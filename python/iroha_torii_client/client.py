@@ -767,6 +767,8 @@ __all__ = [
     "PipelineTransactionStatusResponse",
     "MultisigResponse",
     "MultisigDraftIntent",
+    "GovernanceContractEmergencyHold",
+    "GovernanceContractLifecycle",
     "GovernanceContractResponse",
     "BallotSubmitResult",
     "ProtectedNamespacesApplyResult",
@@ -5354,13 +5356,47 @@ class MultisigDraftIntent:
 
 
 @dataclass(frozen=True)
+class GovernanceContractEmergencyHold:
+    """Retained bounded Parliament emergency-hold projection."""
+
+    incident_digest_hex: str
+    proposal_content_id_hex: str
+    governance_attempt_id_hex: str
+    reason: str
+    imposed_at_height: int
+    expires_at_height: int
+
+
+@dataclass(frozen=True)
+class GovernanceContractLifecycle:
+    """Complete retained ownership and lifecycle projection for one contract."""
+
+    origin: str
+    origin_account: str
+    origin_proposal_content_id_hex: Optional[str]
+    origin_governance_attempt_id_hex: Optional[str]
+    owner: str
+    pending_owner: Optional[str]
+    parliament_delegated: bool
+    active_code_hash_hex: Optional[str]
+    revision: int
+    emergency_hold: Optional[GovernanceContractEmergencyHold]
+
+
+@dataclass(frozen=True)
 class GovernanceContractResponse:
     """Governance binding returned by ``GET /v1/gov/contracts/{contract_address}``."""
 
     found: bool
     contract_address: str
+    contract_subject_account: Optional[str]
     dataspace: Optional[str]
+    active: Optional[bool]
+    lifecycle: Optional[GovernanceContractLifecycle]
+    emergency_hold_active: Optional[bool]
     code_hash_hex: Optional[str]
+    abi_hash_hex: Optional[str]
+    public_entrypoints: Optional[List[str]]
 
 
 @dataclass(frozen=True)
@@ -18622,25 +18658,289 @@ class ToriiClient(
         context: str,
     ) -> GovernanceContractResponse:
         record = ToriiClient._ensure_mapping(payload, context)
-        code_hash_hex_value = record.get("code_hash_hex")
-        code_hash_hex = None
-        if code_hash_hex_value is not None:
-            code_hash_hex = ToriiClient._normalize_hex_string(
-                code_hash_hex_value,
-                context=f"{context}.code_hash_hex",
+        found = ToriiClient._coerce_bool(record.get("found"), f"{context}.found")
+        active = (
+            ToriiClient._coerce_bool(record.get("active"), f"{context}.active")
+            if found
+            else None
+        )
+        exact_fields = (
+            frozenset(
+                {
+                    "found",
+                    "contract_address",
+                    "contract_subject_account",
+                    "dataspace",
+                    "active",
+                    "lifecycle",
+                    "emergency_hold_active",
+                    "code_hash_hex",
+                    "abi_hash_hex",
+                    "public_entrypoints",
+                }
+            )
+            if active
+            else frozenset(
+                {
+                    "found",
+                    "contract_address",
+                    "contract_subject_account",
+                    "dataspace",
+                    "active",
+                    "lifecycle",
+                    "emergency_hold_active",
+                }
+            )
+            if found
+            else frozenset({"found", "contract_address", "dataspace"})
+        )
+        ToriiClient._require_kaigi_fields(
+            record,
+            required=exact_fields,
+            context=context,
+        )
+        contract_address = ToriiClient._require_kaigi_exact_string(
+            record.get("contract_address"), context=f"{context}.contract_address"
+        )
+        dataspace = ToriiClient._require_kaigi_exact_string(
+            record.get("dataspace"), context=f"{context}.dataspace"
+        )
+        contract_subject_account = (
+            ToriiClient._require_kaigi_canonical_account_id(
+                record.get("contract_subject_account"),
+                context=f"{context}.contract_subject_account",
+            )
+            if found
+            else None
+        )
+        lifecycle = (
+            ToriiClient._parse_governance_contract_lifecycle(
+                record["lifecycle"], context=f"{context}.lifecycle"
+            )
+            if found
+            else None
+        )
+        emergency_hold_active = (
+            ToriiClient._coerce_bool(
+                record["emergency_hold_active"], f"{context}.emergency_hold_active"
+            )
+            if found
+            else None
+        )
+
+        def optional_hash(field: str) -> Optional[str]:
+            value = record.get(field)
+            if value is None:
+                return None
+            return ToriiClient._require_exact_lower_hex_string(
+                value, context=f"{context}.{field}", expected_length=64
+            )
+
+        code_hash_hex = optional_hash("code_hash_hex") if active else None
+        abi_hash_hex = optional_hash("abi_hash_hex") if active else None
+        public_entrypoints_value = record.get("public_entrypoints")
+        public_entrypoints: Optional[List[str]] = None
+        if active:
+            if not isinstance(public_entrypoints_value, list):
+                raise RuntimeError(f"{context}.public_entrypoints must be an array")
+            public_entrypoints = [
+                ToriiClient._require_kaigi_exact_string(
+                    entry, context=f"{context}.public_entrypoints[{index}]"
+                )
+                for index, entry in enumerate(public_entrypoints_value)
+            ]
+            if not public_entrypoints:
+                raise RuntimeError(f"{context}.public_entrypoints must not be empty")
+            for index, entry in enumerate(public_entrypoints):
+                if re.fullmatch(r"[a-z][a-z0-9_]{0,127}", entry) is None:
+                    raise RuntimeError(
+                        f"{context}.public_entrypoints[{index}] must be a canonical public entrypoint name"
+                    )
+            if public_entrypoints != sorted(set(public_entrypoints)):
+                raise RuntimeError(
+                    f"{context}.public_entrypoints must be sorted and contain no duplicates"
+                )
+        if found:
+            assert active is not None
+            assert lifecycle is not None
+            assert emergency_hold_active is not None
+            if active:
+                if (
+                    code_hash_hex is None
+                    or abi_hash_hex is None
+                    or public_entrypoints is None
+                ):
+                    raise RuntimeError(
+                        f"{context} active response must contain all artifact fields"
+                    )
+                if lifecycle.active_code_hash_hex != code_hash_hex:
+                    raise RuntimeError(
+                        f"{context}.lifecycle.active_code_hash_hex must match code_hash_hex"
+                    )
+            elif lifecycle.active_code_hash_hex is not None:
+                raise RuntimeError(
+                    f"{context}.lifecycle.active_code_hash_hex must be null for an inactive contract"
+                )
+            if emergency_hold_active and lifecycle.emergency_hold is None:
+                raise RuntimeError(
+                    f"{context}.emergency_hold_active requires a retained emergency hold"
+                )
+        return GovernanceContractResponse(
+            found=found,
+            contract_address=contract_address,
+            contract_subject_account=contract_subject_account,
+            dataspace=dataspace,
+            active=active,
+            lifecycle=lifecycle,
+            emergency_hold_active=emergency_hold_active,
+            code_hash_hex=code_hash_hex,
+            abi_hash_hex=abi_hash_hex,
+            public_entrypoints=public_entrypoints,
+        )
+
+    @staticmethod
+    def _parse_governance_contract_lifecycle(
+        value: Any, *, context: str
+    ) -> GovernanceContractLifecycle:
+        record = ToriiClient._ensure_mapping(value, context)
+        ToriiClient._require_kaigi_fields(
+            record,
+            required=frozenset(
+                {
+                    "origin",
+                    "origin_account",
+                    "origin_proposal_content_id_hex",
+                    "origin_governance_attempt_id_hex",
+                    "owner",
+                    "pending_owner",
+                    "parliament_delegated",
+                    "active_code_hash_hex",
+                    "revision",
+                    "emergency_hold",
+                }
+            ),
+            context=context,
+        )
+        origin = ToriiClient._require_kaigi_exact_string(
+            record.get("origin"), context=f"{context}.origin"
+        )
+        if origin not in {"direct", "parliament"}:
+            raise RuntimeError(f"{context}.origin must be direct or parliament")
+
+        def optional_hash(field: str) -> Optional[str]:
+            value = record.get(field)
+            if value is None:
+                return None
+            return ToriiClient._require_exact_lower_hex_string(
+                value, context=f"{context}.{field}", expected_length=64
+            )
+
+        revision = ToriiClient._coerce_unsigned(
+            record.get("revision"), f"{context}.revision"
+        )
+        if revision == 0:
+            raise RuntimeError(f"{context}.revision must be positive")
+        emergency_hold = (
+            ToriiClient._parse_governance_contract_emergency_hold(
+                record["emergency_hold"], context=f"{context}.emergency_hold"
+            )
+            if record.get("emergency_hold") is not None
+            else None
+        )
+        origin_proposal_content_id_hex = optional_hash("origin_proposal_content_id_hex")
+        origin_governance_attempt_id_hex = optional_hash(
+            "origin_governance_attempt_id_hex"
+        )
+        if origin == "direct" and (
+            origin_proposal_content_id_hex is not None
+            or origin_governance_attempt_id_hex is not None
+        ):
+            raise RuntimeError(
+                f"{context} direct origin must not carry Parliament identifiers"
+            )
+        if origin == "parliament" and (
+            origin_proposal_content_id_hex is None
+            or origin_governance_attempt_id_hex is None
+        ):
+            raise RuntimeError(
+                f"{context} Parliament origin requires both governance identifiers"
+            )
+
+        def owner(field: str) -> str:
+            value = record.get(field)
+            if value == "parliament":
+                return "parliament"
+            return ToriiClient._require_kaigi_canonical_account_id(
+                value, context=f"{context}.{field}"
+            )
+
+        pending_owner = record.get("pending_owner")
+        return GovernanceContractLifecycle(
+            origin=origin,
+            origin_account=ToriiClient._require_kaigi_canonical_account_id(
+                record.get("origin_account"), context=f"{context}.origin_account"
+            ),
+            origin_proposal_content_id_hex=origin_proposal_content_id_hex,
+            origin_governance_attempt_id_hex=origin_governance_attempt_id_hex,
+            owner=owner("owner"),
+            pending_owner=None if pending_owner is None else owner("pending_owner"),
+            parliament_delegated=ToriiClient._coerce_bool(
+                record.get("parliament_delegated"),
+                f"{context}.parliament_delegated",
+            ),
+            active_code_hash_hex=optional_hash("active_code_hash_hex"),
+            revision=revision,
+            emergency_hold=emergency_hold,
+        )
+
+    @staticmethod
+    def _parse_governance_contract_emergency_hold(
+        value: Any, *, context: str
+    ) -> GovernanceContractEmergencyHold:
+        record = ToriiClient._ensure_mapping(value, context)
+        ToriiClient._require_kaigi_fields(
+            record,
+            required=frozenset(
+                {
+                    "incident_digest_hex",
+                    "proposal_content_id_hex",
+                    "governance_attempt_id_hex",
+                    "reason",
+                    "imposed_at_height",
+                    "expires_at_height",
+                }
+            ),
+            context=context,
+        )
+        imposed_at_height = ToriiClient._coerce_unsigned(
+            record.get("imposed_at_height"), f"{context}.imposed_at_height"
+        )
+        expires_at_height = ToriiClient._coerce_unsigned(
+            record.get("expires_at_height"), f"{context}.expires_at_height"
+        )
+        if imposed_at_height == 0:
+            raise RuntimeError(f"{context}.imposed_at_height must be positive")
+        if expires_at_height <= imposed_at_height:
+            raise RuntimeError(
+                f"{context}.expires_at_height must follow imposed_at_height"
+            )
+
+        def required_hash(field: str) -> str:
+            return ToriiClient._require_exact_lower_hex_string(
+                record.get(field),
+                context=f"{context}.{field}",
                 expected_length=64,
             )
-        return GovernanceContractResponse(
-            found=bool(record.get("found")),
-            contract_address=ToriiClient._require_string(
-                record.get("contract_address"),
-                f"{context}.contract_address",
+
+        return GovernanceContractEmergencyHold(
+            incident_digest_hex=required_hash("incident_digest_hex"),
+            proposal_content_id_hex=required_hash("proposal_content_id_hex"),
+            governance_attempt_id_hex=required_hash("governance_attempt_id_hex"),
+            reason=ToriiClient._require_kaigi_exact_string(
+                record.get("reason"), context=f"{context}.reason"
             ),
-            dataspace=ToriiClient._coerce_optional_string(
-                record.get("dataspace"),
-                context=f"{context}.dataspace",
-            ),
-            code_hash_hex=code_hash_hex,
+            imposed_at_height=imposed_at_height,
+            expires_at_height=expires_at_height,
         )
 
     @staticmethod

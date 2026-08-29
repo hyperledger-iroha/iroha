@@ -468,11 +468,11 @@ final class ToriiGovernanceDecodingTests: XCTestCase {
         }
     }
 
-    func testContractEmergencyHoldRejectsNoncanonicalContainmentFields() {
+    func testContractEmergencyHoldRejectsInvalidContainmentFields() {
         let validPrefix =
             "{\"kind\":\"ContractEmergencyHold\",\"payload\":{\"contract_address\":\"\(Self.contractAddress)\",\"expected_revision\":1,\"expected_code_hash\":\"\(String(repeating: "11", count: 32))\",\"incident_digest\":\(fixedBytes(7)),"
         for suffix in [
-            "\"reason\":\" containment\",\"duration_blocks\":1}}",
+            "\"reason\":\"   \",\"duration_blocks\":1}}",
             "\"reason\":\"containment\",\"duration_blocks\":0}}",
             "\"reason\":\"containment\",\"duration_blocks\":3601}}",
         ] {

@@ -1811,6 +1811,7 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
         transaction_batch_max_bytes: usize::try_from(defaults::torii::MAX_CONTENT_LEN.get())
             .unwrap_or(usize::MAX),
         state: state.clone(),
+        sccp_replay_archive: None,
         #[cfg(feature = "app_api")]
         parliament_tle_release_coordinator: Arc::new(
             iroha_core::tle_release::TleReleaseCoordinatorV1::without_signer(),
@@ -2109,9 +2110,14 @@ async fn explorer_transaction_detail_not_found_returns_json_response() {
     let app = mk_app_state_for_tests();
     let headers = HeaderMap::new();
     let missing_hash = "00".repeat(32);
+    let uri: axum::http::Uri = format!("/v1/explorer/transactions/{missing_hash}")
+        .parse()
+        .expect("valid Explorer transaction URI");
     let response = super::handler_explorer_transaction_detail(
         State(app),
         headers,
+        axum::http::Method::GET,
+        uri,
         crate::loopback_connect_info(),
         axum::extract::Path(missing_hash),
     )
@@ -2130,9 +2136,14 @@ async fn explorer_instruction_detail_not_found_returns_json_response() {
     let app = mk_app_state_for_tests();
     let headers = HeaderMap::new();
     let missing_hash = "00".repeat(32);
+    let uri: axum::http::Uri = format!("/v1/explorer/instructions/{missing_hash}/0")
+        .parse()
+        .expect("valid Explorer instruction URI");
     let response = super::handler_explorer_instruction_detail(
         State(app),
         headers,
+        axum::http::Method::GET,
+        uri,
         crate::loopback_connect_info(),
         axum::extract::Path((missing_hash, 0)),
     )

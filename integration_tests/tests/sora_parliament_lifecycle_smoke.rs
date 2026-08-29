@@ -100,6 +100,7 @@ use iroha_core::{
     state::{
         THRESHOLD_KEY_LIFECYCLE_CERTIFICATE_VERSION_V1,
         threshold_key_lifecycle_certificate_preimage_v1,
+        verify_threshold_key_lifecycle_certificate_v1,
     },
     tle_release::{
         AuthorizedTleReleaseProjectionV1,
@@ -578,11 +579,52 @@ fn read_attempt(
     norito::decode_canonical(&frame).wrap_err("decode canonical Parliament reducer projection")
 }
 
-fn ordered_validator_roster(network: &sandbox::SerializedNetwork) -> Result<Vec<PeerId>> {
-    let roster = iroha_core::sumeragi::signed_genesis_voting_peers(&network.genesis())
-        .wrap_err("read exact signed genesis voting roster")?;
-    if roster.len() != VALIDATOR_COUNT {
+fn ordered_validator_roster(
+    network: &sandbox::SerializedNetwork,
+    client: &Client,
+) -> Result<Vec<PeerId>> {
+    let signed_genesis_roster =
+        iroha_core::sumeragi::signed_genesis_voting_peers(&network.genesis())
+            .wrap_err("read exact signed genesis voting roster")?;
+    if signed_genesis_roster.len() != VALIDATOR_COUNT {
         return Err(eyre!("expected exactly four signed validators"));
+    }
+    let finalized_height = NonZeroU64::new(current_height(client)?).ok_or_else(|| {
+        eyre!("the frozen validator roster is unavailable at genesis height zero")
+    })?;
+    let (proof, _) = client
+        .get_bridge_finality_anchor(finalized_height, network.network_id())
+        .wrap_err("authenticate the current revision-4 frozen validator roster")?;
+    let context = proof.finality_artifact.height_context;
+    if context.height != finalized_height.get()
+        || context.network_id != network.network_id()
+        || context.roster.len() != VALIDATOR_COUNT
+        || context.quorum.min_signers != 3
+        || context.quorum.total_power != 4
+        || context.roster.iter().any(|entry| entry.power != 1)
+    {
+        return Err(eyre!(
+            "the current revision-4 finality context is not an exact four-validator 3-of-4 authority"
+        ));
+    }
+    if context.da_layout != SumeragiV2GenesisContextParameters::recommended().da_layout {
+        return Err(eyre!(
+            "the current revision-4 finality context does not retain the mandatory RS16 DA layout"
+        ));
+    }
+    let roster = context
+        .roster
+        .into_iter()
+        .map(|entry| entry.validator)
+        .collect::<Vec<_>>();
+    let mut proof_members = roster.clone();
+    proof_members.sort_unstable();
+    let mut signed_members = signed_genesis_roster;
+    signed_members.sort_unstable();
+    if proof_members != signed_members {
+        return Err(eyre!(
+            "the current frozen validator roster differs from signed genesis"
+        ));
     }
     Ok(roster)
 }
@@ -653,6 +695,13 @@ fn lifecycle_certificate_replacing(
             })
         })
         .collect::<Result<Vec<_>>>()?;
+    verify_threshold_key_lifecycle_certificate_v1(
+        &certificate,
+        &network.network_id(),
+        effective_height,
+        ordered_roster,
+    )
+    .wrap_err("independently verify the exact lifecycle certificate before submission")?;
     Ok(ApplyThresholdKeyLifecycleCertificateV1 { certificate })
 }
 
@@ -1036,7 +1085,7 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
     );
     network.ensure_blocks(1).await?;
     let client = network.client();
-    let ordered_roster = ordered_validator_roster(&network)?;
+    let ordered_roster = ordered_validator_roster(&network, &client)?;
     let beacon_record =
         deterministic_parliament_beacon_key_record_v1(network.network_id(), &ordered_roster)
             .wrap_err("derive exact public beacon fixture")?;
@@ -2179,7 +2228,7 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
     network.ensure_blocks(1).await?;
 
     let client = network.client();
-    let ordered_roster = ordered_validator_roster(&network)?;
+    let ordered_roster = ordered_validator_roster(&network, &client)?;
     let beacon_record =
         deterministic_parliament_beacon_key_record_v1(network.network_id(), &ordered_roster)
             .wrap_err("derive mandatory NPoS beacon fixture")?;
@@ -2498,7 +2547,7 @@ async fn four_validator_mandatory_npos_beacon_fails_closed_below_threshold_impl(
     network.ensure_blocks(1).await?;
 
     let client = network.client();
-    let ordered_roster = ordered_validator_roster(&network)?;
+    let ordered_roster = ordered_validator_roster(&network, &client)?;
     let beacon_record =
         deterministic_parliament_beacon_key_record_v1(network.network_id(), &ordered_roster)
             .wrap_err("derive fail-closed NPoS beacon fixture")?;
@@ -2788,8 +2837,9 @@ fn parliament_network_corridor_has_no_legacy_or_consensus_bypass_surface() {
         include_str!("sora_parliament_failure_paths.rs"),
     ]
     .concat();
+    let rayon_threads_key = concat!("rayon_global_", "threads");
     assert_eq!(
-        source.matches("rayon_global_threads").count(),
+        source.matches(rayon_threads_key).count(),
         6,
         "every four-validator builder must bound per-peer proving concurrency without disabling FastPQ",
     );

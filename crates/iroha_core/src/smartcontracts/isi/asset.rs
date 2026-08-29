@@ -2480,7 +2480,9 @@ pub mod isi {
             ModerationChallengeBondSettlementLeg, VerifiedModerationChallengeBondPurpose,
             moderation_challenge_rejected_slash_amount, read_challenge,
         };
-        use iroha_data_model::sorafs::moderation_ledger::MODERATION_CHALLENGE_BOND_AMOUNT_V1;
+        use iroha_data_model::sorafs::moderation_ledger::{
+            MODERATION_CHALLENGE_BOND_AMOUNT_V1, MODERATION_CHALLENGE_REJECTED_SLASH_BPS_V1,
+        };
 
         let (purpose, source_id, destination_id, amount) = authorization.into_parts();
         let movement_authorization = match purpose {
@@ -2558,8 +2560,11 @@ pub mod isi {
                 let numeric_spec = state_transaction
                     .numeric_spec_for(&record.bond.asset_definition_id)
                     .map_err(InstructionExecutionError::Find)?;
-                let slash_amount =
-                    moderation_challenge_rejected_slash_amount(&record.bond.amount, numeric_spec)?;
+                let slash_amount = moderation_challenge_rejected_slash_amount(
+                    &record.bond.amount,
+                    numeric_spec,
+                    MODERATION_CHALLENGE_REJECTED_SLASH_BPS_V1,
+                )?;
                 let refund_amount = record
                     .bond
                     .amount

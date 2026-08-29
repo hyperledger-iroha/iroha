@@ -6089,10 +6089,7 @@ pub mod tests {
         let domain = Domain::new(domain_id.clone()).build(&deployer);
         let deployer_account = new_account_in_domain(&deployer, &domain_id).build(&deployer);
         let mut world = World::with([domain], [deployer_account], []);
-        world.contract_instances.insert(
-            contract_address.clone(),
-            iroha_crypto::Hash::new(b"contract-code"),
-        );
+        let contract_code_hash = iroha_crypto::Hash::new(b"contract-code");
         let lifecycle_permission: Permission =
             iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode
                 .into();
@@ -6105,6 +6102,20 @@ pub mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut state_tx = block.transaction();
+        state_tx
+            .world
+            .bind_inactive_contract_subject_for_testing(contract_address.clone(), deployer.clone());
+        state_tx
+            .world
+            .contract_subject_bindings
+            .get_mut(&contract_address)
+            .expect("seed retained lifecycle")
+            .lifecycle
+            .active_code_hash = Some(contract_code_hash);
+        state_tx
+            .world
+            .contract_instances
+            .insert(contract_address.clone(), contract_code_hash);
         DeactivateContractInstance {
             contract_address: contract_address.clone(),
             expected_revision: 1,

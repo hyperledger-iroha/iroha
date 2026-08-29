@@ -9012,13 +9012,17 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                             ),
                         )
                     })?;
+                let expected_revision = parse_u64_value(
+                    required_value(&mut fields, "expected_revision", "ActivateContractInstance")?,
+                    "ActivateContractInstance.expected_revision",
+                )?;
                 let code_hash_value =
                     required_value(&mut fields, "code_hash", "ActivateContractInstance")?;
                 let code_hash =
                     parse_hash_value(code_hash_value, "ActivateContractInstance.code_hash")?;
                 let instruction = ActivateContractInstance {
                     contract_address,
-                    expected_revision: 1,
+                    expected_revision,
                     code_hash,
                 };
                 return Ok(Box::new(instruction).into_instruction_box());
@@ -9043,13 +9047,21 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                             ),
                         )
                     })?;
+                let expected_revision = parse_u64_value(
+                    required_value(
+                        &mut fields,
+                        "expected_revision",
+                        "DeactivateContractInstance",
+                    )?,
+                    "DeactivateContractInstance.expected_revision",
+                )?;
                 let reason = parse_optional_string_value(
                     fields.remove("reason"),
                     "DeactivateContractInstance.reason",
                 )?;
                 let instruction = DeactivateContractInstance {
                     contract_address,
-                    expected_revision: 1,
+                    expected_revision,
                     reason,
                 };
                 return Ok(Box::new(instruction).into_instruction_box());
@@ -10322,6 +10334,10 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
             json::Value::String(activate.contract_address.to_string()),
         );
         inner.insert(
+            "expected_revision".to_owned(),
+            json::Value::String(activate.expected_revision.to_string()),
+        );
+        inner.insert(
             "code_hash".to_owned(),
             json::to_value(&activate.code_hash).map_err(norito_to_napi)?,
         );
@@ -10340,6 +10356,10 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
         inner.insert(
             "contract_address".to_owned(),
             json::Value::String(deactivate.contract_address.to_string()),
+        );
+        inner.insert(
+            "expected_revision".to_owned(),
+            json::Value::String(deactivate.expected_revision.to_string()),
         );
         if let Some(reason) = &deactivate.reason {
             inner.insert("reason".to_owned(), json::Value::String(reason.clone()));
@@ -17282,21 +17302,53 @@ seiyaku Privacy {
         .expect("contract address");
         let instruction: InstructionBox = Box::new(ActivateContractInstance {
             contract_address,
-            expected_revision: 1,
+            expected_revision: 7,
             code_hash: Hash::prehashed(sample_hash(0x44)),
         })
         .into_instruction_box();
         let json_value = instruction_to_json_value(&instruction)
             .expect("serialize ActivateContractInstance instruction");
-        assert!(
-            json_value
-                .as_object()
-                .and_then(|map| map.get("ActivateContractInstance"))
-                .is_some()
+        let payload = json_value
+            .as_object()
+            .and_then(|map| map.get("ActivateContractInstance"))
+            .and_then(json::Value::as_object)
+            .expect("activation JSON payload");
+        assert_eq!(
+            payload.get("expected_revision"),
+            Some(&json::Value::String("7".to_owned()))
         );
         let reconstructed =
             value_to_instruction(json_value.clone()).expect("deserialize ActivateContractInstance");
         assert_eq!(reconstructed, instruction);
+    }
+    #[test]
+    fn contract_lifecycle_instruction_json_requires_expected_revision() {
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            &test_network_id(b"contract-lifecycle-cas"),
+            &authority,
+            1,
+            iroha_data_model::nexus::DataSpaceId::new(0),
+        )
+        .expect("contract address");
+        for value in [
+            norito_json!({
+                "ActivateContractInstance": norito_json!({
+                    "contract_address": contract_address.to_string(),
+                    "code_hash": hash_literal(0x45),
+                }),
+            }),
+            norito_json!({
+                "DeactivateContractInstance": norito_json!({
+                    "contract_address": contract_address.to_string(),
+                    "reason": null,
+                }),
+            }),
+        ] {
+            let error = value_to_instruction(value)
+                .expect_err("lifecycle CAS revision must not be inferred by the host");
+            assert!(error.to_string().contains("expected_revision"));
+        }
     }
     #[test]
     fn js_builder_create_kaigi_payload_matches() {

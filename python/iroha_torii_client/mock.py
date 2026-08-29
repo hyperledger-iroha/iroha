@@ -1013,7 +1013,11 @@ class _MockState:
         if entry is None:
             return _json_response(
                 HTTPStatus.OK,
-                {"found": False, "contract_address": contract_address, "dataspace": None, "code_hash_hex": None},
+                {
+                    "found": False,
+                    "contract_address": contract_address,
+                    "dataspace": "universal",
+                },
             )
         payload = dict(entry)
         payload.setdefault("found", True)

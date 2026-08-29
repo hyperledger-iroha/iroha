@@ -1736,7 +1736,9 @@ fn rejected_data_trigger_execution_still_charges_nexus_fee() {
             ))],
             Repeats::Indefinitely,
             payer_id.clone(),
-            DataEventFilter::Any,
+            DataEventFilter::Account(
+                AccountEventFilter::new().for_account(payer_id.clone()),
+            ),
         )
         .expect("trigger action fixture satisfies validation invariants"),
     );

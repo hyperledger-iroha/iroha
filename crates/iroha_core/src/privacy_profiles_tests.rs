@@ -573,18 +573,18 @@ mod tests {
             }
             let expected_bindings = match protocol_id {
                 PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1 => (
-                    "b5db09ae42957802c502855459a102ba8e829bfb86a0356691455de0a08fbec0".to_owned(),
-                    "a665cfcbea5576a1cf533997e575ebd49957ce320c483c019e784f8fc93457e1".to_owned(),
-                    "8fd68669b9ef735fa227de44ced8fb204c55e46ac1c8f05efc128667e1a69dbb".to_owned(),
-                    "9c83cc55b7098221d7361dfb2f09ae834f4b5e46af777d24266e2e70ceefc45c".to_owned(),
-                    "d8e8f893f2541b0929a8bc9c44f995a38cd6023072e6d94fc362c6f67bdc4cd8".to_owned(),
+                    "feac88e1d075fc7bad3b4b2352c54b8bf2a662c891983cefd748d4991dfb9fba".to_owned(),
+                    "e5a225abf2469b70927d91c275d28e589d0cd0ddc87fbd6f265f908542d4f688".to_owned(),
+                    "7a948e91b038acca4bfb57615dfda10e4aae4cb56c61529cf6b76d6735eb6773".to_owned(),
+                    "59aac0b35adf82940e87293f55f304ab52904896a19bc5a5989aca24eb9c4bc9".to_owned(),
+                    "1b523e15f99cbaf3a363d200e5ed376f5e73f81fbcc195f5b716a1029c3e116e".to_owned(),
                 ),
                 PrivacyProtocolIdV1::PqMaspStarkV1 => (
-                    "10a8697291331061099a6c67eaeac3bc29f77aea951f2f2ad55ca29d0f816951".to_owned(),
-                    "06fbee48b23572d6496ba068dfe819300176a9422ffbcd79c6ccfe1b0b4f9cd2".to_owned(),
-                    "4ee67f01e2268c1b5b14ab576352ba379661c0fab93a4c2f5507f2786ec7b00f".to_owned(),
-                    "776487d416a46123b2146c0e9455be474999f2d8de8994532d8fbf4bf63def9d".to_owned(),
-                    "f05f4f90c69e39a64942426d3ddd6f8d2c2bddbcc25143c7df71a2f495e34fbc".to_owned(),
+                    "6265e763be8e1f62feb4e34a0b9fe0f4ca7748be2ca5d0ad334996a029b42197".to_owned(),
+                    "c218ced8912700bba150ed28e0fdc3fadcd5d35743ea022da66100e097322c93".to_owned(),
+                    "69fbd26aeaea84ef2b790addb168c78b7d66121304f2d0e4fe02969f582c2807".to_owned(),
+                    "a6314323ab707a3766599aed2d109b3ada63acec793ff2a729c749cd951a332d".to_owned(),
+                    "1c05619415d25d0af914427c9c93abbf040a18ce867301b033ff1abc10c661e1".to_owned(),
                 ),
                 _ => unreachable!("the test covers only IVM private note and PQ-MASP"),
             };
@@ -736,9 +736,9 @@ mod tests {
             (
                 "8a24198f13ce0dbe0f4747874def956dc15ca98f9308c29ed678afddbe989a04".to_owned(),
                 "92ee53970444330e37716b98a9eb1c04d8e52eb1ffe08103fb2745cc1abc9a89".to_owned(),
-                "5e83f32ed7edf764e50fc8cebf5b4d8b75cb9e42a296965514b033d49dae4ac4".to_owned(),
-                "c1577ce5a4a22e089a2fd7547f7fea32b7b35808967149d0e7f96a2ecb8c4ba7".to_owned(),
-                "fb5e94756f9f234641b27899b7fd63bb48f3b5f92c24266d76e6d4de16231b27".to_owned(),
+                "e03cf36db71869cc30ddffc00c9cbf32b84424693018415824e4e6553347f23e".to_owned(),
+                "6071bb6f845eed0a13df34ca6e2b28c2b6a9af1c98b6b08957d9838a5c6101c7".to_owned(),
+                "8e182847eb0ff635485572aaf234693beec0970bd6fac3a6bc7ee9fe525864d4".to_owned(),
             ),
             "every consensus-critical FCMP++ binding is a pinned KAT",
         );
@@ -1004,11 +1004,11 @@ mod tests {
                 hex::encode(first.engine_manifest_digest.as_bytes()),
             ),
             (
-                "55bea016d0919cde8d24b54bb35eb01f7578a9a91189aececa34c7fc1b90e75c".to_owned(),
-                "6a0b33463d71f6aec27ad330ae4424e3ed317a841dc1a0d79c5389905072ffc9".to_owned(),
-                "7733ada1295556a13c3f626f270d1287324e28e987613d97e1e1605ff4d22ce8".to_owned(),
-                "9c7c4f65128a4d924955b8b0fb6bfcc56ec34d14224ddfefebe32771c19a9e54".to_owned(),
-                "e613fbbaf3e0470524a2924e72e5f8adc93c3950a26c5a4e9af8b7a74b88078b".to_owned(),
+                "5858a2e4d1be81b06da5a153e8ec103515939fbe78106d7c4e3aa865c2d347cd".to_owned(),
+                "c0bbfcdc6d612eef0e8a5ef549f7dab1f832b217566445b7881fb9d71d1f300a".to_owned(),
+                "3a6e0f4fdaeeab4947f68b44ee6f1eb0434f32326289210d3faab15038ab9cff".to_owned(),
+                "cd5aeafd932dbf75f3cf1d59671480b377f12188aac553700864f0619812fa78".to_owned(),
+                "7d9e4422510f202eb46891b6830923622d396833c32691bda883710eb72b5b2a".to_owned(),
             ),
             "every consensus-critical Bootle/Lantern binding is a pinned KAT"
         );
@@ -1090,7 +1090,7 @@ mod tests {
             bootle_lantern_parameter_digest_v1(&public_parameter_seed, &sampling_profile_digest);
         assert_eq!(
             hex::encode(governed),
-            "6a0b33463d71f6aec27ad330ae4424e3ed317a841dc1a0d79c5389905072ffc9"
+            "c0bbfcdc6d612eef0e8a5ef549f7dab1f832b217566445b7881fb9d71d1f300a"
         );
         for index in 0..sampling_profile_digest.len() {
             let mut mutated_sampling_profile_digest = sampling_profile_digest;
@@ -1188,9 +1188,9 @@ mod tests {
             (
                 "8d5a2946c58314ac12d2968ffe9e8e0c672e3bbceefaaefad6a87420ea7dd212".to_owned(),
                 "b27b73d59151415e21b158c75ed9371cccd795655b604e4a6b53db621660b66e".to_owned(),
-                "c788016923d55e5455f3114735999f3c01f06aac8e7af2ce2bed4968b29800ea".to_owned(),
-                "0412d379f8cbf01109d994bc74f148a13e38fc64350308597c047a0e6ec95fd9".to_owned(),
-                "25f22d98c4f37d513361402fa5730caf214d097b624b2abd848dd932da39751e".to_owned(),
+                "53dba42ea22445f05a5986279320859f2e4622c930549a2c8e8ebbd8b39d9385".to_owned(),
+                "2141dd88d579b2460cfb0f79f230bfb2f71663364d8700c8e7e6b3e8f57c5a2a".to_owned(),
+                "db654c139ee585ae99996b5617a3b0e663a83cef1635a79159c33d9c97ca2cbd".to_owned(),
             ),
             "every consensus-critical Orchard profile binding is a pinned KAT"
         );
@@ -1316,8 +1316,8 @@ mod tests {
                 "97e8be40e495bb6723db0ca73c04d2441ff166cf2163ddd2662c7e6a083f2c32".to_owned(),
                 "3d79fe744741f956cb589f45774f922b849cf93833e6a9ebdedf1f815f1b7b44".to_owned(),
                 "9b1a285d43ddc306b4d9ca6eac525b49b073f7d281ecf94299730613f683aa13".to_owned(),
-                "32c038ab076bf2cab61bb15ffd07675e64b6849fce6e935252160b640d11b5c4".to_owned(),
-                "5464e209f243f68189a84fad74e435aa78653d2fdd3458601787daf5479a45b0".to_owned(),
+                "e98c04cd9cdf69539d24858400c02d1021207b6377bfbe63a734e189ff5b4327".to_owned(),
+                "b3fd69b5fcf8ba2f14f529a8edfac9725338124ac24d612da65eb0fb8364c0d5".to_owned(),
             )
         );
     }
@@ -1352,9 +1352,9 @@ mod tests {
             (
                 "58c1a93d39f23727ae8b5bbb661414f3dcadf2479575282cd7e3b9ebbb5589fc".to_owned(),
                 "ca09d19ed5f3bb56ba7432a67b7ad14697c4874ab7870ea53441e4df0624bd7b".to_owned(),
-                "aa352369f2a1fd0c9377414a2721728c35a95a4bc72497118e75c765edacd99e".to_owned(),
-                "080aaf7d1f9d44c5dad6a5adc393034715fbf428d1dd1e5b59e33808c110aa96".to_owned(),
-                "a74d8f690da89d50b9950e6d3496179f98bc6e60b71ec11e408c908aad73a81b".to_owned(),
+                "f744892c6f1a855b2dc24586ff5701f45ff2dad4d94bca6f8342e500df899a02".to_owned(),
+                "68641f65f768489617b1105cf3918b4f0b0499800af18a1f92b5471fa7836ebb".to_owned(),
+                "041fd6b68d1a2e8b78749f58d013239e317d010ecdc7e37d1299ab9835c3b887".to_owned(),
             )
         );
     }
@@ -1438,12 +1438,12 @@ mod tests {
                 hex::encode(jindo_crs_digest_v1()),
             ),
             (
-                "f30869aeedfa582835144a3ad8a7fcf190e48b20da96330ed623951e1002b452".to_owned(),
-                "4348daf5f80e601d872a1b9eff4040798797cd728a79341f0c826cd85ea2296b".to_owned(),
-                "2da1a1ec122494ecbe23a779003ead489723be8deec52f468ee525d9bbb469db".to_owned(),
-                "7b87a8f64c9345e3ce13c2f4ce02a183e3806a8d2cea0faf7b6b0a00491aed28".to_owned(),
-                "54aaa1d7c4c485968c00c0480f28491293611e1f4f526f2baf210364e26ca2d7".to_owned(),
-                "424603d0ab5f57eed76aa365ec100cb4ac583e10dc801727363b6e188f5edd27".to_owned(),
+                "c4a5f4e1dc7ec790302538f77d0a76c9ca1442f3d23a2517c5f577714bd94500".to_owned(),
+                "e5989a51a3121672e02ff827bd9850587233e1ba77eab3dc5401e914ab2ade84".to_owned(),
+                "e32deea2258a2dfa34f5394f78001051a10945a9b9a9ac51ab3fedd1cdb25289".to_owned(),
+                "cc09c3ae81e41158eb533d828aea52c27a1769cc8e89bbd2adb42eeaf84cbd61".to_owned(),
+                "9c94a7482d68cc10d6d062bc6cdd40e25aa319f27bad56c8109b79fee500f000".to_owned(),
+                "adc8dc7954268627d30b85d6a79df579b3a933af487248a4cba79af08f217dda".to_owned(),
             )
         );
     }

@@ -39,7 +39,7 @@ EXACT_SUPERSEDING_HEAD_ASSERTION = '''assert_eq!(
             GovernanceExpectedHeadPresentV1 {
                 subject_id: deploy_subject_id,
                 version: 1,
-                head_root: competing_code_hash.into(),
+                head_root: competing_contract_code_hash.into(),
             },
         )),
         "supersession must bind the exact authoritative contract head",
@@ -55,6 +55,38 @@ DISTINCT_SUPERSEDING_ARTIFACT_ASSERTION = '''assert_ne!(
         competing_contract_code_hash, code_hash,
         "the supersession fixture must install a genuinely distinct artifact head",
     );'''
+CERTIFIED_SUPERSEDING_DEPLOYMENT_MARKERS = (
+    "let competing_deploy_proposal = ProposalKind::DeployContract(",
+    "let competing_deploy_create = CreateParliamentGovernanceAttemptV1 {",
+    "let competing_deploy_attempt_id = competing_deploy_create.governance_attempt_id();",
+    '''InstructionBox::from(ProposeDeployContract {
+                contract_address: contract_address.clone(),
+                code_hash: competing_contract_code_hash,
+                abi_hash: competing_abi_hash,
+                abi_version: AbiVersion::new(1),
+                manifest_provenance: None,
+            })''',
+    "InstructionBox::from(competing_deploy_create)",
+    "let competing_deploy_certificate = certify_failure_path_attempt(",
+    "assert!(current_height(&client)? < competing_deploy_certificate.enact_at_height);",
+    '''assert_eq!(
+        deploy_certificate.expected_head, competing_deploy_certificate.expected_head,
+        "both certified deployments must compare against the same pre-enactment head",
+    );''',
+    "let competing_enacted = read_attempt(&client, competing_deploy_attempt_id)?;",
+    '''assert_eq!(
+        competing_enacted.attempt().status,
+        GovernanceAttemptStatusV1::Enacted,
+    );''',
+    '''assert_eq!(
+        competing_enacted.certificate(),
+        Some(&competing_deploy_certificate),
+    );''',
+)
+DIRECT_SUPERSESSION_BYPASSES = (
+    "ActivateContractInstance",
+    "CommitContractDeployment",
+)
 NO_RESULT_RESTART_CONTRACT_ABSENCE = '''assert_governed_contract_absent(
         &restart_peer.client(),
         contract_address,
@@ -125,9 +157,7 @@ EXACT_GOVERNED_CONTRACT_BINDING_CALLS = (
         &client,
         &contract_address,
         competing_contract_code_hash,
-        competing_abi_hash,
-        "the competing direct binding must be authoritative before enactment",
-    )?;''',
+        competing_abi_hash,''',
     '''assert_governed_contract_binding(
             &peer_client,
             &contract_address,
@@ -227,7 +257,7 @@ PARLIAMENT_FAILURE_PATH_MARKERS = {
     "four_validator_certified_effects_record_supersession_and_execution_failure": (
         DISTINCT_SUPERSEDING_ARTIFACT,
         DISTINCT_SUPERSEDING_ARTIFACT_ASSERTION,
-        "Hash::prehashed(competing_contract_code_hash.into_bytes())",
+        *CERTIFIED_SUPERSEDING_DEPLOYMENT_MARKERS,
         "GovernanceAttemptStatusV1::Superseded",
         "superseded.certificate(), Some(&deploy_certificate)",
         EXACT_SUPERSEDING_HEAD_ASSERTION,
@@ -642,6 +672,23 @@ def validate_parliament_failure_paths(source: str) -> None:
         _, test = parliament_failure_path_test(source, name)
         for marker in markers:
             require(marker in test, f"Parliament failure path `{name}` lost `{marker}`")
+        if name == (
+            "four_validator_certified_effects_record_supersession_and_execution_failure"
+        ):
+            certified_positions = [
+                test.index(marker)
+                for marker in CERTIFIED_SUPERSEDING_DEPLOYMENT_MARKERS
+            ]
+            require(
+                certified_positions == sorted(certified_positions),
+                "certified supersession path must propose, certify, and autonomously "
+                "enact the competing deployment in order",
+            )
+            for bypass in DIRECT_SUPERSESSION_BYPASSES:
+                require(
+                    bypass not in test,
+                    f"certified supersession path regained direct `{bypass}` authority",
+                )
 
 
 def capacity_failure_builder(source: str) -> tuple[re.Match[str], str]:
@@ -1382,6 +1429,23 @@ class SoraParliamentLifecycleCorridorSourceTests(unittest.TestCase):
                     validate_parliament_failure_paths(
                         mutate_parliament_failure_path_test(corridor, name, marker)
                     )
+
+        certified_name = (
+            "four_validator_certified_effects_record_supersession_and_execution_failure"
+        )
+        certified_anchor = CERTIFIED_SUPERSEDING_DEPLOYMENT_MARKERS[0]
+        for bypass in DIRECT_SUPERSESSION_BYPASSES:
+            with self.subTest(name=certified_name, bypass=bypass), self.assertRaises(
+                ContractError
+            ):
+                validate_parliament_failure_paths(
+                    mutate_parliament_failure_path_test(
+                        corridor,
+                        certified_name,
+                        certified_anchor,
+                        f"{bypass};\n    {certified_anchor}",
+                    )
+                )
 
     def test_capacity_failure_genesis_rejects_adversarial_mutations(self) -> None:
         corridor = read_corridor_source()

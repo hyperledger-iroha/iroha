@@ -54,14 +54,14 @@ use iroha_data_model::{
             ModerationFinalizedCursorV1, ModerationFinalizedEventPageV1,
             ModerationFinalizedEventV1, ModerationFinalizedLedgerSnapshotV1,
             ModerationJurorEligibilityClassV1, ModerationJurorEligibilityRecordV1,
-            ModerationJurorReplacementV1, ModerationLedgerPolicyRecord, ModerationLedgerStatusV1,
-            ModerationNoShowKindV1, ModerationNoShowRecordV1, ModerationOutcomeKindV1,
-            ModerationOutcomeRecordV1, ModerationPanelSelectionV1, ModerationPoPRegistrySnapshotV1,
-            ModerationRevealRecordV1, ModerationSortitionError, ModerationVoteCountsV1,
-            is_canonical_moderation_identifier_v1, sorafs_moderation_panel_roster_hash_v1,
-            sorafs_moderation_pop_challenge_v1, sorafs_moderation_pop_verifier_context_v1,
-            sorafs_moderation_select_panel_v1, sorafs_moderation_sortition_digest_v1,
-            sorafs_moderation_sortition_seed_v1,
+            ModerationJurorReplacementV1, ModerationLedgerPolicyRecord, ModerationLedgerPolicyV1,
+            ModerationLedgerStatusV1, ModerationNoShowKindV1, ModerationNoShowRecordV1,
+            ModerationOutcomeKindV1, ModerationOutcomeRecordV1, ModerationPanelSelectionV1,
+            ModerationPoPRegistrySnapshotV1, ModerationRevealRecordV1, ModerationSortitionError,
+            ModerationVoteCountsV1, is_canonical_moderation_identifier_v1,
+            sorafs_moderation_panel_roster_hash_v1, sorafs_moderation_pop_challenge_v1,
+            sorafs_moderation_pop_verifier_context_v1, sorafs_moderation_select_panel_v1,
+            sorafs_moderation_sortition_digest_v1, sorafs_moderation_sortition_seed_v1,
         },
     },
     state_path::StatePath,
@@ -3022,7 +3022,7 @@ impl Execute for ActivateSorafsModerationCase {
         })?;
         let case = ModerationCaseRecordV1 {
             spec,
-            policy: appeal.policy,
+            policy: appeal.policy.clone(),
             status: ModerationCaseStatusV1::Open,
             opened_at_unix_ms: now,
             opened_by: authority.clone(),
@@ -5450,9 +5450,9 @@ mod tests {
     use core::num::NonZeroU64;
     use iroha_crypto::{Algorithm, KeyPair, PrivateKey, Signature};
     use iroha_data_model::{
-        IntoKeyValue, Registrable,
+        Registrable,
         account::{Account, AccountId},
-        asset::{Asset, AssetBalancePolicy, AssetDefinition, AssetId},
+        asset::{Asset, AssetBalancePolicy, AssetDefinition, AssetDefinitionId, AssetId},
         block::BlockHeader,
         isi::sorafs::{
             CommitSorafsPopCredentialBatch, PublishSorafsPopRevocationList,
@@ -5597,12 +5597,49 @@ mod tests {
         norito::to_bytes(value).expect("encode alternate-layout fixture")
     }
     fn state(accounts: &[&KeyPair], manager: &AccountId) -> State {
-        let mut world = World::new();
-        for keypair in accounts {
-            let id = account(keypair);
-            let (id, value) = Account::new(id.clone()).build(&id).into_key_value();
-            world.accounts.insert(id, value);
+        let voting_asset_id: AssetDefinitionId =
+            iroha_config::parameters::defaults::governance::voting_asset_id()
+                .parse()
+                .expect("default governance voting asset");
+        let custody_accounts = [
+            iroha_config::parameters::defaults::governance::bond_escrow_account_id(),
+            iroha_config::parameters::defaults::governance::slash_receiver_account_id(),
+        ];
+        let mut account_ids = accounts
+            .iter()
+            .map(|keypair| account(keypair))
+            .collect::<Vec<_>>();
+        for custody in custody_accounts {
+            if !account_ids.contains(&custody) {
+                account_ids.push(custody);
+            }
         }
+        let account_models = account_ids.into_iter().map(|id| {
+            let authority = id.clone();
+            Account::new(id).build(&authority)
+        });
+        let balance = Quantity::from(1_000_u32);
+        let assets = accounts.iter().map(|keypair| {
+            Asset::new(
+                AssetId::new(voting_asset_id.clone(), account(keypair)),
+                balance.clone(),
+            )
+        });
+        let mut total = Quantity::zero();
+        for _ in accounts {
+            total = total
+                .checked_add(&balance)
+                .expect("moderation fixture voting-asset total remains valid");
+        }
+        let mut definition = AssetDefinition::numeric(
+            voting_asset_id.clone(),
+            "moderation challenge bond",
+            AssetBalancePolicy::Global,
+            None,
+        )
+        .build(manager);
+        definition.total_quantity = total;
+        let mut world = World::with_assets([], account_models, [definition], assets, []);
         let mut permissions = Permissions::new();
         for permission in [
             MANAGE_PERMISSION,
@@ -5614,44 +5651,12 @@ mod tests {
         world
             .account_permissions
             .insert(manager.clone(), permissions);
-        let mut state = State::new_for_testing(
+        let state = State::new_for_testing(
             world,
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         );
-        let voting_asset_id = state.gov.voting_asset_id.clone();
-        for custody in [
-            state.gov.bond_escrow_account.clone(),
-            state.gov.slash_receiver_account.clone(),
-        ] {
-            if state.world.accounts.get(&custody).is_none() {
-                let (id, value) = Account::new(custody.clone())
-                    .build(manager)
-                    .into_key_value();
-                state.world.accounts.insert(id, value);
-            }
-        }
-        state.world.asset_definitions.insert(
-            voting_asset_id.clone(),
-            AssetDefinition::numeric(
-                voting_asset_id.clone(),
-                "moderation challenge bond",
-                AssetBalancePolicy::Global,
-                None,
-            )
-            .build(manager),
-        );
-        for keypair in accounts {
-            let asset_id = AssetId::new(voting_asset_id.clone(), account(keypair));
-            let balance = Quantity::from(1_000_u32);
-            let (id, value) = Asset::new(asset_id.clone(), balance.clone()).into_key_value();
-            state.world.assets.insert(id, value);
-            state.world.track_asset_holder(&asset_id);
-            state
-                .world
-                .increase_asset_total_amount(&voting_asset_id, &balance)
-                .expect("moderation fixture voting-asset total remains valid");
-        }
+        assert_eq!(state.gov.voting_asset_id, voting_asset_id);
         state
     }
     fn voting_asset_balance(state: &State, account: &AccountId) -> Quantity {
@@ -5659,6 +5664,7 @@ mod tests {
         state
             .world
             .assets
+            .view()
             .get(&id)
             .map(|value| value.as_ref().clone())
             .unwrap_or_else(Quantity::zero)
@@ -7090,8 +7096,7 @@ mod tests {
         substituted_custody.challenge_escrow_account = outsider.clone();
         assert!(
             transact(&mut state, 2, OPENED_AT + 1, |transaction| {
-                SetSorafsModerationPolicy::new(substituted_custody)
-                    .execute(&manager, transaction)
+                SetSorafsModerationPolicy::new(substituted_custody).execute(&manager, transaction)
             })
             .is_err(),
             "policy activation must bind challenge custody to consensus governance"

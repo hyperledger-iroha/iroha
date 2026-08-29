@@ -5351,9 +5351,14 @@ mod tests {
             assert_eq!(registered_hash, code_hash);
             code::register_manifest(&authority, manifest, &mut transaction)
                 .expect("register contract manifest");
+            transaction.world.bind_inactive_contract_subject_for_testing(
+                contract_address.clone(),
+                authority.clone(),
+            );
             code::activate_instance(
                 &authority,
                 contract_address.clone(),
+                1,
                 code_hash,
                 &mut transaction,
             )

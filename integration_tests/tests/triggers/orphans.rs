@@ -71,7 +71,7 @@ async fn set_up_trigger(
             [fail_isi],
             Repeats::Indefinitely,
             the_one_who_fails.clone(),
-            AccountEventFilter::new(),
+            AccountEventFilter::new().for_account(the_one_who_fails.clone()),
         )
         .expect("trigger action fixture satisfies validation invariants"),
     ));

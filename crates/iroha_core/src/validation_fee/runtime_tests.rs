@@ -74,9 +74,14 @@ fn treasury_payout_is_exempt_when_enacted_policy_lists_class() {
     let contract_address =
         ContractAddress::derive(&state_tx.network_id, &deployer, 0, DataSpaceId::UNIVERSAL)
             .expect("contract address");
+    state_tx.world.bind_inactive_contract_subject_for_testing(
+        contract_address.clone(),
+        deployer.clone(),
+    );
     crate::smartcontracts::code::activate_instance(
         &deployer,
         contract_address.clone(),
+        1,
         code_hash,
         &mut state_tx,
     )

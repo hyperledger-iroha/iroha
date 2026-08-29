@@ -746,8 +746,12 @@ impl norito::json::FastJsonWrite for ToriiExplorerAssetDefinitionJsonSource<'_> 
 fn execute_torii_explorer_asset_definition_local_source_read(
     app: &SharedAppState,
     definition_id: &iroha_data_model::asset::AssetDefinitionId,
+    visibility: &routing::DataspaceReadVisibility,
 ) -> Response {
     let world = app.state.world_view();
+    if !visibility.allows_asset_definition(&world, definition_id) {
+        return error_response_with_format(routing::explorer_not_found(), ResponseFormat::Json);
+    }
     let Some(definition) = world.asset_definitions().get(definition_id) else {
         return error_response_with_format(
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -759,7 +763,15 @@ fn execute_torii_explorer_asset_definition_local_source_read(
     let assets = world
         .asset_definition_assets()
         .get(definition_id)
-        .map_or(0, |assets| u32::try_from(assets.len()).unwrap_or(u32::MAX));
+        .map_or(0, |assets| {
+            u32::try_from(
+                assets
+                    .iter()
+                    .filter(|asset_id| visibility.allows_asset(&world, asset_id))
+                    .count(),
+            )
+            .unwrap_or(u32::MAX)
+        });
     let zero_locked_quantity = iroha_primitives::numeric::Quantity::zero();
     let mut locked_quantity = None;
     let mut circulating_quantity = None;

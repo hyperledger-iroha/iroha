@@ -589,6 +589,24 @@ pub fn threshold_key_lifecycle_certificate_preimage_v1(
     Ok(preimage)
 }
 
+fn threshold_key_lifecycle_successor_roster_v1(
+    current_height: u64,
+    parent_context: &iroha_data_model::block::consensus_v2::HeightContext,
+) -> Option<Vec<PeerId>> {
+    if parent_context.height.checked_add(1) != Some(current_height) {
+        return None;
+    }
+    let roster = match (
+        parent_context.height == parent_context.epoch_end_height,
+        parent_context.next_epoch_snapshot.as_ref(),
+    ) {
+        (true, Some(snapshot)) => &snapshot.roster,
+        (false, None) => &parent_context.roster,
+        (true, None) | (false, Some(_)) => return None,
+    };
+    (!roster.is_empty()).then(|| roster.iter().map(|entry| entry.validator.clone()).collect())
+}
+
 /// Verify an exact current-roster `2f + 1` lifecycle certificate.
 ///
 /// # Errors
@@ -684,11 +702,14 @@ mod threshold_key_lifecycle_certificate_tests {
         Vec<KeyPair>,
         Vec<PeerId>,
     ) {
-        let keys = (0..4).map(|_| KeyPair::random()).collect::<Vec<_>>();
-        let roster = keys
-            .iter()
-            .map(|key| PeerId::new(key.public_key().clone()))
+        let mut validators = (0..4)
+            .map(|_| {
+                let key = KeyPair::random();
+                (PeerId::new(key.public_key().clone()), key)
+            })
             .collect::<Vec<_>>();
+        validators.sort_by(|(left, _), (right, _)| left.cmp(right));
+        let (roster, keys): (Vec<_>, Vec<_>) = validators.into_iter().unzip();
         let mut certificate = ThresholdKeyLifecycleCertificateV1 {
             version: THRESHOLD_KEY_LIFECYCLE_CERTIFICATE_VERSION_V1,
             action: ThresholdKeyLifecycleActionV1::RetireGlobalBeaconKey,
@@ -806,6 +827,167 @@ mod threshold_key_lifecycle_certificate_tests {
                 &roster,
             ),
             Err(ThresholdKeyLifecycleCertificateErrorV1::InvalidShape)
+        );
+    }
+
+    #[test]
+    fn frozen_height_context_order_survives_commit_topology_rotation() {
+        use iroha_data_model::block::consensus_v2::{
+            ConsensusMode, SumeragiV2GenesisContextParameters, ValidatorPower,
+        };
+
+        let (mut certificate, keys, roster) = certified_fixture();
+        certificate.effective_height = 2;
+        certificate.signatures.clear();
+        let preimage = threshold_key_lifecycle_certificate_preimage_v1(&certificate)
+            .expect("encode height-two certificate preimage");
+        certificate.signatures = keys
+            .iter()
+            .take(3)
+            .enumerate()
+            .map(|(index, key)| ThresholdKeyLifecycleSignatureV1 {
+                signer_index: u16::try_from(index).expect("small signer index"),
+                signature: Signature::try_new(key.private_key(), &preimage)
+                    .expect("sign height-two lifecycle certificate"),
+            })
+            .collect();
+        let parent_context = crate::sumeragi::v2_context::build_genesis_height_context(
+            crate::sumeragi::v2_context::GenesisContextInputs {
+                network_id: certificate.network_id,
+                election: crate::sumeragi::v2_context::FrozenElectionInputs {
+                    epoch: 0,
+                    epoch_end_height: 8,
+                    mode: ConsensusMode::Npos,
+                    roster: roster
+                        .iter()
+                        .cloned()
+                        .map(|validator| ValidatorPower {
+                            validator,
+                            power: 1,
+                        })
+                        .collect(),
+                    leader_seed: [0x51; 32],
+                },
+                next_epoch_snapshot: None,
+                nexus_amx_context_hash: Hash::prehashed([0x52; Hash::LENGTH]),
+                execution_policy_hash: Hash::prehashed([0x53; Hash::LENGTH]),
+                da_layout: SumeragiV2GenesisContextParameters::recommended().da_layout,
+            },
+        )
+        .expect("build exact parent height context");
+        let frozen_roster = threshold_key_lifecycle_successor_roster_v1(2, &parent_context)
+            .expect("derive the successor's frozen roster");
+        let mut rotated_commit_topology = roster.clone();
+        rotated_commit_topology[..3].rotate_left(1);
+        assert_ne!(frozen_roster, rotated_commit_topology);
+        assert_eq!(
+            verify_threshold_key_lifecycle_certificate_v1(
+                &certificate,
+                &certificate.network_id,
+                2,
+                &frozen_roster,
+            ),
+            Ok(()),
+            "leader-role rotation must not change lifecycle signer indices",
+        );
+        assert_eq!(
+            verify_threshold_key_lifecycle_certificate_v1(
+                &certificate,
+                &certificate.network_id,
+                2,
+                &rotated_commit_topology,
+            ),
+            Err(ThresholdKeyLifecycleCertificateErrorV1::ContextMismatch),
+            "the mutable role topology is not lifecycle certificate authority",
+        );
+    }
+
+    #[test]
+    fn frozen_successor_roster_obeys_epoch_boundary_snapshot_presence() {
+        use iroha_data_model::block::consensus_v2::{
+            ConsensusMode, DualQuorum, SumeragiV2GenesisContextParameters, ValidatorPower,
+            finality::FinalizedNextEpochSnapshot,
+        };
+
+        let sorted_roster = || {
+            let mut roster = (0..4)
+                .map(|_| PeerId::new(KeyPair::random().public_key().clone()))
+                .map(|validator| ValidatorPower {
+                    validator,
+                    power: 1,
+                })
+                .collect::<Vec<_>>();
+            roster.sort();
+            roster
+        };
+        let parent_roster = sorted_roster();
+        let successor_roster = sorted_roster();
+        let successor_snapshot = FinalizedNextEpochSnapshot {
+            epoch: 1,
+            epoch_end_height: 9,
+            mode: ConsensusMode::Npos,
+            validator_set_pops: vec![vec![0x61]; successor_roster.len()],
+            quorum: DualQuorum::from_roster(&successor_roster)
+                .expect("derive exact successor quorum"),
+            roster: successor_roster.clone(),
+            leader_seed: [0x62; 32],
+        };
+        let boundary_parent = crate::sumeragi::v2_context::build_genesis_height_context(
+            crate::sumeragi::v2_context::GenesisContextInputs {
+                network_id: network_id(0x63),
+                election: crate::sumeragi::v2_context::FrozenElectionInputs {
+                    epoch: 0,
+                    epoch_end_height: 1,
+                    mode: ConsensusMode::Npos,
+                    roster: parent_roster.clone(),
+                    leader_seed: [0x64; 32],
+                },
+                next_epoch_snapshot: Some(successor_snapshot),
+                nexus_amx_context_hash: Hash::prehashed([0x65; Hash::LENGTH]),
+                execution_policy_hash: Hash::prehashed([0x66; Hash::LENGTH]),
+                da_layout: SumeragiV2GenesisContextParameters::recommended().da_layout,
+            },
+        )
+        .expect("build epoch-boundary parent context");
+        let selected = threshold_key_lifecycle_successor_roster_v1(2, &boundary_parent)
+            .expect("select authenticated next-epoch roster");
+        assert_eq!(
+            selected,
+            successor_roster
+                .iter()
+                .map(|entry| entry.validator.clone())
+                .collect::<Vec<_>>()
+        );
+
+        let mut non_boundary_parent = boundary_parent.clone();
+        non_boundary_parent.epoch_end_height = 8;
+        non_boundary_parent.next_epoch_snapshot = None;
+        assert_eq!(
+            threshold_key_lifecycle_successor_roster_v1(2, &non_boundary_parent),
+            Some(
+                parent_roster
+                    .iter()
+                    .map(|entry| entry.validator.clone())
+                    .collect()
+            ),
+            "non-boundary heights retain the parent frozen roster",
+        );
+
+        let mut unexpected_snapshot = non_boundary_parent.clone();
+        unexpected_snapshot.next_epoch_snapshot = boundary_parent.next_epoch_snapshot.clone();
+        assert!(
+            threshold_key_lifecycle_successor_roster_v1(2, &unexpected_snapshot).is_none(),
+            "a non-boundary parent cannot inject a next-epoch snapshot",
+        );
+        let mut missing_snapshot = boundary_parent.clone();
+        missing_snapshot.next_epoch_snapshot = None;
+        assert!(
+            threshold_key_lifecycle_successor_roster_v1(2, &missing_snapshot).is_none(),
+            "an epoch-boundary parent must authenticate the complete successor snapshot",
+        );
+        assert!(
+            threshold_key_lifecycle_successor_roster_v1(3, &boundary_parent).is_none(),
+            "a parent context cannot authorize a non-successor height",
         );
     }
 }
@@ -47829,6 +48011,12 @@ impl<'state> StateBlock<'state> {
         {
             return Err(TransactionsBlockError::MergeAdmission);
         }
+        // Seed fixture-defined genesis assets while the parent block history is
+        // still empty. Staging this synthetic block's hash first would make the
+        // production finalizer treat height one as a post-genesis block and
+        // reject every fixture asset as missing its incarnation token.
+        self.finalize_axt_asset_incarnations()
+            .map_err(|_| TransactionsBlockError::AxtAssetIncarnation)?;
         let block_height = self
             ._curr_block
             .height()
@@ -55607,6 +55795,65 @@ impl StateTransaction<'_, '_> {
     pub fn block_height(&self) -> u64 {
         self._curr_block.height().get()
     }
+    /// Resolve the current height's exact finality-frozen validator order for
+    /// threshold-key lifecycle certificate authentication.
+    ///
+    /// The mutable commit topology rotates consensus roles after every block,
+    /// so its positions are not stable signer indices. The parent finality
+    /// artifact instead authenticates either the unchanged epoch roster or the
+    /// complete next-epoch snapshot governing this block.
+    pub(crate) fn threshold_key_lifecycle_frozen_roster_v1(
+        &self,
+    ) -> core::result::Result<Vec<PeerId>, String> {
+        let current_height = self.block_height();
+        let resolution = || {
+            let parent_height = current_height
+                .checked_sub(1)
+                .filter(|height| *height != 0)
+                .ok_or_else(|| {
+                    "threshold-key lifecycle authority has no finalized parent height".to_owned()
+                })?;
+            let parent = self
+                .kura
+                .v2_finality_artifact(parent_height)
+                .map_err(|error| {
+                    format!(
+                        "failed to authenticate threshold-key lifecycle parent finality: {error}"
+                    )
+                })?
+                .ok_or_else(|| {
+                    format!(
+                        "threshold-key lifecycle authority lacks finality at parent height {parent_height}"
+                    )
+                })?;
+            if parent.height_context.network_id != self.network_id {
+                return Err(
+                    "threshold-key lifecycle parent finality belongs to another network".to_owned(),
+                );
+            }
+            threshold_key_lifecycle_successor_roster_v1(
+                current_height,
+                &parent.height_context,
+            )
+            .ok_or_else(|| {
+                "threshold-key lifecycle parent finality does not define this height's frozen roster"
+                    .to_owned()
+            })
+        };
+        match resolution() {
+            Ok(roster) => Ok(roster),
+            Err(error) => {
+                #[cfg(test)]
+                {
+                    let fixture_roster = self.commit_topology().get().clone();
+                    if !fixture_roster.is_empty() {
+                        return Ok(fixture_roster);
+                    }
+                }
+                Err(error)
+            }
+        }
+    }
     fn ensure_private_settlement_feature_active_v1(
         &self,
         authority_context_height: u64,
@@ -57610,24 +57857,31 @@ impl StateTransaction<'_, '_> {
         &mut self,
     ) -> Result<Vec<(EventBox, TriggerId, u64)>, TransactionRejectionReason> {
         let drained = core::mem::take(&mut self.world.internal_event_buf);
-        let check_count = u64::try_from(drained.len())
-            .unwrap_or(u64::MAX)
-            .saturating_mul(
-                u64::try_from(self.world.triggers.data_triggers().len()).unwrap_or(u64::MAX),
-            );
-        self.charge_trigger_work_gas(
-            check_count.saturating_mul(TRIGGER_FILTER_CHECK_GAS),
-            "data trigger filter checks",
-        )?;
         let mut matches = Vec::new();
         for event in &drained {
-            for (trg_id, action) in self.world.triggers.data_triggers().iter() {
+            let candidates = self
+                .world
+                .triggers
+                .data_trigger_candidates(event.as_ref());
+            let check_count = u64::try_from(candidates.len()).unwrap_or(u64::MAX);
+            self.charge_trigger_work_gas(
+                check_count.saturating_mul(TRIGGER_FILTER_CHECK_GAS),
+                "data trigger filter checks",
+            )?;
+            for trg_id in candidates {
+                let Some(action) = self.world.triggers.data_triggers().get(&trg_id) else {
+                    warn!(
+                        trigger_id = %trg_id,
+                        "data-trigger index referenced a missing trigger; skipping candidate"
+                    );
+                    continue;
+                };
                 if data_trigger_action_matches(action, event.as_ref()) {
                     // Preserve emission order so every matching event in a batch
                     // produces its own trigger execution.
                     let shared = SharedDataEvent::from_arc(Arc::clone(event));
-                    let generation = self.world.triggers.registration_generation(trg_id);
-                    matches.push((EventBox::Data(shared), trg_id.clone(), generation));
+                    let generation = self.world.triggers.registration_generation(&trg_id);
+                    matches.push((EventBox::Data(shared), trg_id, generation));
                 }
             }
         }

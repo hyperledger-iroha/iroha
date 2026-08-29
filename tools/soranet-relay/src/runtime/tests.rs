@@ -4036,7 +4036,7 @@ mod tests {
             Arc::clone(&privacy),
             Arc::clone(&privacy_events),
             mode,
-            Some(incentive_logger),
+            Some(Arc::clone(&incentive_logger)),
             remote,
         )
         .await
@@ -4055,7 +4055,7 @@ mod tests {
             &encoded,
             &accumulator,
             TEST_RELAY_ID,
-            None,
+            Some(incentive_logger),
             Arc::clone(&privacy),
             Arc::clone(&privacy_events),
             mode,

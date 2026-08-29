@@ -67,6 +67,7 @@ use std::{
 // Temporary in-memory code registry is not used by on-chain manifest endpoints.
 use iroha_core::kura::Kura;
 // Network Time Service endpoints are backed by `iroha_core::time`.
+use super::*;
 use ::time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use base64::Engine;
 use blake3::hash as blake3_hash;
@@ -176,7 +177,6 @@ use std::{
     panic::AssertUnwindSafe,
     sync::OnceLock,
 };
-use super::*;
 pub mod debug_match_flag {
     use std::sync::OnceLock;
     static DEBUG_MATCH_FROM_CONFIG: OnceLock<bool> = OnceLock::new();
@@ -243,6 +243,86 @@ impl DataspaceReadVisibility {
 
     pub(crate) fn allows_dataspace(&self, dataspace_id: DataSpaceId) -> bool {
         self.can_read_all || self.visible_dataspaces.contains(&dataspace_id)
+    }
+
+    fn domain_dataspace(world: &impl WorldReadOnly, domain_id: &DomainId) -> Option<DataSpaceId> {
+        world
+            .dataspace_catalog()
+            .by_alias(domain_id.dataspace().as_ref())
+            .map(|entry| entry.id)
+    }
+
+    /// Return whether an account is materialized in at least one visible dataspace.
+    ///
+    /// Account-scope derivation defaults unknown identities to the universal
+    /// dataspace, so existence is checked first to keep absent and restricted
+    /// selectors indistinguishable.
+    pub(crate) fn allows_account(
+        &self,
+        world: &impl WorldReadOnly,
+        account_id: &AccountId,
+    ) -> bool {
+        if self.can_read_all {
+            return true;
+        }
+        if world.accounts().get(account_id).is_none() {
+            return false;
+        }
+        world
+            .account_dataspaces(account_id)
+            .is_ok_and(|dataspaces| {
+                dataspaces
+                    .into_iter()
+                    .any(|dataspace| self.allows_dataspace(dataspace))
+            })
+    }
+
+    /// Return whether a domain's authoritative dataspace is visible.
+    pub(crate) fn allows_domain(&self, world: &impl WorldReadOnly, domain_id: &DomainId) -> bool {
+        self.can_read_all
+            || Self::domain_dataspace(world, domain_id)
+                .is_some_and(|dataspace| self.allows_dataspace(dataspace))
+    }
+
+    /// Return whether an asset definition's immutable owning dataspace is visible.
+    pub(crate) fn allows_asset_definition(
+        &self,
+        world: &impl WorldReadOnly,
+        definition_id: &AssetDefinitionId,
+    ) -> bool {
+        self.can_read_all
+            || world
+                .asset_definition_domains()
+                .get(definition_id)
+                .is_some_and(|domain| self.allows_domain(world, domain))
+    }
+
+    /// Return whether an asset bucket belongs to a visible route.
+    pub(crate) fn allows_asset(&self, world: &impl WorldReadOnly, asset_id: &AssetId) -> bool {
+        if self.can_read_all {
+            return true;
+        }
+        if world.assets().get(asset_id).is_none()
+            || !self.allows_asset_definition(world, asset_id.definition())
+        {
+            return false;
+        }
+        match asset_id.scope() {
+            iroha_data_model::asset::AssetBalanceScope::Global => true,
+            iroha_data_model::asset::AssetBalanceScope::Dataspace(dataspace) => {
+                self.allows_dataspace(*dataspace)
+            }
+        }
+    }
+
+    /// Return whether an NFT's authoritative domain route is visible.
+    pub(crate) fn allows_nft(&self, world: &impl WorldReadOnly, nft_id: &NftId) -> bool {
+        self.allows_domain(world, nft_id.domain())
+    }
+
+    /// Return whether an RWA's authoritative domain route is visible.
+    pub(crate) fn allows_rwa(&self, world: &impl WorldReadOnly, rwa_id: &dm::rwa::RwaId) -> bool {
+        self.allows_domain(world, rwa_id.domain())
     }
 
     /// Digest the exact visibility scope bound into Explorer continuation cursors.
@@ -4007,7 +4087,7 @@ mod app_api_transaction_signing_tests {
         assert!(message.contains("propose/approve"));
     }
 }
-fn explorer_not_found() -> Error {
+pub(crate) fn explorer_not_found() -> Error {
     Error::Query(iroha_data_model::ValidationFail::QueryFailed(
         iroha_data_model::query::error::QueryExecutionFail::NotFound,
     ))
@@ -5823,9 +5903,7 @@ where
     T: Send + 'static,
     F: FnOnce() -> Result<T> + Send + 'static,
 {
-    crate::panic_recovery::join_recoverable(crate::panic_recovery::spawn_blocking_recoverable(
-        work,
-    ))
+    crate::panic_recovery::join_recoverable(crate::panic_recovery::spawn_blocking_recoverable(work))
         .await
         .map_err(|_| sccp_internal_error(worker_failure))?
 }
@@ -9372,8 +9450,8 @@ pub(crate) async fn handle_v1_zk_verify_batch_with_limits(
     crate::panic_recovery::join_recoverable(crate::panic_recovery::spawn_blocking_recoverable(
         move || handle_v1_zk_verify_batch_sync(format, body, limits),
     ))
-        .await
-        .map_err(|_| query_internal_error("ZK batch verification worker failed"))?
+    .await
+    .map_err(|_| query_internal_error("ZK batch verification worker failed"))?
 }
 #[cfg(feature = "zk-verify-batch")]
 pub(crate) async fn handle_v1_zk_verify_batch_admitted(
@@ -9681,8 +9759,8 @@ pub async fn handle_v1_zk_roots(
     crate::panic_recovery::join_recoverable(crate::panic_recovery::spawn_blocking_recoverable(
         move || handle_v1_zk_roots_sync(state, accept, req),
     ))
-        .await
-        .map_err(|_| query_internal_error("ZK roots integrity worker failed"))?
+    .await
+    .map_err(|_| query_internal_error("ZK roots integrity worker failed"))?
 }
 pub(crate) async fn handle_v1_zk_roots_admitted(
     state: Arc<CoreState>,
@@ -9836,8 +9914,8 @@ pub async fn handle_v1_zk_merkle_path(
     crate::panic_recovery::join_recoverable(crate::panic_recovery::spawn_blocking_recoverable(
         move || handle_v1_zk_merkle_path_sync(state, accept, req),
     ))
-        .await
-        .map_err(|_| query_internal_error("ZK Merkle-path worker failed"))?
+    .await
+    .map_err(|_| query_internal_error("ZK Merkle-path worker failed"))?
 }
 pub(crate) async fn handle_v1_zk_merkle_path_admitted(
     state: Arc<CoreState>,
@@ -12711,14 +12789,14 @@ pub async fn handle_time_status() -> impl IntoResponse {
     let diagnostics = crate::panic_recovery::join_recoverable(
         crate::panic_recovery::spawn_blocking_recoverable(iroha_core::time::diagnostics_snapshot),
     )
-        .await
-        .unwrap_or_else(|join_err| {
-            iroha_logger::warn!(
-                ?join_err,
-                "Failed to fetch atomic network time diagnostics; retrying inline"
-            );
-            iroha_core::time::diagnostics_snapshot()
-        });
+    .await
+    .unwrap_or_else(|join_err| {
+        iroha_logger::warn!(
+            ?join_err,
+            "Failed to fetch atomic network time diagnostics; retrying inline"
+        );
+        iroha_core::time::diagnostics_snapshot()
+    });
     let iroha_core::time::NetworkTimeDiagnostics {
         status,
         samples: snapshot,
@@ -24100,6 +24178,10 @@ mod multisig_selector_tests {
         );
         let manifest = verified.manifest.signed(authority_keypair);
         register_manifest(authority, manifest, &mut stx).expect("register manifest");
+        stx.world.bind_inactive_contract_subject_for_testing(
+            contract_address.clone(),
+            authority.clone(),
+        );
         activate_instance(authority, contract_address.clone(), 1, code_hash, &mut stx)
             .expect("activate instance");
         if let Some(contract_alias) = contract_alias {
@@ -37667,7 +37749,7 @@ const ENDPOINT_KAIGI_RELAY_DETAIL: &str = "/v1/kaigi/relays/{relay_id}";
 const ENDPOINT_EXPLORER_BLOCKS: &str = "/v1/explorer/blocks";
 const ENDPOINT_EXPLORER_HEALTH: &str = "/v1/explorer/health";
 const ENDPOINT_EXPLORER_BLOCK_DETAIL: &str = "/v1/explorer/blocks/{identifier}";
-const ENDPOINT_EXPLORER_TRANSACTIONS: &str = "/v1/explorer/transactions";
+pub(crate) const ENDPOINT_EXPLORER_TRANSACTIONS: &str = "/v1/explorer/transactions";
 const ENDPOINT_EXPLORER_TRANSACTIONS_LATEST: &str = "/v1/explorer/transactions/latest";
 const ENDPOINT_EXPLORER_INSTRUCTIONS: &str = "/v1/explorer/instructions";
 const ENDPOINT_EXPLORER_INSTRUCTIONS_LATEST: &str = "/v1/explorer/instructions/latest";
@@ -43394,12 +43476,37 @@ fn contract_event_projection_is_visible(
 ///
 /// curl example:
 ///   curl -N "http://127.0.0.1:8080/v1/events/sse"
-pub fn handle_v1_events_sse(
+pub(crate) fn handle_v1_events_sse(
     events: EventsSender,
     kura: Arc<Kura>,
     visibility: ToriiDataspaceReadContext,
     crate::NoritoQuery(params): crate::NoritoQuery<EventsSseParams>,
 ) -> Result<Sse<impl futures::Stream<Item = Result<SseEvent, Infallible>>>, crate::Error> {
+    handle_v1_events_sse_with_filter(events, params, move |event_box| {
+        visibility.filter_event(kura.as_ref(), event_box)
+    })
+}
+
+/// Build an admission-free event stream for integration tests.
+///
+/// Production routes must use the scoped handler so that every event is
+/// filtered against the caller's current dataspace visibility.
+#[doc(hidden)]
+pub fn handle_v1_events_sse_for_tests(
+    events: EventsSender,
+    crate::NoritoQuery(params): crate::NoritoQuery<EventsSseParams>,
+) -> Result<Sse<impl futures::Stream<Item = Result<SseEvent, Infallible>>>, crate::Error> {
+    handle_v1_events_sse_with_filter(events, params, Some)
+}
+
+fn handle_v1_events_sse_with_filter<F>(
+    events: EventsSender,
+    params: EventsSseParams,
+    filter_event: F,
+) -> Result<Sse<impl futures::Stream<Item = Result<SseEvent, Infallible>>>, crate::Error>
+where
+    F: Fn(EventBox) -> Option<EventBox> + Clone + Send + 'static,
+{
     let SseFilterSpec {
         filters,
         proof_backend,
@@ -43423,8 +43530,7 @@ pub fn handle_v1_events_sse(
             let proof_backend = proof_backend.clone();
             let proof_call_hash = proof_call_hash.clone();
             let proof_envelope_hash = proof_envelope_hash.clone();
-            let visibility = visibility.clone();
-            let kura = Arc::clone(&kura);
+            let filter_event = filter_event.clone();
             async move {
                 use tokio::sync::broadcast::error::RecvError;
                 if state.terminal {
@@ -43450,8 +43556,7 @@ pub fn handle_v1_events_sse(
                     }
                     match state.rx.recv().await {
                         Ok(event_box) => {
-                            let Some(event_box) = visibility.filter_event(kura.as_ref(), event_box)
-                            else {
+                            let Some(event_box) = filter_event(event_box) else {
                                 continue;
                             };
                             let mut consider_event = |event_box| {
@@ -47614,9 +47719,14 @@ mod validation_fee_torii_ingress_tests {
             &mut stx,
         )
         .expect("register signed payout-contract manifest");
+        stx.world.bind_inactive_contract_subject_for_testing(
+            payout_binding.contract_address.clone(),
+            authority.clone(),
+        );
         iroha_core::smartcontracts::code::activate_instance(
             authority,
             payout_binding.contract_address,
+            1,
             registered_code_hash,
             &mut stx,
         )
@@ -47634,9 +47744,15 @@ mod validation_fee_torii_ingress_tests {
             &mut stx,
         )
         .expect("register signed pool-contract manifest");
+        let pool_contract_address_for_activation = pool_contract_address();
+        stx.world.bind_inactive_contract_subject_for_testing(
+            pool_contract_address_for_activation.clone(),
+            authority.clone(),
+        );
         iroha_core::smartcontracts::code::activate_instance(
             authority,
-            pool_contract_address(),
+            pool_contract_address_for_activation,
+            1,
             pool_code_hash,
             &mut stx,
         )
@@ -61071,6 +61187,7 @@ mod asset_definitions_query_tests {
 }
 pub async fn handle_v1_explorer_accounts(
     state: Arc<CoreState>,
+    visibility: DataspaceReadVisibility,
     pagination: crate::explorer::ExplorerCursorQuery,
     domain: Option<DomainId>,
     definition: Option<AssetDefinitionId>,
@@ -61080,6 +61197,7 @@ pub async fn handle_v1_explorer_accounts(
         &world,
         domain.as_ref(),
         definition.as_ref(),
+        &visibility,
         &pagination,
     )
     .map_err(|error| conversion_error(format!("invalid Explorer cursor request: {error}")))?;
@@ -61087,12 +61205,18 @@ pub async fn handle_v1_explorer_accounts(
 }
 pub async fn handle_v1_explorer_domains(
     state: Arc<CoreState>,
+    visibility: DataspaceReadVisibility,
     pagination: crate::explorer::ExplorerCursorQuery,
     owned_by: Option<AccountId>,
 ) -> Result<AxResponse, Error> {
     let world = state.world_view();
-    let page = crate::explorer::domains_page_for_filters(&world, owned_by.as_ref(), &pagination)
-        .map_err(|error| conversion_error(format!("invalid Explorer cursor request: {error}")))?;
+    let page = crate::explorer::domains_page_for_filters(
+        &world,
+        owned_by.as_ref(),
+        &visibility,
+        &pagination,
+    )
+    .map_err(|error| conversion_error(format!("invalid Explorer cursor request: {error}")))?;
     Ok(JsonBody(page).into_response())
 }
 fn explorer_circulating_quantity(
@@ -61107,6 +61231,7 @@ fn explorer_circulating_quantity(
 }
 pub async fn handle_v1_explorer_asset_definitions(
     state: Arc<CoreState>,
+    visibility: DataspaceReadVisibility,
     pagination: crate::explorer::ExplorerCursorQuery,
     domain: Option<DomainId>,
     owned_by: Option<AccountId>,
@@ -61117,6 +61242,7 @@ pub async fn handle_v1_explorer_asset_definitions(
         &world,
         domain.as_ref(),
         owned_by.as_ref(),
+        &visibility,
         &pagination,
     )
     .map_err(|error| conversion_error(format!("invalid Explorer cursor request: {error}")))?;
@@ -61151,6 +61277,7 @@ pub async fn handle_v1_explorer_asset_definitions(
 }
 pub async fn handle_v1_explorer_assets(
     state: Arc<CoreState>,
+    visibility: DataspaceReadVisibility,
     pagination: crate::explorer::ExplorerCursorQuery,
     owned_by: Option<AccountId>,
     definition: Option<AssetDefinitionId>,
@@ -61162,6 +61289,7 @@ pub async fn handle_v1_explorer_assets(
         owned_by.as_ref(),
         definition.as_ref(),
         asset_id.as_ref(),
+        &visibility,
         &pagination,
     )
     .map_err(|error| conversion_error(format!("invalid Explorer cursor request: {error}")))?;
@@ -61169,6 +61297,7 @@ pub async fn handle_v1_explorer_assets(
 }
 pub async fn handle_v1_explorer_nfts(
     state: Arc<CoreState>,
+    visibility: DataspaceReadVisibility,
     pagination: crate::explorer::ExplorerCursorQuery,
     owned_by: Option<AccountId>,
     domain: Option<DomainId>,
@@ -61178,6 +61307,7 @@ pub async fn handle_v1_explorer_nfts(
         &world,
         owned_by.as_ref(),
         domain.as_ref(),
+        &visibility,
         &pagination,
     )
     .map_err(|error| conversion_error(format!("invalid Explorer cursor request: {error}")))?;
@@ -61185,6 +61315,7 @@ pub async fn handle_v1_explorer_nfts(
 }
 pub async fn handle_v1_explorer_rwas(
     state: Arc<CoreState>,
+    visibility: DataspaceReadVisibility,
     pagination: crate::explorer::ExplorerCursorQuery,
     owned_by: Option<AccountId>,
     domain: Option<DomainId>,
@@ -61194,6 +61325,7 @@ pub async fn handle_v1_explorer_rwas(
         &world,
         owned_by.as_ref(),
         domain.as_ref(),
+        &visibility,
         &pagination,
     )
     .map_err(|error| conversion_error(format!("invalid Explorer cursor request: {error}")))?;
@@ -61504,7 +61636,15 @@ pub async fn handle_v1_explorer_metrics(
     state: Arc<CoreState>,
     kura: Arc<Kura>,
     telemetry: MaybeTelemetry,
+    visibility: DataspaceReadVisibility,
 ) -> Result<AxResponse, Error> {
+    if !visibility.can_read_all() {
+        return Err(Error::Query(
+            iroha_data_model::ValidationFail::NotPermitted(
+                "CanReadAllLedgerData permission is required for Explorer metrics".to_owned(),
+            ),
+        ));
+    }
     if !telemetry.allows_metrics() {
         return Err(Error::telemetry_profile_forbidden(
             "v1/explorer/metrics",
@@ -61603,11 +61743,9 @@ fn nonzero_height(height: u64) -> Option<NonZeroUsize> {
 }
 
 /// Maximum historical blocks decoded by one Explorer cursor request.
-const EXPLORER_HISTORY_MAX_SCANNED_BLOCKS_V1: usize =
-    crate::explorer::EXPLORER_CURSOR_MAX_SCAN;
+const EXPLORER_HISTORY_MAX_SCANNED_BLOCKS_V1: usize = crate::explorer::EXPLORER_CURSOR_MAX_SCAN;
 /// Maximum transaction or instruction candidates inspected by one cursor request.
-const EXPLORER_HISTORY_MAX_SCANNED_CANDIDATES_V1: usize =
-    crate::explorer::EXPLORER_CURSOR_MAX_SCAN;
+const EXPLORER_HISTORY_MAX_SCANNED_CANDIDATES_V1: usize = crate::explorer::EXPLORER_CURSOR_MAX_SCAN;
 
 #[derive(Clone, Copy, Debug)]
 struct ExplorerHistoryRequestScope {
@@ -62605,15 +62743,23 @@ fn instruction_detail_at_height(
 }
 pub async fn handle_v1_explorer_account_detail(
     state: Arc<CoreState>,
+    visibility: DataspaceReadVisibility,
     account_id: AccountId,
 ) -> Result<AxResponse, Error> {
     let world = state.world_view();
+    if !visibility.allows_account(&world, &account_id) {
+        return Err(explorer_not_found());
+    }
     let dto = world
         .account(&account_id)
         .map(|entry| {
             crate::explorer::ExplorerAccountDto::from_entry(
                 entry,
-                crate::explorer::account_counters_from_world(&world, &account_id),
+                crate::explorer::account_counters_from_world(
+                    &world,
+                    &account_id,
+                    &visibility,
+                ),
             )
         })
         .map_err(|_| explorer_not_found())?;
@@ -62621,10 +62767,14 @@ pub async fn handle_v1_explorer_account_detail(
 }
 pub async fn handle_v1_explorer_account_qr(
     state: Arc<CoreState>,
+    visibility: DataspaceReadVisibility,
     account_id: AccountId,
     telemetry: MaybeTelemetry,
 ) -> Result<AxResponse, Error> {
     let world = state.world_view();
+    if !visibility.allows_account(&world, &account_id) {
+        return Err(explorer_not_found());
+    }
     world
         .account(&account_id)
         .map_err(|_| explorer_not_found())?;
@@ -62635,15 +62785,19 @@ pub async fn handle_v1_explorer_account_qr(
 }
 pub async fn handle_v1_explorer_domain_detail(
     state: Arc<CoreState>,
+    visibility: DataspaceReadVisibility,
     domain_id: DomainId,
 ) -> Result<AxResponse, Error> {
     let world = state.world_view();
+    if !visibility.allows_domain(&world, &domain_id) {
+        return Err(explorer_not_found());
+    }
     let dto = world
         .domain(&domain_id)
         .map(|domain| {
             crate::explorer::ExplorerDomainDto::from_domain(
                 domain,
-                crate::explorer::domain_counters_from_world(&world, &domain_id),
+                crate::explorer::domain_counters_from_world(&world, &domain_id, &visibility),
             )
         })
         .map_err(|_| explorer_not_found())?;
@@ -62651,16 +62805,24 @@ pub async fn handle_v1_explorer_domain_detail(
 }
 pub async fn handle_v1_explorer_asset_definition_detail(
     state: Arc<CoreState>,
+    visibility: DataspaceReadVisibility,
     definition_id: AssetDefinitionId,
 ) -> Result<AxResponse, Error> {
     let world = state.world_view();
+    if !visibility.allows_asset_definition(&world, &definition_id) {
+        return Err(explorer_not_found());
+    }
     let governance = state.governance_snapshot();
     let definition = world
         .asset_definition(&definition_id)
         .map_err(|_| explorer_not_found())?;
     let mut dto = crate::explorer::ExplorerAssetDefinitionDto::from_definition_with_asset_count(
         &definition,
-        crate::explorer::definition_instance_count_from_world(&world, &definition_id),
+        crate::explorer::definition_instance_count_from_world(
+            &world,
+            &definition_id,
+            &visibility,
+        ),
     );
     if definition_id == governance.voting_asset_id {
         use iroha_primitives::numeric::Quantity;
@@ -62733,6 +62895,7 @@ fn mark_explorer_econometrics_participant(
 }
 pub async fn handle_v1_explorer_asset_definition_snapshot(
     state: Arc<CoreState>,
+    visibility: DataspaceReadVisibility,
     definition_id: AssetDefinitionId,
 ) -> Result<AxResponse, Error> {
     use iroha_primitives::numeric::{Numeric, Quantity};
@@ -62740,6 +62903,9 @@ pub async fn handle_v1_explorer_asset_definition_snapshot(
     const LORENZ_POINTS: usize = 32;
     let view = state.view();
     // Ensure the definition exists.
+    if !visibility.allows_asset_definition(view.world(), &definition_id) {
+        return Err(explorer_not_found());
+    }
     view.world()
         .asset_definition(&definition_id)
         .map_err(|_| explorer_not_found())?;
@@ -62752,7 +62918,9 @@ pub async fn handle_v1_explorer_asset_definition_snapshot(
     let mut holders: Vec<(AccountId, Quantity)> = Vec::new();
     let mut total_supply = Quantity::zero();
     for asset in view.world().assets_iter() {
-        if asset.id().definition() != &definition_id {
+        if asset.id().definition() != &definition_id
+            || !visibility.allows_asset(view.world(), asset.id())
+        {
             continue;
         }
         let balance = asset.value().as_ref();
@@ -63005,6 +63173,7 @@ pub async fn handle_v1_explorer_asset_definition_snapshot(
 }
 pub async fn handle_v1_explorer_asset_definition_econometrics(
     state: Arc<CoreState>,
+    visibility: DataspaceReadVisibility,
     definition_id: AssetDefinitionId,
 ) -> Result<AxResponse, Error> {
     reject_emergency_fast_unbounded_history(
@@ -63022,6 +63191,9 @@ pub async fn handle_v1_explorer_asset_definition_econometrics(
     const ISSUANCE_SERIES_DAYS: usize = 30;
     let view = state.view();
     // Ensure the definition exists.
+    if !visibility.allows_asset_definition(view.world(), &definition_id) {
+        return Err(explorer_not_found());
+    }
     view.world()
         .asset_definition(&definition_id)
         .map_err(|_| explorer_not_found())?;
@@ -63115,7 +63287,12 @@ pub async fn handle_v1_explorer_asset_definition_econometrics(
             if block_ms < cutoff_ms {
                 break;
             }
-            for (_, _, tx, result) in external_signed_transaction_results(block_ref) {
+            for (entrypoint_index, _, tx, result) in
+                external_signed_transaction_results(block_ref)
+            {
+                if !visibility.allows_external_entrypoint(block_ref, entrypoint_index) {
+                    continue;
+                }
                 // Ignore rejected transactions.
                 if result.as_ref().is_err() {
                     continue;
@@ -63602,7 +63779,11 @@ mod explorer_asset_definition_econometrics_tests {
             .unpack(|_| {});
         let committed = valid.commit_unchecked().unpack(|_| {});
         crate::test_utils::finalize_committed_block(&state, st_block, committed);
-        let resp = handle_v1_explorer_asset_definition_econometrics(state, def_id)
+        let resp = handle_v1_explorer_asset_definition_econometrics(
+            state,
+            DataspaceReadVisibility::all_for_tests(),
+            def_id,
+        )
             .await
             .expect("handler ok")
             .into_response();
@@ -63851,7 +64032,11 @@ mod explorer_asset_definition_snapshot_tests {
             .unpack(|_| {});
         let committed0 = valid0.commit_unchecked().unpack(|_| {});
         crate::test_utils::finalize_committed_block(&state, st_block0, committed0);
-        let resp = handle_v1_explorer_asset_definition_snapshot(state, def_id)
+        let resp = handle_v1_explorer_asset_definition_snapshot(
+            state,
+            DataspaceReadVisibility::all_for_tests(),
+            def_id,
+        )
             .await
             .expect("handler ok")
             .into_response();
@@ -64024,7 +64209,11 @@ mod explorer_asset_definition_snapshot_tests {
             .unpack(|_| {});
         let committed0 = valid0.commit_unchecked().unpack(|_| {});
         crate::test_utils::finalize_committed_block(&state, st_block0, committed0);
-        let resp = handle_v1_explorer_asset_definition_snapshot(state, def_id)
+        let resp = handle_v1_explorer_asset_definition_snapshot(
+            state,
+            DataspaceReadVisibility::all_for_tests(),
+            def_id,
+        )
             .await
             .expect("handler ok")
             .into_response();
@@ -64070,9 +64259,13 @@ mod explorer_asset_definition_snapshot_tests {
 }
 pub async fn handle_v1_explorer_asset_detail(
     state: Arc<CoreState>,
+    visibility: DataspaceReadVisibility,
     asset_id: AssetId,
 ) -> Result<AxResponse, Error> {
     let world = state.world_view();
+    if !visibility.allows_asset(&world, &asset_id) {
+        return Err(explorer_not_found());
+    }
     let dto = world
         .asset(&asset_id)
         .map(crate::explorer::ExplorerAssetDto::from_entry)
@@ -64081,9 +64274,13 @@ pub async fn handle_v1_explorer_asset_detail(
 }
 pub async fn handle_v1_explorer_nft_detail(
     state: Arc<CoreState>,
+    visibility: DataspaceReadVisibility,
     nft_id: NftId,
 ) -> Result<AxResponse, Error> {
     let world = state.world_view();
+    if !visibility.allows_nft(&world, &nft_id) {
+        return Err(explorer_not_found());
+    }
     let dto = world
         .nft(&nft_id)
         .map(crate::explorer::ExplorerNftDto::from_entry)
@@ -64092,9 +64289,13 @@ pub async fn handle_v1_explorer_nft_detail(
 }
 pub async fn handle_v1_explorer_rwa_detail(
     state: Arc<CoreState>,
+    visibility: DataspaceReadVisibility,
     rwa_id: dm::rwa::RwaId,
 ) -> Result<AxResponse, Error> {
     let world = state.world_view();
+    if !visibility.allows_rwa(&world, &rwa_id) {
+        return Err(explorer_not_found());
+    }
     let dto = world
         .rwa(&rwa_id)
         .map(crate::explorer::ExplorerRwaDto::from_entry)

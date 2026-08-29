@@ -5972,7 +5972,7 @@ pub mod isi {
     }
     fn checked_expired_contract_emergency_hold_retrospective(
         lifecycle: &iroha_data_model::smart_contract::ContractLifecycleControlV1,
-        action: &iroha_data_model::governance::types::CompleteContractEmergencyHoldRetrospectiveGovernanceActionV1,
+        action: &CompleteContractEmergencyHoldRetrospectiveGovernanceActionV1,
         current_height: u64,
     ) -> Result<iroha_data_model::smart_contract::ContractEmergencyHoldV1, Error> {
         if action.retrospective_finding_root == [0; 32] {
@@ -7372,9 +7372,20 @@ pub mod isi {
                 .execute(authority, state_transaction)?;
             }
             if let Some(previous) = current_previous_contract_address {
+                let expected_revision = state_transaction
+                    .world
+                    .contract_subject_bindings
+                    .get(&previous)
+                    .ok_or_else(|| {
+                        InstructionExecutionError::InvariantViolation(
+                            "active alias target has no retained contract lifecycle".into(),
+                        )
+                    })?
+                    .lifecycle
+                    .revision;
                 scode::DeactivateContractInstance {
                     contract_address: previous,
-                    expected_revision: 1,
+                    expected_revision,
                     reason: Some("atomic contract deployment rotation".to_owned()),
                 }
                 .execute(authority, state_transaction)?;
@@ -11127,7 +11138,13 @@ pub mod isi {
 
             let certificate = self.certificate;
             let current_height = state_transaction.block_height();
-            let ordered_roster = state_transaction.commit_topology().get().clone();
+            let ordered_roster = state_transaction
+                .threshold_key_lifecycle_frozen_roster_v1()
+                .map_err(|_| {
+                    threshold_key_lifecycle_error_v1(
+                        "threshold-key lifecycle certificate authentication failed",
+                    )
+                })?;
             crate::state::verify_threshold_key_lifecycle_certificate_v1(
                 &certificate,
                 &state_transaction.network_id,
@@ -38819,7 +38836,7 @@ seiyaku GovernanceLifecycle {
             );
             let deactivate = scode::DeactivateContractInstance {
                 contract_address: contract_address.clone(),
-                expected_revision: 1,
+                expected_revision: 2,
                 reason: Some("adversarial ABA attempt".to_owned()),
             };
             let error = deactivate
@@ -38831,7 +38848,12 @@ seiyaku GovernanceLifecycle {
                 Some(&code_hash),
                 "rejected deactivation must preserve the live binding"
             );
-            let error = activate
+            let active_activate = scode::ActivateContractInstance {
+                contract_address: contract_address.clone(),
+                expected_revision: 2,
+                code_hash,
+            };
+            let error = active_activate
                 .clone()
                 .expect_execute_err(&attacker, &mut stx, "even an idempotent binding request requires lifecycle authority");
             assert_contains!(error.to_string(), "current account owner");
@@ -38851,7 +38873,12 @@ seiyaku GovernanceLifecycle {
                 .lifecycle;
             assert!(deactivated_lifecycle.active_code_hash.is_none());
             assert_eq!(deactivated_lifecycle.revision, 3);
-            let error = activate
+            let reactivate = scode::ActivateContractInstance {
+                contract_address: contract_address.clone(),
+                expected_revision: 3,
+                code_hash,
+            };
+            let error = reactivate
                 .clone()
                 .expect_execute_err(&attacker, &mut stx, "an unprivileged account must not complete an ABA rebind");
             assert_contains!(error.to_string(), "current account owner");
@@ -38861,7 +38888,7 @@ seiyaku GovernanceLifecycle {
                     .get(&contract_address)
                     .is_none()
             );
-            activate
+            reactivate
                 .expect_execute(&ALICE_ID, &mut stx, "runtime lifecycle authority may reactivate verified code");
             assert_eq!(
                 stx.world.contract_instances.get(&contract_address),

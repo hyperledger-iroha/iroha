@@ -567,10 +567,15 @@ final class ParliamentProposalValidatorV1 {
         }
       }
       case "Deactivate" -> {
-        exact(payload, fields("expected_code_hash", "reason"), kind);
+        exact(
+            payload,
+            payload.containsKey("reason")
+                ? fields("expected_code_hash", "reason")
+                : fields("expected_code_hash"),
+            kind);
         lowerHex32(payload.get("expected_code_hash"), kind + ".expected_code_hash");
         if (payload.get("reason") != null) {
-          reason(string(payload.get("reason"), kind + ".reason"), kind + ".reason");
+          string(payload.get("reason"), kind + ".reason");
         }
       }
       case "OfferOwnership" -> {
@@ -626,9 +631,9 @@ final class ParliamentProposalValidatorV1 {
     lowerHex32(
         value.get("expected_code_hash"), "ContractEmergencyHold.expected_code_hash");
     bytes(value.get("incident_digest"), 32, "ContractEmergencyHold.incident_digest", true);
-    reason(
-        string(value.get("reason"), "ContractEmergencyHold.reason"),
-        "ContractEmergencyHold.reason");
+    if (string(value.get("reason"), "ContractEmergencyHold.reason").trim().isEmpty()) {
+      throw invalid("ContractEmergencyHold.reason must not be blank");
+    }
     final BigInteger duration =
         uint(value.get("duration_blocks"), "ContractEmergencyHold.duration_blocks");
     if (duration.signum() == 0 || duration.compareTo(BigInteger.valueOf(3_600)) > 0) {

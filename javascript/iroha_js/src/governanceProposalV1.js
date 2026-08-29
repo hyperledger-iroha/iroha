@@ -763,9 +763,10 @@ function normalizeContractLifecycleAction(value, context) {
       };
     }
     case "Deactivate": {
+      const hasReason = plainObject(record.payload) && Object.hasOwn(record.payload, "reason");
       const payload = exactRecord(
         record.payload,
-        ["expected_code_hash", "reason"],
+        hasReason ? ["expected_code_hash", "reason"] : ["expected_code_hash"],
         payloadContext,
       );
       return {
@@ -775,9 +776,9 @@ function normalizeContractLifecycleAction(value, context) {
             payload.expected_code_hash,
             `${payloadContext}.expected_code_hash`,
           ),
-          reason: payload.reason === null
+          reason: !hasReason || payload.reason === null
             ? null
-            : boundedReason(payload.reason, `${payloadContext}.reason`),
+            : exactString(payload.reason, `${payloadContext}.reason`),
         },
       };
     }
@@ -851,6 +852,10 @@ function normalizeContractEmergencyHold(value, context) {
   if (durationBlocks > 3_600) {
     throw new TypeError(`${context}.duration_blocks exceeds the V1 maximum of 3600`);
   }
+  const reason = exactString(record.reason, `${context}.reason`);
+  if (reason.trim().length === 0) {
+    throw new TypeError(`${context}.reason must not be blank`);
+  }
   return {
     contract_address: contractAddress,
     expected_revision: jsonUint(
@@ -865,7 +870,7 @@ function normalizeContractEmergencyHold(value, context) {
       `${context}.incident_digest`,
       { nonZero: true },
     ),
-    reason: boundedReason(record.reason, `${context}.reason`),
+    reason,
     duration_blocks: durationBlocks,
   };
 }

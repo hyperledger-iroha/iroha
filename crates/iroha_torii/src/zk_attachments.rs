@@ -1558,12 +1558,12 @@ async fn sanitize_attachment_in_process(
     let declared = declared_type.clone();
     let mut outcome = crate::panic_recovery::join_recoverable(
         crate::panic_recovery::spawn_blocking_recoverable(move || {
-        #[cfg(test)]
-        wait_for_sanitizer_worker_test_gate();
-        let outcome = sanitize_attachment_sync(declared.as_deref(), body.as_ref(), &cfg);
-        drop(admission);
-        outcome
-    }),
+            #[cfg(test)]
+            wait_for_sanitizer_worker_test_gate();
+            let outcome = sanitize_attachment_sync(declared.as_deref(), body.as_ref(), &cfg);
+            drop(admission);
+            outcome
+        }),
     )
     .await
     .map_err(|err| {
@@ -1591,12 +1591,12 @@ async fn sanitize_attachment_subprocess(
     };
     let outcome = crate::panic_recovery::join_recoverable(
         crate::panic_recovery::spawn_blocking_recoverable(move || {
-        #[cfg(test)]
-        wait_for_sanitizer_worker_test_gate();
-        let outcome = run_sanitizer_subprocess(request, cfg.timeout, admission.clone());
-        drop(admission);
-        outcome
-    }),
+            #[cfg(test)]
+            wait_for_sanitizer_worker_test_gate();
+            let outcome = run_sanitizer_subprocess(request, cfg.timeout, admission.clone());
+            drop(admission);
+            outcome
+        }),
     )
     .await
     .map_err(|err| {

@@ -908,9 +908,7 @@ fn run_lifecycle_active_height(
                             services,
                         )?;
                     }
-                    if producer_claim
-                        .validate_sidecar_pacemaker_escape_permit()
-                        .is_some()
+                    if let Some(_permit) = producer_claim.validate_sidecar_pacemaker_escape_permit()
                     {
                         // A missing merge sidecar is an I/O dependency, not
                         // authority to stop the absolute view clock. Preserve

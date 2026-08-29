@@ -2540,6 +2540,252 @@ class GovernanceProposalSorafsProviderGovernance:
         return cls(GovernanceSorafsProviderAction.from_payload(record["action"]))
 
 
+class GovernanceContractLifecycleActionKind(str, Enum):
+    """Closed contract-lifecycle Parliament action tags."""
+
+    ACTIVATE = "Activate"
+    DEACTIVATE = "Deactivate"
+    OFFER_OWNERSHIP = "OfferOwnership"
+    CANCEL_OWNERSHIP_OFFER = "CancelOwnershipOffer"
+    ACCEPT_PARLIAMENT_OWNERSHIP = "AcceptParliamentOwnership"
+    COMPLETE_EMERGENCY_HOLD_RETROSPECTIVE = "CompleteEmergencyHoldRetrospective"
+
+
+@dataclass(frozen=True)
+class GovernanceContractLifecycleActivate:
+    """Exact governed contract activation payload."""
+
+    code_hash: str
+    abi_hash: str
+    abi_version: int
+    manifest_provenance: Optional[GovernanceManifestProvenance]
+
+
+@dataclass(frozen=True)
+class GovernanceContractLifecycleDeactivate:
+    """Exact governed contract deactivation payload."""
+
+    expected_code_hash: str
+    reason: Optional[str]
+
+
+@dataclass(frozen=True)
+class GovernanceContractLifecycleOfferOwnership:
+    """Exact governed contract ownership-offer payload."""
+
+    new_owner: str
+
+
+@dataclass(frozen=True)
+class GovernanceContractLifecycleEmergencyHoldRetrospective:
+    """Exact expired emergency-hold retrospective payload."""
+
+    hold_proposal_content_id: tuple[int, ...]
+    hold_governance_attempt_id: tuple[int, ...]
+    incident_digest: tuple[int, ...]
+    retrospective_finding_root: tuple[int, ...]
+
+
+GovernanceContractLifecycleActionPayload = Union[
+    GovernanceContractLifecycleActivate,
+    GovernanceContractLifecycleDeactivate,
+    GovernanceContractLifecycleOfferOwnership,
+    GovernanceContractLifecycleEmergencyHoldRetrospective,
+    None,
+]
+
+
+@dataclass(frozen=True)
+class GovernanceContractLifecycleAction:
+    """One exact adjacently-tagged lifecycle action."""
+
+    action: GovernanceContractLifecycleActionKind
+    payload: GovernanceContractLifecycleActionPayload
+
+    @classmethod
+    def from_payload(cls, value: Any) -> "GovernanceContractLifecycleAction":
+        context = "ContractLifecycleGovernance payload.action"
+        record = _exact(value, frozenset({"action", "payload"}), context)
+        try:
+            action = GovernanceContractLifecycleActionKind(record["action"])
+        except (ValueError, TypeError) as exc:
+            raise TypeError(f"{context}.action is not a first-release lifecycle action") from exc
+        payload_context = f"{context}.payload"
+        if action in {
+            GovernanceContractLifecycleActionKind.CANCEL_OWNERSHIP_OFFER,
+            GovernanceContractLifecycleActionKind.ACCEPT_PARLIAMENT_OWNERSHIP,
+        }:
+            if record["payload"] is not None:
+                raise TypeError(f"{payload_context} must be null for {action.value}")
+            return cls(action, None)
+        if action is GovernanceContractLifecycleActionKind.ACTIVATE:
+            payload = _exact(
+                record["payload"],
+                frozenset({"code_hash", "abi_hash", "abi_version", "manifest_provenance"}),
+                payload_context,
+            )
+            abi_version = _proposal_exact_json_uint(
+                payload["abi_version"], f"{payload_context}.abi_version", positive=True
+            )
+            if abi_version != 1:
+                raise TypeError(f"{payload_context}.abi_version must be the integer 1")
+            provenance = (
+                None
+                if payload["manifest_provenance"] is None
+                else GovernanceManifestProvenance.from_payload(
+                    payload["manifest_provenance"], f"{payload_context}.manifest_provenance"
+                )
+            )
+            return cls(
+                action,
+                GovernanceContractLifecycleActivate(
+                    _lower_hex32(payload["code_hash"], f"{payload_context}.code_hash"),
+                    _lower_hex32(payload["abi_hash"], f"{payload_context}.abi_hash"),
+                    abi_version,
+                    provenance,
+                ),
+            )
+        if action is GovernanceContractLifecycleActionKind.DEACTIVATE:
+            payload = _exact(
+                record["payload"],
+                frozenset({"expected_code_hash", "reason"})
+                if isinstance(record["payload"], Mapping) and "reason" in record["payload"]
+                else frozenset({"expected_code_hash"}),
+                payload_context,
+            )
+            reason_value = payload.get("reason")
+            if reason_value is not None and not isinstance(reason_value, str):
+                raise TypeError(f"{payload_context}.reason must be a string or null")
+            reason = cast(Optional[str], reason_value)
+            return cls(
+                action,
+                GovernanceContractLifecycleDeactivate(
+                    _lower_hex32(
+                        payload["expected_code_hash"], f"{payload_context}.expected_code_hash"
+                    ),
+                    reason,
+                ),
+            )
+        if action is GovernanceContractLifecycleActionKind.OFFER_OWNERSHIP:
+            payload = _exact(record["payload"], frozenset({"new_owner"}), payload_context)
+            return cls(
+                action,
+                GovernanceContractLifecycleOfferOwnership(
+                    _account_id(payload["new_owner"], f"{payload_context}.new_owner")
+                ),
+            )
+        payload = _exact(
+            record["payload"],
+            frozenset(
+                {
+                    "hold_proposal_content_id",
+                    "hold_governance_attempt_id",
+                    "incident_digest",
+                    "retrospective_finding_root",
+                }
+            ),
+            payload_context,
+        )
+        return cls(
+            action,
+            GovernanceContractLifecycleEmergencyHoldRetrospective(
+                _bytes32(
+                    payload["hold_proposal_content_id"],
+                    f"{payload_context}.hold_proposal_content_id",
+                    nonzero=True,
+                ),
+                _bytes32(
+                    payload["hold_governance_attempt_id"],
+                    f"{payload_context}.hold_governance_attempt_id",
+                    nonzero=True,
+                ),
+                _bytes32(
+                    payload["incident_digest"],
+                    f"{payload_context}.incident_digest",
+                    nonzero=True,
+                ),
+                _bytes32(
+                    payload["retrospective_finding_root"],
+                    f"{payload_context}.retrospective_finding_root",
+                    nonzero=True,
+                ),
+            ),
+        )
+
+
+@dataclass(frozen=True)
+class GovernanceProposalContractLifecycleGovernance:
+    """Canonical `ContractLifecycleGovernanceProposalV1` payload."""
+
+    contract_address: str
+    expected_revision: int
+    action: GovernanceContractLifecycleAction
+
+    @classmethod
+    def from_payload(cls, value: Any) -> "GovernanceProposalContractLifecycleGovernance":
+        context = "ContractLifecycleGovernance payload"
+        record = _exact(
+            value, frozenset({"contract_address", "expected_revision", "action"}), context
+        )
+        return cls(
+            _contract_address(record["contract_address"], f"{context}.contract_address"),
+            _proposal_exact_json_uint(
+                record["expected_revision"], f"{context}.expected_revision", positive=True
+            ),
+            GovernanceContractLifecycleAction.from_payload(record["action"]),
+        )
+
+
+@dataclass(frozen=True)
+class GovernanceProposalContractEmergencyHold:
+    """Canonical `ContractEmergencyHoldProposalV1` payload."""
+
+    contract_address: str
+    expected_revision: int
+    expected_code_hash: str
+    incident_digest: tuple[int, ...]
+    reason: str
+    duration_blocks: int
+
+    @classmethod
+    def from_payload(cls, value: Any) -> "GovernanceProposalContractEmergencyHold":
+        context = "ContractEmergencyHold payload"
+        record = _exact(
+            value,
+            frozenset(
+                {
+                    "contract_address",
+                    "expected_revision",
+                    "expected_code_hash",
+                    "incident_digest",
+                    "reason",
+                    "duration_blocks",
+                }
+            ),
+            context,
+        )
+        if not isinstance(record["reason"], str):
+            raise TypeError(f"{context}.reason must be a string")
+        reason = record["reason"]
+        if not reason.strip():
+            raise TypeError(f"{context}.reason must not be blank")
+        duration_blocks = _proposal_exact_json_uint(
+            record["duration_blocks"], f"{context}.duration_blocks", positive=True
+        )
+        if duration_blocks > 3_600:
+            raise TypeError(f"{context}.duration_blocks must be in 1..3600")
+        return cls(
+            _contract_address(record["contract_address"], f"{context}.contract_address"),
+            _proposal_exact_json_uint(
+                record["expected_revision"], f"{context}.expected_revision", positive=True
+            ),
+            _lower_hex32(record["expected_code_hash"], f"{context}.expected_code_hash"),
+            _bytes32(record["incident_digest"], f"{context}.incident_digest", nonzero=True),
+            reason,
+            duration_blocks,
+        )
+
+
 GovernanceProposalPayload = Union[
     GovernanceProposalDeployContract,
     GovernanceProposalRuntimeUpgrade,
@@ -2548,11 +2794,13 @@ GovernanceProposalPayload = Union[
     GovernanceProposalValidationFeePayoutLifecycle,
     GovernanceProposalMusubiRegistryGovernance,
     GovernanceProposalSorafsProviderGovernance,
+    GovernanceProposalContractLifecycleGovernance,
+    GovernanceProposalContractEmergencyHold,
 ]
 
 
 class GovernanceProposalKindTag(str, Enum):
-    """Exactly the seven first-release `ProposalKind` tags."""
+    """Exactly the nine first-release `ProposalKind` tags."""
 
     DEPLOY_CONTRACT = "DeployContract"
     RUNTIME_UPGRADE = "RuntimeUpgrade"
@@ -2561,6 +2809,8 @@ class GovernanceProposalKindTag(str, Enum):
     VALIDATION_FEE_PAYOUT_LIFECYCLE = "ValidationFeePayoutLifecycle"
     MUSUBI_REGISTRY_GOVERNANCE = "MusubiRegistryGovernance"
     SORAFS_PROVIDER_GOVERNANCE = "SorafsProviderGovernance"
+    CONTRACT_LIFECYCLE_GOVERNANCE = "ContractLifecycleGovernance"
+    CONTRACT_EMERGENCY_HOLD = "ContractEmergencyHold"
 
 
 @dataclass(frozen=True)
@@ -2576,7 +2826,7 @@ class GovernanceProposalKind:
         try:
             kind = GovernanceProposalKindTag(record["kind"])
         except (ValueError, TypeError) as exc:
-            raise TypeError("proposal kind tag is not one of the seven first-release variants") from exc
+            raise TypeError("proposal kind tag is not one of the nine first-release variants") from exc
         parser = {
             kind.DEPLOY_CONTRACT: GovernanceProposalDeployContract.from_payload,
             kind.RUNTIME_UPGRADE: GovernanceProposalRuntimeUpgrade.from_payload,
@@ -2585,6 +2835,8 @@ class GovernanceProposalKind:
             kind.VALIDATION_FEE_PAYOUT_LIFECYCLE: GovernanceProposalValidationFeePayoutLifecycle.from_payload,
             kind.MUSUBI_REGISTRY_GOVERNANCE: GovernanceProposalMusubiRegistryGovernance.from_payload,
             kind.SORAFS_PROVIDER_GOVERNANCE: GovernanceProposalSorafsProviderGovernance.from_payload,
+            kind.CONTRACT_LIFECYCLE_GOVERNANCE: GovernanceProposalContractLifecycleGovernance.from_payload,
+            kind.CONTRACT_EMERGENCY_HOLD: GovernanceProposalContractEmergencyHold.from_payload,
         }[kind]
         payload = cast(GovernanceProposalPayload, parser(record["payload"]))
         return cls(kind, payload)

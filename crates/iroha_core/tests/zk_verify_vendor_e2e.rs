@@ -167,6 +167,8 @@ seiyaku VendorBridgeGate {
     Grant::account_permission(contract_submit_permission, contract_address.subject_id())
         .execute(&authority, &mut stx)
         .expect("grant ballot submission to the contract effect authority");
+    stx.world
+        .bind_inactive_contract_subject_for_testing(contract_address.clone(), authority.clone());
     ActivateContractInstance {
         contract_address: contract_address.clone(),
         expected_revision: 1,

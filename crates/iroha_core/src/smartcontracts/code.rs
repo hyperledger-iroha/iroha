@@ -753,9 +753,12 @@ pub fn borrow_bound_contract_subject_from_world<'a>(
     world: &'a impl WorldReadOnly,
     contract_address: &ContractAddress,
 ) -> Option<&'a AccountId> {
-    world.contract_instances().get(contract_address)?;
+    let code_hash = world.contract_instances().get(contract_address)?;
     let binding = world.contract_subject_bindings().get(contract_address)?;
     binding.validate_for(contract_address).ok()?;
+    if binding.lifecycle.active_code_hash.as_ref() != Some(code_hash) {
+        return None;
+    }
     Some(&binding.subject)
 }
 /// Resolve a bound instance without cloning its manifest or bytecode.
@@ -1025,6 +1028,10 @@ mod tests {
             DataSpaceId::UNIVERSAL,
         )
         .expect("contract address");
+        stx.world.bind_inactive_contract_subject_for_testing(
+            contract_address.clone(),
+            authority.clone(),
+        );
         activate_instance(&authority, contract_address.clone(), 1, code_hash, &mut stx)
             .expect("activate instance");
         assert_eq!(
@@ -1126,6 +1133,10 @@ mod tests {
             DataSpaceId::UNIVERSAL,
         )
         .expect("contract address");
+        stx.world.bind_inactive_contract_subject_for_testing(
+            contract_address.clone(),
+            authority.clone(),
+        );
         activate_instance(&authority, contract_address.clone(), 1, code_hash, &mut stx)
             .expect("governed activation");
         stx.apply();
@@ -1150,6 +1161,12 @@ mod tests {
             DataSpaceId::UNIVERSAL,
         )
         .expect("contract address");
+        transaction
+            .world
+            .bind_inactive_contract_subject_for_testing(
+                contract_address.clone(),
+                authority.clone(),
+            );
         let (v1_code, v1_manifest) = lifecycle_contract(
             r#"
 seiyaku LifecycleOne {
@@ -1166,6 +1183,7 @@ seiyaku LifecycleOne {
         activate_instance(
             &authority,
             contract_address.clone(),
+            1,
             v1_hash,
             &mut transaction,
         )
@@ -1230,6 +1248,7 @@ seiyaku LifecycleOne {
         activate_instance(
             &authority,
             contract_address.clone(),
+            2,
             v1_hash,
             &mut transaction,
         )
@@ -1253,43 +1272,14 @@ seiyaku LifecycleTwo {
             .expect("register v2 bytecode");
         register_manifest(&authority, v2_manifest.signed(&keypair), &mut transaction)
             .expect("register v2 manifest");
-        let unauthorized_kaizen = activate_instance(
-            &authority,
-            contract_address.clone(),
-            v2_hash,
-            &mut transaction,
-        )
-        .expect_err("in-place replacement requires governance authorization");
-        assert!(
-            unauthorized_kaizen
-                .to_string()
-                .contains("CanEnactGovernance")
-        );
-        assert_eq!(
-            transaction
-                .world
-                .contract_instances
-                .get(&contract_address)
-                .copied(),
-            Some(v1_hash),
-            "rejected kaizen must preserve the old binding"
-        );
-        Grant::account_permission(
-            iroha_data_model::permission::Permission::new(
-                "CanEnactGovernance".to_owned(),
-                Json::new(()),
-            ),
-            authority.clone(),
-        )
-        .execute(&authority, &mut transaction)
-        .expect("grant in-place kaizen governance permission");
         activate_instance(
             &authority,
             contract_address.clone(),
+            3,
             v2_hash,
             &mut transaction,
         )
-        .expect("replace the active binding");
+        .expect("the lifecycle owner may replace the active binding");
         let kaizen = pending_contract_lifecycle(&transaction.world, &contract_address)
             .expect("valid lifecycle state")
             .expect("replacement staged kaizen");
@@ -1405,6 +1395,12 @@ seiyaku LifecycleAba {
         let mut first_block = state.block(default_header(1));
         let mut first_transaction = first_block.transaction();
         first_transaction.tx_call_hash = Some(Hash::new(b"lifecycle-aba-first-activation"));
+        first_transaction
+            .world
+            .bind_inactive_contract_subject_for_testing(
+                contract_address.clone(),
+                authority.clone(),
+            );
         let code_hash = register_code_bytes(&authority, code, &mut first_transaction)
             .expect("register lifecycle bytecode");
         register_manifest(
@@ -1416,6 +1412,7 @@ seiyaku LifecycleAba {
         activate_instance(
             &authority,
             contract_address.clone(),
+            1,
             code_hash,
             &mut first_transaction,
         )
@@ -1440,7 +1437,7 @@ seiyaku LifecycleAba {
         deactivate.tx_call_hash = Some(Hash::new(b"lifecycle-aba-deactivation"));
         DeactivateContractInstance {
             contract_address: contract_address.clone(),
-            expected_revision: 1,
+            expected_revision: 2,
             reason: Some("ABA regression fixture".to_owned()),
         }
         .execute(&authority, &mut deactivate)
@@ -1455,6 +1452,7 @@ seiyaku LifecycleAba {
         activate_instance(
             &authority,
             contract_address.clone(),
+            3,
             code_hash,
             &mut second_transaction,
         )
@@ -1738,6 +1736,10 @@ seiyaku LifecycleAba {
         let error = fetch_contract_lifecycle(&world_view, &address)
             .expect_err("active-index drift must fail closed");
         assert!(error.contains("does not match the active-instance index"));
+        assert!(
+            borrow_bound_contract_subject_from_world(&world_view, &address).is_none(),
+            "active execution identity must fail closed on lifecycle/index drift"
+        );
     }
     #[test]
     fn subject_binding_initialization_rejects_mismatched_existing_binding() {

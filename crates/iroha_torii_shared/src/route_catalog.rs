@@ -2945,7 +2945,7 @@ pub mod runtime_governance {
         AdmissionPolicy::AuthenticatedAccount,
     )
     .with_feature_gate(FeatureGate::Feature("app_api"))
-    .with_authentication(AuthenticationPolicy::ProtocolHandshake)
+    .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
     .with_projections(RouteProjections::OPENAPI)
     .with_path_policy(PathPolicy::ProtocolException {
         reason: "governance SSE transport endpoint",
@@ -3141,29 +3141,8 @@ pub mod sorafs {
             AdmissionPolicy::AuthenticatedAccount,
         )
         .with_feature_gate(FeatureGate::Feature("app_api"))
-        .with_authentication(AuthenticationPolicy::ProtocolHandshake)
+        .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
         .with_projections(RouteProjections::OPENAPI)
-        .with_implicit_head(true)
-    }
-    const fn protocol_get(
-        stable_route_id: &'static str,
-        path: &'static str,
-        route_match: RouteMatch,
-        reason: &'static str,
-    ) -> RouteDescriptor {
-        RouteDescriptor::new(
-            stable_route_id,
-            HttpMethod::Get,
-            path,
-            ApiSurface::Protocol,
-            Listener::Torii,
-            RouteEffect::ReadOnly,
-            AdmissionPolicy::Public,
-        )
-        .with_feature_gate(FeatureGate::Feature("app_api"))
-        .with_authentication(AuthenticationPolicy::ProtocolHandshake)
-        .with_route_match(route_match)
-        .with_path_policy(PathPolicy::ProtocolException { reason })
         .with_implicit_head(true)
     }
     /// Read configured `SoraFS` publication peers.
@@ -3781,7 +3760,7 @@ pub mod application_api {
             RouteEffect::LongLivedStream,
             AdmissionPolicy::AuthenticatedAccount,
         )
-        .with_authentication(AuthenticationPolicy::ProtocolHandshake)
+        .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
         .with_feature_gate(FeatureGate::Feature("app_api"))
         .with_projections(RouteProjections::OPENAPI)
         .with_path_policy(PathPolicy::ProtocolException {
@@ -3819,6 +3798,14 @@ pub mod application_api {
     }
     const fn telemetry_documented_get(id: &'static str, path: &'static str) -> RouteDescriptor {
         telemetry_diagnostic_get(id, path).with_projections(RouteProjections::OPENAPI)
+    }
+    const fn authenticated_telemetry_documented_get(
+        id: &'static str,
+        path: &'static str,
+    ) -> RouteDescriptor {
+        telemetry_documented_get(id, path)
+            .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
+            .with_admission(AdmissionPolicy::AuthenticatedAccount)
     }
     macro_rules! declare_routes {
         ($($name:ident => $factory:ident($id:literal, $path:literal);)+) => {
@@ -3974,12 +3961,12 @@ pub mod application_api {
         SUBSCRIPTIONS_BY_SUBSCRIPTION_ID_USAGE_POST => account_mutation_post("application.subscriptions_by_subscription_id_usage_post", "/v1/subscriptions/{subscription_id}/usage");
         SUBSCRIPTIONS_BY_SUBSCRIPTION_ID_CHARGE_NOW_POST => account_mutation_post("application.subscriptions_by_subscription_id_charge_now_post", "/v1/subscriptions/{subscription_id}/charge-now");
         PARAMETERS_GET => app_get("application.parameters_get", "/v1/parameters");
-        EXPLORER_ACCOUNTS_GET => app_get("application.explorer_accounts_get", "/v1/explorer/accounts");
-        EXPLORER_DOMAINS_GET => app_get("application.explorer_domains_get", "/v1/explorer/domains");
-        EXPLORER_ASSET_DEFINITIONS_GET => app_get("application.explorer_asset_definitions_get", "/v1/explorer/asset-definitions");
-        EXPLORER_ASSETS_GET => app_get("application.explorer_assets_get", "/v1/explorer/assets");
-        EXPLORER_NFTS_GET => app_get("application.explorer_nfts_get", "/v1/explorer/nfts");
-        EXPLORER_RWAS_GET => app_get("application.explorer_rwas_get", "/v1/explorer/rwas");
+        EXPLORER_ACCOUNTS_GET => dataspace_get("application.explorer_accounts_get", "/v1/explorer/accounts");
+        EXPLORER_DOMAINS_GET => dataspace_get("application.explorer_domains_get", "/v1/explorer/domains");
+        EXPLORER_ASSET_DEFINITIONS_GET => dataspace_get("application.explorer_asset_definitions_get", "/v1/explorer/asset-definitions");
+        EXPLORER_ASSETS_GET => dataspace_get("application.explorer_assets_get", "/v1/explorer/assets");
+        EXPLORER_NFTS_GET => dataspace_get("application.explorer_nfts_get", "/v1/explorer/nfts");
+        EXPLORER_RWAS_GET => dataspace_get("application.explorer_rwas_get", "/v1/explorer/rwas");
         EXPLORER_BLOCKS_GET => dataspace_get("application.explorer_blocks_get", "/v1/explorer/blocks");
         EXPLORER_HEALTH_GET => app_sdk_get("application.explorer_health_get", "/v1/explorer/health");
         EXPLORER_BLOCKS_STREAM_GET => dataspace_protocol_get("application.explorer_blocks_stream_get", "/v1/explorer/blocks/stream");
@@ -3991,24 +3978,24 @@ pub mod application_api {
         SORACLES_DEFI_ATTESTATIONS_LATEST_GET => app_sdk_get("application.soracles_defi_attestations_latest_get", "/v1/soracles/defi/attestations/latest");
         SORACLES_FEEDS_GET => app_sdk_get("application.soracles_feeds_get", "/v1/soracles/feeds");
         SORACLES_FEEDS_BY_FEED_ID_HISTORY_GET => app_sdk_get("application.soracles_feeds_by_feed_id_history_get", "/v1/soracles/feeds/{feed_id}/history");
-        EXPLORER_METRICS_GET => telemetry_documented_get("application.explorer_metrics_get", "/v1/explorer/metrics");
+        EXPLORER_METRICS_GET => authenticated_telemetry_documented_get("application.explorer_metrics_get", "/v1/explorer/metrics");
         EXPLORER_INSTRUCTIONS_STREAM_GET => dataspace_telemetry_protocol_get("application.explorer_instructions_stream_get", "/v1/explorer/instructions/stream");
         TELEMETRY_PEERS_INFO_GET => telemetry_documented_get("application.telemetry_peers_info_get", "/v1/telemetry/peers-info");
         TELEMETRY_PROPAGATION_GET => telemetry_diagnostic_get("application.telemetry_propagation_get", "/v1/telemetry/propagation");
         TELEMETRY_LIVE_GET => telemetry_documented_get("application.telemetry_live_get", "/v1/telemetry/live");
-        EXPLORER_ACCOUNTS_BY_ACCOUNT_ID_GET => app_get("application.explorer_accounts_by_account_id_get", "/v1/explorer/accounts/{account_id}");
-        EXPLORER_ACCOUNTS_BY_ACCOUNT_ID_QR_GET => app_get("application.explorer_accounts_by_account_id_qr_get", "/v1/explorer/accounts/{account_id}/qr");
-        EXPLORER_DOMAINS_BY_DOMAIN_ID_GET => app_get("application.explorer_domains_by_domain_id_get", "/v1/explorer/domains/{domain_id}");
-        EXPLORER_ASSET_DEFINITIONS_BY_DEFINITION_ID_GET => app_get("application.explorer_asset_definitions_by_definition_id_get", "/v1/explorer/asset-definitions/{definition_id}");
-        EXPLORER_ASSET_DEFINITIONS_BY_DEFINITION_ID_ECONOMETRICS_GET => app_get("application.explorer_asset_definitions_by_definition_id_econometrics_get", "/v1/explorer/asset-definitions/{definition_id}/econometrics");
-        EXPLORER_ASSET_DEFINITIONS_BY_DEFINITION_ID_SNAPSHOT_GET => app_get("application.explorer_asset_definitions_by_definition_id_snapshot_get", "/v1/explorer/asset-definitions/{definition_id}/snapshot");
-        EXPLORER_ASSETS_BY_ASSET_ID_GET => app_get("application.explorer_assets_by_asset_id_get", "/v1/explorer/assets/{asset_id}");
-        EXPLORER_NFTS_BY_NFT_ID_GET => app_get("application.explorer_nfts_by_nft_id_get", "/v1/explorer/nfts/{nft_id}");
-        EXPLORER_RWAS_BY_RWA_ID_GET => app_get("application.explorer_rwas_by_rwa_id_get", "/v1/explorer/rwas/{rwa_id}");
+        EXPLORER_ACCOUNTS_BY_ACCOUNT_ID_GET => dataspace_get("application.explorer_accounts_by_account_id_get", "/v1/explorer/accounts/{account_id}");
+        EXPLORER_ACCOUNTS_BY_ACCOUNT_ID_QR_GET => dataspace_get("application.explorer_accounts_by_account_id_qr_get", "/v1/explorer/accounts/{account_id}/qr");
+        EXPLORER_DOMAINS_BY_DOMAIN_ID_GET => dataspace_get("application.explorer_domains_by_domain_id_get", "/v1/explorer/domains/{domain_id}");
+        EXPLORER_ASSET_DEFINITIONS_BY_DEFINITION_ID_GET => dataspace_get("application.explorer_asset_definitions_by_definition_id_get", "/v1/explorer/asset-definitions/{definition_id}");
+        EXPLORER_ASSET_DEFINITIONS_BY_DEFINITION_ID_ECONOMETRICS_GET => dataspace_get("application.explorer_asset_definitions_by_definition_id_econometrics_get", "/v1/explorer/asset-definitions/{definition_id}/econometrics");
+        EXPLORER_ASSET_DEFINITIONS_BY_DEFINITION_ID_SNAPSHOT_GET => dataspace_get("application.explorer_asset_definitions_by_definition_id_snapshot_get", "/v1/explorer/asset-definitions/{definition_id}/snapshot");
+        EXPLORER_ASSETS_BY_ASSET_ID_GET => dataspace_get("application.explorer_assets_by_asset_id_get", "/v1/explorer/assets/{asset_id}");
+        EXPLORER_NFTS_BY_NFT_ID_GET => dataspace_get("application.explorer_nfts_by_nft_id_get", "/v1/explorer/nfts/{nft_id}");
+        EXPLORER_RWAS_BY_RWA_ID_GET => dataspace_get("application.explorer_rwas_by_rwa_id_get", "/v1/explorer/rwas/{rwa_id}");
         EXPLORER_BLOCKS_BY_IDENTIFIER_GET => dataspace_get("application.explorer_blocks_by_identifier_get", "/v1/explorer/blocks/{identifier}");
         EXPLORER_TRANSACTIONS_BY_HASH_GET => dataspace_get("application.explorer_transactions_by_hash_get", "/v1/explorer/transactions/{hash}");
         EXPLORER_INSTRUCTIONS_BY_HASH_BY_INDEX_GET => dataspace_get("application.explorer_instructions_by_hash_by_index_get", "/v1/explorer/instructions/{hash}/{index}");
-        EXPLORER_INSTRUCTIONS_BY_HASH_BY_INDEX_CONTRACT_VIEW_GET => app_sdk_get("application.explorer_instructions_by_hash_by_index_contract_view_get", "/v1/explorer/instructions/{hash}/{index}/contract-view");
+        EXPLORER_INSTRUCTIONS_BY_HASH_BY_INDEX_CONTRACT_VIEW_GET => dataspace_sdk_get("application.explorer_instructions_by_hash_by_index_contract_view_get", "/v1/explorer/instructions/{hash}/{index}/contract-view");
         KAIGI_CALLS_BY_CALL_ID_GET => app_sdk_get("application.kaigi_calls_by_call_id_get", "/v1/kaigi/calls/{call_id}");
         KAIGI_CALLS_BY_CALL_ID_SIGNALS_GET => account_compute_sdk_get("application.kaigi_calls_by_call_id_signals_get", "/v1/kaigi/calls/{call_id}/signals");
         KAIGI_CALLS_BY_CALL_ID_EVENTS_GET => app_unprojected_protocol_get("application.kaigi_calls_by_call_id_events_get", "/v1/kaigi/calls/{call_id}/events");
@@ -4139,7 +4126,7 @@ pub mod contracts_and_verification_keys {
             RouteEffect::LongLivedStream,
             AdmissionPolicy::AuthenticatedAccount,
         )
-        .with_authentication(AuthenticationPolicy::ProtocolHandshake)
+        .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
         .with_feature_gate(FeatureGate::Feature("app_api"))
         .with_projections(RouteProjections::OPENAPI)
         .with_path_policy(PathPolicy::ProtocolException {

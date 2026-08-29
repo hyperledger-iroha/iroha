@@ -145,10 +145,8 @@ impl ModerationLedgerPolicyV1 {
             _ => return Err(ModerationLedgerPolicyError::MissingPredecessor),
         }
         if self.challenge_bond_amount != Quantity::from(MODERATION_CHALLENGE_BOND_AMOUNT_V1)
-            || self.challenge_rejected_slash_bps
-                != MODERATION_CHALLENGE_REJECTED_SLASH_BPS_V1
-            || self.challenge_resolution_grace_ms
-                != MODERATION_CHALLENGE_RESOLUTION_GRACE_MS_V1
+            || self.challenge_rejected_slash_bps != MODERATION_CHALLENGE_REJECTED_SLASH_BPS_V1
+            || self.challenge_resolution_grace_ms != MODERATION_CHALLENGE_RESOLUTION_GRACE_MS_V1
         {
             return Err(ModerationLedgerPolicyError::InvalidChallengeEconomics);
         }

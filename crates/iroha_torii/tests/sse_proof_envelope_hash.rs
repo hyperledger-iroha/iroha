@@ -16,7 +16,7 @@ async fn sse_filters_by_proof_envelope_hash() {
         "/v1/events/sse",
         get({
             let events = events.clone();
-            move |q| async move { iroha_torii::handle_v1_events_sse(events, q) }
+            move |q| async move { iroha_torii::handle_v1_events_sse_for_tests(events, q) }
         }),
     );
     // Filter by envelope hash (hex, 64 chars)

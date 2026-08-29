@@ -2693,8 +2693,7 @@ mod tests {
             revision: 1,
             predecessor_policy_digest: None,
             challenge_voting_asset_id: crate::asset::AssetDefinitionId::derive_from_components(
-                crate::domain::DomainId::try_new("sora", "universal")
-                    .expect("governance domain"),
+                crate::domain::DomainId::try_new("sora", "universal").expect("governance domain"),
                 "xor".parse().expect("governance asset name"),
             ),
             challenge_bond_amount: Quantity::from(

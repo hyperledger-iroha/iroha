@@ -1,5 +1,32 @@
 {
   "components": {
+    "headers": {
+      "IsoOutboundSignatureDomainV2": {
+        "description": "Domain separator used for the detached signature over the exact ISO XML response body.",
+        "required": true,
+        "schema": {
+          "const": "iroha.iso20022.outbound.v2",
+          "type": "string"
+        }
+      },
+      "IsoOutboundSignatureV2": {
+        "description": "Canonical padded-base64 detached signature over `iroha.iso20022.outbound.v2\\0` followed by the exact XML response bytes.",
+        "required": true,
+        "schema": {
+          "minLength": 4,
+          "pattern": "^[A-Za-z0-9+/]+={0,2}$",
+          "type": "string"
+        }
+      },
+      "IsoOutboundSignerV2": {
+        "description": "Canonical Iroha multihash public key that verifies the detached ISO XML response signature.",
+        "required": true,
+        "schema": {
+          "minLength": 1,
+          "type": "string"
+        }
+      }
+    },
     "schemas": {
       "AcceptMusubiPackageMaintainerV1": {
         "additionalProperties": false,
@@ -12016,6 +12043,40 @@
             "properties": {
               "kind": {
                 "const": "SorafsProviderGovernance",
+                "type": "string"
+              },
+              "payload": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            },
+            "required": [
+              "kind",
+              "payload"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "ContractLifecycleGovernance",
+                "type": "string"
+              },
+              "payload": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            },
+            "required": [
+              "kind",
+              "payload"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "ContractEmergencyHold",
                 "type": "string"
               },
               "payload": {
@@ -64110,7 +64171,7 @@
     },
     "/v1/iso20022/audit/messages": {
       "get": {
-        "description": "Return the deterministic tamper-evident audit manifest for durable ISO 20022 bridge records.",
+        "description": "Return a deterministic tamper-evident audit manifest scoped to records where the signed participant is originator or counterparty. Separately configured audit-admin keys receive global read-only access.",
         "parameters": [
           {
             "description": "Iroha multihash public key of the canonical request signer.",
@@ -64180,7 +64241,7 @@
     },
     "/v1/iso20022/camt056": {
       "post": {
-        "description": "Submit a camt.056 message for ISO 20022 lifecycle bridging.",
+        "description": "Submit a camt.056 lifecycle message as the original originator under the pinned profile/signature policy.",
         "parameters": [
           {
             "description": "Optional ISO bridge rail profile bound into the canonical operator signature.",
@@ -64239,7 +64300,7 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
@@ -64247,7 +64308,7 @@
                 }
               }
             },
-            "description": "Successful response",
+            "description": "Accepted after durable V2 replay admission",
             "headers": {
               "Cache-Control": {
                 "description": "Authenticated responses which must never be retained.",
@@ -64258,6 +64319,9 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "Replay capacity contains only unexpired protected identities, or durable admission is unavailable; retry later."
           }
         },
         "summary": "Submit ISO 20022 camt.056 lifecycle payload.",
@@ -64269,7 +64333,7 @@
     },
     "/v1/iso20022/colr012": {
       "post": {
-        "description": "Submit a colr.012 message for ISO 20022 lifecycle bridging.",
+        "description": "Submit an initial colr.012 message whose signed participant owns AppHdr/Fr and allows the selected profile.",
         "parameters": [
           {
             "description": "Optional ISO bridge rail profile bound into the canonical operator signature.",
@@ -64328,7 +64392,7 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
@@ -64336,7 +64400,7 @@
                 }
               }
             },
-            "description": "Successful response",
+            "description": "Accepted after durable V2 replay admission",
             "headers": {
               "Cache-Control": {
                 "description": "Authenticated responses which must never be retained.",
@@ -64347,6 +64411,9 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "Replay capacity contains only unexpired protected identities, or durable admission is unavailable; retry later."
           }
         },
         "summary": "Submit ISO 20022 colr.012 collateral substitution confirmation payload.",
@@ -64358,7 +64425,7 @@
     },
     "/v1/iso20022/messages/{msg_id}": {
       "get": {
-        "description": "Return the rich ISO 20022 message record by message id, including profile metadata and status history.",
+        "description": "Return the V2 ISO 20022 message record, including immutable participant provenance, pinned profile/signature policy, and status history. Access is limited to either original participant or a separately configured audit-admin key.",
         "parameters": [
           {
             "description": "ISO 20022 message id.",
@@ -64437,7 +64504,7 @@
     },
     "/v1/iso20022/messages/{msg_id}/camt029": {
       "get": {
-        "description": "Return a cancellation resolution message from the durable ISO bridge record. The response body is camt.029 XML.",
+        "description": "Return party-scoped camt.029 XML from the durable V2 record, signed over the exact response bytes with the documented detached-signature headers.",
         "parameters": [
           {
             "description": "ISO 20022 message id.",
@@ -64488,7 +64555,7 @@
         "responses": {
           "200": {
             "content": {
-              "application/json": {
+              "application/xml": {
                 "schema": {
                   "$ref": "#/components/schemas/XmlText"
                 }
@@ -64503,6 +64570,15 @@
                   "const": "private, no-store",
                   "type": "string"
                 }
+              },
+              "X-Iroha-Iso-Signature-Domain": {
+                "$ref": "#/components/headers/IsoOutboundSignatureDomainV2"
+              },
+              "X-Iroha-Iso-Signature": {
+                "$ref": "#/components/headers/IsoOutboundSignatureV2"
+              },
+              "X-Iroha-Iso-Signer": {
+                "$ref": "#/components/headers/IsoOutboundSignerV2"
               }
             }
           }
@@ -64516,7 +64592,7 @@
     },
     "/v1/iso20022/messages/{msg_id}/pacs002": {
       "get": {
-        "description": "Return the current ISO 20022 payment status report for a bridged message.",
+        "description": "Return party-scoped pacs.002 XML from the durable V2 record, signed over the exact response bytes with the documented detached-signature headers.",
         "parameters": [
           {
             "description": "ISO 20022 message id.",
@@ -64567,7 +64643,7 @@
         "responses": {
           "200": {
             "content": {
-              "application/json": {
+              "application/xml": {
                 "schema": {
                   "$ref": "#/components/schemas/XmlText"
                 }
@@ -64582,6 +64658,15 @@
                   "const": "private, no-store",
                   "type": "string"
                 }
+              },
+              "X-Iroha-Iso-Signature-Domain": {
+                "$ref": "#/components/headers/IsoOutboundSignatureDomainV2"
+              },
+              "X-Iroha-Iso-Signature": {
+                "$ref": "#/components/headers/IsoOutboundSignatureV2"
+              },
+              "X-Iroha-Iso-Signer": {
+                "$ref": "#/components/headers/IsoOutboundSignerV2"
               }
             }
           }
@@ -64595,7 +64680,7 @@
     },
     "/v1/iso20022/messages/{msg_id}/pacs004": {
       "get": {
-        "description": "Return a payment return message from the durable ISO bridge record. The response body is pacs.004 XML.",
+        "description": "Return party-scoped pacs.004 XML from the durable V2 record, signed over the exact response bytes with the documented detached-signature headers.",
         "parameters": [
           {
             "description": "ISO 20022 message id.",
@@ -64646,7 +64731,7 @@
         "responses": {
           "200": {
             "content": {
-              "application/json": {
+              "application/xml": {
                 "schema": {
                   "$ref": "#/components/schemas/XmlText"
                 }
@@ -64661,6 +64746,15 @@
                   "const": "private, no-store",
                   "type": "string"
                 }
+              },
+              "X-Iroha-Iso-Signature-Domain": {
+                "$ref": "#/components/headers/IsoOutboundSignatureDomainV2"
+              },
+              "X-Iroha-Iso-Signature": {
+                "$ref": "#/components/headers/IsoOutboundSignatureV2"
+              },
+              "X-Iroha-Iso-Signer": {
+                "$ref": "#/components/headers/IsoOutboundSignerV2"
               }
             }
           }
@@ -64674,7 +64768,7 @@
     },
     "/v1/iso20022/messages/{msg_id}/sese024": {
       "get": {
-        "description": "Return a securities settlement status advice from the durable ISO bridge record. The response body is sese.024 XML.",
+        "description": "Return party-scoped sese.024 XML from the durable V2 record, signed over the exact response bytes with the documented detached-signature headers.",
         "parameters": [
           {
             "description": "ISO 20022 message id.",
@@ -64725,7 +64819,7 @@
         "responses": {
           "200": {
             "content": {
-              "application/json": {
+              "application/xml": {
                 "schema": {
                   "$ref": "#/components/schemas/XmlText"
                 }
@@ -64740,6 +64834,15 @@
                   "const": "private, no-store",
                   "type": "string"
                 }
+              },
+              "X-Iroha-Iso-Signature-Domain": {
+                "$ref": "#/components/headers/IsoOutboundSignatureDomainV2"
+              },
+              "X-Iroha-Iso-Signature": {
+                "$ref": "#/components/headers/IsoOutboundSignatureV2"
+              },
+              "X-Iroha-Iso-Signer": {
+                "$ref": "#/components/headers/IsoOutboundSignerV2"
               }
             }
           }
@@ -64753,7 +64856,7 @@
     },
     "/v1/iso20022/messages/{msg_id}/sese025": {
       "get": {
-        "description": "Return a securities settlement confirmation from the durable ISO bridge record. The response body is sese.025 XML.",
+        "description": "Return party-scoped sese.025 XML from the durable V2 record, signed over the exact response bytes with the documented detached-signature headers.",
         "parameters": [
           {
             "description": "ISO 20022 message id.",
@@ -64804,7 +64907,7 @@
         "responses": {
           "200": {
             "content": {
-              "application/json": {
+              "application/xml": {
                 "schema": {
                   "$ref": "#/components/schemas/XmlText"
                 }
@@ -64819,6 +64922,15 @@
                   "const": "private, no-store",
                   "type": "string"
                 }
+              },
+              "X-Iroha-Iso-Signature-Domain": {
+                "$ref": "#/components/headers/IsoOutboundSignatureDomainV2"
+              },
+              "X-Iroha-Iso-Signature": {
+                "$ref": "#/components/headers/IsoOutboundSignatureV2"
+              },
+              "X-Iroha-Iso-Signer": {
+                "$ref": "#/components/headers/IsoOutboundSignerV2"
               }
             }
           }
@@ -64832,7 +64944,7 @@
     },
     "/v1/iso20022/pacs002": {
       "post": {
-        "description": "Submit a pacs.002 message for ISO 20022 lifecycle bridging.",
+        "description": "Submit a pacs.002 lifecycle message as the original counterparty under the pinned profile/signature policy. A settlement transition additionally requires committed-transaction evidence.",
         "parameters": [
           {
             "description": "Optional ISO bridge rail profile bound into the canonical operator signature.",
@@ -64891,7 +65003,7 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
@@ -64899,7 +65011,7 @@
                 }
               }
             },
-            "description": "Successful response",
+            "description": "Accepted after durable V2 replay admission",
             "headers": {
               "Cache-Control": {
                 "description": "Authenticated responses which must never be retained.",
@@ -64910,6 +65022,9 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "Replay capacity contains only unexpired protected identities, or durable admission is unavailable; retry later."
           }
         },
         "summary": "Submit ISO 20022 pacs.002 lifecycle payload.",
@@ -64921,7 +65036,7 @@
     },
     "/v1/iso20022/pacs004": {
       "post": {
-        "description": "Submit a pacs.004 message for ISO 20022 lifecycle bridging.",
+        "description": "Submit a pacs.004 lifecycle message as the original counterparty under the pinned profile/signature policy.",
         "parameters": [
           {
             "description": "Optional ISO bridge rail profile bound into the canonical operator signature.",
@@ -64980,7 +65095,7 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
@@ -64988,7 +65103,7 @@
                 }
               }
             },
-            "description": "Successful response",
+            "description": "Accepted after durable V2 replay admission",
             "headers": {
               "Cache-Control": {
                 "description": "Authenticated responses which must never be retained.",
@@ -64999,6 +65114,9 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "Replay capacity contains only unexpired protected identities, or durable admission is unavailable; retry later."
           }
         },
         "summary": "Submit ISO 20022 pacs.004 lifecycle payload.",
@@ -65010,7 +65128,7 @@
     },
     "/v1/iso20022/pacs008": {
       "post": {
-        "description": "Submit a pacs.008 message for ISO 20022 bridging.",
+        "description": "Submit a pacs.008 message. The signed participant must own AppHdr/Fr, allow the selected profile, and durably reserve all replay identities before ledger signing.",
         "parameters": [
           {
             "description": "Optional ISO bridge rail profile bound into the canonical operator signature.",
@@ -65069,7 +65187,7 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
@@ -65077,7 +65195,7 @@
                 }
               }
             },
-            "description": "Successful response",
+            "description": "Accepted after durable V2 replay admission",
             "headers": {
               "Cache-Control": {
                 "description": "Authenticated responses which must never be retained.",
@@ -65088,6 +65206,9 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "Replay capacity contains only unexpired protected identities, or durable admission is unavailable; retry later."
           }
         },
         "summary": "Submit ISO 20022 pacs.008 payload.",
@@ -65099,7 +65220,7 @@
     },
     "/v1/iso20022/pacs009": {
       "post": {
-        "description": "Submit a pacs.009 message for ISO 20022 bridging.",
+        "description": "Submit a pacs.009 message. The signed participant must own AppHdr/Fr, allow the selected profile, and durably reserve all replay identities before ledger signing.",
         "parameters": [
           {
             "description": "Optional ISO bridge rail profile bound into the canonical operator signature.",
@@ -65158,7 +65279,7 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
@@ -65166,7 +65287,7 @@
                 }
               }
             },
-            "description": "Successful response",
+            "description": "Accepted after durable V2 replay admission",
             "headers": {
               "Cache-Control": {
                 "description": "Authenticated responses which must never be retained.",
@@ -65177,6 +65298,9 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "Replay capacity contains only unexpired protected identities, or durable admission is unavailable; retry later."
           }
         },
         "summary": "Submit ISO 20022 pacs.009 payload.",
@@ -65188,7 +65312,7 @@
     },
     "/v1/iso20022/sese023": {
       "post": {
-        "description": "Submit a sese.023 message for ISO 20022 lifecycle bridging.",
+        "description": "Submit an initial sese.023 message whose signed participant owns AppHdr/Fr and allows the selected profile.",
         "parameters": [
           {
             "description": "Optional ISO bridge rail profile bound into the canonical operator signature.",
@@ -65247,7 +65371,7 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
@@ -65255,7 +65379,7 @@
                 }
               }
             },
-            "description": "Successful response",
+            "description": "Accepted after durable V2 replay admission",
             "headers": {
               "Cache-Control": {
                 "description": "Authenticated responses which must never be retained.",
@@ -65266,6 +65390,9 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "Replay capacity contains only unexpired protected identities, or durable admission is unavailable; retry later."
           }
         },
         "summary": "Submit ISO 20022 sese.023 settlement instruction payload.",
@@ -65277,7 +65404,7 @@
     },
     "/v1/iso20022/sese024": {
       "post": {
-        "description": "Submit a sese.024 message for ISO 20022 lifecycle bridging.",
+        "description": "Submit a sese.024 lifecycle message as the original counterparty under the pinned profile/signature policy.",
         "parameters": [
           {
             "description": "Optional ISO bridge rail profile bound into the canonical operator signature.",
@@ -65336,7 +65463,7 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
@@ -65344,7 +65471,7 @@
                 }
               }
             },
-            "description": "Successful response",
+            "description": "Accepted after durable V2 replay admission",
             "headers": {
               "Cache-Control": {
                 "description": "Authenticated responses which must never be retained.",
@@ -65355,6 +65482,9 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "Replay capacity contains only unexpired protected identities, or durable admission is unavailable; retry later."
           }
         },
         "summary": "Submit ISO 20022 sese.024 settlement status payload.",
@@ -65366,7 +65496,7 @@
     },
     "/v1/iso20022/sese025": {
       "post": {
-        "description": "Submit a sese.025 message for ISO 20022 lifecycle bridging.",
+        "description": "Submit a sese.025 lifecycle message as the original counterparty under the pinned profile/signature policy.",
         "parameters": [
           {
             "description": "Optional ISO bridge rail profile bound into the canonical operator signature.",
@@ -65425,7 +65555,7 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
@@ -65433,7 +65563,7 @@
                 }
               }
             },
-            "description": "Successful response",
+            "description": "Accepted after durable V2 replay admission",
             "headers": {
               "Cache-Control": {
                 "description": "Authenticated responses which must never be retained.",
@@ -65444,6 +65574,9 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "Replay capacity contains only unexpired protected identities, or durable admission is unavailable; retry later."
           }
         },
         "summary": "Submit ISO 20022 sese.025 settlement confirmation payload.",

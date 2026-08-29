@@ -7,6 +7,7 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 import org.hyperledger.iroha.android.address.AccountIdLiteral;
 import org.hyperledger.iroha.android.crypto.IrohaHash;
@@ -157,15 +158,227 @@ public final class ContractJsonParser {
   public static GovernanceContractResponse parseGovernanceContractResponse(final byte[] payload) {
     final Map<String, Object> root =
         expectObject(parse(payload, "governance contract response"), "governance contract response");
+    final String context = "governance contract response";
+    final boolean found = requiredBoolean(root.get("found"), context + ".found");
+    final Boolean active = found
+        ? Boolean.valueOf(requiredBoolean(root.get("active"), context + ".active"))
+        : null;
+    final Set<String> expectedFields;
+    if (!found) {
+      expectedFields = Set.of("found", "contract_address", "dataspace");
+    } else if (active.booleanValue()) {
+      expectedFields = Set.of(
+          "found",
+          "contract_address",
+          "contract_subject_account",
+          "dataspace",
+          "active",
+          "lifecycle",
+          "emergency_hold_active",
+          "code_hash_hex",
+          "abi_hash_hex",
+          "public_entrypoints");
+    } else {
+      expectedFields = Set.of(
+          "found",
+          "contract_address",
+          "contract_subject_account",
+          "dataspace",
+          "active",
+          "lifecycle",
+          "emergency_hold_active");
+    }
+    requireExactKeys(root, expectedFields, context);
+    final String contractSubjectAccount = found
+        ? requiredExactAccountId(
+            root.get("contract_subject_account"), context + ".contract_subject_account")
+        : null;
+    final String dataspace = requiredExactString(root.get("dataspace"), context + ".dataspace");
+    final GovernanceContractLifecycle lifecycle = found
+        ? parseGovernanceContractLifecycle(root.get("lifecycle"), context + ".lifecycle")
+        : null;
+    final Boolean emergencyHoldActive = found
+        ? Boolean.valueOf(requiredBoolean(
+            root.get("emergency_hold_active"), context + ".emergency_hold_active"))
+        : null;
+    final String codeHashHex = Boolean.TRUE.equals(active)
+        ? exactLowerHex32(root.get("code_hash_hex"), context + ".code_hash_hex")
+        : null;
+    final String abiHashHex = Boolean.TRUE.equals(active)
+        ? exactLowerHex32(root.get("abi_hash_hex"), context + ".abi_hash_hex")
+        : null;
+    final List<String> publicEntrypoints = Boolean.TRUE.equals(active)
+        ? governancePublicEntrypoints(
+            root.get("public_entrypoints"), context + ".public_entrypoints")
+        : null;
+    if (found) {
+      if (active.booleanValue()) {
+        if (!codeHashHex.equals(lifecycle.activeCodeHashHex())) {
+          throw new IllegalStateException(
+              context + " lifecycle active code hash must match code_hash_hex");
+        }
+      } else if (lifecycle.activeCodeHashHex() != null) {
+        throw new IllegalStateException(
+            context + " lifecycle active code hash must be null for an inactive contract");
+      }
+      if (emergencyHoldActive.booleanValue() && lifecycle.emergencyHold() == null) {
+        throw new IllegalStateException(
+            context + " active emergency-hold state requires a retained hold record");
+      }
+    }
     return new GovernanceContractResponse(
-        requiredBoolean(root.get("found"), "governance contract response.found"),
-        requiredString(root.get("contract_address"), "governance contract response.contract_address"),
-        optionalString(root.get("dataspace"), "governance contract response.dataspace"),
-        root.containsKey("code_hash_hex") && root.get("code_hash_hex") != null
-            ? HttpClientTransport.normalizeHex32(
-                requiredString(root.get("code_hash_hex"), "governance contract response.code_hash_hex"),
-                "codeHashHex")
-            : null);
+        found,
+        requiredExactString(root.get("contract_address"), context + ".contract_address"),
+        contractSubjectAccount,
+        dataspace,
+        active,
+        lifecycle,
+        emergencyHoldActive,
+        codeHashHex,
+        abiHashHex,
+        publicEntrypoints);
+  }
+
+  private static GovernanceContractLifecycle parseGovernanceContractLifecycle(
+      final Object value, final String context) {
+    final Map<String, Object> record = expectObject(value, context);
+    requireExactKeys(
+        record,
+        Set.of(
+            "origin",
+            "origin_account",
+            "origin_proposal_content_id_hex",
+            "origin_governance_attempt_id_hex",
+            "owner",
+            "pending_owner",
+            "parliament_delegated",
+            "active_code_hash_hex",
+            "revision",
+            "emergency_hold"),
+        context);
+    final String origin = requiredExactString(record.get("origin"), context + ".origin");
+    if (!"direct".equals(origin) && !"parliament".equals(origin)) {
+      throw new IllegalStateException(context + ".origin must be direct or parliament");
+    }
+    final long revision = asNonNegativeLong(record.get("revision"), context + ".revision");
+    if (revision == 0L) {
+      throw new IllegalStateException(context + ".revision must be positive");
+    }
+    final String proposalContentIdHex = optionalExactHash(
+        record.get("origin_proposal_content_id_hex"),
+        context + ".origin_proposal_content_id_hex");
+    final String governanceAttemptIdHex = optionalExactHash(
+        record.get("origin_governance_attempt_id_hex"),
+        context + ".origin_governance_attempt_id_hex");
+    if ("direct".equals(origin)
+        && (proposalContentIdHex != null || governanceAttemptIdHex != null)) {
+      throw new IllegalStateException(
+          context + " direct origin must not carry Parliament identifiers");
+    }
+    if ("parliament".equals(origin)
+        && (proposalContentIdHex == null || governanceAttemptIdHex == null)) {
+      throw new IllegalStateException(
+          context + " Parliament origin requires both governance identifiers");
+    }
+    return new GovernanceContractLifecycle(
+        origin,
+        requiredExactAccountId(record.get("origin_account"), context + ".origin_account"),
+        proposalContentIdHex,
+        governanceAttemptIdHex,
+        governanceContractOwner(record.get("owner"), context + ".owner"),
+        record.get("pending_owner") == null
+            ? null
+            : governanceContractOwner(record.get("pending_owner"), context + ".pending_owner"),
+        requiredBoolean(record.get("parliament_delegated"), context + ".parliament_delegated"),
+        optionalExactHash(
+            record.get("active_code_hash_hex"), context + ".active_code_hash_hex"),
+        revision,
+        record.get("emergency_hold") == null
+            ? null
+            : parseGovernanceContractEmergencyHold(
+                record.get("emergency_hold"), context + ".emergency_hold"));
+  }
+
+  private static GovernanceContractEmergencyHold parseGovernanceContractEmergencyHold(
+      final Object value, final String context) {
+    final Map<String, Object> record = expectObject(value, context);
+    requireExactKeys(
+        record,
+        Set.of(
+            "incident_digest_hex",
+            "proposal_content_id_hex",
+            "governance_attempt_id_hex",
+            "reason",
+            "imposed_at_height",
+            "expires_at_height"),
+        context);
+    final long imposedAtHeight =
+        asNonNegativeLong(record.get("imposed_at_height"), context + ".imposed_at_height");
+    final long expiresAtHeight =
+        asNonNegativeLong(record.get("expires_at_height"), context + ".expires_at_height");
+    if (imposedAtHeight == 0L) {
+      throw new IllegalStateException(context + ".imposed_at_height must be positive");
+    }
+    if (expiresAtHeight <= imposedAtHeight) {
+      throw new IllegalStateException(context + ".expires_at_height must follow imposed_at_height");
+    }
+    final String incidentDigestHex =
+        optionalExactHash(record.get("incident_digest_hex"), context + ".incident_digest_hex");
+    final String proposalContentIdHex =
+        optionalExactHash(
+            record.get("proposal_content_id_hex"), context + ".proposal_content_id_hex");
+    final String governanceAttemptIdHex =
+        optionalExactHash(
+            record.get("governance_attempt_id_hex"), context + ".governance_attempt_id_hex");
+    if (incidentDigestHex == null || proposalContentIdHex == null || governanceAttemptIdHex == null) {
+      throw new IllegalStateException(context + " must contain all three hash fields");
+    }
+    return new GovernanceContractEmergencyHold(
+        incidentDigestHex,
+        proposalContentIdHex,
+        governanceAttemptIdHex,
+        requiredExactString(record.get("reason"), context + ".reason"),
+        imposedAtHeight,
+        expiresAtHeight);
+  }
+
+  private static void requireExactKeys(
+      final Map<String, Object> value, final Set<String> expected, final String path) {
+    if (!value.keySet().equals(expected)) {
+      throw new IllegalStateException(path + " fields must match the exact first-release schema");
+    }
+  }
+
+  private static String optionalExactHash(final Object value, final String path) {
+    return value == null ? null : exactLowerHex32(value, path);
+  }
+
+  private static String governanceContractOwner(final Object value, final String path) {
+    final String literal = requiredExactString(value, path);
+    return "parliament".equals(literal) ? literal : requiredExactAccountId(literal, path);
+  }
+
+  private static List<String> governancePublicEntrypoints(
+      final Object value, final String path) {
+    final List<Object> raw = requiredList(value, path);
+    if (raw.isEmpty()) {
+      throw new IllegalStateException(path + " must not be empty");
+    }
+    final java.util.ArrayList<String> entries = new java.util.ArrayList<>(raw.size());
+    String previous = null;
+    for (int index = 0; index < raw.size(); index++) {
+      final String entry = requiredExactString(raw.get(index), path + "[" + index + "]");
+      if (!entry.matches("[a-z][a-z0-9_]{0,127}")) {
+        throw new IllegalStateException(
+            path + "[" + index + "] must be a canonical public entrypoint name");
+      }
+      if (previous != null && previous.compareTo(entry) >= 0) {
+        throw new IllegalStateException(path + " must be sorted and contain no duplicates");
+      }
+      entries.add(entry);
+      previous = entry;
+    }
+    return entries;
   }
 
   private static Object parse(final byte[] payload, final String context) {

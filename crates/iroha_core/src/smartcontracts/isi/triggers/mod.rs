@@ -72,8 +72,8 @@ pub mod isi {
         TRIGGER_REGISTERED_BLOCK_HEIGHT_METADATA_KEY,
         "__registered_at_ms",
     ];
-    const MAX_DATA_TRIGGERS_PER_AUTHORITY: usize = 64;
-    const MAX_DATA_TRIGGERS_TOTAL: usize = 4_096;
+    pub(super) const MAX_DATA_TRIGGERS_PER_AUTHORITY: usize = 64;
+    pub(super) const MAX_DATA_TRIGGERS_TOTAL: usize = 4_096;
     fn has_exact_global_data_trigger_permission(
         state_transaction: &StateTransaction<'_, '_>,
         submitting_authority: &AccountId,
@@ -208,7 +208,7 @@ pub mod isi {
         }
         let authority_count = triggers
             .iter()
-            .filter(|(_, action)| action.authority() == trigger_authority)
+            .filter(|(_, action)| &action.authority == trigger_authority)
             .count();
         if authority_count >= MAX_DATA_TRIGGERS_PER_AUTHORITY {
             return Err(Error::InvalidParameter(
@@ -1330,7 +1330,10 @@ mod tests {
         block::ValidBlock,
         kura::Kura,
         query::store::LiveQueryStore,
-        smartcontracts::{Error, Execute, ValidQuery, isi::triggers::set::SetReadOnly},
+        smartcontracts::{
+            Error, Execute, ValidQuery,
+            isi::triggers::{set::SetReadOnly, specialized::SpecializedTrigger},
+        },
         state::{State, World},
         sumeragi::network_topology::Topology,
     };
@@ -1481,6 +1484,86 @@ mod tests {
         ))
         .execute(&ALICE_ID, &mut next)
         .expect("the exact global capability authorizes global scope");
+    }
+    #[test]
+    fn data_trigger_authority_capacity_rejects_the_sixty_fifth_registration() {
+        let state = State::new(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let block = new_dummy_block();
+        let mut state_block = state.block(block.as_ref().header());
+        let mut stx = state_block.transaction();
+        for index in 0..isi::MAX_DATA_TRIGGERS_PER_AUTHORITY {
+            let trigger: SpecializedTrigger<DataEventFilter> = data_trigger(
+                &format!("authority_capacity_{index}"),
+                ALICE_ID.clone(),
+                DataEventFilter::Any,
+            )
+            .try_into()
+            .expect("data trigger specializes");
+            assert!(
+                stx.world
+                    .triggers
+                    .add_data_trigger(trigger)
+                    .expect("seed data trigger")
+            );
+        }
+
+        let error = Register::trigger(data_trigger(
+            "authority_capacity_overflow",
+            ALICE_ID.clone(),
+            DataEventFilter::Any,
+        ))
+        .execute(&ALICE_ID, &mut stx)
+        .expect_err("the sixty-fifth data trigger for one authority must be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("data trigger authority capacity exceeded: maximum 64"),
+            "unexpected authority-capacity rejection: {error}"
+        );
+    }
+    #[test]
+    fn global_data_trigger_capacity_rejects_the_four_thousand_ninety_seventh_registration() {
+        let state = State::new(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let block = new_dummy_block();
+        let mut state_block = state.block(block.as_ref().header());
+        let mut stx = state_block.transaction();
+        for index in 0..isi::MAX_DATA_TRIGGERS_TOTAL {
+            let trigger: SpecializedTrigger<DataEventFilter> = data_trigger(
+                &format!("global_capacity_{index}"),
+                ALICE_ID.clone(),
+                DataEventFilter::Any,
+            )
+            .try_into()
+            .expect("data trigger specializes");
+            assert!(
+                stx.world
+                    .triggers
+                    .add_data_trigger(trigger)
+                    .expect("seed data trigger")
+            );
+        }
+
+        let error = Register::trigger(data_trigger(
+            "global_capacity_overflow",
+            ALICE_ID.clone(),
+            DataEventFilter::Any,
+        ))
+        .execute(&ALICE_ID, &mut stx)
+        .expect_err("the four-thousand-ninety-seventh data trigger must be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("data trigger capacity exceeded: maximum 4096"),
+            "unexpected global-capacity rejection: {error}"
+        );
     }
     fn new_dummy_block() -> crate::block::CommittedBlock {
         let (leader_public_key, leader_private_key) = checked_keypair().into_parts();

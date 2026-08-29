@@ -58,10 +58,12 @@ rotating the alias. The nonce is reserved consensus state and cannot be changed
 through generic metadata instructions.
 
 Raw `ActivateContractInstance` can reactivate an existing retained address but
-cannot create lifecycle ownership. Activation stores the code hash in the
-lifecycle record; deactivation clears it, advances the revision, and retains
-origin and ownership. Each lifecycle event carries the complete post-transition
-record so indexers do not have to infer ownership from historical operators.
+cannot create lifecycle ownership. Raw activation and deactivation both carry
+the exact non-zero lifecycle `expected_revision`; stale requests fail closed.
+Activation stores the code hash and advances the revision, while deactivation
+clears the hash, advances the revision, and retains origin and ownership. Each
+lifecycle event carries the complete post-transition record so indexers do not
+have to infer ownership from historical operators.
 
 ## `GET /v1/gov/contracts/{contract_address}`
 

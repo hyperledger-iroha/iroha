@@ -46,9 +46,25 @@ mod tests {
             streaming::CONTRACT_EVENTS_SSE,
             streaming::SUBSCRIPTION_WS,
             telemetry::ASSET_HOLDERS,
+            application_api::EXPLORER_ACCOUNTS_GET,
+            application_api::EXPLORER_DOMAINS_GET,
+            application_api::EXPLORER_ASSET_DEFINITIONS_GET,
+            application_api::EXPLORER_ASSETS_GET,
+            application_api::EXPLORER_NFTS_GET,
+            application_api::EXPLORER_RWAS_GET,
             application_api::EXPLORER_BLOCKS_GET,
             application_api::EXPLORER_TRANSACTIONS_GET,
             application_api::EXPLORER_INSTRUCTIONS_GET,
+            application_api::EXPLORER_ACCOUNTS_BY_ACCOUNT_ID_GET,
+            application_api::EXPLORER_ACCOUNTS_BY_ACCOUNT_ID_QR_GET,
+            application_api::EXPLORER_DOMAINS_BY_DOMAIN_ID_GET,
+            application_api::EXPLORER_ASSET_DEFINITIONS_BY_DEFINITION_ID_GET,
+            application_api::EXPLORER_ASSET_DEFINITIONS_BY_DEFINITION_ID_ECONOMETRICS_GET,
+            application_api::EXPLORER_ASSET_DEFINITIONS_BY_DEFINITION_ID_SNAPSHOT_GET,
+            application_api::EXPLORER_ASSETS_BY_ASSET_ID_GET,
+            application_api::EXPLORER_NFTS_BY_NFT_ID_GET,
+            application_api::EXPLORER_RWAS_BY_RWA_ID_GET,
+            application_api::EXPLORER_INSTRUCTIONS_BY_HASH_BY_INDEX_CONTRACT_VIEW_GET,
         ] {
             assert_eq!(route.admission(), AdmissionPolicy::DataspaceVisible);
             assert_eq!(
@@ -249,6 +265,55 @@ mod tests {
                 "retired route {retired} leaked into the canonical catalog"
             );
         }
+    }
+
+    #[test]
+    fn protocol_handshake_is_reserved_for_protocol_principals() {
+        for route in CATALOGED_ROUTES
+            .iter()
+            .filter(|route| route.authentication() == AuthenticationPolicy::ProtocolHandshake)
+        {
+            assert!(
+                matches!(
+                    route.admission(),
+                    AdmissionPolicy::AuthenticatedProtocolPrincipal
+                        | AdmissionPolicy::ValidatorRosterMember
+                ),
+                "{} assigns a protocol handshake to a non-protocol principal",
+                route.stable_route_id(),
+            );
+        }
+
+        for route in [
+            runtime_governance::GOV_STREAM,
+            application_api::KAIGI_CALLS_BY_CALL_ID_EVENTS_GET,
+            application_api::KAIGI_RELAYS_EVENTS_GET,
+            sorafs::REPUTATION_EVENTS_STREAM,
+            sorafs::REPUTATION_EVENTS_WEBSOCKET,
+            contracts_and_verification_keys::SORAFS_ORDERBOOK_EVENTS_STREAM_GET,
+            contracts_and_verification_keys::SORAFS_ORDERBOOK_EVENTS_WS_GET,
+            contracts_and_verification_keys::SORAFS_RESERVE_EVENTS_STREAM_GET,
+            contracts_and_verification_keys::SORAFS_RESERVE_EVENTS_WS_GET,
+        ] {
+            assert_eq!(
+                route.authentication(),
+                AuthenticationPolicy::CanonicalAccountSignature,
+                "{} must authenticate the human account principal",
+                route.stable_route_id(),
+            );
+            assert_eq!(route.admission(), AdmissionPolicy::AuthenticatedAccount);
+        }
+    }
+
+    #[test]
+    fn explorer_metrics_requires_a_canonical_global_reader_boundary() {
+        let route = application_api::EXPLORER_METRICS_GET;
+        assert_eq!(
+            route.authentication(),
+            AuthenticationPolicy::CanonicalAccountSignature
+        );
+        assert_eq!(route.admission(), AdmissionPolicy::AuthenticatedAccount);
+        assert!(route.requires_private_no_store());
     }
     #[test]
     fn canonical_catalog_excludes_unmounted_zk_prover_report_adapters() {

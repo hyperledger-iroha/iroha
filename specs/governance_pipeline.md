@@ -132,22 +132,24 @@ release qualified.
    the ordered registration corpus, survivor subset, and roots from those
    accepted records; a manager cannot submit replacement registration corpora
    or survivor subsets. The survivor set is immutable before ballots are
-   accepted. The complete survivor-ordered masked-ballot batch remains a
-   manager-authorized freeze payload because verifying as many as 1,000
-   attacker-controlled one-hot proofs is not a permissionless checkpoint. Core
-   performs that authorization before cryptographic work, then requires one
-   proof-valid record for every frozen survivor, so the manager cannot forge,
-   omit, reorder, or alter one member's ballot. Payload-minimal close, survivor
-   freeze, release, failure, and finalization triggers remain permissionless.
-   Before close or freeze replays a registration or ballot corpus, Core checks
+   accepted. `FreezeTimedOvnCorpus` is a permissionless exact-next append. Core
+   derives the committed survivor offset and checks the active ballot, exact
+   phase and containing-height window, body and predecessor bindings, nonempty
+   chunk width, canonical record widths, capacity, and every one-hot proof
+   before advancing the replay-checkable prefix. A relayer therefore cannot
+   forge, omit, overlap, reorder, or alter one member's ballot, and only the
+   terminal prefix seals the complete survivor-ordered corpus. Payload-minimal
+   close, survivor freeze, release, failure, and finalization triggers remain
+   permissionless.
+   Before registration close, survivor freeze, or a corpus append, Core checks
    the reducer-owned active ballot, exact phase, body binding, predecessor
    checkpoint, and containing height using only bounded scalar state. Wrong-
    height and replayed checkpoint traffic therefore fails before proof work;
-   an exact-height transition still performs the complete replay. Aggregate
-   finalization similarly verifies the fixed-size public TLE/session/release
-   binding and final threshold signature before either corpus is replayed, then
-   retains the full replay and second signature verification before mutation.
-   Core replays the public aggregate transcript and persists no secret shares or
+   an exact-height append still verifies every new record. Aggregate
+   finalization first verifies the fixed-size public TLE/session/release binding
+   and final threshold signature, then verifies the committed public aggregate
+   transcript before mutation. Snapshot restore replays the complete raw
+   evidence instead of trusting the cache. Core persists no secret shares or
    individual openings. A finalized release pulse and verified threshold-BLS
    signature open only the aggregate Aye/Nay/Abstain tally.
 8. If a phase deadline is missed, Core derives the eligible `NoResult` reason

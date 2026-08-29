@@ -104,12 +104,12 @@ pub(crate) async fn request_local_partial_release_v1(
     let ballot_attempt_id = parse_ballot_attempt_id(&ballot_attempt_id)?;
     crate::panic_recovery::join_recoverable(crate::panic_recovery::spawn_blocking_recoverable(
         move || {
-        // Keep physical signer capacity reserved even if the HTTP future is
-        // cancelled and dropping its JoinHandle detaches this blocking task.
-        let _signer_admission = signer_admission;
-        let view = state.query_view();
-        coordinator.request_partial_release(&view, ballot_attempt_id)
-    },
+            // Keep physical signer capacity reserved even if the HTTP future is
+            // cancelled and dropping its JoinHandle detaches this blocking task.
+            let _signer_admission = signer_admission;
+            let view = state.query_view();
+            coordinator.request_partial_release(&view, ballot_attempt_id)
+        },
     ))
     .await
     .map_err(|_| crate::Error::AppServiceUnavailable {

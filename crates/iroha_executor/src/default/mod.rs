@@ -2995,6 +2995,99 @@ pub mod account {
             "Can't remove value from the metadata of another account"
         );
     }
+    #[cfg(test)]
+    mod reserved_transfer_control_tests {
+        use super::*;
+        use core::num::NonZeroU64;
+
+        #[derive(Debug)]
+        struct TestExecutor {
+            host: Iroha,
+            context: prelude::Context,
+            verdict: crate::data_model::executor::Result<(), ValidationFail>,
+        }
+
+        impl TestExecutor {
+            fn new(authority: AccountId) -> Self {
+                Self {
+                    host: Iroha,
+                    context: prelude::Context {
+                        authority,
+                        curr_block: BlockHeader::new(
+                            NonZeroU64::new(2).expect("non-genesis block height"),
+                            None,
+                            None,
+                            None,
+                            0,
+                            0,
+                        ),
+                    },
+                    verdict: Ok(()),
+                }
+            }
+        }
+
+        impl Execute for TestExecutor {
+            fn host(&self) -> &Iroha {
+                &self.host
+            }
+
+            fn context(&self) -> &prelude::Context {
+                &self.context
+            }
+
+            fn context_mut(&mut self) -> &mut prelude::Context {
+                &mut self.context
+            }
+
+            fn verdict(&self) -> &crate::data_model::executor::Result<(), ValidationFail> {
+                &self.verdict
+            }
+
+            fn deny(&mut self, reason: ValidationFail) {
+                self.verdict = Err(reason);
+            }
+        }
+
+        impl Visit for TestExecutor {}
+
+        fn account_id() -> AccountId {
+            let public_key: PublicKey =
+                "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245"
+                    .parse()
+                    .expect("valid fixture public key");
+            AccountId::new(public_key)
+        }
+
+        #[test]
+        fn default_executor_rejects_generic_transfer_control_set_and_remove() {
+            let authority = account_id();
+            let key: Name = iroha_data_model::asset::ASSET_TRANSFER_CONTROL_METADATA_KEY
+                .parse()
+                .expect("asset transfer control metadata key");
+            let set = SetKeyValue::account(
+                authority.clone(),
+                key.clone(),
+                Json::new("generic replacement"),
+            );
+            let mut set_executor = TestExecutor::new(authority.clone());
+            visit_set_account_key_value(&mut set_executor, &set);
+            assert!(
+                matches!(set_executor.verdict(), Err(ValidationFail::NotPermitted(message))
+                    if message.contains("reserved for native asset transfer controls")),
+                "default executor must deny the reserved SetKeyValue path"
+            );
+
+            let remove = RemoveKeyValue::account(authority.clone(), key);
+            let mut remove_executor = TestExecutor::new(authority);
+            visit_remove_account_key_value(&mut remove_executor, &remove);
+            assert!(
+                matches!(remove_executor.verdict(), Err(ValidationFail::NotPermitted(message))
+                    if message.contains("reserved for native asset transfer controls")),
+                "default executor must deny the reserved RemoveKeyValue path"
+            );
+        }
+    }
     /// Replaces the controller for an account when the caller owns it or has the replacement permission.
     pub fn visit_replace_account_controller<V: Execute + Visit + ?Sized>(
         executor: &mut V,

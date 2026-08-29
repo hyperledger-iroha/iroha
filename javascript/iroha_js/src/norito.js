@@ -3919,6 +3919,7 @@ function decodeSmartContractInstructionPayload(wireId, payload) {
     case DEACTIVATE_CONTRACT_INSTANCE_WIRE_ID: {
       const fields = decodeStructFields(payload, "DeactivateContractInstance", [
         "contract_address",
+        "expected_revision",
         "reason",
       ]);
       return {
@@ -3926,6 +3927,10 @@ function decodeSmartContractInstructionPayload(wireId, payload) {
           contract_address: decodeStringValue(
             fields.contract_address,
             "DeactivateContractInstance.contract_address",
+          ),
+          expected_revision: decodeU64Value(
+            fields.expected_revision,
+            "DeactivateContractInstance.expected_revision",
           ),
           reason: decodeOptionValue(
             fields.reason,
@@ -3938,6 +3943,7 @@ function decodeSmartContractInstructionPayload(wireId, payload) {
     case ACTIVATE_CONTRACT_INSTANCE_WIRE_ID: {
       const fields = decodeStructFields(payload, "ActivateContractInstance", [
         "contract_address",
+        "expected_revision",
         "code_hash",
       ]);
       return {
@@ -3945,6 +3951,10 @@ function decodeSmartContractInstructionPayload(wireId, payload) {
           contract_address: decodeStringValue(
             fields.contract_address,
             "ActivateContractInstance.contract_address",
+          ),
+          expected_revision: decodeU64Value(
+            fields.expected_revision,
+            "ActivateContractInstance.expected_revision",
           ),
           code_hash: decodeHashValue(fields.code_hash, "ActivateContractInstance.code_hash"),
         },
@@ -6071,6 +6081,10 @@ function encodeSmartContractInstructionCompact(instruction) {
             "DeactivateContractInstance.contract_address",
           ),
         )],
+        [encodeU64Value(
+          instruction.DeactivateContractInstance.expected_revision,
+          "DeactivateContractInstance.expected_revision",
+        )],
         [encodeOptionValue(
           instruction.DeactivateContractInstance.reason,
           encodeNoritoStringValue,
@@ -6088,6 +6102,10 @@ function encodeSmartContractInstructionCompact(instruction) {
             instruction.ActivateContractInstance.contract_address,
             "ActivateContractInstance.contract_address",
           ),
+        )],
+        [encodeU64Value(
+          instruction.ActivateContractInstance.expected_revision,
+          "ActivateContractInstance.expected_revision",
         )],
         [encodeHashValue(
           instruction.ActivateContractInstance.code_hash,

@@ -33,7 +33,11 @@ use norito::codec::{Decode, Encode};
 use norito::json;
 #[cfg(feature = "json")]
 use norito::json::{FastJsonWrite, JsonSerialize as JsonSerializeTrait};
-use std::{collections::BTreeMap, fmt, num::NonZeroU64};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt,
+    num::NonZeroU64,
+};
 use thiserror::Error;
 /// Error type for [`Set`] operations.
 #[derive(Debug, Error, displaydoc::Display)]
@@ -129,6 +133,456 @@ type ActiveTriggerIdStoreBlock<'set> = StorageBlock<'set, TriggerId, ()>;
 type ActiveTriggerIdStoreTransaction<'block, 'set> =
     StorageTransaction<'block, 'set, TriggerId, ()>;
 type ActiveTriggerIdStoreView<'set> = StorageView<'set, TriggerId, ()>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum DataTriggerFamily {
+    Peer,
+    Domain,
+    Account,
+    Asset,
+    AssetDefinition,
+    Nft,
+    Rwa,
+    Trigger,
+    Role,
+    Configuration,
+    Executor,
+    Proof,
+    VerifyingKey,
+    RuntimeUpgrade,
+    SmartContract,
+    Soradns,
+    Sorafs,
+    Musubi,
+    SpaceDirectory,
+    Escrow,
+    Oracle,
+    Social,
+    Bridge,
+    Governance,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum DataTriggerSubjectKind {
+    Domain,
+    Account,
+    Asset,
+    AssetDefinitionForAsset,
+    AssetDefinition,
+    AssetTransferSource,
+    AssetTransferDestination,
+    Nft,
+    Rwa,
+    Trigger,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum DataTriggerIndexKey {
+    Any,
+    Family(DataTriggerFamily),
+    Subject(DataTriggerSubjectKind, Vec<u8>),
+}
+
+#[derive(Debug, Default)]
+struct DataTriggerIndex {
+    postings: BTreeMap<DataTriggerIndexKey, BTreeSet<TriggerId>>,
+}
+
+impl DataTriggerIndex {
+    fn from_triggers(
+        triggers: &impl StorageReadOnly<TriggerId, LoadedAction<DataEventFilter>>,
+    ) -> Self {
+        let mut index = Self::default();
+        for (id, action) in triggers.iter() {
+            index.insert(id, &action.filter);
+        }
+        index
+    }
+
+    fn insert(&mut self, id: &TriggerId, filter: &DataEventFilter) {
+        for key in data_trigger_filter_index_keys(filter) {
+            self.postings.entry(key).or_default().insert(id.clone());
+        }
+    }
+
+    fn remove(&mut self, id: &TriggerId) {
+        self.postings.retain(|_, ids| {
+            ids.remove(id);
+            !ids.is_empty()
+        });
+    }
+
+    fn candidates(&self, event: &DataEvent) -> Vec<TriggerId> {
+        let mut candidates = BTreeSet::new();
+        for key in data_event_index_keys(event) {
+            if let Some(ids) = self.postings.get(&key) {
+                candidates.extend(ids.iter().cloned());
+            }
+        }
+        candidates.into_iter().collect()
+    }
+}
+
+fn data_trigger_subject_key<T: Encode>(
+    kind: DataTriggerSubjectKind,
+    subject: &T,
+) -> DataTriggerIndexKey {
+    DataTriggerIndexKey::Subject(kind, subject.encode())
+}
+
+fn data_trigger_filter_index_keys(filter: &DataEventFilter) -> Vec<DataTriggerIndexKey> {
+    let family = |family| vec![DataTriggerIndexKey::Family(family)];
+    match filter {
+        DataEventFilter::Any => vec![DataTriggerIndexKey::Any],
+        DataEventFilter::Peer(_) => family(DataTriggerFamily::Peer),
+        DataEventFilter::Domain(filter) => filter.id_matcher().as_ref().map_or_else(
+            || family(DataTriggerFamily::Domain),
+            |id| vec![data_trigger_subject_key(DataTriggerSubjectKind::Domain, id)],
+        ),
+        DataEventFilter::Account(filter) => filter.id_matcher().as_ref().map_or_else(
+            || family(DataTriggerFamily::Account),
+            |id| {
+                vec![data_trigger_subject_key(
+                    DataTriggerSubjectKind::Account,
+                    id,
+                )]
+            },
+        ),
+        DataEventFilter::Asset(filter) => {
+            let mut keys = Vec::new();
+            if let Some(id) = filter.id_matcher() {
+                keys.push(data_trigger_subject_key(DataTriggerSubjectKind::Asset, id));
+            }
+            if let Some(id) = filter.asset_definition_matcher() {
+                keys.push(data_trigger_subject_key(
+                    DataTriggerSubjectKind::AssetDefinitionForAsset,
+                    id,
+                ));
+            }
+            if let Some(id) = filter.transfer_source_account_matcher() {
+                keys.push(data_trigger_subject_key(
+                    DataTriggerSubjectKind::AssetTransferSource,
+                    id,
+                ));
+            }
+            if let Some(id) = filter.transfer_destination_account_matcher() {
+                keys.push(data_trigger_subject_key(
+                    DataTriggerSubjectKind::AssetTransferDestination,
+                    id,
+                ));
+            }
+            if keys.is_empty() {
+                keys.push(DataTriggerIndexKey::Family(DataTriggerFamily::Asset));
+            }
+            keys
+        }
+        DataEventFilter::AssetDefinition(filter) => filter.id_matcher().as_ref().map_or_else(
+            || family(DataTriggerFamily::AssetDefinition),
+            |id| {
+                vec![data_trigger_subject_key(
+                    DataTriggerSubjectKind::AssetDefinition,
+                    id,
+                )]
+            },
+        ),
+        DataEventFilter::Nft(filter) => filter.id_matcher().as_ref().map_or_else(
+            || family(DataTriggerFamily::Nft),
+            |id| vec![data_trigger_subject_key(DataTriggerSubjectKind::Nft, id)],
+        ),
+        DataEventFilter::Rwa(filter) => filter.id_matcher().as_ref().map_or_else(
+            || family(DataTriggerFamily::Rwa),
+            |id| vec![data_trigger_subject_key(DataTriggerSubjectKind::Rwa, id)],
+        ),
+        DataEventFilter::Trigger(filter) => filter.id_matcher().as_ref().map_or_else(
+            || family(DataTriggerFamily::Trigger),
+            |id| {
+                vec![data_trigger_subject_key(
+                    DataTriggerSubjectKind::Trigger,
+                    id,
+                )]
+            },
+        ),
+        DataEventFilter::Role(_) => family(DataTriggerFamily::Role),
+        DataEventFilter::Configuration(_) => family(DataTriggerFamily::Configuration),
+        DataEventFilter::Executor(_) => family(DataTriggerFamily::Executor),
+        DataEventFilter::Proof(_) => family(DataTriggerFamily::Proof),
+        DataEventFilter::VerifyingKey(_) => family(DataTriggerFamily::VerifyingKey),
+        DataEventFilter::RuntimeUpgrade(_) => family(DataTriggerFamily::RuntimeUpgrade),
+        DataEventFilter::Soradns(_) => family(DataTriggerFamily::Soradns),
+        DataEventFilter::Sorafs(_) => family(DataTriggerFamily::Sorafs),
+        DataEventFilter::Musubi(_) => family(DataTriggerFamily::Musubi),
+        DataEventFilter::SpaceDirectory(_) => family(DataTriggerFamily::SpaceDirectory),
+        DataEventFilter::Escrow(_) => family(DataTriggerFamily::Escrow),
+        DataEventFilter::Oracle(_) => family(DataTriggerFamily::Oracle),
+        DataEventFilter::Social(_) => family(DataTriggerFamily::Social),
+        DataEventFilter::Bridge(_) => family(DataTriggerFamily::Bridge),
+        DataEventFilter::Governance(_) => family(DataTriggerFamily::Governance),
+    }
+}
+
+fn add_asset_event_index_keys(keys: &mut BTreeSet<DataTriggerIndexKey>, event: &AssetEvent) {
+    keys.insert(DataTriggerIndexKey::Family(DataTriggerFamily::Asset));
+    let asset_id = event.origin();
+    keys.insert(data_trigger_subject_key(
+        DataTriggerSubjectKind::Asset,
+        asset_id,
+    ));
+    keys.insert(data_trigger_subject_key(
+        DataTriggerSubjectKind::AssetDefinitionForAsset,
+        asset_id.definition(),
+    ));
+    if let AssetEvent::Transferred(transfer) = event {
+        keys.insert(data_trigger_subject_key(
+            DataTriggerSubjectKind::AssetTransferSource,
+            transfer.source().account(),
+        ));
+        keys.insert(data_trigger_subject_key(
+            DataTriggerSubjectKind::AssetTransferDestination,
+            transfer.destination().account(),
+        ));
+    }
+}
+
+fn data_event_index_keys(event: &DataEvent) -> BTreeSet<DataTriggerIndexKey> {
+    let mut keys = BTreeSet::from([DataTriggerIndexKey::Any]);
+    match event {
+        DataEvent::Peer(_) => {
+            keys.insert(DataTriggerIndexKey::Family(DataTriggerFamily::Peer));
+        }
+        DataEvent::Domain(event) => {
+            keys.insert(DataTriggerIndexKey::Family(DataTriggerFamily::Domain));
+            keys.insert(data_trigger_subject_key(
+                DataTriggerSubjectKind::Domain,
+                event.origin(),
+            ));
+            match event {
+                DomainEvent::Account(scoped) => {
+                    keys.insert(DataTriggerIndexKey::Family(DataTriggerFamily::Account));
+                    keys.insert(data_trigger_subject_key(
+                        DataTriggerSubjectKind::Account,
+                        scoped.event.origin(),
+                    ));
+                }
+                DomainEvent::Asset(scoped) => {
+                    add_asset_event_index_keys(&mut keys, &scoped.event);
+                }
+                DomainEvent::AssetDefinition(scoped) => {
+                    keys.insert(DataTriggerIndexKey::Family(
+                        DataTriggerFamily::AssetDefinition,
+                    ));
+                    keys.insert(data_trigger_subject_key(
+                        DataTriggerSubjectKind::AssetDefinition,
+                        scoped.event.origin(),
+                    ));
+                }
+                DomainEvent::Nft(event) => {
+                    keys.insert(DataTriggerIndexKey::Family(DataTriggerFamily::Nft));
+                    keys.insert(data_trigger_subject_key(
+                        DataTriggerSubjectKind::Nft,
+                        event.origin(),
+                    ));
+                }
+                DomainEvent::Rwa(event) => {
+                    keys.insert(DataTriggerIndexKey::Family(DataTriggerFamily::Rwa));
+                    keys.insert(data_trigger_subject_key(
+                        DataTriggerSubjectKind::Rwa,
+                        event.origin(),
+                    ));
+                }
+                _ => {}
+            }
+        }
+        DataEvent::Account(event) => {
+            keys.insert(DataTriggerIndexKey::Family(DataTriggerFamily::Account));
+            keys.insert(data_trigger_subject_key(
+                DataTriggerSubjectKind::Account,
+                event.origin(),
+            ));
+        }
+        DataEvent::Asset(event) => add_asset_event_index_keys(&mut keys, event),
+        DataEvent::AssetDefinition(event) => {
+            keys.insert(DataTriggerIndexKey::Family(
+                DataTriggerFamily::AssetDefinition,
+            ));
+            keys.insert(data_trigger_subject_key(
+                DataTriggerSubjectKind::AssetDefinition,
+                event.origin(),
+            ));
+        }
+        DataEvent::Trigger(event) => {
+            keys.insert(DataTriggerIndexKey::Family(DataTriggerFamily::Trigger));
+            keys.insert(data_trigger_subject_key(
+                DataTriggerSubjectKind::Trigger,
+                event.origin(),
+            ));
+        }
+        DataEvent::Role(_) => {
+            keys.insert(DataTriggerIndexKey::Family(DataTriggerFamily::Role));
+        }
+        DataEvent::Configuration(_) => {
+            keys.insert(DataTriggerIndexKey::Family(
+                DataTriggerFamily::Configuration,
+            ));
+        }
+        DataEvent::Executor(_) => {
+            keys.insert(DataTriggerIndexKey::Family(DataTriggerFamily::Executor));
+        }
+        DataEvent::Proof(_) => {
+            keys.insert(DataTriggerIndexKey::Family(DataTriggerFamily::Proof));
+        }
+        DataEvent::VerifyingKey(_) => {
+            keys.insert(DataTriggerIndexKey::Family(DataTriggerFamily::VerifyingKey));
+        }
+        DataEvent::RuntimeUpgrade(_) => {
+            keys.insert(DataTriggerIndexKey::Family(
+                DataTriggerFamily::RuntimeUpgrade,
+            ));
+        }
+        DataEvent::SmartContract(_) => {
+            keys.insert(DataTriggerIndexKey::Family(
+                DataTriggerFamily::SmartContract,
+            ));
+        }
+        DataEvent::Soradns(_) => {
+            keys.insert(DataTriggerIndexKey::Family(DataTriggerFamily::Soradns));
+        }
+        DataEvent::Sorafs(_) => {
+            keys.insert(DataTriggerIndexKey::Family(DataTriggerFamily::Sorafs));
+        }
+        DataEvent::Musubi(_) => {
+            keys.insert(DataTriggerIndexKey::Family(DataTriggerFamily::Musubi));
+        }
+        DataEvent::SpaceDirectory(_) => {
+            keys.insert(DataTriggerIndexKey::Family(
+                DataTriggerFamily::SpaceDirectory,
+            ));
+        }
+        DataEvent::Escrow(_) => {
+            keys.insert(DataTriggerIndexKey::Family(DataTriggerFamily::Escrow));
+        }
+        DataEvent::Oracle(_) => {
+            keys.insert(DataTriggerIndexKey::Family(DataTriggerFamily::Oracle));
+        }
+        DataEvent::Social(_) => {
+            keys.insert(DataTriggerIndexKey::Family(DataTriggerFamily::Social));
+        }
+        DataEvent::Bridge(_) => {
+            keys.insert(DataTriggerIndexKey::Family(DataTriggerFamily::Bridge));
+        }
+        DataEvent::Governance(_) => {
+            keys.insert(DataTriggerIndexKey::Family(DataTriggerFamily::Governance));
+        }
+    }
+    keys
+}
+
+#[cfg(test)]
+mod data_trigger_index_tests {
+    use super::*;
+    use iroha_crypto::KeyPair;
+
+    fn account_id() -> AccountId {
+        AccountId::new(
+            KeyPair::try_random()
+                .expect("data-trigger index fixture key generation should succeed")
+                .public_key()
+                .clone(),
+        )
+    }
+
+    #[test]
+    fn exact_account_and_domain_postings_bound_nested_event_candidates() {
+        let alice = account_id();
+        let bob = account_id();
+        let domain = DomainId::try_new("wonderland", "universal").expect("valid domain");
+        let any_id: TriggerId = "a_any".parse().expect("valid trigger id");
+        let account_family_id: TriggerId = "b_account_family".parse().expect("valid trigger id");
+        let alice_id: TriggerId = "c_alice".parse().expect("valid trigger id");
+        let domain_id: TriggerId = "d_domain".parse().expect("valid trigger id");
+        let bob_id: TriggerId = "e_bob".parse().expect("valid trigger id");
+
+        let mut index = DataTriggerIndex::default();
+        index.insert(&any_id, &DataEventFilter::Any);
+        index.insert(
+            &account_family_id,
+            &DataEventFilter::Account(AccountEventFilter::new()),
+        );
+        index.insert(
+            &alice_id,
+            &DataEventFilter::Account(AccountEventFilter::new().for_account(alice.clone())),
+        );
+        index.insert(
+            &domain_id,
+            &DataEventFilter::Domain(DomainEventFilter::new().for_domain(domain.clone())),
+        );
+        index.insert(
+            &bob_id,
+            &DataEventFilter::Account(AccountEventFilter::new().for_account(bob)),
+        );
+
+        let event = DataEvent::account_in_domain(AccountEvent::Deleted(alice), domain);
+        assert_eq!(
+            index.candidates(&event),
+            vec![
+                any_id.clone(),
+                account_family_id.clone(),
+                alice_id.clone(),
+                domain_id.clone(),
+            ]
+        );
+
+        index.remove(&alice_id);
+        assert_eq!(
+            index.candidates(&event),
+            vec![any_id, account_family_id, domain_id]
+        );
+    }
+
+    #[test]
+    fn asset_postings_deduplicate_multi_constraint_candidates() {
+        let source = account_id();
+        let destination = account_id();
+        let unrelated = account_id();
+        let definition = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("assets", "universal").expect("valid domain"),
+            "rose".parse().expect("valid asset name"),
+        );
+        let source_asset = AssetId::new(definition.clone(), source.clone());
+        let destination_asset = AssetId::new(definition.clone(), destination.clone());
+        let matching_id: TriggerId = "asset_match".parse().expect("valid trigger id");
+        let unrelated_id: TriggerId = "asset_unrelated".parse().expect("valid trigger id");
+        let definition_event_id: TriggerId = "definition_event".parse().expect("valid trigger id");
+
+        let mut index = DataTriggerIndex::default();
+        index.insert(
+            &matching_id,
+            &DataEventFilter::Asset(
+                AssetEventFilter::new()
+                    .for_asset(source_asset.clone())
+                    .for_asset_definition(definition.clone())
+                    .for_transfer_source_account(source)
+                    .for_transfer_destination_account(destination),
+            ),
+        );
+        index.insert(
+            &unrelated_id,
+            &DataEventFilter::Asset(AssetEventFilter::new().for_transfer_source_account(unrelated)),
+        );
+        index.insert(
+            &definition_event_id,
+            &DataEventFilter::AssetDefinition(
+                AssetDefinitionEventFilter::new().for_asset_definition(definition),
+            ),
+        );
+
+        let event = DataEvent::Asset(AssetEvent::Transferred(AssetTransferred {
+            source: source_asset,
+            destination: destination_asset,
+            amount: 1_u32.into(),
+        }));
+        assert_eq!(index.candidates(&event), vec![matching_id]);
+    }
+}
 /// Specialized structure that maps event filters to Triggers.
 // NB: `Set` has custom `Serialize` and `DeserializeSeed` implementations
 // which need to be manually updated when changing the struct
@@ -483,6 +937,8 @@ pub struct SetTransaction<'block, 'set> {
     /// removed and re-registered after a match was materialized without
     /// changing the persisted trigger wire format.
     registration_generations: BTreeMap<TriggerId, u64>,
+    /// Deterministic, transaction-local postings for bounded data-event matching.
+    data_trigger_index: DataTriggerIndex,
     /// Triggers using [`DataEventFilter`]
     data_triggers: StorageTransaction<'block, 'set, TriggerId, LoadedAction<DataEventFilter>>,
     /// Triggers using [`PipelineEventFilterBox`]
@@ -1248,8 +1704,10 @@ impl Set {
 impl<'set> SetBlock<'set> {
     /// Create struct to apply transaction's changes
     pub fn transaction(&mut self) -> SetTransaction<'_, 'set> {
+        let data_trigger_index = DataTriggerIndex::from_triggers(&self.data_triggers);
         SetTransaction {
             registration_generations: BTreeMap::new(),
+            data_trigger_index,
             data_triggers: self.data_triggers.transaction(),
             pipeline_triggers: self.pipeline_triggers.transaction(),
             time_triggers: self.time_triggers.transaction(),
@@ -1313,6 +1771,10 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
     /// successful registration in this overlay advances the generation.
     pub(crate) fn registration_generation(&self, id: &TriggerId) -> u64 {
         self.registration_generations.get(id).copied().unwrap_or(0)
+    }
+    /// Return canonically ordered data-trigger candidates for `event`.
+    pub(crate) fn data_trigger_candidates(&self, event: &DataEvent) -> Vec<TriggerId> {
+        self.data_trigger_index.candidates(event)
     }
     fn set_active_id(
         active_ids: &mut ActiveTriggerIdStoreTransaction<'block, 'set>,
@@ -1409,9 +1871,15 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
         &mut self,
         trigger: SpecializedTrigger<DataEventFilter>,
     ) -> Result<bool> {
-        Ok(self.add_to(trigger, TriggeringEventType::Data, |me| {
+        let trigger_id = trigger.id.clone();
+        let filter = trigger.action.filter.clone();
+        let added = self.add_to(trigger, TriggeringEventType::Data, |me| {
             &mut me.data_triggers
-        }))
+        });
+        if added {
+            self.data_trigger_index.insert(&trigger_id, &filter);
+        }
+        Ok(added)
     }
     /// Add trigger with [`PipelineEventFilterBox`]
     ///
@@ -1614,6 +2082,7 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
         self.set_active_id_by_event_type(event_type, id, false);
         let removed = match event_type {
             TriggeringEventType::Data => {
+                self.data_trigger_index.remove(id);
                 Self::remove_from(&mut self.contracts, &mut self.data_triggers, id.clone())
             }
             TriggeringEventType::Pipeline => {
@@ -1713,6 +2182,7 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
         }
         let mut removed = Vec::new();
         let Self {
+            data_trigger_index,
             data_triggers,
             pipeline_triggers,
             time_triggers,
@@ -1753,6 +2223,9 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
             contracts,
             by_call_triggers,
         );
+        for id in &removed {
+            data_trigger_index.remove(id);
+        }
         removed
     }
     /// Update internal retry runtime state for a time trigger.

@@ -5206,11 +5206,39 @@ export interface ToriiGovernanceContractEmergencyHoldProposal {
   duration_blocks: number;
 }
 
+export interface ToriiGovernanceContractEmergencyHold {
+  incident_digest_hex: string;
+  proposal_content_id_hex: string;
+  governance_attempt_id_hex: string;
+  reason: string;
+  imposed_at_height: number;
+  expires_at_height: number;
+}
+
+export interface ToriiGovernanceContractLifecycle {
+  origin: "direct" | "parliament";
+  origin_account: string;
+  origin_proposal_content_id_hex: string | null;
+  origin_governance_attempt_id_hex: string | null;
+  owner: string;
+  pending_owner: string | null;
+  parliament_delegated: boolean;
+  active_code_hash_hex: string | null;
+  revision: number;
+  emergency_hold: ToriiGovernanceContractEmergencyHold | null;
+}
+
 export interface ToriiGovernanceContractResponse {
   found: boolean;
   contract_address: string;
+  contract_subject_account: string | null;
   dataspace: string | null;
+  active: boolean | null;
+  lifecycle: ToriiGovernanceContractLifecycle | null;
+  emergency_hold_active: boolean | null;
   code_hash_hex: string | null;
+  abi_hash_hex: string | null;
+  public_entrypoints: string[] | null;
 }
 
 export type ToriiGovernanceProposalKind =
@@ -8390,10 +8418,12 @@ export interface IsoMessageSubmissionResponseBase {
   payload_hash: string | null;
   reference_snapshot_id: string | null;
   embedded_signature_detected: boolean;
+  /** Immutable schema-V2 participant provenance captured at durable admission. */
   originator_participant_id: string | null;
   counterparty_participant_id: string | null;
   admitting_participant_id: string | null;
   admitting_operator_key: string | null;
+  /** Original profile and signature policy pinned for every lifecycle message. */
   pinned_profile_id: string | null;
   pinned_signature_policy: string | null;
   status_history: ReadonlyArray<IsoStatusHistoryEntry>;
@@ -13632,6 +13662,24 @@ export interface CancelAssetLockInstruction {
   CancelAssetLock: {
     escrow_id: string;
     expected_remaining_amount: string;
+  };
+}
+
+/** Raw owner-authorized activation guarded by the exact retained lifecycle revision. */
+export interface ActivateContractInstanceInstruction {
+  ActivateContractInstance: {
+    contract_address: string;
+    expected_revision: string;
+    code_hash: string;
+  };
+}
+
+/** Raw owner-authorized deactivation guarded by the exact retained lifecycle revision. */
+export interface DeactivateContractInstanceInstruction {
+  DeactivateContractInstance: {
+    contract_address: string;
+    expected_revision: string;
+    reason: string | null;
   };
 }
 

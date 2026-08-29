@@ -740,6 +740,17 @@ pub struct GovernanceCapabilitiesV1 {
     pub supported_routes: Vec<String>,
 }
 const GOVERNANCE_APPROVAL_MODE_V1: &str = "PARLIAMENT_ATTEMPT_TIMED_OVN_V1";
+const GOVERNANCE_SUPPORTED_PROPOSAL_KINDS_V1: [&str; 9] = [
+    "DEPLOY_CONTRACT",
+    "RUNTIME_UPGRADE",
+    "SCCP_ROUTE_GOVERNANCE",
+    "VALIDATION_FEE_POLICY",
+    "VALIDATION_FEE_PAYOUT_LIFECYCLE",
+    "MUSUBI_REGISTRY_GOVERNANCE",
+    "SORAFS_PROVIDER_GOVERNANCE",
+    "CONTRACT_LIFECYCLE_GOVERNANCE",
+    "CONTRACT_EMERGENCY_HOLD",
+];
 /// GET `/v1/gov/capabilities` — return strict public governance readiness.
 ///
 /// # Errors
@@ -805,15 +816,10 @@ pub async fn handle_gov_capabilities(
             policy_jury: gov.policy_jury_size.to_string(),
             confirmation_jury: gov.confirmation_jury_size.to_string(),
         },
-        supported_proposal_kinds: vec![
-            "DEPLOY_CONTRACT".to_owned(),
-            "MUSUBI_REGISTRY_GOVERNANCE".to_owned(),
-            "RUNTIME_UPGRADE".to_owned(),
-            "SCCP_ROUTE_GOVERNANCE".to_owned(),
-            "SORAFS_PROVIDER_GOVERNANCE".to_owned(),
-            "VALIDATION_FEE_PAYOUT_LIFECYCLE".to_owned(),
-            "VALIDATION_FEE_POLICY".to_owned(),
-        ],
+        supported_proposal_kinds: GOVERNANCE_SUPPORTED_PROPOSAL_KINDS_V1
+            .iter()
+            .map(|kind| (*kind).to_owned())
+            .collect(),
         supported_routes: vec![
             "/v1/gov/capabilities".to_owned(),
             "/v1/gov/citizens/draft".to_owned(),
@@ -2230,31 +2236,34 @@ impl From<&iroha_data_model::smart_contract::ContractLifecycleControlV1>
         use iroha_data_model::smart_contract::{
             ContractDeploymentOriginV1, ContractParliamentDelegationV1,
         };
-        let (origin, origin_account, origin_proposal_content_id_hex, origin_governance_attempt_id_hex) =
-            match &lifecycle.origin {
-                ContractDeploymentOriginV1::Direct(origin) => (
-                    "direct".to_owned(),
-                    origin.deployer.to_string(),
-                    None,
-                    None,
-                ),
-                ContractDeploymentOriginV1::Parliament(origin) => (
-                    "parliament".to_owned(),
-                    origin.proposer.to_string(),
-                    Some(hex::encode(origin.proposal_content_id)),
-                    Some(hex::encode(origin.governance_attempt_id)),
-                ),
-            };
-        let emergency_hold = lifecycle.emergency_hold.as_ref().map(|hold| {
-            GovernedContractEmergencyHoldV1 {
-                incident_digest_hex: hex::encode(hold.incident_digest),
-                proposal_content_id_hex: hex::encode(hold.proposal_content_id),
-                governance_attempt_id_hex: hex::encode(hold.governance_attempt_id),
-                reason: hold.reason.clone(),
-                imposed_at_height: hold.imposed_at_height,
-                expires_at_height: hold.expires_at_height,
+        let (
+            origin,
+            origin_account,
+            origin_proposal_content_id_hex,
+            origin_governance_attempt_id_hex,
+        ) = match &lifecycle.origin {
+            ContractDeploymentOriginV1::Direct(origin) => {
+                ("direct".to_owned(), origin.deployer.to_string(), None, None)
             }
-        });
+            ContractDeploymentOriginV1::Parliament(origin) => (
+                "parliament".to_owned(),
+                origin.proposer.to_string(),
+                Some(hex::encode(origin.proposal_content_id)),
+                Some(hex::encode(origin.governance_attempt_id)),
+            ),
+        };
+        let emergency_hold =
+            lifecycle
+                .emergency_hold
+                .as_ref()
+                .map(|hold| GovernedContractEmergencyHoldV1 {
+                    incident_digest_hex: hex::encode(hold.incident_digest),
+                    proposal_content_id_hex: hex::encode(hold.proposal_content_id),
+                    governance_attempt_id_hex: hex::encode(hold.governance_attempt_id),
+                    reason: hold.reason.clone(),
+                    imposed_at_height: hold.imposed_at_height,
+                    expires_at_height: hold.expires_at_height,
+                });
         Self {
             origin,
             origin_account,
@@ -2806,6 +2815,24 @@ mod tests {
     use std::sync::Arc;
     const ACCOUNT_AUTHORITY: &str = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
     const ACCOUNT_OWNER_ALT: &str = "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D";
+
+    #[test]
+    fn governance_capability_proposal_kinds_match_the_append_only_v1_inventory() {
+        assert_eq!(
+            GOVERNANCE_SUPPORTED_PROPOSAL_KINDS_V1,
+            [
+                "DEPLOY_CONTRACT",
+                "RUNTIME_UPGRADE",
+                "SCCP_ROUTE_GOVERNANCE",
+                "VALIDATION_FEE_POLICY",
+                "VALIDATION_FEE_PAYOUT_LIFECYCLE",
+                "MUSUBI_REGISTRY_GOVERNANCE",
+                "SORAFS_PROVIDER_GOVERNANCE",
+                "CONTRACT_LIFECYCLE_GOVERNANCE",
+                "CONTRACT_EMERGENCY_HOLD",
+            ]
+        );
+    }
 
     #[test]
     fn casting_context_route_holds_heavy_admission_through_blocking_replay() {
@@ -3479,6 +3506,7 @@ seiyaku GovernedReadFixture {
         activate_instance(
             &harness.authority,
             contract_address.clone(),
+            1,
             code_hash,
             &mut transaction,
         )

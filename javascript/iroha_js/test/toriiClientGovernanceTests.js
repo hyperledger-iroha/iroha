@@ -423,7 +423,7 @@ export function registerToriiClientGovernanceTests({
     assert.deepEqual(missingTyped, { found: false, proposal: null });
   });
 
-  test("getGovernanceProposalTyped closes over all seven V1 proposal kinds", async () => {
+  test("getGovernanceProposalTyped closes over all nine V1 proposal kinds", async () => {
     const contractAddress =
       "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw";
     const payoutBinding = {
@@ -543,6 +543,35 @@ export function registerToriiClientGovernanceTests({
           },
         },
         "sorafs_provider_governance",
+      ],
+      [
+        "ContractLifecycleGovernance",
+        {
+          contract_address: contractAddress,
+          expected_revision: 3,
+          action: {
+            action: "CompleteEmergencyHoldRetrospective",
+            payload: {
+              hold_proposal_content_id: Array(32).fill(0x51),
+              hold_governance_attempt_id: Array(32).fill(0x52),
+              incident_digest: Array(32).fill(0x53),
+              retrospective_finding_root: Array(32).fill(0x54),
+            },
+          },
+        },
+        "contract_lifecycle_governance",
+      ],
+      [
+        "ContractEmergencyHold",
+        {
+          contract_address: contractAddress,
+          expected_revision: 2,
+          expected_code_hash: "33".repeat(32),
+          incident_digest: Array(32).fill(0x55),
+          reason: "contain active exploit",
+          duration_blocks: 3_600,
+        },
+        "contract_emergency_hold",
       ],
     ];
     for (const [variant, payload, resultField] of variants) {
@@ -1491,6 +1520,8 @@ wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
       "ValidationFeePayoutLifecycle",
       "MusubiRegistryGovernance",
       "SorafsProviderGovernance",
+      "ContractLifecycleGovernance",
+      "ContractEmergencyHold",
     ]) {
       assert.match(proposalKind[1], new RegExp(`variant: "${variant}"`, "u"));
     }

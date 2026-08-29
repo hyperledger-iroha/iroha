@@ -529,9 +529,14 @@ async fn handler_post_transaction_rejects_unfunded_nexus_fee_tx_before_history()
         !app.state.has_committed_entrypoint(tx.hash_as_entrypoint()),
         "ingress rejection should not create committed history"
     );
+    let explorer_uri: axum::http::Uri = format!("/v1/explorer/transactions/{tx_hash_hex}")
+        .parse()
+        .expect("valid Explorer transaction URI");
     let explorer = super::handler_explorer_transaction_detail(
         State(app),
         HeaderMap::new(),
+        axum::http::Method::GET,
+        explorer_uri,
         crate::loopback_connect_info(),
         axum::extract::Path(tx_hash_hex),
     )

@@ -37,10 +37,12 @@ security and operability risk first, UX throughput second.
 ### DeactivateContractInstance
 - Remove or tombstone the `contract_address` binding while persisting provenance data
   (who, when, reason code) for troubleshooting.
-- Require the same governance permission set as activation, with policy hooks to disallow
-  deactivation of core system namespaces without elevated approval.
+- Require the exact retained lifecycle `expected_revision`. Direct activation and deactivation
+  are restricted to the current account owner; Parliament uses the certified governance
+  lifecycle corridor when it owns the contract or holds revocable lifecycle delegation.
 - Reject when the instance is already inactive to keep event logs deterministic.
-- Emit a `ContractInstanceEvent::Deactivated` that downstream watchers can consume.
+- Clear `active_code_hash`, advance the lifecycle revision, retain origin and ownership, and emit
+  `SmartContractEvent::InstanceDeactivated` with the complete post-transition lifecycle record.
 
 ### RemoveSmartContractBytes
 - Allow pruning of stored bytecode by `code_hash` only when no manifests or active instances
@@ -72,16 +74,15 @@ security and operability risk first, UX throughput second.
 - World state includes `account_rekey_records` keyed by `AccountAlias` so we can stage alias →
   signatory migrations without touching the historical `AccountId` encoding.
 
-## IVM Syscall Drafting
+## IVM Syscall Surface
 
 - Host shims for `DeactivateContractInstance` / `RemoveSmartContractBytes` ship as
   `SYSCALL_DEACTIVATE_CONTRACT_INSTANCE` (0x43) and
   `SYSCALL_REMOVE_SMART_CONTRACT_BYTES` (0x44), both consuming Norito TLVs that mirror the
   canonical ISI structs.
-- Extend `abi_syscall_list()` only after host handlers mirror `iroha_core` execution paths to keep
-  ABI hashes stable during development.
-- Update Kotodama lowering once syscall numbers stabilize; add golden coverage for the expanded
-  surface at the same time.
+- `DeactivateContractInstance` carries the mandatory lifecycle `expected_revision`; host and
+  Kotodama paths decode the canonical struct and therefore cannot infer a legacy default.
+- `abi_syscall_list()` and the generated syscall references remain the canonical v1 surface.
 
 ## Status
 

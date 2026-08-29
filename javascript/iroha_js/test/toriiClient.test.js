@@ -2710,6 +2710,12 @@ test("getIsoMessageStatus normalizes ISO bridge status and pacs002 code", async 
   const payload = await client.getIsoMessageStatus("iso-normalize");
   assert.equal(payload?.status, "Pending");
   assert.equal(payload?.pacs002_code, "PDNG");
+  assert.equal(payload?.originator_participant_id, "originator-bank");
+  assert.equal(payload?.counterparty_participant_id, "counterparty-bank");
+  assert.equal(payload?.admitting_participant_id, "originator-bank");
+  assert.equal(payload?.admitting_operator_key, "ed0120fixture");
+  assert.equal(payload?.pinned_profile_id, "generic-iso20022");
+  assert.equal(payload?.pinned_signature_policy, "record_only");
 });
 
 test("getIsoMessageStatus rejects unknown ISO status values and pacs002 codes", async () => {
@@ -17277,8 +17283,25 @@ test("getGovernanceContract reads one governed binding", async () => {
       jsonData: {
         found: true,
         contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
+        contract_subject_account: FIXTURE_ALICE_ID,
         dataspace: "universal",
+        active: true,
+        lifecycle: {
+          origin: "direct",
+          origin_account: FIXTURE_ALICE_ID,
+          origin_proposal_content_id_hex: null,
+          origin_governance_attempt_id_hex: null,
+          owner: FIXTURE_ALICE_ID,
+          pending_owner: "parliament",
+          parliament_delegated: true,
+          active_code_hash_hex: fakeHashHex(0xaa),
+          revision: 7,
+          emergency_hold: null,
+        },
+        emergency_hold_active: false,
         code_hash_hex: fakeHashHex(0xaa),
+        abi_hash_hex: fakeHashHex(0xbb),
+        public_entrypoints: ["transfer", "view_balance"],
       },
       headers: { "content-type": "application/json" },
     });
@@ -17296,6 +17319,10 @@ test("getGovernanceContract reads one governed binding", async () => {
   assert.equal(result.found, true);
   assert.equal(result.dataspace, "universal");
   assert.equal(result.code_hash_hex, fakeHashHex(0xaa));
+  assert.equal(result.lifecycle.revision, 7);
+  assert.equal(result.lifecycle.active_code_hash_hex, fakeHashHex(0xaa));
+  assert.equal(result.lifecycle.pending_owner, "parliament");
+  assert.deepEqual(result.public_entrypoints, ["transfer", "view_balance"]);
 });
 
 test("iterateTriggers paginates list endpoint", async () => {
@@ -25460,6 +25487,7 @@ test("getContractCodeBytes rejects ambiguous or active DTO shapes", async () => 
 
 test("getGovernanceContract mirrors response handling", async () => {
   let calledUrl;
+  const owner = FIXTURE_ALICE_ID;
   const fetchImpl = async (url) => {
     calledUrl = url;
     return createResponse({
@@ -25467,8 +25495,25 @@ test("getGovernanceContract mirrors response handling", async () => {
       jsonData: {
         found: true,
         contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
+        contract_subject_account: owner,
         dataspace: "universal",
+        active: true,
+        lifecycle: {
+          origin: "direct",
+          origin_account: owner,
+          origin_proposal_content_id_hex: null,
+          origin_governance_attempt_id_hex: null,
+          owner,
+          pending_owner: null,
+          parliament_delegated: false,
+          active_code_hash_hex: "1".repeat(64),
+          revision: 1,
+          emergency_hold: null,
+        },
+        emergency_hold_active: false,
         code_hash_hex: "1".repeat(64),
+        abi_hash_hex: "2".repeat(64),
+        public_entrypoints: ["ping"],
       },
       headers: { "content-type": "application/json" },
     });
@@ -25487,6 +25532,29 @@ test("getGovernanceContract mirrors response handling", async () => {
 test("getGovernanceContract rejects coercible, non-canonical, or unexpected fields", async () => {
   const contractAddress =
     "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw";
+  const activeResponse = {
+    found: true,
+    contract_address: contractAddress,
+    contract_subject_account: FIXTURE_ALICE_ID,
+    dataspace: "universal",
+    active: true,
+    lifecycle: {
+      origin: "direct",
+      origin_account: FIXTURE_ALICE_ID,
+      origin_proposal_content_id_hex: null,
+      origin_governance_attempt_id_hex: null,
+      owner: FIXTURE_ALICE_ID,
+      pending_owner: null,
+      parliament_delegated: false,
+      active_code_hash_hex: "1".repeat(64),
+      revision: 1,
+      emergency_hold: null,
+    },
+    emergency_hold_active: false,
+    code_hash_hex: "1".repeat(64),
+    abi_hash_hex: "2".repeat(64),
+    public_entrypoints: ["ping"],
+  };
   const cases = [
     [
       "string boolean",
@@ -25494,18 +25562,12 @@ test("getGovernanceContract rejects coercible, non-canonical, or unexpected fiel
         found: "false",
         contract_address: contractAddress,
         dataspace: "universal",
-        code_hash_hex: "1".repeat(64),
       },
       /found must be a boolean/,
     ],
     [
       "uppercase hash",
-      {
-        found: true,
-        contract_address: contractAddress,
-        dataspace: "universal",
-        code_hash_hex: "A".repeat(64),
-      },
+      { ...activeResponse, code_hash_hex: "A".repeat(64) },
       /code_hash_hex must be an exact lowercase 32-byte hex string/,
     ],
     [
@@ -25518,6 +25580,24 @@ test("getGovernanceContract rejects coercible, non-canonical, or unexpected fiel
         ignored: true,
       },
       /unsupported fields: ignored/,
+    ],
+    [
+      "mismatched lifecycle code hash",
+      {
+        ...activeResponse,
+        lifecycle: { ...activeResponse.lifecycle, active_code_hash_hex: "3".repeat(64) },
+      },
+      /active_code_hash_hex must match code_hash_hex/,
+    ],
+    [
+      "unsorted public entrypoints",
+      { ...activeResponse, public_entrypoints: ["view_balance", "transfer"] },
+      /must be sorted and contain no duplicates/,
+    ],
+    [
+      "absent response with active fields",
+      { found: false, contract_address: contractAddress, dataspace: "universal", active: null },
+      /unsupported fields: active/,
     ],
   ];
   for (const [label, jsonData, pattern] of cases) {

@@ -2281,11 +2281,35 @@ mod tests {
     #[test]
     async fn registration_metadata_values_share_the_set_key_value_limit() -> Result<()> {
         use iroha_data_model::{
+            asset::{AssetBalancePolicy, AssetDefinitionId},
+            isi::rwa::RegisterRwa,
             parameter::{CustomParameter, CustomParameterId},
             prelude::Parameter,
+            rwa::{NewRwa, RwaControlPolicy},
         };
         use iroha_primitives::json::Json;
+        use iroha_primitives::numeric::{NumericSpec, Quantity};
         use std::str::FromStr as _;
+
+        fn metadata_with_encoded_size(size: usize) -> Metadata {
+            let value = Json::new("X".repeat(size.saturating_sub(2)));
+            assert_eq!(
+                value.as_ref().len(),
+                size,
+                "fixture must hit the wire-size boundary"
+            );
+            let mut metadata = Metadata::default();
+            metadata.insert("bounded".parse().expect("metadata key"), value);
+            metadata
+        }
+
+        fn assert_metadata_limit(error: Error, entity: &str) {
+            assert!(
+                matches!(error, Error::InvalidParameter(_)),
+                "oversized {entity} registration returned {error:?}"
+            );
+        }
+
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_test_domains(&kura)?;
         let block_header = ValidBlock::new_dummy(checked_keypair().private_key())
@@ -2299,20 +2323,123 @@ mod tests {
             Json::new(16_u64),
         )))
         .execute(&ALICE_ID, &mut state_transaction)?;
-        let mut metadata = Metadata::default();
-        metadata.insert("small".parse()?, Json::new("ok"));
-        crate::smartcontracts::limits::enforce_metadata_value_sizes(
-            &mut state_transaction,
-            &metadata,
-        )?;
-        metadata.insert("large".parse()?, Json::new("X".repeat(32)));
-        assert!(matches!(
-            crate::smartcontracts::limits::enforce_metadata_value_sizes(
-                &mut state_transaction,
-                &metadata,
+
+        let exact = metadata_with_encoded_size(16);
+        let oversized = metadata_with_encoded_size(17);
+
+        let exact_account = AccountId::new(checked_keypair().public_key().clone());
+        Register::account(Account::new(exact_account.clone()).with_metadata(exact.clone()))
+            .execute(&ALICE_ID, &mut state_transaction)?;
+        let oversized_account = AccountId::new(checked_keypair().public_key().clone());
+        assert_metadata_limit(
+            Register::account(
+                Account::new(oversized_account.clone()).with_metadata(oversized.clone()),
+            )
+            .execute(&ALICE_ID, &mut state_transaction)
+            .expect_err("oversized account metadata must fail"),
+            "account",
+        );
+        assert!(state_transaction.world.account(&oversized_account).is_err());
+
+        let exact_domain = DomainId::try_new("metadata-exact", "universal")?;
+        Register::domain(Domain::new(exact_domain).with_metadata(exact.clone()))
+            .execute(&ALICE_ID, &mut state_transaction)?;
+        let oversized_domain = DomainId::try_new("metadata-oversized", "universal")?;
+        assert_metadata_limit(
+            Register::domain(
+                Domain::new(oversized_domain.clone()).with_metadata(oversized.clone()),
+            )
+            .execute(&ALICE_ID, &mut state_transaction)
+            .expect_err("oversized domain metadata must fail"),
+            "domain",
+        );
+        assert!(state_transaction.world.domain(&oversized_domain).is_err());
+
+        let wonderland = DomainId::try_new("wonderland", "universal")?;
+        let exact_definition = AssetDefinitionId::derive_from_components(
+            wonderland.clone(),
+            "metadata_exact".parse()?,
+        );
+        Register::asset_definition(
+            AssetDefinition::numeric(
+                exact_definition,
+                "metadata exact",
+                AssetBalancePolicy::Global,
+                None,
+            )
+            .with_metadata(exact.clone()),
+        )
+        .execute(&ALICE_ID, &mut state_transaction)?;
+        let oversized_definition = AssetDefinitionId::derive_from_components(
+            wonderland.clone(),
+            "metadata_oversized".parse()?,
+        );
+        assert_metadata_limit(
+            Register::asset_definition(
+                AssetDefinition::numeric(
+                    oversized_definition.clone(),
+                    "metadata oversized",
+                    AssetBalancePolicy::Global,
+                    None,
+                )
+                .with_metadata(oversized.clone()),
+            )
+            .execute(&ALICE_ID, &mut state_transaction)
+            .expect_err("oversized asset-definition metadata must fail"),
+            "asset definition",
+        );
+        assert!(
+            state_transaction
+                .world
+                .asset_definition(&oversized_definition)
+                .is_err()
+        );
+
+        let exact_nft: NftId = "metadata_exact$wonderland.universal".parse()?;
+        Register::nft(Nft::new(exact_nft, exact.clone()))
+            .execute(&ALICE_ID, &mut state_transaction)?;
+        let oversized_nft: NftId = "metadata_oversized$wonderland.universal".parse()?;
+        assert_metadata_limit(
+            Register::nft(Nft::new(oversized_nft.clone(), oversized.clone()))
+                .execute(&ALICE_ID, &mut state_transaction)
+                .expect_err("oversized NFT metadata must fail"),
+            "NFT",
+        );
+        assert!(state_transaction.world.nft(&oversized_nft).is_err());
+
+        state_transaction.tx_call_hash = Some(iroha_crypto::Hash::new(b"metadata-limit-rwa"));
+        RegisterRwa {
+            rwa: NewRwa::new(
+                wonderland.clone(),
+                "1".parse::<Quantity>()?,
+                NumericSpec::integer(),
+                "metadata-exact".to_owned(),
+                None,
+                exact,
+                Vec::new(),
+                RwaControlPolicy::default(),
             ),
-            Err(Error::InvalidParameter(_))
-        ));
+        }
+        .execute(&ALICE_ID, &mut state_transaction)?;
+        let rwa_count = state_transaction.world.rwas.len();
+        assert_metadata_limit(
+            RegisterRwa {
+                rwa: NewRwa::new(
+                    wonderland,
+                    "1".parse::<Quantity>()?,
+                    NumericSpec::integer(),
+                    "metadata-oversized".to_owned(),
+                    None,
+                    oversized,
+                    Vec::new(),
+                    RwaControlPolicy::default(),
+                ),
+            }
+            .execute(&ALICE_ID, &mut state_transaction)
+            .expect_err("oversized RWA metadata must fail"),
+            "RWA",
+        );
+        assert_eq!(state_transaction.world.rwas.len(), rwa_count);
         Ok(())
     }
     #[test]

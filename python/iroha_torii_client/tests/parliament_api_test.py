@@ -238,6 +238,8 @@ def _capabilities() -> dict[str, Any]:
             "confirmation_jury": "4",
         },
         "supported_proposal_kinds": [
+            "CONTRACT_EMERGENCY_HOLD",
+            "CONTRACT_LIFECYCLE_GOVERNANCE",
             "DEPLOY_CONTRACT",
             "MUSUBI_REGISTRY_GOVERNANCE",
             "RUNTIME_UPGRADE",

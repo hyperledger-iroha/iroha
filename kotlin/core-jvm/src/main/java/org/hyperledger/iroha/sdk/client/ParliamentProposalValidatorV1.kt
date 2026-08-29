@@ -409,9 +409,14 @@ internal object ParliamentProposalValidatorV1 {
                 }
             }
             "Deactivate" -> {
-                exact(payload, setOf("expected_code_hash", "reason"), kind)
+                val fields = if (payload.containsKey("reason")) {
+                    setOf("expected_code_hash", "reason")
+                } else {
+                    setOf("expected_code_hash")
+                }
+                exact(payload, fields, kind)
                 lowerHex32(payload["expected_code_hash"], "$kind.expected_code_hash")
-                payload["reason"]?.let { reason(string(it, "$kind.reason"), "$kind.reason") }
+                payload["reason"]?.let { string(it, "$kind.reason") }
             }
             "OfferOwnership" -> {
                 exact(payload, setOf("new_owner"), kind)
@@ -453,7 +458,9 @@ internal object ParliamentProposalValidatorV1 {
         ) { "contract emergency-hold expected_revision must be nonzero" }
         lowerHex32(value["expected_code_hash"], "ContractEmergencyHold.expected_code_hash")
         bytes(value["incident_digest"], 32, "ContractEmergencyHold.incident_digest", true)
-        reason(string(value["reason"], "ContractEmergencyHold.reason"), "ContractEmergencyHold.reason")
+        require(string(value["reason"], "ContractEmergencyHold.reason").trim().isNotEmpty()) {
+            "ContractEmergencyHold.reason must not be blank"
+        }
         val duration = uint(value["duration_blocks"], "ContractEmergencyHold.duration_blocks")
         require(duration in BigInteger.ONE..BigInteger.valueOf(3_600)) {
             "ContractEmergencyHold.duration_blocks must be in 1..3600"

@@ -1,0 +1,49 @@
+package org.hyperledger.iroha.android.client;
+
+/** Complete retained ownership and lifecycle projection for one contract. */
+public final class GovernanceContractLifecycle {
+  private final String origin;
+  private final String originAccount;
+  private final String originProposalContentIdHex;
+  private final String originGovernanceAttemptIdHex;
+  private final String owner;
+  private final String pendingOwner;
+  private final boolean parliamentDelegated;
+  private final String activeCodeHashHex;
+  private final long revision;
+  private final GovernanceContractEmergencyHold emergencyHold;
+
+  public GovernanceContractLifecycle(
+      final String origin,
+      final String originAccount,
+      final String originProposalContentIdHex,
+      final String originGovernanceAttemptIdHex,
+      final String owner,
+      final String pendingOwner,
+      final boolean parliamentDelegated,
+      final String activeCodeHashHex,
+      final long revision,
+      final GovernanceContractEmergencyHold emergencyHold) {
+    this.origin = origin;
+    this.originAccount = originAccount;
+    this.originProposalContentIdHex = originProposalContentIdHex;
+    this.originGovernanceAttemptIdHex = originGovernanceAttemptIdHex;
+    this.owner = owner;
+    this.pendingOwner = pendingOwner;
+    this.parliamentDelegated = parliamentDelegated;
+    this.activeCodeHashHex = activeCodeHashHex;
+    this.revision = revision;
+    this.emergencyHold = emergencyHold;
+  }
+
+  public String origin() { return origin; }
+  public String originAccount() { return originAccount; }
+  public String originProposalContentIdHex() { return originProposalContentIdHex; }
+  public String originGovernanceAttemptIdHex() { return originGovernanceAttemptIdHex; }
+  public String owner() { return owner; }
+  public String pendingOwner() { return pendingOwner; }
+  public boolean parliamentDelegated() { return parliamentDelegated; }
+  public String activeCodeHashHex() { return activeCodeHashHex; }
+  public long revision() { return revision; }
+  public GovernanceContractEmergencyHold emergencyHold() { return emergencyHold; }
+}

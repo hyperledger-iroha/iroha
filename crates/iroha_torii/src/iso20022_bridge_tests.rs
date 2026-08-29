@@ -11299,9 +11299,17 @@ fn participant_message(
 fn participant_catalog_binds_initial_from_and_scopes_reads_to_both_parties() {
     let store = TempDir::new().expect("tempdir");
     let audit_admin = fixture_key_pair(0xAD);
+    let other_party = fixture_key_pair(0xAE);
     let mut config = sample_config();
     config.store_dir = Some(store.path().to_path_buf());
     config.audit_admin_keys = vec![audit_admin.public_key().clone()];
+    config.participants.push(actual::IsoBridgeParticipant {
+        id: "other-bank".to_owned(),
+        operator_keys: vec![other_party.public_key().clone()],
+        financial_identifiers: vec!["OTHRDEFF".to_owned()],
+        allowed_profiles: vec!["generic-iso20022".to_owned()],
+        roles: vec!["originator".to_owned(), "counterparty".to_owned()],
+    });
     let runtime = Iso20022BridgeRuntime::from_config(&config)
         .expect("valid participant config")
         .expect("enabled runtime");
@@ -11343,13 +11351,49 @@ fn participant_catalog_binds_initial_from_and_scopes_reads_to_both_parties() {
             parties,
         )
         .expect("durable authenticated admission");
+    let other_message = participant_message(
+        "pacs.008",
+        "OTHRDEFF",
+        "MARKDEFF",
+        "MsgId=other-payment",
+    );
+    let other_parties = runtime
+        .authorize_initial_submission(other_party.public_key(), profile, &other_message)
+        .expect("other participant owns its From identity");
+    runtime
+        .admit_authenticated_inbound(
+            "other-payment",
+            inbound_metadata("other-payment", "pacs.008"),
+            other_parties,
+        )
+        .expect("second durable authenticated admission");
     assert!(runtime.can_read_message(originator.public_key(), "participant-payment"));
     assert!(runtime.can_read_message(counterparty.public_key(), "participant-payment"));
     assert!(runtime.can_read_message(audit_admin.public_key(), "participant-payment"));
-    assert!(!runtime.can_read_message(
-        fixture_key_pair(0xAE).public_key(),
-        "participant-payment"
-    ));
+    assert!(!runtime.can_read_message(other_party.public_key(), "participant-payment"));
+    assert!(!runtime.can_read_message(fixture_key_pair(0xAF).public_key(), "participant-payment"));
+
+    let originator_audit = runtime
+        .audit_index_for(originator.public_key())
+        .expect("participant audit index");
+    let counterparty_audit = runtime
+        .audit_index_for(counterparty.public_key())
+        .expect("shared counterparty audit index");
+    let other_audit = runtime
+        .audit_index_for(other_party.public_key())
+        .expect("other participant audit index");
+    let admin_audit = runtime
+        .audit_index_for(audit_admin.public_key())
+        .expect("audit admin global index");
+    assert_eq!(originator_audit["record_count"].as_u64(), Some(1));
+    assert_eq!(counterparty_audit["record_count"].as_u64(), Some(2));
+    assert_eq!(other_audit["record_count"].as_u64(), Some(1));
+    assert_eq!(admin_audit["record_count"].as_u64(), Some(2));
+    assert!(
+        runtime
+            .audit_index_for(fixture_key_pair(0xAF).public_key())
+            .is_none()
+    );
 }
 
 #[test]
@@ -11357,14 +11401,20 @@ fn participant_catalog_rejects_legacy_unscoped_and_overlapping_admin_keys() {
     let mut unscoped = sample_config();
     unscoped.participants.clear();
     let error = runtime_config_error(&unscoped, "unscoped participant catalog must fail");
-    assert!(error.to_string().contains("legacy unscoped bridge configuration"));
+    assert!(
+        error
+            .to_string()
+            .contains("legacy unscoped bridge configuration")
+    );
 
     let mut overlapping = sample_config();
     overlapping.audit_admin_keys = vec![overlapping.participants[0].operator_keys[0].clone()];
     let error = runtime_config_error(&overlapping, "audit mutation key overlap must fail");
-    assert!(error
-        .to_string()
-        .contains("must not also be a participant mutation key"));
+    assert!(
+        error
+            .to_string()
+            .contains("must not also be a participant mutation key")
+    );
 }
 
 #[test]
@@ -11382,12 +11432,7 @@ fn lifecycle_roles_reject_cross_party_updates() {
         .expect("enabled runtime");
     let originator = fixture_key_pair(0xAB);
     let counterparty = fixture_key_pair(0xAC);
-    let original = participant_message(
-        "pacs.008",
-        "DEUTDEFF",
-        "MARKDEFF",
-        "MsgId=owned-payment",
-    );
+    let original = participant_message("pacs.008", "DEUTDEFF", "MARKDEFF", "MsgId=owned-payment");
     let profile = runtime.default_profile();
     let parties = runtime
         .authorize_initial_submission(originator.public_key(), profile, &original)
@@ -11415,12 +11460,7 @@ fn lifecycle_roles_reject_cross_party_updates() {
         Err(IsoAdmissionError::NotAuthorized)
     );
     let lifecycle_parties = runtime
-        .authorize_lifecycle_submission(
-            counterparty.public_key(),
-            profile,
-            "pacs.002",
-            &lifecycle,
-        )
+        .authorize_lifecycle_submission(counterparty.public_key(), profile, "pacs.002", &lifecycle)
         .expect("original counterparty owns pacs.002");
     assert_eq!(
         lifecycle_parties.admitting_participant_id,
@@ -11445,12 +11485,7 @@ fn lifecycle_roles_reject_cross_party_updates() {
         "BizMsgIdr=cancel-1\nOrgnlGrpInf/OrgnlMsgId=owned-payment",
     );
     runtime
-        .authorize_lifecycle_submission(
-            originator.public_key(),
-            profile,
-            "camt.056",
-            &cancellation,
-        )
+        .authorize_lifecycle_submission(originator.public_key(), profile, "camt.056", &cancellation)
         .expect("original originator owns camt.056");
     assert_eq!(
         runtime.authorize_lifecycle_submission(
@@ -11468,10 +11503,9 @@ fn settling_pacs002_requires_committed_transaction_evidence() {
     let runtime = sample_runtime();
     record_original(&runtime, "settlement-evidence", "pacs.008");
     let lifecycle_id = "settlement-evidence-status";
-    assert!(runtime.check_and_record_inbound(
-        lifecycle_id,
-        inbound_metadata(lifecycle_id, "pacs.002")
-    ));
+    assert!(
+        runtime.check_and_record_inbound(lifecycle_id, inbound_metadata(lifecycle_id, "pacs.002"))
+    );
     let lifecycle = parse_message(
         "pacs.002",
         b"BizMsgIdr=settlement-evidence-status\nOrgnlMsgId=settlement-evidence\nTxSts=ACSC",
@@ -11496,12 +11530,7 @@ fn settling_pacs002_requires_committed_transaction_evidence() {
     );
     assert!(runtime.mark_queued("settlement-evidence"));
     runtime
-        .apply_inbound_lifecycle_message_with_evidence(
-            lifecycle_id,
-            "pacs.002",
-            &lifecycle,
-            true,
-        )
+        .apply_inbound_lifecycle_message_with_evidence(lifecycle_id, "pacs.002", &lifecycle, true)
         .expect("committed evidence permits settlement transition");
     assert_eq!(
         runtime
@@ -11556,11 +11585,7 @@ fn protected_replay_capacity_fails_closed_without_mutation() {
         .expect("first admission");
     let second = runtime.compatibility_test_parties(&inbound_metadata("two", "pacs.008"));
     assert_eq!(
-        runtime.admit_authenticated_inbound(
-            "two",
-            inbound_metadata("two", "pacs.008"),
-            second,
-        ),
+        runtime.admit_authenticated_inbound("two", inbound_metadata("two", "pacs.008"), second,),
         Err(IsoAdmissionError::ProtectedCapacity)
     );
     assert!(!runtime.records.contains_key("two"));
@@ -11569,8 +11594,11 @@ fn protected_replay_capacity_fails_closed_without_mutation() {
 #[test]
 fn detail_persistence_failure_keeps_the_precommitted_replay_tombstone() {
     let store = TempDir::new().expect("tempdir");
-    fs::write(store.path().join("messages"), b"block rich-record directory creation")
-        .expect("write rich-record blocker");
+    fs::write(
+        store.path().join("messages"),
+        b"block rich-record directory creation",
+    )
+    .expect("write rich-record blocker");
     let mut config = sample_config();
     config.store_dir = Some(store.path().to_path_buf());
     let runtime = Iso20022BridgeRuntime::from_config(&config)
@@ -11579,15 +11607,15 @@ fn detail_persistence_failure_keeps_the_precommitted_replay_tombstone() {
     let metadata = inbound_metadata("precommitted-replay", "pacs.008");
     let parties = runtime.compatibility_test_parties(&metadata);
     assert_eq!(
-        runtime.admit_authenticated_inbound(
-            "precommitted-replay",
-            metadata.clone(),
-            parties,
-        ),
+        runtime.admit_authenticated_inbound("precommitted-replay", metadata.clone(), parties,),
         Err(IsoAdmissionError::PersistenceUnavailable)
     );
     assert!(!runtime.records.contains_key("precommitted-replay"));
-    assert!(runtime.replay_tombstones.contains_key("precommitted-replay"));
+    assert!(
+        runtime
+            .replay_tombstones
+            .contains_key("precommitted-replay")
+    );
     drop(runtime);
 
     let reloaded = Iso20022BridgeRuntime::from_config(&config)

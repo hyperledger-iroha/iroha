@@ -38653,6 +38653,174 @@ state_test! { sync data_trigger_depth_u8_max_rejects_without_panicking_or_wrappi
         "depth 256 must be rejected before its trigger executes"
     );
 }
+state_test! { sync data_trigger_fanout_rejects_the_two_hundred_fifty_seventh_firing
+    use iroha_data_model::prelude::DataEvent;
+    let state = blank_state();
+    let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+    let mut block = state.block(header);
+    let mut transaction = block.transaction();
+    let authorities = (1_u8..=5)
+        .map(|seed| {
+            let key = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+            AccountId::new(key.public_key().clone())
+        })
+        .collect::<Vec<_>>();
+    for index in 0..=MAX_DATA_TRIGGER_FIRINGS_PER_TRANSACTION {
+        let authority = authorities[index / 64].clone();
+        let trigger = Trigger::new(
+            format!("bounded_fanout_{index}")
+                .parse()
+                .expect("valid trigger id"),
+            Action::new(
+                Vec::<InstructionBox>::new(),
+                Repeats::Indefinitely,
+                authority,
+                data_pre::DataEventFilter::Any,
+            )
+            .expect("trigger action fixture satisfies validation invariants"),
+        )
+        .try_into()
+        .expect("data trigger specializes");
+        assert!(
+            transaction
+                .world
+                .triggers
+                .add_data_trigger(trigger)
+                .expect("seed data trigger")
+        );
+    }
+    let_row! { event = data_pre::DomainEvent::Created(
+        Domain::new(DomainId::try_new("fanout_seed", "universal").expect("valid seed domain"))
+            .build(&ALICE_ID),
+    ) };
+    transaction
+        .world
+        .internal_event_buf
+        .push(Arc::new(DataEvent::Domain(event)));
+
+    let_row! { error = transaction
+        .execute_data_triggers_dfs(&ALICE_ID)
+        .expect_err("the two-hundred-fifty-seventh firing must be rejected") };
+    assert!(
+        matches!(
+            error,
+            TransactionRejectionReason::Validation(ValidationFail::NotPermitted(ref message))
+                if message.contains("data trigger cascade exceeds 256 firings per transaction")
+        ),
+        "unexpected fanout rejection: {error:?}"
+    );
+}
+state_test! { sync data_trigger_filter_recheck_and_firing_share_the_block_gas_budget
+    use iroha_data_model::prelude::DataEvent;
+    let state = blank_state();
+    let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+    let mut block = state.block(header);
+    let mut transaction = block.transaction();
+    transaction.gas_limit_per_block = 2;
+    let trigger = Trigger::new(
+        "gas_bounded_data_trigger"
+            .parse()
+            .expect("valid trigger id"),
+        Action::new(
+            Vec::<InstructionBox>::new(),
+            Repeats::Indefinitely,
+            ALICE_ID.clone(),
+            data_pre::DataEventFilter::Any,
+        )
+        .expect("trigger action fixture satisfies validation invariants"),
+    )
+    .try_into()
+    .expect("data trigger specializes");
+    assert!(
+        transaction
+            .world
+            .triggers
+            .add_data_trigger(trigger)
+            .expect("seed data trigger")
+    );
+    let_row! { event = data_pre::DomainEvent::Created(
+        Domain::new(DomainId::try_new("gas_seed", "universal").expect("valid seed domain"))
+            .build(&ALICE_ID),
+    ) };
+    transaction
+        .world
+        .internal_event_buf
+        .push(Arc::new(DataEvent::Domain(event)));
+
+    let_row! { error = transaction
+        .execute_data_triggers_dfs(&ALICE_ID)
+        .expect_err("trigger firing must stop at the shared block gas budget") };
+    assert!(
+        matches!(
+            error,
+            TransactionRejectionReason::Validation(ValidationFail::NotPermitted(ref message))
+                if message.contains("data trigger firing exceed the shared block gas budget: 3 > 2")
+        ),
+        "unexpected trigger gas rejection: {error:?}"
+    );
+    assert_eq!(
+        transaction.last_tx_gas_used, 2,
+        "filter matching and the canonical recheck must both debit the shared budget"
+    );
+}
+state_test! { sync native_trigger_instructions_are_not_an_unmetered_execution_path
+    use iroha_data_model::{Level, isi::Log, prelude::DataEvent};
+    let state = blank_state();
+    let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+    let mut block = state.block(header);
+    let mut transaction = block.transaction();
+    transaction.gas_limit_per_block = 3;
+    let trigger = Trigger::new(
+        "native_instruction_gas_trigger"
+            .parse()
+            .expect("valid trigger id"),
+        Action::new(
+            [InstructionBox::from(Log::new(
+                Level::INFO,
+                "metered native trigger instruction".to_owned(),
+            ))],
+            Repeats::Indefinitely,
+            ALICE_ID.clone(),
+            data_pre::DataEventFilter::Any,
+        )
+        .expect("trigger action fixture satisfies validation invariants"),
+    )
+    .try_into()
+    .expect("data trigger specializes");
+    assert!(
+        transaction
+            .world
+            .triggers
+            .add_data_trigger(trigger)
+            .expect("seed data trigger")
+    );
+    let_row! { event = data_pre::DomainEvent::Created(
+        Domain::new(
+            DomainId::try_new("native_gas_seed", "universal").expect("valid seed domain"),
+        )
+        .build(&ALICE_ID),
+    ) };
+    transaction
+        .world
+        .internal_event_buf
+        .push(Arc::new(DataEvent::Domain(event)));
+
+    let_row! { error = transaction
+        .execute_data_triggers_dfs(&ALICE_ID)
+        .expect_err("native trigger instructions must consume the remaining block budget") };
+    assert!(
+        matches!(
+            error,
+            TransactionRejectionReason::Validation(ValidationFail::NotPermitted(ref message))
+                if message.contains("native trigger instructions exceed the shared block gas budget: 4 > 3")
+        ),
+        "unexpected native trigger gas rejection: {error:?}"
+    );
+    assert_eq!(
+        transaction.last_tx_gas_used, 3,
+        "filter, recheck, and firing debits must remain staged before the native instruction is rejected"
+    );
+}
 state_test! { sync authenticated_generic_ivm_trigger_executes_without_contract_identity
     use iroha_data_model::{
         events::execute_trigger::{ExecuteTriggerEvent, ExecuteTriggerEventFilter},
@@ -38817,6 +38985,10 @@ state_test! { sync raw_ivm_trigger_enforces_entrypoint_authorization_before_argu
         Register::account(Account::new(contract_subject.clone()))
             .execute(&ALICE_ID, &mut stx)
             .expect("register raw trigger contract subject");
+        stx.world.bind_inactive_contract_subject_for_testing(
+            contract_address.clone(),
+            ALICE_ID.clone(),
+        );
         let_row! { deployment_permission: Permission = iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode .into() };
         Grant::account_permission(deployment_permission, ALICE_ID.clone())
             .execute(&ALICE_ID, &mut stx)
@@ -39216,6 +39388,10 @@ state_test! { sync contract_call_trigger_enforces_entrypoint_authorization_befor
         Register::account(Account::new(contract_subject.clone()))
             .execute(&ALICE_ID, &mut stx)
             .expect("register ContractCall trigger contract subject");
+        stx.world.bind_inactive_contract_subject_for_testing(
+            contract_address.clone(),
+            ALICE_ID.clone(),
+        );
         let_row! { deployment_permission: Permission = iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode .into() };
         Grant::account_permission(deployment_permission, ALICE_ID.clone())
             .execute(&ALICE_ID, &mut stx)
@@ -39438,6 +39614,10 @@ state_test! { sync execute_data_trigger_supports_alias_resolve_and_json_amount_t
         Register::account(Account::new(contract_subject.clone()))
             .execute(&ALICE_ID, &mut stx)
             .expect("register alias-transfer callback contract subject");
+        stx.world.bind_inactive_contract_subject_for_testing(
+            contract_address.clone(),
+            ALICE_ID.clone(),
+        );
         let_row! { deployment_permission: Permission = iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode .into() };
         Grant::account_permission(deployment_permission, ALICE_ID.clone())
             .execute(&ALICE_ID, &mut stx)

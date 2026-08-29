@@ -24184,33 +24184,274 @@ function canonicalManifestEntrypointKind(value, name) {
 }
 
 function normalizeGovernanceContractResponse(payload) {
+  const context = "governanceContract";
   const record = ensureRecord(payload ?? {}, "governance contract response");
   assertSupportedOptionKeys(
     record,
-    new Set(["found", "contract_address", "dataspace", "code_hash_hex"]),
+    new Set([
+      "found",
+      "contract_address",
+      "contract_subject_account",
+      "dataspace",
+      "active",
+      "lifecycle",
+      "emergency_hold_active",
+      "code_hash_hex",
+      "abi_hash_hex",
+      "public_entrypoints",
+    ]),
     "governance contract response",
   );
-  return {
-    found: requireExactBoolean(record.found, "governanceContract.found"),
+  const found = requireExactBoolean(record.found, "governanceContract.found");
+  const active = found
+    ? requireExactBoolean(record.active, `${context}.active`)
+    : null;
+  const fields = found
+    ? active
+      ? [
+          "found",
+          "contract_address",
+          "contract_subject_account",
+          "dataspace",
+          "active",
+          "lifecycle",
+          "emergency_hold_active",
+          "code_hash_hex",
+          "abi_hash_hex",
+          "public_entrypoints",
+        ]
+      : [
+          "found",
+          "contract_address",
+          "contract_subject_account",
+          "dataspace",
+          "active",
+          "lifecycle",
+          "emergency_hold_active",
+        ]
+    : ["found", "contract_address", "dataspace"];
+  requireExactGovernanceProposalRecord(record, fields, "governance contract response");
+  const result = {
+    found,
     contract_address: requireExactNonEmptyString(
       record.contract_address,
-      "governanceContract.contract_address",
+      `${context}.contract_address`,
     ),
-    dataspace:
-      record.dataspace == null
+    contract_subject_account: found
+      ? requireCanonicalGovernanceAccountId(
+          record.contract_subject_account,
+          `${context}.contract_subject_account`,
+        )
+      : null,
+    dataspace: requireExactNonEmptyString(record.dataspace, `${context}.dataspace`),
+    active,
+    lifecycle:
+      !found
         ? null
-        : requireExactNonEmptyString(
-            record.dataspace,
-            "governanceContract.dataspace",
+        : normalizeGovernanceContractLifecycle(
+            record.lifecycle,
+            `${context}.lifecycle`,
           ),
+    emergency_hold_active: found
+      ? requireExactBoolean(
+          record.emergency_hold_active,
+          `${context}.emergency_hold_active`,
+        )
+      : null,
     code_hash_hex:
-      record.code_hash_hex == null
+      !active
         ? null
         : requireExactLowerHex32String(
             record.code_hash_hex,
-            "governanceContract.code_hash_hex",
+            `${context}.code_hash_hex`,
+          ),
+    abi_hash_hex:
+      !active
+        ? null
+        : requireExactLowerHex32String(
+            record.abi_hash_hex,
+            `${context}.abi_hash_hex`,
+          ),
+    public_entrypoints:
+      !active
+        ? null
+        : normalizeGovernancePublicEntrypoints(
+            record.public_entrypoints,
+            `${context}.public_entrypoints`,
           ),
   };
+  if (found) {
+    if (result.active) {
+      if (result.lifecycle.active_code_hash_hex !== result.code_hash_hex) {
+        throw new TypeError(
+          `${context}.lifecycle.active_code_hash_hex must match code_hash_hex`,
+        );
+      }
+    } else if (result.lifecycle.active_code_hash_hex !== null) {
+      throw new TypeError(
+        `${context}.lifecycle.active_code_hash_hex must be null for an inactive contract`,
+      );
+    }
+    if (result.emergency_hold_active && result.lifecycle.emergency_hold === null) {
+      throw new TypeError(
+        `${context}.emergency_hold_active requires a retained emergency hold`,
+      );
+    }
+  }
+  return result;
+}
+
+function normalizeGovernanceContractLifecycle(value, context) {
+  const record = requireExactGovernanceProposalRecord(
+    value,
+    [
+      "origin",
+      "origin_account",
+      "origin_proposal_content_id_hex",
+      "origin_governance_attempt_id_hex",
+      "owner",
+      "pending_owner",
+      "parliament_delegated",
+      "active_code_hash_hex",
+      "revision",
+      "emergency_hold",
+    ],
+    context,
+  );
+  const origin = requireExactNonEmptyString(record.origin, `${context}.origin`);
+  if (origin !== "direct" && origin !== "parliament") {
+    throw new TypeError(`${context}.origin must be direct or parliament`);
+  }
+  const lifecycle = {
+    origin,
+    origin_account: requireCanonicalGovernanceAccountId(
+      record.origin_account,
+      `${context}.origin_account`,
+    ),
+    origin_proposal_content_id_hex:
+      record.origin_proposal_content_id_hex == null
+        ? null
+        : requireExactLowerHex32String(
+            record.origin_proposal_content_id_hex,
+            `${context}.origin_proposal_content_id_hex`,
+          ),
+    origin_governance_attempt_id_hex:
+      record.origin_governance_attempt_id_hex == null
+        ? null
+        : requireExactLowerHex32String(
+            record.origin_governance_attempt_id_hex,
+            `${context}.origin_governance_attempt_id_hex`,
+          ),
+    owner: normalizeGovernanceContractOwner(record.owner, `${context}.owner`),
+    pending_owner:
+      record.pending_owner == null
+        ? null
+        : normalizeGovernanceContractOwner(
+            record.pending_owner,
+            `${context}.pending_owner`,
+          ),
+    parliament_delegated: requireExactBoolean(
+      record.parliament_delegated,
+      `${context}.parliament_delegated`,
+    ),
+    active_code_hash_hex:
+      record.active_code_hash_hex == null
+        ? null
+        : requireExactLowerHex32String(
+            record.active_code_hash_hex,
+            `${context}.active_code_hash_hex`,
+          ),
+    revision: requireExactJsonUnsignedInteger(record.revision, `${context}.revision`, {
+      allowZero: false,
+    }),
+    emergency_hold:
+      record.emergency_hold == null
+        ? null
+        : normalizeGovernanceContractEmergencyHold(
+            record.emergency_hold,
+            `${context}.emergency_hold`,
+          ),
+  };
+  const hasProposalContentId = lifecycle.origin_proposal_content_id_hex !== null;
+  const hasAttemptId = lifecycle.origin_governance_attempt_id_hex !== null;
+  if (origin === "direct" && (hasProposalContentId || hasAttemptId)) {
+    throw new TypeError(`${context} direct origin must not carry Parliament identifiers`);
+  }
+  if (origin === "parliament" && (!hasProposalContentId || !hasAttemptId)) {
+    throw new TypeError(`${context} Parliament origin requires both governance identifiers`);
+  }
+  return lifecycle;
+}
+
+function normalizeGovernanceContractEmergencyHold(value, context) {
+  const record = requireExactGovernanceProposalRecord(
+    value,
+    [
+      "incident_digest_hex",
+      "proposal_content_id_hex",
+      "governance_attempt_id_hex",
+      "reason",
+      "imposed_at_height",
+      "expires_at_height",
+    ],
+    context,
+  );
+  const imposedAtHeight = requireExactJsonUnsignedInteger(
+    record.imposed_at_height,
+    `${context}.imposed_at_height`,
+    { allowZero: false },
+  );
+  const expiresAtHeight = requireExactJsonUnsignedInteger(
+    record.expires_at_height,
+    `${context}.expires_at_height`,
+    { allowZero: false },
+  );
+  if (expiresAtHeight <= imposedAtHeight) {
+    throw new TypeError(`${context}.expires_at_height must follow imposed_at_height`);
+  }
+  return {
+    incident_digest_hex: requireExactLowerHex32String(
+      record.incident_digest_hex,
+      `${context}.incident_digest_hex`,
+    ),
+    proposal_content_id_hex: requireExactLowerHex32String(
+      record.proposal_content_id_hex,
+      `${context}.proposal_content_id_hex`,
+    ),
+    governance_attempt_id_hex: requireExactLowerHex32String(
+      record.governance_attempt_id_hex,
+      `${context}.governance_attempt_id_hex`,
+    ),
+    reason: requireExactNonEmptyString(record.reason, `${context}.reason`),
+    imposed_at_height: imposedAtHeight,
+    expires_at_height: expiresAtHeight,
+  };
+}
+
+function normalizeGovernanceContractOwner(value, context) {
+  const literal = requireExactNonEmptyString(value, context);
+  return literal === "parliament"
+    ? literal
+    : requireCanonicalGovernanceAccountId(literal, context);
+}
+
+function normalizeGovernancePublicEntrypoints(value, context) {
+  const entries = requireStringArray(value, context).map((entry, index) => {
+    const literal = requireExactNonEmptyString(entry, `${context}[${index}]`);
+    if (!/^[a-z][a-z0-9_]{0,127}$/u.test(literal)) {
+      throw new TypeError(`${context}[${index}] must be a canonical public entrypoint name`);
+    }
+    return literal;
+  });
+  if (entries.length === 0) {
+    throw new TypeError(`${context} must not be empty`);
+  }
+  for (let index = 1; index < entries.length; index += 1) {
+    if (entries[index - 1] >= entries[index]) {
+      throw new TypeError(`${context} must be sorted and contain no duplicates`);
+    }
+  }
+  return entries;
 }
 
 function normalizeAliasResolutionResponse(
