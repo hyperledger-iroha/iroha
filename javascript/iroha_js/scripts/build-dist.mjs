@@ -29,6 +29,7 @@ const LOCK_TIMEOUT_MS = 60_000;
 const STALE_LOCK_MS = 5 * 60_000;
 const REQUIRED_OUTPUTS = [
   "address.js",
+  "atomicPrivateSettlement.js",
   "browser.js",
   "curveRegistry.js",
   "ivmArtifact.js",

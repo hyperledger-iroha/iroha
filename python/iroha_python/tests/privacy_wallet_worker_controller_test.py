@@ -491,6 +491,9 @@ def test_private_settlement_prove_accepts_only_public_norito_and_checks_exact_re
     assert result.statement_norito == statement
     assert result.audit_capsule_norito == capsule
     assert result.proof == b"public-stark-proof"
+    assert repr(result) == "PrivateSettlementPreparedProofV1(<restricted>)"
+    assert "public-stark-proof" not in repr(result)
+    assert "capsule" not in repr(result).lower()
     [(command, sequence, payload)] = written_frames(process)
     assert command == worker.PrivacyWalletWorkerCommandV1.PROVE_PRIVATE_SETTLEMENT
     assert sequence == 1

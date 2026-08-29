@@ -18,6 +18,7 @@ use iroha_core::private_settlement::{
     PrivateSettlementPhaseSignerV1, PrivateSettlementRestrictedSidecarV1,
     PrivateSettlementSidecarLifecycleV1, PrivateSettlementSidecarStoreConfigV1,
     PrivateSettlementSidecarStoreErrorV1, PrivateSettlementSidecarStoreOutcomeV1,
+    validate_private_settlement_committee_authority_v1,
 };
 use iroha_core::state::StateReadOnly as _;
 use iroha_crypto::{Hash, PublicKey};
@@ -49,6 +50,14 @@ const PRIVATE_SETTLEMENT_RECONCILIATION_PAGE_RECORDS_V1: usize = 16;
 const PRIVATE_SETTLEMENT_RECONCILIATION_MAX_PAGES_PER_TICK_V1: usize = 16;
 const PRIVATE_SETTLEMENT_RECONCILIATION_INTERVAL_V1: Duration = Duration::from_secs(1);
 
+fn governed_sidecar_store_config_v1(
+    config: &iroha_config::parameters::actual::NexusAtomicPrivateSettlement,
+) -> Result<PrivateSettlementSidecarStoreConfigV1, PrivateSettlementSidecarStoreErrorV1> {
+    let max_records = usize::try_from(config.sidecar_max_records.get())
+        .map_err(|_| PrivateSettlementSidecarStoreErrorV1::ConfigurationInvalid)?;
+    PrivateSettlementSidecarStoreConfigV1::new(max_records, config.sidecar_max_total_bytes.get())
+}
+
 /// Route-local durable runtime installed as an Axum extension.
 #[derive(Clone)]
 pub(crate) struct PrivateSettlementToriiRuntimeV1 {
@@ -69,8 +78,9 @@ impl PrivateSettlementToriiRuntimeV1 {
         availability_signer: Option<Arc<PrivateSettlementAvailabilitySignerV1>>,
         phase_signer: Option<Arc<PrivateSettlementPhaseSignerV1>>,
     ) -> Result<Self, PrivateSettlementSidecarStoreErrorV1> {
-        let enabled = state.nexus_snapshot().atomic_private_settlement.enabled;
-        if !enabled || emergency_fast {
+        let nexus = state.nexus_snapshot();
+        let config = nexus.atomic_private_settlement;
+        if !config.enabled || emergency_fast {
             return Ok(Self {
                 store: None,
                 availability_signer: None,
@@ -83,7 +93,7 @@ impl PrivateSettlementToriiRuntimeV1 {
         let root = kura_root.join(PRIVATE_SETTLEMENT_SIDECAR_DIRECTORY_V1);
         let store = PrivateSettlementFileSidecarStoreV1::open(
             root,
-            PrivateSettlementSidecarStoreConfigV1::default(),
+            governed_sidecar_store_config_v1(&config)?,
         )?;
         Ok(Self {
             store: Some(Arc::new(store)),
@@ -148,6 +158,87 @@ impl PrivateSettlementToriiRuntimeV1 {
     }
 }
 
+#[cfg(test)]
+mod governed_sidecar_store_config_tests {
+    use std::num::{NonZeroU32, NonZeroU64};
+
+    use iroha_crypto::{Hash, HashOf};
+    use iroha_data_model::{
+        NetworkId,
+        block::BlockHeader,
+        nexus::{
+            ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1, DataSpaceId, LaneId,
+            PRIVATE_SETTLEMENT_XCHACHA_NONCE_BYTES_V1, PrivateSettlementAuditAadV1,
+            PrivateSettlementAuditCapsuleV1, PrivateSettlementCapsulePaddingV1,
+            PrivateSettlementRouteV1,
+        },
+    };
+
+    use super::*;
+
+    #[test]
+    fn governed_limits_are_forwarded_exactly() {
+        let mut config = iroha_config::parameters::actual::NexusAtomicPrivateSettlement::default();
+        config.sidecar_max_records = NonZeroU32::new(17).expect("non-zero record bound");
+        config.sidecar_max_total_bytes =
+            NonZeroU64::new(23 * 1024 * 1024).expect("non-zero byte bound");
+
+        let store = governed_sidecar_store_config_v1(&config).expect("bounded store config");
+        assert_eq!(store.max_records(), 17);
+        assert_eq!(store.max_total_bytes(), 23 * 1024 * 1024);
+    }
+
+    #[test]
+    fn capsule_bound_counts_the_complete_canonical_envelope() {
+        let capsule = PrivateSettlementAuditCapsuleV1 {
+            version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
+            aad: PrivateSettlementAuditAadV1 {
+                network_id: NetworkId::from_genesis_hash(
+                    HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"capsule bound")),
+                ),
+                bundle_id: Hash::new(b"capsule-bound-bundle"),
+                leg_ordinal: 0,
+                route: PrivateSettlementRouteV1 {
+                    dataspace_id: DataSpaceId::new(7),
+                    lane_id: LaneId::SINGLE,
+                    lane_incarnation: Hash::new(b"capsule-bound-incarnation"),
+                },
+                authority_digest: Hash::new(b"capsule-bound-authority"),
+                authority_context_height: 1,
+                audit_policy_digest: Hash::new(b"capsule-bound-policy"),
+                audit_key_epoch: 1,
+                plaintext_commitment: Hash::new(b"capsule-bound-plaintext"),
+            },
+            padding: PrivateSettlementCapsulePaddingV1::KiB4,
+            nonce: [0; PRIVATE_SETTLEMENT_XCHACHA_NONCE_BYTES_V1],
+            ciphertext: vec![0; PrivateSettlementCapsulePaddingV1::KiB4.ciphertext_bytes()],
+            wrapped_deks: Vec::new(),
+        };
+        let ciphertext_only_bound = u64::try_from(capsule.ciphertext.len()).expect("fits u64");
+        assert!(
+            !audit_capsule_within_canonical_bound(&capsule, ciphertext_only_bound),
+            "the AAD, nonce, padding tag, and recipient inventory must count against the bound"
+        );
+        let canonical_bound = u64::try_from(
+            norito::encode_canonical(&capsule)
+                .expect("capsule encodes")
+                .len(),
+        )
+        .expect("fits u64");
+        assert!(audit_capsule_within_canonical_bound(
+            &capsule,
+            canonical_bound
+        ));
+    }
+
+    #[test]
+    fn deployment_auditor_floor_is_enforced() {
+        assert!(audit_threshold_meets_governed_floor(1, 1));
+        assert!(audit_threshold_meets_governed_floor(3, 2));
+        assert!(!audit_threshold_meets_governed_floor(1, 2));
+    }
+}
+
 struct PrivateSettlementReconciliationWorkV1 {
     payload_digest: Hash,
     receipt: Option<iroha_data_model::nexus::PrivateSettlementReceiptV1>,
@@ -191,24 +282,26 @@ async fn reconcile_private_settlement_finality_tick_v1(
         if page.next_cursor.is_some() && page.next_cursor == cursor {
             return Err(PrivateSettlementReconciliationFailureV1::CursorDidNotAdvance);
         }
-        let view = state.view();
-        let authoritative_height = u64::try_from(view.height())
-            .map_err(|_| PrivateSettlementReconciliationFailureV1::HeightUnavailable)?;
-        let world = view.world();
-        let work = page
-            .candidates
-            .into_iter()
-            .map(|candidate| PrivateSettlementReconciliationWorkV1 {
-                payload_digest: candidate.payload_digest,
-                receipt: world
-                    .private_settlement_receipt_v1(&candidate.bundle_id)
-                    .cloned(),
-                abort: world
-                    .private_settlement_abort_v1(&candidate.bundle_id)
-                    .copied(),
-            })
-            .collect::<Vec<_>>();
-        drop(view);
+        let (authoritative_height, work) = {
+            let view = state.view();
+            let authoritative_height = u64::try_from(view.height())
+                .map_err(|_| PrivateSettlementReconciliationFailureV1::HeightUnavailable)?;
+            let world = view.world();
+            let work = page
+                .candidates
+                .into_iter()
+                .map(|candidate| PrivateSettlementReconciliationWorkV1 {
+                    payload_digest: candidate.payload_digest,
+                    receipt: world
+                        .private_settlement_receipt_v1(&candidate.bundle_id)
+                        .cloned(),
+                    abort: world
+                        .private_settlement_abort_v1(&candidate.bundle_id)
+                        .copied(),
+                })
+                .collect::<Vec<_>>();
+            (authoritative_height, work)
+        };
         if !work.is_empty() {
             let blocking_store = Arc::clone(&store);
             tokio::task::spawn_blocking(move || {
@@ -463,13 +556,41 @@ fn parse_digest(literal: &str) -> Result<Hash, Response> {
     })
 }
 
+fn audit_capsule_within_canonical_bound(
+    capsule: &iroha_data_model::nexus::PrivateSettlementAuditCapsuleV1,
+    maximum_bytes: u64,
+) -> bool {
+    norito::encode_canonical(capsule)
+        .ok()
+        .and_then(|encoded| u64::try_from(encoded.len()).ok())
+        .is_some_and(|encoded_bytes| encoded_bytes <= maximum_bytes)
+}
+
+fn audit_threshold_meets_governed_floor(policy_min_approvals: u8, governed_floor: u16) -> bool {
+    u16::from(policy_min_approvals) >= governed_floor
+}
+
+fn committee_authority_is_authoritative(
+    app: &SharedAppState,
+    authority_context_height: u64,
+    authority: &iroha_data_model::nexus::PrivateSettlementCommitteeAuthorityV1,
+) -> bool {
+    let view = app.state.view();
+    validate_private_settlement_committee_authority_v1(&view, authority_context_height, authority)
+        .is_ok()
+}
+
 fn validate_upload_policy(
     app: &SharedAppState,
     request: &PrivateSettlementLegUploadRequestV1,
     stored_at_height: u64,
 ) -> Result<(), Response> {
     let config = active_config(app, stored_at_height)?;
-    if request.manifest.network_id != app.state.network_id
+    if !committee_authority_is_authoritative(
+        app,
+        request.manifest.authority_context_height,
+        &request.committee_authority,
+    ) || request.manifest.network_id != app.state.network_id
         || request.manifest.legs.len() > usize::from(config.max_participants.get())
         || request
             .manifest
@@ -477,10 +598,17 @@ fn validate_upload_policy(
             .checked_sub(request.manifest.authority_context_height)
             .is_none_or(|span| span > config.max_expiry_blocks.get())
         || request.payload.proof.len() as u64 > config.max_proof_bytes.get()
-        || request.payload.audit_capsule.ciphertext.len() as u64 > config.max_capsule_bytes.get()
+        || !audit_capsule_within_canonical_bound(
+            &request.payload.audit_capsule,
+            config.max_capsule_bytes.get(),
+        )
         || !config
             .permitted_policy_versions
             .contains(&u16::from(request.audit_policy.body.version))
+        || !audit_threshold_meets_governed_floor(
+            request.audit_policy.body.min_approvals,
+            config.default_min_auditor_approvals.get(),
+        )
         || !config.capsule_padding_classes_bytes.iter().any(|class| {
             usize::try_from(class.get()).ok()
                 == Some(request.payload.audit_capsule.padding.plaintext_bytes())
@@ -503,7 +631,11 @@ fn validate_availability_share_policy(
 ) -> Result<(), Response> {
     let config = active_config(app, stored_at_height)?;
     let material = &request.material;
-    if material.manifest.network_id != app.state.network_id
+    if !committee_authority_is_authoritative(
+        app,
+        material.manifest.authority_context_height,
+        &material.committee_authority,
+    ) || material.manifest.network_id != app.state.network_id
         || material.manifest.legs.len() > usize::from(config.max_participants.get())
         || material
             .manifest
@@ -511,10 +643,17 @@ fn validate_availability_share_policy(
             .checked_sub(material.manifest.authority_context_height)
             .is_none_or(|span| span > config.max_expiry_blocks.get())
         || material.proof.len() as u64 > config.max_proof_bytes.get()
-        || material.audit_capsule.ciphertext.len() as u64 > config.max_capsule_bytes.get()
+        || !audit_capsule_within_canonical_bound(
+            &material.audit_capsule,
+            config.max_capsule_bytes.get(),
+        )
         || !config
             .permitted_policy_versions
             .contains(&u16::from(material.audit_policy.body.version))
+        || !audit_threshold_meets_governed_floor(
+            material.audit_policy.body.min_approvals,
+            config.default_min_auditor_approvals.get(),
+        )
         || !config.capsule_padding_classes_bytes.iter().any(|class| {
             usize::try_from(class.get()).ok()
                 == Some(material.audit_capsule.padding.plaintext_bytes())

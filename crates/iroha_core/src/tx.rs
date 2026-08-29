@@ -8116,9 +8116,8 @@ pub mod tests {
             TypeId::of::<iroha_data_model::isi::offline::SetOfflineDeviceAttestationPolicy>(),
             TypeId::of::<iroha_data_model::isi::private_settlement::ActivatePrivateSettlementPoolV1>(
             ),
-            TypeId::of::<
-                iroha_data_model::isi::private_settlement::AbortAtomicPrivateSettlementV1,
-            >(),
+            TypeId::of::<iroha_data_model::isi::private_settlement::AbortAtomicPrivateSettlementV1>(
+            ),
             TypeId::of::<
                 iroha_data_model::isi::private_settlement::FinalizeAtomicPrivateSettlementV1,
             >(),

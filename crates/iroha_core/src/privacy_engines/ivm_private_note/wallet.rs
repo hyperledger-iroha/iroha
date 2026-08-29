@@ -344,7 +344,6 @@ pub fn encrypt_ivm_private_wallet_note_v1(
 /// The caller must already have derived `commitment` under its governed note
 /// profile. The supplied ephemeral secret is retained only in restricted audit
 /// material; a fresh authenticated nonce is obtained from `rng`.
-#[cfg(test)]
 pub(crate) fn encrypt_ivm_private_wallet_note_for_commitment_with_opening_v1(
     rng: &mut (impl RngCore + CryptoRng),
     pool_id: PrivacyPoolIdV1,

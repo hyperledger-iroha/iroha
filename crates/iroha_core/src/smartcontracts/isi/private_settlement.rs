@@ -10,7 +10,7 @@ use crate::private_settlement::{
 };
 use iroha_data_model::isi::private_settlement::{
     AbortAtomicPrivateSettlementV1, ActivatePrivateSettlementPoolV1,
-    FinalizeAtomicPrivateSettlementV1,
+    FinalizeAtomicPrivateSettlementV1, RotatePrivateSettlementPoolPolicyV1,
 };
 use iroha_data_model::nexus::{
     ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1, PrivateSettlementAbortReasonV1,
@@ -34,9 +34,36 @@ impl Execute for ActivatePrivateSettlementPoolV1 {
             audit_key_epoch: self.audit_key_epoch,
             lifecycle: self.lifecycle,
             governance_digest: self.governance_digest,
+            prior_revisions: Vec::new(),
         };
         state_transaction
             .bootstrap_private_settlement_pool_v1(projection, &self.initial_commitments)
+            .map_err(|_| invalid_pool_activation())?;
+        Ok(())
+    }
+}
+
+impl Execute for RotatePrivateSettlementPoolPolicyV1 {
+    fn execute(
+        self,
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        super::privacy::ensure_privacy_governance(authority, state_transaction)?;
+        self.validate().map_err(|_| invalid_pool_activation())?;
+        let replacement = PrivateSettlementPoolGovernanceProjectionV1 {
+            version: self.version,
+            route: self.route,
+            pool_id: self.pool_id,
+            asset_binding_commitment: self.asset_binding_commitment,
+            audit_policy_digest: self.audit_policy_digest,
+            audit_key_epoch: self.audit_key_epoch,
+            lifecycle: self.lifecycle,
+            governance_digest: self.governance_digest,
+            prior_revisions: Vec::new(),
+        };
+        state_transaction
+            .rotate_private_settlement_pool_policy_v1(self.expected_governance_digest, replacement)
             .map_err(|_| invalid_pool_activation())?;
         Ok(())
     }

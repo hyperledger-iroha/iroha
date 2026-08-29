@@ -208,6 +208,11 @@ fn visit_privacy_protocol_instruction<V: Visit + ?Sized>(
         visitor.visit_activate_private_settlement_pool_v1(v);
     } else if let Some(v) =
         isi.as_any()
+            .downcast_ref::<crate::isi::private_settlement::RotatePrivateSettlementPoolPolicyV1>()
+    {
+        visitor.visit_rotate_private_settlement_pool_policy_v1(v);
+    } else if let Some(v) =
+        isi.as_any()
             .downcast_ref::<crate::isi::private_settlement::AbortAtomicPrivateSettlementV1>()
     {
         visitor.visit_abort_atomic_private_settlement_v1(v);
@@ -804,6 +809,9 @@ macro_rules! instruction_visitors {
             visit_submit_privacy_proof_v1(&$crate::isi::privacy::SubmitPrivacyProofV1),
             visit_activate_private_settlement_pool_v1(
                 &$crate::isi::private_settlement::ActivatePrivateSettlementPoolV1
+            ),
+            visit_rotate_private_settlement_pool_policy_v1(
+                &$crate::isi::private_settlement::RotatePrivateSettlementPoolPolicyV1
             ),
             visit_abort_atomic_private_settlement_v1(
                 &$crate::isi::private_settlement::AbortAtomicPrivateSettlementV1

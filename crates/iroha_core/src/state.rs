@@ -8,8 +8,10 @@ use crate::private_settlement::{
         PrivateSettlementOutputKeyV1, PrivateSettlementOutputRecordV1, PrivateSettlementPoolKeyV1,
         PrivateSettlementRootKeyV1, PrivateSettlementRootProvenanceV1,
         plan_private_settlement_abort_v1, plan_private_settlement_pool_bootstrap_v1,
-        plan_private_settlement_receipt_v1, validate_private_settlement_persisted_state_v1,
+        plan_private_settlement_pool_rotation_v1, plan_private_settlement_receipt_v1,
+        validate_private_settlement_persisted_state_v1,
     },
+    protocol::validate_private_settlement_committee_authority_v1,
     state::{PrivateSettlementPoolGovernanceProjectionV1, PrivateSettlementPoolStateV1},
 };
 use eyre::{Result, WrapErr, eyre};
@@ -55807,6 +55809,37 @@ impl StateTransaction<'_, '_> {
             .insert(plan.root_key, plan.root_provenance);
         Ok(PrivateSettlementGlobalStateOutcomeV1::Applied)
     }
+    /// Rotate one governed pool policy without resetting its root or replay state.
+    pub(crate) fn rotate_private_settlement_pool_policy_v1(
+        &mut self,
+        expected_governance_digest: Hash,
+        replacement: PrivateSettlementPoolGovernanceProjectionV1,
+    ) -> core::result::Result<
+        PrivateSettlementGlobalStateOutcomeV1,
+        PrivateSettlementGlobalStateErrorV1,
+    > {
+        let current_height = self.block_height();
+        self.ensure_private_settlement_feature_active_v1(current_height)?;
+        self.ensure_private_settlement_route_active_v1(replacement.route)?;
+        let plan = plan_private_settlement_pool_rotation_v1(
+            &self.world.private_settlement_governance,
+            &self.world.private_settlement_pools,
+            &self.world.private_settlement_receipts,
+            expected_governance_digest,
+            replacement,
+            current_height,
+        )?;
+        let Some(plan) = plan else {
+            return Ok(PrivateSettlementGlobalStateOutcomeV1::Idempotent);
+        };
+        self.world
+            .private_settlement_governance
+            .insert(plan.key, plan.governance);
+        self.world
+            .private_settlement_pools
+            .insert(plan.key, plan.pool);
+        Ok(PrivateSettlementGlobalStateOutcomeV1::Applied)
+    }
     /// Atomically stage every certified leg and the public receipt in this transaction.
     pub(crate) fn apply_private_settlement_receipt_v1(
         &mut self,
@@ -55838,8 +55871,17 @@ impl StateTransaction<'_, '_> {
         {
             return Err(PrivateSettlementGlobalStateErrorV1::Bounds);
         }
-        for leg in &receipt.manifest.legs {
+        receipt
+            .validate_shape()
+            .map_err(|_| PrivateSettlementGlobalStateErrorV1::Receipt)?;
+        for (leg, authority) in receipt.manifest.legs.iter().zip(&receipt.authority_catalog) {
             self.ensure_private_settlement_route_active_v1(leg.route)?;
+            validate_private_settlement_committee_authority_v1(
+                self,
+                receipt.manifest.authority_context_height,
+                authority,
+            )
+            .map_err(|_| PrivateSettlementGlobalStateErrorV1::Receipt)?;
         }
         let plan = plan_private_settlement_receipt_v1(
             &self.world.private_settlement_governance,

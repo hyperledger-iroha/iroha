@@ -11291,7 +11291,8 @@ pub struct NexusAtomicPrivateSettlement {
     pub commit_timeout_blocks: u64,
     /// Strictly increasing canonical padded-plaintext classes, in bytes.
     ///
-    /// The authenticated ciphertext is exactly 16 bytes larger.
+    /// The authenticated ciphertext is exactly 16 bytes larger; configuration
+    /// also reserves canonical AAD, nonce, vector, and wrapped-DEK framing.
     #[config(
         default = "defaults::nexus::atomic_private_settlement::capsule_padding_classes_bytes()"
     )]
@@ -11308,7 +11309,13 @@ pub struct NexusAtomicPrivateSettlement {
     /// Minimum durable sidecar retention after admission, in blocks.
     #[config(default = "defaults::nexus::atomic_private_settlement::SIDECAR_RETENTION_BLOCKS")]
     pub sidecar_retention_blocks: u64,
-    /// Default online auditor threshold for new governed policies.
+    /// Maximum encrypted settlement records retained by one local sidecar store.
+    #[config(default = "defaults::nexus::atomic_private_settlement::SIDECAR_MAX_RECORDS")]
+    pub sidecar_max_records: u32,
+    /// Maximum canonical bytes retained by one local sidecar store.
+    #[config(default = "defaults::nexus::atomic_private_settlement::SIDECAR_MAX_TOTAL_BYTES")]
+    pub sidecar_max_total_bytes: u64,
+    /// Governed minimum online auditor threshold accepted for new policies.
     #[config(
         default = "defaults::nexus::atomic_private_settlement::DEFAULT_MIN_AUDITOR_APPROVALS"
     )]
@@ -11334,6 +11341,8 @@ impl_default!(NexusAtomicPrivateSettlement {
     max_capsule_bytes: defaults::nexus::atomic_private_settlement::MAX_CAPSULE_BYTES,
     max_carrier_bytes: defaults::nexus::atomic_private_settlement::MAX_CARRIER_BYTES,
     sidecar_retention_blocks: defaults::nexus::atomic_private_settlement::SIDECAR_RETENTION_BLOCKS,
+    sidecar_max_records: defaults::nexus::atomic_private_settlement::SIDECAR_MAX_RECORDS,
+    sidecar_max_total_bytes: defaults::nexus::atomic_private_settlement::SIDECAR_MAX_TOTAL_BYTES,
     default_min_auditor_approvals:
         defaults::nexus::atomic_private_settlement::DEFAULT_MIN_AUDITOR_APPROVALS,
     permitted_policy_versions:
@@ -11468,6 +11477,18 @@ impl NexusAtomicPrivateSettlement {
             self.sidecar_retention_blocks,
             "nexus.atomic_private_settlement.sidecar_retention_blocks"
         );
+        let sidecar_max_records = NonZeroU32::new(self.sidecar_max_records).unwrap_or_else(|| {
+            invalid = true;
+            emitter.emit(
+                Report::new(ParseError::InvalidNexusConfig)
+                    .attach("nexus.atomic_private_settlement.sidecar_max_records must be > 0"),
+            );
+            NonZeroU32::new(1).expect("private-settlement record placeholder is non-zero")
+        });
+        let sidecar_max_total_bytes = nonzero_u64!(
+            self.sidecar_max_total_bytes,
+            "nexus.atomic_private_settlement.sidecar_max_total_bytes"
+        );
 
         if self.proof_profile_version
             != defaults::nexus::atomic_private_settlement::PROOF_PROFILE_VERSION
@@ -11507,6 +11528,15 @@ impl NexusAtomicPrivateSettlement {
                 ));
                 NonZeroU16::new(1).expect("private-settlement approval placeholder is non-zero")
             });
+        if usize::from(default_min_auditor_approvals.get())
+            > iroha_data_model::nexus::PRIVATE_SETTLEMENT_MAX_AUDITORS_V1
+        {
+            invalid = true;
+            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                "nexus.atomic_private_settlement.default_min_auditor_approvals must be at most {}",
+                iroha_data_model::nexus::PRIVATE_SETTLEMENT_MAX_AUDITORS_V1
+            )));
+        }
 
         let phase_budget = self
             .audit_timeout_blocks
@@ -11554,6 +11584,24 @@ impl NexusAtomicPrivateSettlement {
                 defaults::nexus::atomic_private_settlement::MAX_CARRIER_BYTES_LIMIT
             )));
         }
+        if self.sidecar_max_records
+            > defaults::nexus::atomic_private_settlement::SIDECAR_MAX_RECORDS_LIMIT
+        {
+            invalid = true;
+            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                "nexus.atomic_private_settlement.sidecar_max_records must be at most {}",
+                defaults::nexus::atomic_private_settlement::SIDECAR_MAX_RECORDS_LIMIT
+            )));
+        }
+        if self.sidecar_max_total_bytes
+            > defaults::nexus::atomic_private_settlement::SIDECAR_MAX_TOTAL_BYTES_LIMIT
+        {
+            invalid = true;
+            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                "nexus.atomic_private_settlement.sidecar_max_total_bytes must be at most {}",
+                defaults::nexus::atomic_private_settlement::SIDECAR_MAX_TOTAL_BYTES_LIMIT
+            )));
+        }
 
         if self.capsule_padding_classes_bytes.is_empty() {
             invalid = true;
@@ -11584,10 +11632,15 @@ impl NexusAtomicPrivateSettlement {
                     "nexus.atomic_private_settlement.capsule_padding_classes_bytes[{index}] is not supported by proof profile V1"
                 )));
             }
-            if u64::from(bytes).saturating_add(16) > self.max_capsule_bytes {
+            let required_capsule_bytes =
+                iroha_data_model::nexus::private_settlement_capsule_canonical_upper_bound_v1(
+                    u64::from(bytes),
+                    u64::from(default_min_auditor_approvals.get()),
+                );
+            if required_capsule_bytes > self.max_capsule_bytes {
                 invalid = true;
                 emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
-                    "nexus.atomic_private_settlement.capsule_padding_classes_bytes[{index}] plus the 16-byte authentication tag exceeds max_capsule_bytes"
+                    "nexus.atomic_private_settlement.capsule_padding_classes_bytes[{index}] cannot fit the complete canonical capsule for default_min_auditor_approvals"
                 )));
             }
             previous_padding = bytes;
@@ -11635,6 +11688,8 @@ impl NexusAtomicPrivateSettlement {
             max_capsule_bytes,
             max_carrier_bytes,
             sidecar_retention_blocks,
+            sidecar_max_records,
+            sidecar_max_total_bytes,
             default_min_auditor_approvals,
             permitted_policy_versions,
         })

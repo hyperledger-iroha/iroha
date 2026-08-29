@@ -1,9 +1,24 @@
-//! Nexus helpers (lane governance reports and public-lane snapshots).
+//! Nexus helpers for lane governance, public lanes, and private settlement.
 use crate::{Run, RunContext};
 use eyre::{Result, eyre};
-use iroha::data_model::nexus::LaneId;
+use iroha::data_model::nexus::{
+    AtomicPrivateSettlementV1, LaneId, PrivateSettlementCommitteeAuthorityV1,
+    PrivateSettlementPhaseCertificateV1, PrivateSettlementPrepareBarrierV1,
+    PrivateSettlementProvisionalLegMaterialV1,
+};
+use iroha_crypto::{Hash, KeyPair};
+use iroha_torii_shared::private_settlement_api::{
+    PrivateSettlementAuditApprovalRequestV1, PrivateSettlementBundleSubmitRequestV1,
+    PrivateSettlementLegUploadRequestV1,
+};
 use norito::json::{Map, Value};
-use std::{convert::TryFrom, fmt::Write};
+use std::{
+    convert::TryFrom,
+    fmt::Write,
+    path::{Path, PathBuf},
+    str::FromStr as _,
+};
+use url::Url;
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
     /// Show governance manifest status per lane
@@ -11,6 +26,9 @@ pub enum Command {
     /// Inspect public-lane validator lifecycle and stake state
     #[command(subcommand)]
     PublicLane(PublicLaneCommand),
+    /// Coordinate and inspect atomic private cross-dataspace settlement
+    #[command(subcommand)]
+    PrivateSettlement(PrivateSettlementCommand),
 }
 #[derive(clap::Args, Debug, Default)]
 pub struct LaneReportArgs {
@@ -30,6 +48,134 @@ pub enum PublicLaneCommand {
     Validators(PublicLaneValidatorsArgs),
     /// List bonded stake and pending unbonds for a public lane
     Stake(PublicLaneStakeArgs),
+}
+
+/// Atomic private-settlement Torii operations.
+#[derive(clap::Subcommand, Debug)]
+pub enum PrivateSettlementCommand {
+    /// Persist provisional material on one validator and request its availability share
+    AvailabilityShare(PrivateSettlementAvailabilityShareArgs),
+    /// Ask one validator to verify, durably stage, and vote Prepare
+    PrepareVote(PrivateSettlementPrepareVoteArgs),
+    /// Ask one validator to verify the complete Prepare barrier and vote Commit
+    CommitVote(PrivateSettlementCommitVoteArgs),
+    /// Persist one exact Prepare or Commit certificate on a validator
+    PhaseCertificate(PrivateSettlementPhaseCertificateArgs),
+    /// Upload one certified encrypted leg
+    LegUpload(PrivateSettlementLegUploadArgs),
+    /// Read one authenticated redacted leg status
+    LegStatus(PrivateSettlementDigestArgs),
+    /// Fetch the restricted proof view as an exact committee identity
+    CommitteeProof(PrivateSettlementDigestArgs),
+    /// Fetch the encrypted capsule as an exact governed auditor identity
+    AuditCapsule(PrivateSettlementDigestArgs),
+    /// Submit one purpose-separated auditor approval
+    AuditApproval(PrivateSettlementAuditApprovalArgs),
+    /// Submit the exact sponsor-signed global finalization carrier
+    BundleSubmit(PrivateSettlementJsonFileArgs),
+    /// Read the public bundle lifecycle
+    BundleStatus(PrivateSettlementBundleIdArgs),
+    /// Read the public terminal receipt or pending marker
+    BundleReceipt(PrivateSettlementBundleIdArgs),
+}
+
+#[derive(clap::Args, Debug)]
+pub struct PrivateSettlementAvailabilityShareArgs {
+    /// Exact participant Torii root URL.
+    #[arg(long)]
+    pub endpoint: Url,
+    /// Bounded Norito JSON `PrivateSettlementProvisionalLegMaterialV1` file.
+    #[arg(long, value_name = "PATH")]
+    pub material: PathBuf,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct PrivateSettlementPrepareVoteArgs {
+    /// Exact participant Torii root URL.
+    #[arg(long)]
+    pub endpoint: Url,
+    /// Bounded Norito JSON `AtomicPrivateSettlementV1` file.
+    #[arg(long, value_name = "PATH")]
+    pub manifest: PathBuf,
+    /// Exact leg payload digest.
+    #[arg(long)]
+    pub payload_digest: String,
+    /// Bounded Norito JSON four-validator authority file.
+    #[arg(long, value_name = "PATH")]
+    pub authority: PathBuf,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct PrivateSettlementCommitVoteArgs {
+    /// Exact participant Torii root URL.
+    #[arg(long)]
+    pub endpoint: Url,
+    /// Exact leg payload digest.
+    #[arg(long)]
+    pub payload_digest: String,
+    /// Bounded Norito JSON complete Prepare barrier file.
+    #[arg(long, value_name = "PATH")]
+    pub barrier: PathBuf,
+    /// Bounded Norito JSON four-validator authority file.
+    #[arg(long, value_name = "PATH")]
+    pub authority: PathBuf,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct PrivateSettlementPhaseCertificateArgs {
+    /// Exact participant Torii root URL.
+    #[arg(long)]
+    pub endpoint: Url,
+    /// Bounded Norito JSON `AtomicPrivateSettlementV1` file.
+    #[arg(long, value_name = "PATH")]
+    pub manifest: PathBuf,
+    /// Exact leg payload digest.
+    #[arg(long)]
+    pub payload_digest: String,
+    /// Bounded Norito JSON Prepare or Commit certificate file.
+    #[arg(long, value_name = "PATH")]
+    pub certificate: PathBuf,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct PrivateSettlementLegUploadArgs {
+    /// Optional participant Torii root; defaults to the configured Torii URL.
+    #[arg(long)]
+    pub endpoint: Option<Url>,
+    /// Bounded Norito JSON `PrivateSettlementLegUploadRequestV1` file.
+    #[arg(long, value_name = "PATH")]
+    pub request: PathBuf,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct PrivateSettlementDigestArgs {
+    /// Exact leg payload digest.
+    #[arg(long)]
+    pub payload_digest: String,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct PrivateSettlementAuditApprovalArgs {
+    /// Exact leg payload digest.
+    #[arg(long)]
+    pub payload_digest: String,
+    /// Bounded Norito JSON `PrivateSettlementAuditApprovalRequestV1` file.
+    #[arg(long, value_name = "PATH")]
+    pub request: PathBuf,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct PrivateSettlementJsonFileArgs {
+    /// Bounded Norito JSON request file.
+    #[arg(long, value_name = "PATH")]
+    pub request: PathBuf,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct PrivateSettlementBundleIdArgs {
+    /// Exact public bundle identifier.
+    #[arg(long)]
+    pub bundle_id: String,
 }
 #[derive(clap::Args, Debug)]
 pub struct PublicLaneValidatorsArgs {
@@ -60,6 +206,148 @@ impl Run for Command {
                 PublicLaneCommand::Validators(args) => public_lane_validators(context, &args),
                 PublicLaneCommand::Stake(args) => public_lane_stake(context, &args),
             },
+            Command::PrivateSettlement(command) => private_settlement(context, command),
+        }
+    }
+}
+
+fn read_private_settlement_json<T>(path: &Path, label: &str) -> Result<T>
+where
+    T: norito::json::JsonDeserialize,
+{
+    let json = crate::read_cli_text_file_bounded(path, label)?;
+    crate::parse_json(&json).map_err(|error| eyre!("invalid {label}: {error}"))
+}
+
+fn private_settlement_digest(literal: &str, label: &str) -> Result<Hash> {
+    Hash::from_str(literal).map_err(|_| eyre!("{label} must be an exact bare hash string"))
+}
+
+fn private_settlement_operator_key<C: RunContext>(context: &C) -> Result<KeyPair> {
+    context.operator_key_pair().cloned().ok_or_else(|| {
+        eyre!(
+            "this restricted private-settlement operation requires --operator-private-key-file"
+        )
+    })
+}
+
+fn private_settlement<C: RunContext>(
+    context: &mut C,
+    command: PrivateSettlementCommand,
+) -> Result<()> {
+    let client = context.client_from_config();
+    match command {
+        PrivateSettlementCommand::AvailabilityShare(args) => {
+            let material: PrivateSettlementProvisionalLegMaterialV1 =
+                read_private_settlement_json(&args.material, "private-settlement material")?;
+            let response =
+                client.request_private_settlement_availability_share_v1(&args.endpoint, &material)?;
+            context.print_data(&response)
+        }
+        PrivateSettlementCommand::PrepareVote(args) => {
+            let manifest: AtomicPrivateSettlementV1 =
+                read_private_settlement_json(&args.manifest, "private-settlement manifest")?;
+            let authority: PrivateSettlementCommitteeAuthorityV1 =
+                read_private_settlement_json(&args.authority, "private-settlement authority")?;
+            let payload_digest =
+                private_settlement_digest(&args.payload_digest, "payload digest")?;
+            let response = client.request_private_settlement_prepare_vote_v1(
+                &args.endpoint,
+                &manifest,
+                payload_digest,
+                &authority,
+            )?;
+            context.print_data(&response)
+        }
+        PrivateSettlementCommand::CommitVote(args) => {
+            let barrier: PrivateSettlementPrepareBarrierV1 =
+                read_private_settlement_json(&args.barrier, "private-settlement Prepare barrier")?;
+            let authority: PrivateSettlementCommitteeAuthorityV1 =
+                read_private_settlement_json(&args.authority, "private-settlement authority")?;
+            let payload_digest =
+                private_settlement_digest(&args.payload_digest, "payload digest")?;
+            let response = client.request_private_settlement_commit_vote_v1(
+                &args.endpoint,
+                payload_digest,
+                &barrier,
+                &authority,
+            )?;
+            context.print_data(&response)
+        }
+        PrivateSettlementCommand::PhaseCertificate(args) => {
+            let manifest: AtomicPrivateSettlementV1 =
+                read_private_settlement_json(&args.manifest, "private-settlement manifest")?;
+            let certificate: PrivateSettlementPhaseCertificateV1 = read_private_settlement_json(
+                &args.certificate,
+                "private-settlement phase certificate",
+            )?;
+            let payload_digest =
+                private_settlement_digest(&args.payload_digest, "payload digest")?;
+            let response = client.persist_private_settlement_phase_certificate_v1(
+                &args.endpoint,
+                &manifest,
+                payload_digest,
+                &certificate,
+            )?;
+            context.print_data(&response)
+        }
+        PrivateSettlementCommand::LegUpload(args) => {
+            let request: PrivateSettlementLegUploadRequestV1 =
+                read_private_settlement_json(&args.request, "private-settlement leg upload")?;
+            let response = if let Some(endpoint) = args.endpoint {
+                client.upload_private_settlement_leg_to_v1(&endpoint, &request)?
+            } else {
+                client.upload_private_settlement_leg_v1(&request)?
+            };
+            context.print_data(&response)
+        }
+        PrivateSettlementCommand::LegStatus(args) => {
+            let payload_digest =
+                private_settlement_digest(&args.payload_digest, "payload digest")?;
+            context.print_data(&client.private_settlement_leg_status_v1(payload_digest)?)
+        }
+        PrivateSettlementCommand::CommitteeProof(args) => {
+            let role_key = private_settlement_operator_key(context)?;
+            let payload_digest =
+                private_settlement_digest(&args.payload_digest, "payload digest")?;
+            context.print_data(
+                &client.private_settlement_committee_proof_v1(payload_digest, &role_key)?,
+            )
+        }
+        PrivateSettlementCommand::AuditCapsule(args) => {
+            let role_key = private_settlement_operator_key(context)?;
+            let payload_digest =
+                private_settlement_digest(&args.payload_digest, "payload digest")?;
+            context.print_data(
+                &client.private_settlement_auditor_capsule_v1(payload_digest, &role_key)?,
+            )
+        }
+        PrivateSettlementCommand::AuditApproval(args) => {
+            let role_key = private_settlement_operator_key(context)?;
+            let payload_digest =
+                private_settlement_digest(&args.payload_digest, "payload digest")?;
+            let request: PrivateSettlementAuditApprovalRequestV1 = read_private_settlement_json(
+                &args.request,
+                "private-settlement audit approval",
+            )?;
+            context.print_data(&client.submit_private_settlement_audit_approval_v1(
+                payload_digest,
+                &role_key,
+                &request,
+            )?)
+        }
+        PrivateSettlementCommand::BundleSubmit(args) => {
+            let request: PrivateSettlementBundleSubmitRequestV1 =
+                read_private_settlement_json(&args.request, "private-settlement bundle carrier")?;
+            context.print_data(&client.submit_private_settlement_bundle_v1(&request)?)
+        }
+        PrivateSettlementCommand::BundleStatus(args) => {
+            let bundle_id = private_settlement_digest(&args.bundle_id, "bundle id")?;
+            context.print_data(&client.private_settlement_bundle_status_v1(bundle_id)?)
+        }
+        PrivateSettlementCommand::BundleReceipt(args) => {
+            let bundle_id = private_settlement_digest(&args.bundle_id, "bundle id")?;
+            context.print_data(&client.private_settlement_bundle_receipt_v1(bundle_id)?)
         }
     }
 }
@@ -540,6 +828,18 @@ mod tests {
             "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
         );
     }
+
+    #[test]
+    fn private_settlement_digest_parser_is_exact() {
+        let expected = Hash::prehashed([0x42; Hash::LENGTH]);
+        assert_eq!(
+            private_settlement_digest(&expected.to_string(), "bundle id")
+                .expect("canonical digest"),
+            expected
+        );
+        assert!(private_settlement_digest("not-a-hash", "bundle id").is_err());
+    }
+
     #[test]
     fn lane_summary_formats_rows() {
         let entry = Map::from_iter([

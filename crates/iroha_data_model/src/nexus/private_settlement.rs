@@ -63,12 +63,38 @@ pub const PRIVATE_SETTLEMENT_ML_KEM_768_CIPHERTEXT_BYTES_V1: usize = 1_088;
 pub const PRIVATE_SETTLEMENT_XCHACHA_NONCE_BYTES_V1: usize = 24;
 /// A wrapped 32-byte DEK plus its Poly1305 authentication tag.
 pub const PRIVATE_SETTLEMENT_WRAPPED_DEK_BYTES_V1: usize = 48;
+/// Conservative canonical framing budget for the capsule header, AAD, nonce, and vectors.
+pub const PRIVATE_SETTLEMENT_CAPSULE_ENVELOPE_BOUND_BYTES_V1: u64 = 8 * 1024;
+/// Conservative canonical framing budget for one governed auditor's complete wrapped-DEK row.
+///
+/// The budget includes the account identifier, algorithm-tagged public key,
+/// ML-KEM ciphertext, X25519 component, nonce, wrapped key, and Norito framing.
+pub const PRIVATE_SETTLEMENT_WRAPPED_DEK_ROW_BOUND_BYTES_V1: u64 = 8 * 1024;
 /// Upper bound for the canonical public carrier receipt.
 pub const PRIVATE_SETTLEMENT_MAX_RECEIPT_BYTES_V1: usize = 4 * 1024 * 1024;
 /// Compressed BLS-normal proof/signature width used by Native AMX.
 pub const PRIVATE_SETTLEMENT_BLS_BYTES_V1: usize = 96;
 /// Exact audited settlement-local proof profile descriptor.
 pub const PRIVATE_SETTLEMENT_PROOF_PROFILE_DESCRIPTOR_V1: &[u8] = b"iroha-atomic-private-settlement-stark-v1:native-rust:first-release:inputs=2-fixed:payer-authorization=purpose-separated-controller-signatures:outputs=3-fixed:roles=recipient+change+sponsor-reimbursement:selectors=canonical-active-or-domain-dummy:values=u128-checked-balanced:asset=salted-hidden-binding:tree=sha256-depth32:successor=validator-derived-only:public-intent=canonical-proof-binding-excluding-post-proof-artifacts:business-plaintext=auditor-capsule-sha256-commitment:wallet=x25519+xchacha20poly1305:proof=stark-fri-sha256-goldilocks";
+
+/// Return a deterministic safe upper bound for one canonical V1 audit capsule.
+///
+/// `padded_plaintext_bytes` excludes the 16-byte payload authentication tag.
+/// The bound is intentionally conservative so configuration validation can
+/// prove that at least the governed minimum auditor roster is usable without
+/// constructing identities or cryptographic material.
+#[must_use]
+pub const fn private_settlement_capsule_canonical_upper_bound_v1(
+    padded_plaintext_bytes: u64,
+    auditor_count: u64,
+) -> u64 {
+    padded_plaintext_bytes
+        .saturating_add(16)
+        .saturating_add(PRIVATE_SETTLEMENT_CAPSULE_ENVELOPE_BOUND_BYTES_V1)
+        .saturating_add(
+            auditor_count.saturating_mul(PRIVATE_SETTLEMENT_WRAPPED_DEK_ROW_BOUND_BYTES_V1),
+        )
+}
 
 const BUNDLE_ID_DOMAIN_V1: &[u8] = b"iroha:nexus:private-settlement:bundle-id:v1\0";
 const PROOF_BINDING_DIGEST_DOMAIN_V1: &[u8] = b"iroha:nexus:private-settlement:proof-binding:v1\0";
@@ -1788,6 +1814,10 @@ pub struct PrivateSettlementAuditAadV1 {
     pub leg_ordinal: u8,
     /// Exact route and incarnation.
     pub route: PrivateSettlementRouteV1,
+    /// Digest of the exact four-validator committee roster and proofs of possession.
+    pub authority_digest: Hash,
+    /// Global/catalog height at which the exact committee authority is resolved.
+    pub authority_context_height: u64,
     /// Digest of the governed policy.
     pub audit_policy_digest: Hash,
     /// Exact auditor key epoch.
@@ -1846,7 +1876,7 @@ impl PrivateSettlementHybridPublicKeyV1 {
 }
 
 /// One auditor authorized by a dataspace-local policy.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -1861,8 +1891,14 @@ pub struct PrivateSettlementAuditorV1 {
     pub encryption_key: PrivateSettlementHybridPublicKeyV1,
 }
 
+impl fmt::Debug for PrivateSettlementAuditorV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("PrivateSettlementAuditorV1(<restricted>)")
+    }
+}
+
 /// Self-authenticating body of one governed local auditor policy.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -1890,6 +1926,12 @@ pub struct PrivateSettlementAuditPolicyBodyV1 {
     pub auditors: Vec<PrivateSettlementAuditorV1>,
 }
 
+impl fmt::Debug for PrivateSettlementAuditPolicyBodyV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("PrivateSettlementAuditPolicyBodyV1(<restricted>)")
+    }
+}
+
 impl PrivateSettlementAuditPolicyBodyV1 {
     /// Recompute the domain-separated digest of this exact policy body.
     ///
@@ -1902,7 +1944,7 @@ impl PrivateSettlementAuditPolicyBodyV1 {
 }
 
 /// Governed auditor policy with a domain-separated self-digest.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -1913,6 +1955,12 @@ pub struct PrivateSettlementAuditPolicyV1 {
     pub body: PrivateSettlementAuditPolicyBodyV1,
     /// Domain-separated canonical body digest.
     pub policy_digest: Hash,
+}
+
+impl fmt::Debug for PrivateSettlementAuditPolicyV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("PrivateSettlementAuditPolicyV1(<restricted>)")
+    }
 }
 
 impl PrivateSettlementAuditPolicyV1 {
@@ -2358,7 +2406,7 @@ impl PrivateSettlementPoolGovernanceV1 {
 }
 
 /// One hybrid KEM-wrapped data-encryption key addressed to an auditor.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -2381,8 +2429,14 @@ pub struct PrivateSettlementWrappedDekV1 {
     pub wrapped_dek: Vec<u8>,
 }
 
+impl fmt::Debug for PrivateSettlementWrappedDekV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("PrivateSettlementWrappedDekV1(<redacted>)")
+    }
+}
+
 /// Padded encrypted auditor capsule and independently wrapped DEKs.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -2403,6 +2457,12 @@ pub struct PrivateSettlementAuditCapsuleV1 {
     pub ciphertext: Vec<u8>,
     /// Strictly ordered independently wrapped DEKs.
     pub wrapped_deks: Vec<PrivateSettlementWrappedDekV1>,
+}
+
+impl fmt::Debug for PrivateSettlementAuditCapsuleV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("PrivateSettlementAuditCapsuleV1(<redacted>)")
+    }
 }
 
 impl PrivateSettlementAuditCapsuleV1 {
@@ -2436,6 +2496,8 @@ impl PrivateSettlementAuditCapsuleV1 {
             || self.aad.network_id.as_bytes().iter().all(|byte| *byte == 0)
             || hash_is_zero(&self.aad.bundle_id)
             || hash_is_zero(&self.aad.route.lane_incarnation)
+            || hash_is_zero(&self.aad.authority_digest)
+            || self.aad.authority_context_height == 0
             || hash_is_zero(&self.aad.plaintext_commitment)
         {
             return Err(PrivateSettlementValidationError::AuditCapsuleBindingMismatch);
@@ -2641,7 +2703,7 @@ impl PrivateSettlementSidecarAvailabilityV1 {
 }
 
 /// Complete restricted sidecar verified by one participant committee.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -2659,6 +2721,17 @@ pub struct PrivateSettlementLegPayloadV1 {
     pub audit_capsule: PrivateSettlementAuditCapsuleV1,
     /// Restricted-DA availability metadata.
     pub availability: PrivateSettlementSidecarAvailabilityV1,
+}
+
+impl fmt::Debug for PrivateSettlementLegPayloadV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PrivateSettlementLegPayloadV1")
+            .field("bundle_id", &self.statement.bundle_id)
+            .field("leg_ordinal", &self.statement.leg_ordinal)
+            .field("route", &self.statement.route)
+            .finish_non_exhaustive()
+    }
 }
 
 impl PrivateSettlementLegPayloadV1 {
@@ -2742,6 +2815,7 @@ impl PrivateSettlementLegPayloadV1 {
             || availability.bundle_id != manifest.bundle_id
             || availability.leg_ordinal != self.statement.leg_ordinal
             || availability.route != self.statement.route
+            || availability.authority_digest != self.audit_capsule.aad.authority_digest
             || availability.authority_context_height != manifest.authority_context_height
             || availability.payload_digest != payload_digest
             || usize::try_from(availability.payload_bytes).ok() != Some(canonical_payload_bytes)
@@ -2765,9 +2839,7 @@ impl PrivateSettlementLegPayloadV1 {
         }
         policy.validate()?;
         if self.proof.is_empty() || self.proof.len() > PRIVATE_SETTLEMENT_MAX_PROOF_BYTES_V1 {
-            return Err(PrivateSettlementValidationError::InvalidProofSize {
-                bytes: self.proof.len(),
-            });
+            return Err(PrivateSettlementValidationError::InvalidProofSize);
         }
         self.statement.validate()?;
         let leg = manifest
@@ -2802,6 +2874,8 @@ impl PrivateSettlementLegPayloadV1 {
             || self.audit_capsule.aad.bundle_id != self.statement.bundle_id
             || self.audit_capsule.aad.leg_ordinal != self.statement.leg_ordinal
             || self.audit_capsule.aad.route != self.statement.route
+            || self.audit_capsule.aad.authority_context_height
+                != self.statement.authority_context_height
             || self.audit_capsule.aad.plaintext_commitment
                 != self.statement.audit_plaintext_commitment
         {
@@ -2957,6 +3031,9 @@ impl PrivateSettlementProvisionalLegMaterialV1 {
             || self.availability_body.leg_ordinal != self.statement.leg_ordinal
             || self.availability_body.route != self.statement.route
             || self.availability_body.authority_digest != authority_digest
+            || self.audit_capsule.aad.authority_digest != authority_digest
+            || self.audit_capsule.aad.authority_context_height
+                != self.availability_body.authority_context_height
             || self.availability_body.authority_context_height
                 != self.manifest.authority_context_height
             || self.availability_body.payload_digest != payload_digest
@@ -2985,7 +3062,7 @@ pub fn private_settlement_proof_digest_v1(proof: &[u8]) -> Hash {
 }
 
 /// Exact purpose-separated body signed by a local auditor.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -3022,8 +3099,14 @@ pub struct PrivateSettlementAuditApprovalBodyV1 {
     pub expiry_height: u64,
 }
 
+impl fmt::Debug for PrivateSettlementAuditApprovalBodyV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("PrivateSettlementAuditApprovalBodyV1(<restricted>)")
+    }
+}
+
 /// Signed local-auditor approval required before participant Prepare.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -3034,6 +3117,12 @@ pub struct PrivateSettlementAuditApprovalV1 {
     pub body: PrivateSettlementAuditApprovalBodyV1,
     /// Auditor signature over `body`.
     pub signature: SignatureOf<PrivateSettlementAuditApprovalBodyV1>,
+}
+
+impl fmt::Debug for PrivateSettlementAuditApprovalV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("PrivateSettlementAuditApprovalV1(<restricted>)")
+    }
 }
 
 impl PrivateSettlementAuditApprovalV1 {
@@ -3838,11 +3927,8 @@ pub enum PrivateSettlementValidationError {
     #[error("private settlement wrapped DEK is invalid")]
     InvalidWrappedDek,
     /// Proof bytes are empty or exceed the profile bound.
-    #[error("private settlement proof size {bytes} is invalid")]
-    InvalidProofSize {
-        /// Actual proof byte length.
-        bytes: usize,
-    },
+    #[error("private settlement proof size is invalid")]
+    InvalidProofSize,
     /// Proof statement ordinal does not identify a manifest leg.
     #[error("private settlement payload references an unknown leg")]
     UnknownLeg,
@@ -4946,6 +5032,26 @@ mod tests {
             body,
         };
         approval.verify(&policy, 20).expect("approval verifies");
+        assert_eq!(
+            format!("{policy:?}"),
+            "PrivateSettlementAuditPolicyV1(<restricted>)"
+        );
+        assert_eq!(
+            format!("{:?}", policy.body),
+            "PrivateSettlementAuditPolicyBodyV1(<restricted>)"
+        );
+        assert_eq!(
+            format!("{auditor:?}"),
+            "PrivateSettlementAuditorV1(<restricted>)"
+        );
+        assert_eq!(
+            format!("{:?}", approval.body),
+            "PrivateSettlementAuditApprovalBodyV1(<restricted>)"
+        );
+        assert_eq!(
+            format!("{approval:?}"),
+            "PrivateSettlementAuditApprovalV1(<restricted>)"
+        );
 
         let mut substituted = approval.clone();
         substituted.body.proof_digest = hash(99);
@@ -5173,7 +5279,7 @@ mod tests {
         delta.encrypted_outputs[2].ciphertext.pop();
         assert_eq!(
             delta.validate_against(&statement),
-            Err(PrivateSettlementValidationError::DeltaStatementMismatch)
+            Err(PrivateSettlementValidationError::InvalidEncryptedOutput { index: 2 })
         );
         let mut malformed_statement = statement;
         malformed_statement.encrypted_outputs[2].ciphertext.pop();

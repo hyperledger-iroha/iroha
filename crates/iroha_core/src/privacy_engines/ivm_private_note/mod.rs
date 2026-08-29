@@ -69,7 +69,6 @@ pub(crate) use stark::{
     PRIVATE_NOTE_PROFILE_CONSTRAINT_DEGREE_V1, PrivateNoteStarkRelationV1,
     validate_ivm_private_note_stark_profile_v1, verify_private_note_stark_v1,
 };
-#[cfg(test)]
 pub(crate) use wallet::encrypt_ivm_private_wallet_note_for_commitment_with_opening_v1;
 pub(crate) use wallet::validate_ivm_private_wallet_encryption_opening_v1;
 pub use wallet::{

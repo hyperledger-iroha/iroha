@@ -14,8 +14,8 @@ use super::{
 use iroha_crypto::Hash;
 use iroha_data_model::{
     nexus::{
-        PrivateSettlementAbortReceiptV1, PrivateSettlementPoolGovernanceV1,
-        PrivateSettlementReceiptV1, PrivateSettlementRouteV1,
+        PrivateSettlementAbortReceiptV1, PrivateSettlementDeltaV1,
+        PrivateSettlementPoolGovernanceV1, PrivateSettlementReceiptV1, PrivateSettlementRouteV1,
     },
     privacy::{
         PrivacyCommitmentV1, PrivacyEncryptedOutputV1, PrivacyNullifierV1, PrivacyPoolIdV1,
@@ -259,6 +259,53 @@ pub(crate) struct PrivateSettlementPoolBootstrapPlanV1 {
     pub(crate) root_provenance: PrivateSettlementRootProvenanceV1,
 }
 
+/// Complete infallible write set for one policy/key rotation.
+pub(crate) struct PrivateSettlementPoolRotationPlanV1 {
+    pub(crate) key: PrivateSettlementPoolKeyV1,
+    pub(crate) governance: PrivateSettlementPoolGovernanceProjectionV1,
+    pub(crate) pool: PrivateSettlementPoolStateV1,
+}
+
+fn governance_origin_matches_current_v1(
+    current: &PrivateSettlementPoolGovernanceProjectionV1,
+    origin_governance_digest: Hash,
+    origin_admitted_at_height: u64,
+) -> bool {
+    if origin_admitted_at_height == 0
+        || origin_governance_digest == Hash::prehashed([0; Hash::LENGTH])
+    {
+        return false;
+    }
+    let origin = current
+        .prior_revisions
+        .first()
+        .copied()
+        .unwrap_or_else(|| current.current_revision());
+    origin.lifecycle.governance_revision == 1
+        && origin.governance_digest == origin_governance_digest
+        && origin.lifecycle.is_active_at(origin_admitted_at_height)
+}
+
+fn receipt_leg_matches_governance_lineage_v1(
+    governance: &PrivateSettlementPoolGovernanceProjectionV1,
+    receipt: &PrivateSettlementReceiptV1,
+    delta: &PrivateSettlementDeltaV1,
+) -> bool {
+    let context_revision = governance.revision_at(receipt.manifest.authority_context_height);
+    let finalized_revision = governance.revision_at(receipt.finalized_height);
+    let Some(revision) = context_revision.filter(|revision| Some(*revision) == finalized_revision)
+    else {
+        return false;
+    };
+    delta.asset_binding_commitment == governance.asset_binding_commitment
+        && delta.audit_policy_digest == revision.audit_policy_digest
+        && delta.audit_key_epoch == revision.audit_key_epoch
+        && revision
+            .lifecycle
+            .retirement_height
+            .is_none_or(|retirement| receipt.manifest.expiry_height < retirement)
+}
+
 /// Validate and plan one governed pool bootstrap without mutating persistent state.
 pub(crate) fn plan_private_settlement_pool_bootstrap_v1(
     governance_store: &impl StorageReadOnly<
@@ -318,6 +365,89 @@ pub(crate) fn plan_private_settlement_pool_bootstrap_v1(
             governance_digest: governance.governance_digest,
             admitted_at_height,
         },
+    }))
+}
+
+/// Validate and plan one exact governance rotation without changing the pool frontier.
+pub(crate) fn plan_private_settlement_pool_rotation_v1(
+    governance_store: &impl StorageReadOnly<
+        PrivateSettlementPoolKeyV1,
+        PrivateSettlementPoolGovernanceProjectionV1,
+    >,
+    pools: &impl StorageReadOnly<PrivateSettlementPoolKeyV1, PrivateSettlementPoolStateV1>,
+    receipts: &impl StorageReadOnly<Hash, PrivateSettlementReceiptV1>,
+    expected_governance_digest: Hash,
+    replacement: PrivateSettlementPoolGovernanceProjectionV1,
+    admitted_at_height: u64,
+) -> Result<Option<PrivateSettlementPoolRotationPlanV1>, PrivateSettlementGlobalStateErrorV1> {
+    replacement
+        .validate_current_fields()
+        .map_err(PrivateSettlementGlobalStateErrorV1::from_pool)?;
+    if admitted_at_height <= 1
+        || replacement.lifecycle.activation_height != admitted_at_height
+        || !replacement.lifecycle.is_active_at(admitted_at_height)
+    {
+        return Err(PrivateSettlementGlobalStateErrorV1::Governance);
+    }
+    let key = PrivateSettlementPoolKeyV1::new(replacement.route, replacement.pool_id)?;
+    let current = governance_store
+        .get(&key)
+        .ok_or(PrivateSettlementGlobalStateErrorV1::Governance)?;
+    let pool = pools
+        .get(&key)
+        .ok_or(PrivateSettlementGlobalStateErrorV1::Pool)?;
+    current
+        .validate()
+        .map_err(PrivateSettlementGlobalStateErrorV1::from_pool)?;
+    if !replacement.prior_revisions.is_empty() {
+        return Err(PrivateSettlementGlobalStateErrorV1::Governance);
+    }
+    if current.current_fields_equal(&replacement)
+        && pool.restricted_pool_policy_digest() == replacement.governance_digest
+    {
+        return Ok(None);
+    }
+    let expected_revision = current
+        .lifecycle
+        .governance_revision
+        .checked_add(1)
+        .ok_or(PrivateSettlementGlobalStateErrorV1::Governance)?;
+    if current.governance_digest != expected_governance_digest {
+        return Err(PrivateSettlementGlobalStateErrorV1::Substitution);
+    }
+    if current.version != replacement.version
+        || current.route != replacement.route
+        || current.pool_id != replacement.pool_id
+        || current.asset_binding_commitment != replacement.asset_binding_commitment
+        || current.audit_policy_digest == replacement.audit_policy_digest
+        || current.audit_key_epoch >= replacement.audit_key_epoch
+        || current.governance_digest == replacement.governance_digest
+        || replacement.lifecycle.governance_revision != expected_revision
+        || !current
+            .lifecycle
+            .is_active_at(admitted_at_height.saturating_sub(1))
+        || pool.route() != current.route
+        || pool.pool_id() != current.pool_id
+        || pool.restricted_pool_policy_digest() != current.governance_digest
+        || receipts.iter().any(|(_, receipt)| {
+            receipt.finalized_height == admitted_at_height
+                && receipt.legs.iter().any(|leg| {
+                    leg.delta.route == replacement.route && leg.delta.pool_id == replacement.pool_id
+                })
+        })
+    {
+        return Err(PrivateSettlementGlobalStateErrorV1::Governance);
+    }
+    let replacement = current
+        .with_replacement(replacement)
+        .map_err(PrivateSettlementGlobalStateErrorV1::from_pool)?;
+    let rotated_pool = pool
+        .rotate_governance_digest(current.governance_digest, replacement.governance_digest)
+        .map_err(PrivateSettlementGlobalStateErrorV1::from_pool)?;
+    Ok(Some(PrivateSettlementPoolRotationPlanV1 {
+        key,
+        governance: replacement,
+        pool: rotated_pool,
     }))
 }
 
@@ -534,8 +664,11 @@ pub(crate) fn validate_private_settlement_persisted_state_v1(
                         Some(PrivateSettlementRootProvenanceV1::Governance {
                             governance_digest,
                             admitted_at_height,
-                        }) if governance_digest == &governed_pool.governance_digest
-                            && governed_pool.lifecycle.is_active_at(*admitted_at_height)
+                        }) if governance_origin_matches_current_v1(
+                            governed_pool,
+                            *governance_digest,
+                            *admitted_at_height,
+                        )
                     )
                 })
         {
@@ -581,19 +714,7 @@ pub(crate) fn validate_private_settlement_persisted_state_v1(
             let governed_pool = governance
                 .get(&pool)
                 .ok_or(PrivateSettlementGlobalStateErrorV1::Governance)?;
-            if leg.delta.asset_binding_commitment != governed_pool.asset_binding_commitment
-                || leg.delta.audit_policy_digest != governed_pool.audit_policy_digest
-                || leg.delta.audit_key_epoch != governed_pool.audit_key_epoch
-                || !governed_pool
-                    .lifecycle
-                    .is_active_at(receipt.manifest.authority_context_height)
-                || !governed_pool
-                    .lifecycle
-                    .is_active_at(receipt.finalized_height)
-                || governed_pool
-                    .lifecycle
-                    .retirement_height
-                    .is_some_and(|retirement| receipt.manifest.expiry_height >= retirement)
+            if !receipt_leg_matches_governance_lineage_v1(governed_pool, receipt, &leg.delta)
                 || leg.delta.old_epoch.checked_add(1) != Some(leg.delta.new_epoch)
             {
                 return Err(PrivateSettlementGlobalStateErrorV1::Governance);
@@ -687,8 +808,11 @@ pub(crate) fn validate_private_settlement_persisted_state_v1(
                 if key.epoch != 1
                     || *admitted_at_height == 0
                     || governance.get(&key.pool).is_none_or(|record| {
-                        record.governance_digest != *governance_digest
-                            || !record.lifecycle.is_active_at(*admitted_at_height)
+                        !governance_origin_matches_current_v1(
+                            record,
+                            *governance_digest,
+                            *admitted_at_height,
+                        )
                     })
                 {
                     return Err(PrivateSettlementGlobalStateErrorV1::Governance);
@@ -806,6 +930,29 @@ impl PrivateSettlementGlobalStateV1 {
                 admitted_at_height,
             },
         );
+        Ok(PrivateSettlementGlobalStateOutcomeV1::Applied)
+    }
+
+    /// Rotate one pool governance projection while preserving its exact frontier.
+    pub(crate) fn rotate_pool_policy(
+        &mut self,
+        expected_governance_digest: Hash,
+        replacement: PrivateSettlementPoolGovernanceProjectionV1,
+        admitted_at_height: u64,
+    ) -> Result<PrivateSettlementGlobalStateOutcomeV1, PrivateSettlementGlobalStateErrorV1> {
+        let plan = plan_private_settlement_pool_rotation_v1(
+            &self.governance,
+            &self.pools,
+            &self.receipts,
+            expected_governance_digest,
+            replacement,
+            admitted_at_height,
+        )?;
+        let Some(plan) = plan else {
+            return Ok(PrivateSettlementGlobalStateOutcomeV1::Idempotent);
+        };
+        self.governance.insert(plan.key, plan.governance);
+        self.pools.insert(plan.key, plan.pool);
         Ok(PrivateSettlementGlobalStateOutcomeV1::Applied)
     }
 
@@ -1015,6 +1162,16 @@ impl PrivateSettlementGlobalStateV1 {
             if bundle_id != &receipt.manifest.bundle_id || self.aborts.contains_key(bundle_id) {
                 return Err(PrivateSettlementGlobalStateErrorV1::Receipt);
             }
+            for leg in &receipt.legs {
+                let key = PrivateSettlementPoolKeyV1::new(leg.delta.route, leg.delta.pool_id)?;
+                let governance = self
+                    .governance
+                    .get(&key)
+                    .ok_or(PrivateSettlementGlobalStateErrorV1::Governance)?;
+                if !receipt_leg_matches_governance_lineage_v1(governance, receipt, &leg.delta) {
+                    return Err(PrivateSettlementGlobalStateErrorV1::Governance);
+                }
+            }
             receipt_digests.insert(*bundle_id, canonical_receipt_digest_v1(receipt)?);
         }
         let validate_reference = |reference: PrivateSettlementFinalizationReferenceV1| {
@@ -1062,10 +1219,13 @@ impl PrivateSettlementGlobalStateV1 {
                     admitted_at_height,
                 } => {
                     if *admitted_at_height == 0
-                        || self
-                            .governance
-                            .get(&key.pool)
-                            .is_none_or(|record| record.governance_digest != *governance_digest)
+                        || self.governance.get(&key.pool).is_none_or(|record| {
+                            !governance_origin_matches_current_v1(
+                                record,
+                                *governance_digest,
+                                *admitted_at_height,
+                            )
+                        })
                     {
                         return Err(PrivateSettlementGlobalStateErrorV1::Governance);
                     }
@@ -1192,6 +1352,235 @@ pub(crate) mod tests {
             .collect::<Vec<_>>();
         aggregate_private_settlement_phase_votes_v1(body, delta.leg_ordinal, authority, &votes)
             .expect("phase certificate")
+    }
+
+    fn recertify_receipt_with_validator_keys(
+        mut receipt: PrivateSettlementReceiptV1,
+        validator_keys: &[KeyPair],
+    ) -> PrivateSettlementReceiptV1 {
+        let mut ordered_keys = validator_keys.to_vec();
+        ordered_keys.sort_by(|left, right| {
+            let left_peer = PeerId::from(left.public_key().clone());
+            let right_peer = PeerId::from(right.public_key().clone());
+            iroha_data_model::account::AccountId::new(left.public_key().clone())
+                .cmp(&iroha_data_model::account::AccountId::new(
+                    right.public_key().clone(),
+                ))
+                .then_with(|| left_peer.cmp(&right_peer))
+        });
+        let validators = ordered_keys
+            .iter()
+            .map(|key| PeerId::from(key.public_key().clone()))
+            .collect::<Vec<_>>();
+        let validator_pops = ordered_keys
+            .iter()
+            .map(|key| {
+                iroha_crypto::bls_normal_pop_prove(key.private_key()).expect("validator PoP")
+            })
+            .collect::<Vec<_>>();
+        let authorities = receipt
+            .manifest
+            .legs
+            .iter()
+            .map(|leg| PrivateSettlementCommitteeAuthorityV1 {
+                route: leg.route,
+                validator_set_hash: HashOf::new(&validators),
+                validators: validators.clone(),
+                validator_pops: validator_pops.clone(),
+            })
+            .collect::<Vec<_>>();
+        let deltas = receipt
+            .legs
+            .iter()
+            .map(|leg| leg.delta.clone())
+            .collect::<Vec<_>>();
+        let prepares = deltas
+            .iter()
+            .zip(&authorities)
+            .map(|(delta, authority)| {
+                certificate(
+                    &receipt.manifest,
+                    delta,
+                    authority,
+                    &ordered_keys,
+                    PrivateSettlementPhaseV1::Prepare,
+                    private_settlement_reserved_prepared_bundle_digest_v1(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let prepared_bundle_digest = private_settlement_prepared_bundle_digest_v1(
+            &receipt.manifest,
+            &authorities,
+            &deltas,
+            &prepares,
+        )
+        .expect("prepared bundle digest");
+        receipt.legs = deltas
+            .iter()
+            .zip(&authorities)
+            .zip(prepares)
+            .map(
+                |((delta, authority), prepare)| PrivateSettlementLegReceiptV1 {
+                    delta: delta.clone(),
+                    prepare,
+                    commit: certificate(
+                        &receipt.manifest,
+                        delta,
+                        authority,
+                        &ordered_keys,
+                        PrivateSettlementPhaseV1::Commit,
+                        prepared_bundle_digest,
+                    ),
+                },
+            )
+            .collect();
+        receipt.authority_catalog = authorities;
+        verify_private_settlement_receipt_v1(&receipt).expect("recertified receipt");
+        receipt
+    }
+
+    fn private_settlement_transaction_bytes(
+        transaction: &crate::state::StateTransaction<'_, '_>,
+    ) -> Vec<u8> {
+        let state = PrivateSettlementGlobalStateV1 {
+            governance: transaction
+                .world
+                .private_settlement_governance
+                .iter()
+                .map(|(key, value)| (*key, value.clone()))
+                .collect(),
+            pools: transaction
+                .world
+                .private_settlement_pools
+                .iter()
+                .map(|(key, value)| (*key, value.clone()))
+                .collect(),
+            roots: transaction
+                .world
+                .private_settlement_roots
+                .iter()
+                .map(|(key, value)| (*key, *value))
+                .collect(),
+            nullifiers: transaction
+                .world
+                .private_settlement_nullifiers
+                .iter()
+                .map(|(key, value)| (*key, *value))
+                .collect(),
+            outputs: transaction
+                .world
+                .private_settlement_outputs
+                .iter()
+                .map(|(key, value)| (*key, value.clone()))
+                .collect(),
+            receipts: transaction
+                .world
+                .private_settlement_receipts
+                .iter()
+                .map(|(key, value)| (*key, value.clone()))
+                .collect(),
+            aborts: transaction
+                .world
+                .private_settlement_aborts
+                .iter()
+                .map(|(key, value)| (*key, *value))
+                .collect(),
+        };
+        norito::encode_canonical(&state).expect("private-settlement transaction state encodes")
+    }
+
+    fn install_private_settlement_authority_fixture(
+        state: &crate::state::State,
+        receipt: &PrivateSettlementReceiptV1,
+        validator_keys: &[KeyPair],
+    ) {
+        use crate::{
+            governance::manifest::{
+                GovernanceRules, LaneManifestRegistry, LaneManifestStatus, ManifestValidatorBinding,
+            },
+            state::derive_validator_key_id,
+        };
+        use iroha_data_model::{
+            account::AccountId,
+            consensus::{ConsensusKeyRecord, ConsensusKeyStatus},
+            nexus::{LaneStorageProfile, LaneVisibility},
+        };
+        use std::{collections::BTreeMap, sync::Arc};
+
+        let mut world = state.world.block();
+        {
+            let mut peers = world.peers_mut_for_testing().transaction();
+            for key in validator_keys {
+                let peer = PeerId::from(key.public_key().clone());
+                if !peers.iter().any(|existing| existing == &peer) {
+                    peers.push(peer);
+                }
+            }
+            peers.apply();
+        }
+        for key in validator_keys {
+            let id = derive_validator_key_id(key.public_key());
+            let record = ConsensusKeyRecord {
+                id: id.clone(),
+                public_key: key.public_key().clone(),
+                pop: Some(
+                    iroha_crypto::bls_normal_pop_prove(key.private_key())
+                        .expect("authority fixture PoP"),
+                ),
+                activation_height: 0,
+                expiry_height: None,
+                hsm: None,
+                replaces: None,
+                status: ConsensusKeyStatus::Active,
+            };
+            world.consensus_keys.insert(id, record.clone());
+            world
+                .consensus_keys_by_pk
+                .insert(record.public_key.to_string(), vec![record.id]);
+        }
+        world.commit();
+
+        let validators = validator_keys
+            .iter()
+            .map(|key| AccountId::new(key.public_key().clone()))
+            .collect::<Vec<_>>();
+        let mut statuses = BTreeMap::new();
+        for leg in &receipt.manifest.legs {
+            let validator_bindings = validators
+                .iter()
+                .map(|validator| ManifestValidatorBinding {
+                    validator: validator.clone(),
+                    peer_id: PeerId::from(
+                        validator
+                            .try_signatory()
+                            .expect("fixture validators are single-signatory")
+                            .clone(),
+                    ),
+                    torii_url: None,
+                })
+                .collect();
+            statuses.insert(
+                leg.route.lane_id,
+                LaneManifestStatus {
+                    lane: leg.route.lane_id,
+                    alias: format!("private-settlement-{}", leg.route.lane_id.as_u32()),
+                    dataspace: leg.route.dataspace_id,
+                    visibility: LaneVisibility::Public,
+                    storage: LaneStorageProfile::FullReplica,
+                    governance: Some("parliament".to_owned()),
+                    manifest_path: Some(std::path::PathBuf::from(
+                        "/tmp/private-settlement-authority.json",
+                    )),
+                    governance_rules: Some(GovernanceRules {
+                        validators: validators.clone(),
+                        validator_bindings,
+                        ..GovernanceRules::default()
+                    }),
+                    privacy_commitments: Vec::new(),
+                },
+            );
+        }
+        state.install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(statuses)));
     }
 
     pub(crate) fn fixture() -> (
@@ -1379,6 +1768,204 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn policy_rotation_preserves_frontier_and_rejects_old_policy_bundles() {
+        let (mut state, old_policy_receipt, _) = fixture();
+        let key = PrivateSettlementPoolKeyV1::new(
+            old_policy_receipt.legs[0].delta.route,
+            old_policy_receipt.legs[0].delta.pool_id,
+        )
+        .expect("pool key");
+        let current = state.governance.get(&key).expect("governance").clone();
+        let old_head = state.pool_head(key.route(), key.pool_id()).expect("head");
+        let old_roots = state.roots.clone();
+        let old_nullifiers = state.nullifiers.clone();
+        let old_outputs = state.outputs.clone();
+        let old_receipts = state.receipts.clone();
+        let mut replacement = current;
+        replacement.audit_policy_digest = Hash::new(b"rotated audit policy");
+        replacement.audit_key_epoch += 1;
+        replacement.lifecycle.governance_revision += 1;
+        replacement.lifecycle.activation_height = 20;
+        replacement.governance_digest = Hash::new(b"rotated restricted governance");
+
+        assert_eq!(
+            state.rotate_pool_policy(current.governance_digest, replacement.clone(), 20),
+            Ok(PrivateSettlementGlobalStateOutcomeV1::Applied)
+        );
+        assert_eq!(state.pool_head(key.route(), key.pool_id()), Some(old_head));
+        assert_eq!(state.roots, old_roots);
+        assert_eq!(state.nullifiers, old_nullifiers);
+        assert_eq!(state.outputs, old_outputs);
+        assert_eq!(state.receipts, old_receipts);
+        state
+            .validate()
+            .expect("rotated state validates after restart");
+        assert_eq!(
+            state.rotate_pool_policy(current.governance_digest, replacement, 20),
+            Ok(PrivateSettlementGlobalStateOutcomeV1::Idempotent)
+        );
+
+        let before_old_bundle = norito::encode_canonical(&state).expect("state bytes");
+        assert!(state.apply_receipt(old_policy_receipt, 20).is_err());
+        assert_eq!(
+            norito::encode_canonical(&state).expect("state bytes"),
+            before_old_bundle,
+            "a bundle spanning the policy boundary must not mutate any map"
+        );
+    }
+
+    #[test]
+    fn policy_rotation_retains_finalized_history_across_restart_and_replay() {
+        let (mut state, receipt, _) = fixture();
+        assert_eq!(
+            state.apply_receipt(receipt.clone(), receipt.finalized_height),
+            Ok(PrivateSettlementGlobalStateOutcomeV1::Applied)
+        );
+        let key = PrivateSettlementPoolKeyV1::new(
+            receipt.legs[0].delta.route,
+            receipt.legs[0].delta.pool_id,
+        )
+        .expect("pool key");
+        let current = state.governance.get(&key).expect("governance").clone();
+        let old_head = state.pool_head(key.route(), key.pool_id()).expect("head");
+        let mut replacement = current.clone();
+        replacement.audit_policy_digest = Hash::new(b"post-finality audit policy");
+        replacement.audit_key_epoch += 1;
+        replacement.lifecycle.governance_revision += 1;
+        replacement.lifecycle.activation_height = receipt.finalized_height + 1;
+        replacement.governance_digest = Hash::new(b"post-finality governance");
+
+        assert_eq!(
+            state.rotate_pool_policy(
+                current.governance_digest,
+                replacement,
+                receipt.finalized_height + 1,
+            ),
+            Ok(PrivateSettlementGlobalStateOutcomeV1::Applied)
+        );
+        assert_eq!(state.pool_head(key.route(), key.pool_id()), Some(old_head));
+        let persisted = norito::encode_canonical(&state).expect("state encodes");
+        let mut restored: PrivateSettlementGlobalStateV1 =
+            norito::decode_from_bytes(&persisted).expect("state decodes");
+        restored
+            .validate()
+            .expect("pre-rotation receipt remains valid after restart");
+        let world = world_from_private_settlement_state(restored.clone());
+        validate_private_settlement_persisted_state_v1(
+            &world.private_settlement_governance.view(),
+            &world.private_settlement_pools.view(),
+            &world.private_settlement_roots.view(),
+            &world.private_settlement_nullifiers.view(),
+            &world.private_settlement_outputs.view(),
+            &world.private_settlement_receipts.view(),
+            &world.private_settlement_aborts.view(),
+        )
+        .expect("WSV recovery accepts the anchored historical policy revision");
+        let rotated = restored.governance.get(&key).expect("rotated governance");
+        assert_eq!(rotated.prior_revisions.len(), 1);
+        assert_eq!(
+            rotated.prior_revisions[0].governance_digest,
+            current.governance_digest
+        );
+        assert_eq!(
+            restored.apply_receipt(receipt.clone(), receipt.finalized_height),
+            Ok(PrivateSettlementGlobalStateOutcomeV1::Idempotent)
+        );
+        assert_eq!(
+            norito::encode_canonical(&restored).expect("state re-encodes"),
+            persisted,
+            "exact replay after rotation must leave every state byte unchanged"
+        );
+    }
+
+    #[test]
+    fn policy_rotation_rejects_a_same_height_pool_finalization() {
+        let (mut state, receipt, _) = fixture();
+        assert_eq!(
+            state.apply_receipt(receipt.clone(), receipt.finalized_height),
+            Ok(PrivateSettlementGlobalStateOutcomeV1::Applied)
+        );
+        let key = PrivateSettlementPoolKeyV1::new(
+            receipt.legs[0].delta.route,
+            receipt.legs[0].delta.pool_id,
+        )
+        .expect("pool key");
+        let current = state.governance.get(&key).expect("governance").clone();
+        let mut replacement = current.clone();
+        replacement.audit_policy_digest = Hash::new(b"same-height audit policy");
+        replacement.audit_key_epoch += 1;
+        replacement.lifecycle.governance_revision += 1;
+        replacement.lifecycle.activation_height = receipt.finalized_height;
+        replacement.governance_digest = Hash::new(b"same-height governance");
+        let before = norito::encode_canonical(&state).expect("state bytes");
+
+        assert_eq!(
+            state.rotate_pool_policy(
+                current.governance_digest,
+                replacement,
+                receipt.finalized_height,
+            ),
+            Err(PrivateSettlementGlobalStateErrorV1::Governance)
+        );
+        assert_eq!(
+            norito::encode_canonical(&state).expect("state bytes"),
+            before
+        );
+    }
+
+    #[test]
+    fn policy_rotation_rejects_stale_rollback_and_asset_substitution_without_mutation() {
+        let (mut state, receipt, _) = fixture();
+        let key = PrivateSettlementPoolKeyV1::new(
+            receipt.legs[0].delta.route,
+            receipt.legs[0].delta.pool_id,
+        )
+        .expect("pool key");
+        let current = state.governance.get(&key).expect("governance").clone();
+        let mut replacement = current;
+        replacement.audit_policy_digest = Hash::new(b"new policy");
+        replacement.audit_key_epoch += 1;
+        replacement.lifecycle.governance_revision += 1;
+        replacement.lifecycle.activation_height = 20;
+        replacement.governance_digest = Hash::new(b"new governance");
+
+        for invalid in [
+            PrivateSettlementPoolGovernanceProjectionV1 {
+                audit_key_epoch: current.audit_key_epoch,
+                ..replacement.clone()
+            },
+            PrivateSettlementPoolGovernanceProjectionV1 {
+                lifecycle: current.lifecycle,
+                ..replacement.clone()
+            },
+            PrivateSettlementPoolGovernanceProjectionV1 {
+                asset_binding_commitment: Hash::new(b"substituted asset binding"),
+                ..replacement.clone()
+            },
+        ] {
+            let before = norito::encode_canonical(&state).expect("state bytes");
+            assert!(
+                state
+                    .rotate_pool_policy(current.governance_digest, invalid, 20)
+                    .is_err()
+            );
+            assert_eq!(
+                norito::encode_canonical(&state).expect("state bytes"),
+                before
+            );
+        }
+        let before = norito::encode_canonical(&state).expect("state bytes");
+        assert_eq!(
+            state.rotate_pool_policy(Hash::new(b"stale expected digest"), replacement.clone(), 20,),
+            Err(PrivateSettlementGlobalStateErrorV1::Substitution)
+        );
+        assert_eq!(
+            norito::encode_canonical(&state).expect("state bytes"),
+            before
+        );
+    }
+
+    #[test]
     fn invalid_later_leg_leaves_all_state_bytes_identical() {
         let (mut state, mut receipt, _) = fixture();
         receipt.legs[1].delta.new_root = PrivacyRootV1::new([0xFF; 32]);
@@ -1553,11 +2140,13 @@ pub(crate) mod tests {
         use iroha_data_model::{
             ChainId,
             block::BlockHeader,
-            nexus::{LaneCatalog, LaneConfig},
+            nexus::{DataSpaceCatalog, DataSpaceMetadata, LaneCatalog, LaneConfig},
         };
         use std::num::{NonZeroU32, NonZeroU64};
 
-        let (private_state, receipt, _) = fixture();
+        let (private_state, receipt, sidecar_fixture) = fixture();
+        let receipt =
+            recertify_receipt_with_validator_keys(receipt, &sidecar_fixture.validator_keys);
         let world = world_from_private_settlement_state(private_state);
         let state = State::new_with_chain_and_network_id_for_testing(
             world,
@@ -1565,6 +2154,11 @@ pub(crate) mod tests {
             LiveQueryStore::start_test(),
             ChainId::from("private-settlement-wsv-test"),
             receipt.manifest.network_id.clone(),
+        );
+        install_private_settlement_authority_fixture(
+            &state,
+            &receipt,
+            &sidecar_fixture.validator_keys,
         );
         let header = BlockHeader::new(
             NonZeroU64::new(receipt.finalized_height).expect("non-zero finalization height"),
@@ -1610,11 +2204,31 @@ pub(crate) mod tests {
         block.nexus.lane_config =
             iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog);
         block.nexus.lane_catalog = lane_catalog;
+        block.nexus.dataspace_catalog = DataSpaceCatalog::new(
+            receipt
+                .manifest
+                .legs
+                .iter()
+                .map(|leg| DataSpaceMetadata {
+                    id: leg.route.dataspace_id,
+                    alias: format!("private-settlement-{}", leg.route.dataspace_id.as_u64()),
+                    description: None,
+                    fault_tolerance: 1,
+                })
+                .collect(),
+        )
+        .expect("fixture settlement dataspace catalog");
         block.lane_incarnations = receipt
             .manifest
             .legs
             .iter()
             .map(|leg| (leg.route.lane_id, leg.route.lane_incarnation))
+            .collect();
+        block.lane_incarnation_activation_heights = receipt
+            .manifest
+            .legs
+            .iter()
+            .map(|leg| (leg.route.lane_id, 0))
             .collect();
 
         let old_heads = receipt
@@ -1711,6 +2325,26 @@ pub(crate) mod tests {
             .atomic_private_settlement
             .minimum_activation_notice_blocks =
             NonZeroU64::new(1).expect("non-zero settlement activation notice");
+
+        let forged_validator_keys = (0xB1_u8..=0xB4)
+            .map(|seed| KeyPair::from_seed(vec![seed; 32], iroha_crypto::Algorithm::BlsNormal))
+            .collect::<Vec<_>>();
+        let forged_receipt =
+            recertify_receipt_with_validator_keys(receipt.clone(), &forged_validator_keys);
+        {
+            let mut transaction = block.transaction();
+            let before = private_settlement_transaction_bytes(&transaction);
+            assert_eq!(
+                transaction.apply_private_settlement_receipt_v1(forged_receipt),
+                Err(PrivateSettlementGlobalStateErrorV1::Receipt),
+                "self-certified attacker keys must not authorize global state mutation"
+            );
+            let after = private_settlement_transaction_bytes(&transaction);
+            assert_eq!(
+                before, after,
+                "forged-authority rejection must leave every private-state map byte-identical"
+            );
+        }
 
         let mut invalid = receipt.clone();
         invalid.legs[1].delta.new_root = PrivacyRootV1::new([0xFF; 32]);

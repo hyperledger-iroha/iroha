@@ -8847,8 +8847,8 @@ mod tests {
         nexus::{
             AUTOSCALE_META_COMMITTEE, AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_DRAIN_STATE,
             AUTOSCALE_META_MANAGED, AssetPermissionManifest, AtomicPrivateSettlementV1, LaneConfig,
-            LaneId, LaneVisibility, ManifestVersion, PrivateSettlementCommitBundleV1,
-            PrivateSettlementAbortReasonV1, PrivateSettlementPoolGovernanceLifecycleV1,
+            LaneId, LaneVisibility, ManifestVersion, PrivateSettlementAbortReasonV1,
+            PrivateSettlementCommitBundleV1, PrivateSettlementPoolGovernanceLifecycleV1,
             PrivateSettlementRouteV1, UniversalAccountId,
         },
         oracle::{FeedConfigVersion, FeedEvent, FeedEventOutcome, FeedSuccess, ObservationValue},

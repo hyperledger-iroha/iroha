@@ -174,7 +174,11 @@ Collecting -> Audited -> Prepared -> CommitCertified -> Finalized
    successful responder. Commit certification does not mutate WSV.
 6. The sponsor signs and submits one carrier containing exactly one
    `FinalizeAtomicPrivateSettlementV1` instruction. The carrier binds the
-   sponsor and exact public fee intent and carries the complete receipt.
+   sponsor and exact public fee intent and carries the complete receipt. Before
+   finalization, the same sponsor may instead submit one
+   `AbortAtomicPrivateSettlementV1` carrier that binds the complete public
+   manifest and a stable public reason class; it never carries a delta or
+   confidential sidecar material.
 7. Global receipt planning verifies every authority/QC/delta and every current
    WSV invariant. Only after all fallible checks succeed are all pool heads,
    root provenance entries, nullifiers, encrypted outputs, replay receipt, and
@@ -223,7 +227,9 @@ environment variable enables the feature. The actual configuration includes:
 - `max_participants` (hard V1 maximum 255) and `max_expiry_blocks`;
 - audit, Prepare, and Commit height timeouts;
 - strictly increasing capsule padding classes;
-- proof, capsule, carrier, sidecar-record, and retention bounds;
+- proof, capsule, carrier, per-record, and retention bounds;
+- `sidecar_max_records` and `sidecar_max_total_bytes`, which are consensus-
+  committed governed capacities passed to every Torii sidecar store at open;
 - `default_min_auditor_approvals` and permitted audit-policy versions.
 
 Invalid zero values, unsupported V1 versions, duplicate/unsorted padding or
@@ -279,6 +285,23 @@ publication. Continuously assert that no strict subset becomes visible or
 spendable and that every node converges after healing. Keep signed RS16 DA/RBC
 enabled.
 
+Each real-process run emits one strict JSONL record for
+`scripts/private_settlement_fault_report.py`. The reporter requires the exact
+N=2,3,4,8,16 matrix across at least ten seeds per N, one validator restart in
+every committee, coordinator/global restarts, acknowledged 5/10/20-percent
+loss for restricted DA, Prepare, and Commit, all phase cuts and persistence
+boundaries, convergence, byte-identical invalid-leg state, exactly-once success,
+replay rejection, and zero partial visibility or spendability observations.
+Every run binds the same full source commit and archived hardware-description
+SHA-256, plus the archived N-specific configuration SHA-256. A canonical
+configuration manifest covers N=2,3,4,8,16 in order and binds every exact
+configuration file while asserting four validators, 3-of-4 quorum, and
+mandatory signed RS16 DA/RBC. The summary binds every raw JSONL file by length
+and SHA-256, and the final DOI verifier regenerates the summary from those
+archived records rather than trusting a detached matrix claim. Synthetic or
+simulated records are test fixtures only and must never be published as
+real-process evidence.
+
 N=17 through 255 are deterministic state-machine, codec, carrier-size, and TLC
 tests. They must not be labeled real-network latency measurements.
 
@@ -289,6 +312,23 @@ snapshots, queries, events, logs, and telemetry. Plant account, asset, amount,
 memo, and capsule canaries in multiple encodings. Differential runs in which
 only secrets change must preserve public shapes and message counts; only
 cryptographic values may differ. Publish the residual metadata listed above.
+`scripts/private_settlement_leakage_audit.py` enforces this with byte-level
+canary scans, exact public file/size/JSON-shape comparison, and mandatory paired
+V1 message-count manifests covering Torii, public/restricted P2P, block, query,
+event, log, and telemetry records. Its report binds the canary manifest, every
+scanned artifact, and both message-count manifests by byte length and SHA-256.
+The DOI-bundle verifier independently requires those bindings to cover every
+archived public and restricted capture, Kura/merge and snapshot artifact,
+query/event/log/telemetry record, and both count manifests; a clean report from
+another capture set cannot satisfy the gate. It also reloads the canary manifest
+and independently rescans every archived privacy surface, so a digest-rebound
+report with suppressed findings still fails. A separate canonical
+differential-pair manifest binds the left and right artifact paths, kinds,
+lengths, and SHA-256 digests for every required privacy surface. The verifier
+requires the declared left/right roots to contain exactly that paired archive
+inventory, loads every pair itself, requires equal byte lengths, and recomputes
+JSON public shapes. Changing a same-size public field name or omitting an
+unpaired differential file cannot be hidden by rewriting the leakage report.
 
 For each real N, run at least five warmups and thirty measured bundles across
 multiple seeds on pinned hardware. Report p50/p95/p99 with confidence intervals
@@ -298,6 +338,18 @@ network bytes, proof/receipt size, and storage growth. Transparent AMX is the
 control. The first release publishes its measured envelope; later releases fail
 when p95 regresses by more than `max(10%, 3 MAD)` or p99 by more than 20% against
 the signed baseline.
+
+`scripts/private_settlement_benchmark_report.py` validates the raw JSONL matrix
+and emits deterministic bootstrap intervals. The final release verifier parses
+the retained raw samples again, regenerates every p50/p95/p99, MAD, and
+deterministic confidence interval, and requires the published measured-run and
+seed identities, stage/resource shapes, counts, and passing regression result
+to match exactly. Every raw sample and the generated report bind the same full
+release commit, archived hardware-description digest, and exact N-specific
+configuration digest, so results from another build, host profile, network
+configuration, or altered summary cannot be relabeled. Later-release regression
+comparisons reject a baseline captured with different hardware, configurations,
+or benchmark requirements before applying the p95/p99 thresholds.
 
 ### Release artifact
 
@@ -309,3 +361,21 @@ manifest hashes, commit id, hardware description, threat model, protocol
 argument, limitations, and independent audit reports in a DOI-backed artifact
 for the BCK26 paper.
 
+Validate the final, already-published artifact with
+`scripts/private_settlement_release_evidence.py <bundle>/release-manifest-v1.json`.
+The V1 manifest binds every file by byte length and SHA-256, rejects unlisted
+files and symlinks, and requires the exact real-network participant/loss/crash
+matrix, four-validator 3-of-4 committees, ten randomized seeds, a two-hour
+soak, benchmark sample minima, reproducible-build/SBOM evidence, a complete
+independent-audit scope, an auditor key-custody/rotation report, and a canonical
+DOI. Focused/workspace tests, strict Clippy, format verification, SDK,
+inventory, ten-seed randomization, two-hour atomic soak, and serial
+privacy-release gates are structured V1 reports bound to the exact source
+commit and to distinct separately archived operator transcripts; a one-line
+placeholder cannot satisfy them. Reproducible-build evidence must contain at
+least two distinct builder/environment records that produce byte-identical
+archived release binaries, and the CycloneDX 1.5/1.6 SBOM must bind the same
+commit and SHA-256 hashes. The hardware description is a commit-bound structured
+record, and the configuration manifest must bind every archived N=2,3,4,8,16
+configuration used by both the fault and benchmark matrices. This verifier
+deliberately does not manufacture or waive any of those external results.

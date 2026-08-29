@@ -194,6 +194,54 @@ redeem archives to 48 MiB; the exported
 `KAGEMUSHA_REDEEM_REQUEST_MAX_BYTES` constants expose those exact Torii
 boundaries.
 
+## Atomic private settlement transport
+
+`@iroha/iroha-js/atomic-private-settlement` is a browser-safe, witness-free
+transport for the V1 private settlement routes. A native wallet or coordinator
+must prepare the exact JSON object; JavaScript does not accept note witnesses,
+capsule plaintext, spending keys, or a generic proof callback:
+
+```js
+import {
+  AtomicPrivateSettlementOperationV1,
+  AtomicPrivateSettlementPreparedRequestV1,
+  AtomicPrivateSettlementToriiClientV1,
+} from "@iroha/iroha-js/atomic-private-settlement";
+
+const settlement = new AtomicPrivateSettlementToriiClientV1(toriiUrl, {
+  sponsorHeaderProvider: (request) => sponsorSigner.headersFor(request),
+});
+const prepared = new AtomicPrivateSettlementPreparedRequestV1(
+  AtomicPrivateSettlementOperationV1.LEG_UPLOAD,
+  nativeCoordinator.preparedLegUploadJson(),
+);
+
+try {
+  const response = await settlement.uploadLeg(prepared);
+  try {
+    nativeCoordinator.acceptToriiResponse(response.bytes());
+  } finally {
+    response.close();
+  }
+} finally {
+  prepared.close();
+}
+```
+
+Sponsor operations require exactly the canonical account-header quartet.
+Committee proof reads require an exact validator role-header provider; capsule
+reads and approvals require an exact governed auditor provider. Public bundle
+status and receipt reads carry no caller identity. The client sends each exact
+route once with redirects, credentials, ambient authorization, compression,
+and retries disabled. It rejects header collisions, response URL substitution,
+unknown public fields, malformed identifiers, and oversized responses, and it
+never renders request or response bodies in errors.
+
+This transport does not activate the protocol or establish production
+readiness. Operators must keep the feature governed and disabled until the
+deployment has passed the real-process, leakage, performance, independent
+cryptographic-review, and artifact-publication gates.
+
 ## Native Privacy Bridge
 
 The first-release native surface exposes local build metadata only:

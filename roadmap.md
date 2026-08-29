@@ -7,11 +7,12 @@ Completed history lives in [`status.md`](./status.md).
 
 ## Atomic private settlement release qualification
 
-- Complete and qualify matching prepared-leg, audit, coordination, carrier,
-  status, and receipt APIs in Kotlin, mirrored Java, Swift, CLI, Python, and
-  every other maintained scripting SDK. Use shared canonical Norito fixtures,
-  preserve opaque witness handles, and keep exact plaintext out of high-level
-  runtimes, logs, errors, and telemetry.
+- Finish release-candidate qualification of the implemented prepared-leg,
+  audit, coordination, carrier, status, and receipt APIs in Rust/CLI, Kotlin,
+  mirrored Java, Swift, Python, and JavaScript. Rebuild the missing Swift native
+  bridge from the same settled commit, run every complete SDK suite against the
+  shared canonical fixture, and preserve opaque witness handles and plaintext
+  redaction through packaging and clean-consumer tests.
 - Run real four-validator processes for every participating dataspace at
   N=2,3,4,8,16, with N=3 as the paper configuration and mandatory signed RS16
   DA/RBC throughout. Exercise one validator unavailable per committee,
@@ -19,11 +20,16 @@ Completed history lives in [`status.md`](./status.md).
   message loss, phase-cut partitions, delay/healing, and crashes after every
   sidecar, staged-delta, QC, Kura, WSV, and receipt-publication boundary.
   Continuously assert that no strict subset of legs becomes visible or
-  spendable. Keep N=17..255 claims limited to codec, wire-size, deterministic
-  state-machine, and formal-model evidence.
+  spendable. Bind each raw run to the settled commit, the archived structured
+  hardware description, and the exact N-specific configuration through the
+  canonical N=2,3,4,8,16 configuration manifest. Keep N=17..255 claims limited
+  to codec, wire-size, deterministic state-machine, and formal-model evidence.
 - Execute the structured-canary and differential leakage matrix over Torii,
   restricted/public P2P, block wire, Kura/merge artifacts, snapshots, queries,
-  events, logs, and telemetry. Publish the intentional residual linkability:
+  events, logs, and telemetry. Bind every exact left/right input in the
+  canonical differential-pair manifest, with no unpaired files in either
+  declared root, so the final verifier can recompute byte-size and JSON-shape
+  equivalence independently. Publish the intentional residual linkability:
   routes/count, timing, sponsor/fee, stable pools/roots, and possible asset
   inference in single-CBDC dataspaces.
 - On pinned hardware, collect at least five warmups and thirty measured bundles
@@ -31,8 +37,9 @@ Completed history lives in [`status.md`](./status.md).
   for proof, availability, audit, committee verification, Prepare, Commit,
   finality, and end-to-end latency, alongside throughput, CPU, RSS, network,
   proof/receipt size, storage growth, and transparent-AMX controls. Sign the
-  first measured envelope and enforce the documented later-release regression
-  thresholds.
+  first measured envelope, bind every sample to the same hardware and exact
+  N-specific configuration used by the fault matrix, and enforce the documented
+  later-release regression thresholds.
 - Close focused/workspace tests, strict all-target Clippy, formatting, ten
   randomized seeds, two-hour soak, serial privacy-release checks, release
   inventory, reproducible build, and SBOM from one settled candidate. Qualify
@@ -43,7 +50,8 @@ Completed history lives in [`status.md`](./status.md).
   cross-dataspace state machine. Archive the exact commit, manifests, raw
   CSV/JSON, configurations, sanitized captures, plots, logs, hardware/threat
   descriptions, limitations, and audit reports in a DOI-backed BCK26 artifact.
-  Keep the feature disabled by default until every gate passes.
+  Run `scripts/private_settlement_release_evidence.py` against that published
+  bundle and keep the feature disabled by default until every gate passes.
 
 ## Telemetry first-release closure
 

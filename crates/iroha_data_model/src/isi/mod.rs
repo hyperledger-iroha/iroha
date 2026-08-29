@@ -146,6 +146,7 @@ impl_direct_instruction_box!(crate::isi::privacy::RotatePrivacyZkX509CrlV1);
 impl_direct_instruction_box!(crate::isi::privacy::RevokePrivacyZkX509CrlV1);
 impl_direct_instruction_box!(crate::isi::privacy::SubmitPrivacyProofV1);
 impl_direct_instruction_box!(crate::isi::private_settlement::ActivatePrivateSettlementPoolV1);
+impl_direct_instruction_box!(crate::isi::private_settlement::RotatePrivateSettlementPoolPolicyV1);
 impl_direct_instruction_box!(crate::isi::private_settlement::AbortAtomicPrivateSettlementV1);
 impl_direct_instruction_box!(crate::isi::private_settlement::FinalizeAtomicPrivateSettlementV1);
 impl_direct_instruction_box!(crate::isi::bridge::SubmitBridgeProof);
@@ -2717,8 +2718,8 @@ pub mod prelude {
         },
         private_settlement::{
             AbortAtomicPrivateSettlementV1, ActivatePrivateSettlementPoolV1,
-            FinalizeAtomicPrivateSettlementV1,
-            PrivateSettlementPoolActivationValidationErrorV1,
+            FinalizeAtomicPrivateSettlementV1, PrivateSettlementPoolActivationValidationErrorV1,
+            PrivateSettlementPoolRotationValidationErrorV1, RotatePrivateSettlementPoolPolicyV1,
         },
         ram_lfe::{
             ActivateRamLfeProgramPolicy, DeactivateRamLfeProgramPolicy, RegisterRamLfeProgramPolicy,

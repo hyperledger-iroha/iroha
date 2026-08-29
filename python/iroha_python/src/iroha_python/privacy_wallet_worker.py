@@ -211,7 +211,7 @@ class PrivateSettlementWalletLeaseV1:
     audit_plaintext_commitment: bytes
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, repr=False)
 class PrivateSettlementPreparedProofV1:
     """Public artifacts returned by terminal native settlement proving."""
 
@@ -224,6 +224,11 @@ class PrivateSettlementPreparedProofV1:
     statement_norito: bytes
     proof: bytes
     audit_capsule_norito: bytes
+
+    def __repr__(self) -> str:
+        """Return a log-safe representation without proof or capsule bytes."""
+
+        return "PrivateSettlementPreparedProofV1(<restricted>)"
 
 
 @dataclass(frozen=True)
