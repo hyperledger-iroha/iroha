@@ -23,6 +23,14 @@ authority has exactly four validators and every availability, Prepare, and
 Commit certificate contains exactly three distinct valid signatures from that
 authority. Observers cannot pad a quorum.
 
+The authority is not a caller-selected set of four keys. At the manifest's
+`authority_context_height`, every validator resolves the exact canonical
+ordered roster and active lane incarnation from consensus state, requires the
+resolved authority height to equal that context height, requires the V1
+`f = 1` four-validator geometry, and verifies every BLS proof of possession.
+Restricted upload, Prepare voting, and global receipt admission all use this
+same state-anchored authority boundary.
+
 Ordinary validators receive the proof and opaque fixed-shape delta, not audit
 plaintext. Authorized local auditors decrypt and approve the exact plaintext;
 the governed default is one approval from N authorized auditors. The global
@@ -108,7 +116,12 @@ XChaCha20-Poly1305. The same DEK is independently wrapped to every auditor in
 the exact policy order using the existing X25519/ML-KEM-768 hybrid KEM and an
 independent authenticated nonce. Capsule and wrap AAD bind the network,
 dataspace route and incarnation, bundle, leg, policy, key epoch, and canonical
-plaintext commitment.
+plaintext commitment. They also bind the digest of the exact state-anchored
+four-validator authority and its `authority_context_height`. The capsule AEAD
+authenticates the canonical complete AAD; each DEK-wrap AEAD authenticates that
+same AAD plus its exact auditor identity, recipient hybrid key, and KEM
+ciphertext. A capsule or wrapped DEK therefore cannot be transplanted to a
+different historical roster or authority height.
 
 The capsule includes the exact parties, asset, amount, memo, policy references,
 view data, note openings, and output-encryption openings required for audit. It
@@ -121,6 +134,32 @@ Retired decryption keys must be retained, or retained capsules must be rewrapped
 for the applicable regulatory retention period. That is an operator/governance
 obligation and a release recovery test, not an implicit property of AEAD.
 
+## Governed pool activation and policy rotation
+
+`ActivatePrivateSettlementPoolV1` creates the public projection of one
+restricted route/pool/asset binding and its canonical initial commitments.
+`RotatePrivateSettlementPoolPolicyV1` is the privacy-governance-authorized
+replacement boundary for its auditor policy and key epoch. A rotation must name
+the exact current `governance_digest`, preserve the route, pool, asset-binding
+commitment, frontier, roots, nullifiers, outputs, and receipts, advance the
+governance revision by exactly one, use a strictly newer key epoch and different
+policy/governance digests, and activate at the block that contains the rotation.
+The predecessor must still be active at the preceding height. A rotation is
+rejected if a receipt touching the same exact route/pool is finalized at that
+activation height; policy activation and pool finalization cannot share that
+height.
+
+The globally replicated projection retains a gap-free public lineage of every
+superseded policy digest, key epoch, lifecycle, and governance digest. Snapshot
+and restart validation resolve the revision effective at both a finalized
+receipt's `authority_context_height` and finalization height, so a receipt
+finalized before rotation remains valid and its exact replay remains
+idempotent. This history does not grandfather pending work: a bundle prepared
+under the old policy that crosses the activation boundary fails closed before
+any global mutation. Operational recovery still requires retaining old
+decryption keys for retained capsules or governing and testing capsule
+rewrapping before those keys are destroyed.
+
 ## Restricted confidential availability
 
 `PrivateSettlementFileSidecarStoreV1` persists provisional and certified
@@ -130,6 +169,12 @@ same-effective-user ownership, a single-writer process lease, create-new temp
 files, canonical decode/re-encode, fsync before rename, and directory fsync.
 Startup scanning rejects unknown, noncanonical, substituted, or capacity-
 violating records and reconstructs staged pool/nullifier/output reservations.
+Those locks use exact-route keys: pool heads are reserved by
+`(route, pool_id, old_epoch, old_root)`, nullifiers by
+`(route, pool_id, nullifier)`, and outputs by
+`(route, pool_id, commitment)`. Equal opaque values on different routes do not
+alias, while a conflict on the same full route cannot be bypassed by reusing a
+pool identifier.
 
 Access views are least privilege:
 
