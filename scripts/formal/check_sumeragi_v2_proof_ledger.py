@@ -54019,11 +54019,19 @@ if let (
             effects_path,
             drain,
             """
-if matches!(&owned.effect, AdapterEffect::Apply { .. })
-    && (self.pending_runner_decision_cleanup.is_some()
-        || !self.pending_durable_validate_admissions.is_empty()
-        || self.pending_live_wal_sign_admission.is_some()
-        || !self.pending_lifecycle_output_admissions.is_empty())
+let released_validation_will_apply = match &owned.effect {
+    AdapterEffect::ValidateBody { round, subject, .. } => self
+        .published_lifecycle_validate_retry_markers
+        .get(&(*round, *subject))
+        .is_some_and(|marker| {
+            !marker.owns_live_lifecycle_row()
+                && marker.latest_statement.phase() == Some(wire::GlobalPhase::Commit)
+        }),
+    _ => false,
+};
+if (matches!(&owned.effect, AdapterEffect::Apply { .. })
+    || released_validation_will_apply)
+    && self.decision_apply_dispatch_barrier_is_occupied()
 {
     break;
 }
@@ -54035,7 +54043,7 @@ match self.consume_one(
     services,
 )
 """,
-            "retained Apply dispatch must stop at the runner-cleanup fence and carry its highest-Prepare cleanup sidecar into consume_one",
+            "retained Apply or released-Validate dispatch must stop at the complete Decision Apply barrier and carry its highest-Prepare cleanup sidecar into consume_one",
             errors,
         )
         _require_rust_token_sequence(

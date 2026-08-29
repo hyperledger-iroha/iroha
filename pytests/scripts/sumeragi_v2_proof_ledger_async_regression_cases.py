@@ -1785,9 +1785,9 @@ def test_lifecycle_decision_apply_corridor_semantics_survive_effect_item_reseal(
         ),
         (
             "drain_retained_effect_batch",
-            "|| !self.pending_durable_validate_admissions.is_empty()",
-            "|| false",
-            "carry its highest-Prepare cleanup sidecar into consume_one",
+            "&& self.decision_apply_dispatch_barrier_is_occupied()",
+            "&& false",
+            "retained Apply or released-Validate dispatch must stop at the complete Decision Apply barrier",
         ),
         (
             "retain_effect_batch_at_frontier",
