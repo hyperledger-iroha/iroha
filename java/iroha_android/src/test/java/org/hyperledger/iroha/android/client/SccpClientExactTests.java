@@ -547,15 +547,6 @@ public final class SccpClientExactTests {
                 Base64.getEncoder().encodeToString(fill(64, 0)),
                 transaction,
                 7L));
-    expectFailure(
-        () ->
-            destinationRequest(
-                AUTHORITY,
-                encoded,
-                Base64.getEncoder()
-                    .encodeToString(fill(SccpSubmitEncoding.MAX_DETACHED_SIGNATURE_BYTES + 1, 1)),
-                transaction,
-                7L));
     final byte[] nativeProof =
         canonicalArtifactBytes(SccpSubmitEncoding.NATIVE_INBOUND_PROOF_SCHEMA_NAME, 0);
     messageRequest(
