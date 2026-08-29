@@ -151,7 +151,9 @@ async fn nexus_dataspaces_summary_endpoint_returns_joined_snapshot() {
     .execute(&ALICE_ID, &mut stx)
     .expect("mint asset");
     stx.apply();
-    block.commit().expect("commit seeded state");
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit seeded state");
     sumeragi::status::set_lane_commitments(
         Vec::new(),
         vec![status::DataspaceCommitmentSnapshot {
@@ -231,7 +233,9 @@ async fn nexus_dataspaces_summary_endpoint_returns_zeroed_snapshot_for_account_w
         .execute(&ALICE_ID, &mut stx)
         .expect("register account");
     stx.apply();
-    block.commit().expect("commit account");
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit account");
     let router = build_test_router(state, &kura, local_peer_id);
     let spaced_literal = format!("  {account_literal}  ");
     let literal = urlencoding::encode(&spaced_literal);
@@ -305,7 +309,9 @@ async fn nexus_dataspaces_summary_endpoint_reports_portfolio_only_default_datasp
         .execute(&ALICE_ID, &mut stx)
         .expect("mint asset");
     stx.apply();
-    block.commit().expect("commit seeded state");
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit seeded state");
     let router = build_test_router(state, &kura, local_peer_id);
     let literal = urlencoding::encode(&account_literal);
     let uri = format!("/v1/nexus/dataspaces/accounts/{literal}/summary");
@@ -436,7 +442,9 @@ async fn nexus_dataspaces_summary_endpoint_reports_pending_expired_and_revoked_m
         .execute(&ALICE_ID, &mut stx)
         .expect("register account with uaid");
     stx.apply();
-    block.commit().expect("commit account");
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit account");
     sumeragi::status::set_lane_commitments(
         Vec::new(),
         vec![status::DataspaceCommitmentSnapshot {
@@ -592,7 +600,9 @@ async fn nexus_dataspaces_summary_endpoint_reports_null_alias_for_uncataloged_da
         .execute(&ALICE_ID, &mut stx)
         .expect("mint asset");
     stx.apply();
-    block.commit().expect("commit seeded state");
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit seeded state");
     let mut bindings = UaidDataspaceBindings::default();
     bindings.bind_account(dataspace, account_id.clone());
     state
@@ -741,7 +751,9 @@ async fn nexus_dataspaces_summary_endpoint_merges_bound_accounts_and_consensus_t
     .execute(&ALICE_ID, &mut stx)
     .expect("mint asset");
     stx.apply();
-    block.commit().expect("commit seeded state");
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit seeded state");
     let mut bindings = state
         .view()
         .world()
@@ -936,8 +948,7 @@ fn build_test_router(state: Arc<State>, kura: &Arc<Kura>, local_peer_id: PeerId)
         &queue,
         &local_peer_id,
         broadcast::channel(1).0,
-        true,
-        false,
+        iroha_config::parameters::actual::TelemetryProfile::Operator,
     );
     torii.router()
 }

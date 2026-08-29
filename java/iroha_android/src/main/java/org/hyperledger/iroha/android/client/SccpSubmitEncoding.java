@@ -20,12 +20,15 @@ final class SccpSubmitEncoding {
   static final int MAX_DESTINATION_ARTIFACT_BYTES = MAX_GROTH16_ARTIFACT_BYTES + 64 * 1024;
   static final int MAX_DESTINATION_ARTIFACT_BASE64_BYTES = 22_544_384;
   static final int MAX_NATIVE_PROOF_BYTES = 16 * 1024 * 1024;
+  static final int MAX_REPLAY_WITNESS_BYTES = 16 * 1024;
   static final int MAX_DETACHED_SIGNATURE_BYTES = 16 * 1024;
   static final int MAX_TRANSACTION_PAYLOAD_BYTES = 16 * 1024 * 1024;
   static final String DESTINATION_ARTIFACT_SCHEMA_NAME =
       "iroha_data_model::bridge::BridgeSccpDestinationProofV1";
   static final String NATIVE_INBOUND_PROOF_SCHEMA_NAME =
       "iroha_sccp::native_admission::SccpNativeInboundMessageProofV1";
+  static final String REPLAY_WITNESS_SCHEMA_NAME =
+      "iroha_data_model::bridge::sccp_replay::SccpSparseMerkleWitnessV1";
   static final Set<String> PROOF_REQUEST_SCHEMA_NAMES =
       Set.of(
           "iroha_sccp::SccpGroth16Bn254ProofRequestV1",

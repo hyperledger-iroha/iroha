@@ -102,7 +102,7 @@ use iroha_core::{
         WorldReadOnly,
     },
     sumeragi,
-    telemetry::{Telemetry, capability::TelemetryGate},
+    telemetry::Telemetry,
     time,
     torii::zk::proofs::{
         ProofFilters as CoreProofFilters, ProofListItem, ProofListParams as CoreProofListParams,
@@ -155,7 +155,7 @@ use iroha_sccp::{
     sccp_payload_projection,
 };
 #[cfg(feature = "telemetry")]
-use iroha_telemetry::metrics::{MicropaymentCreditSnapshot, MicropaymentTicketCounters, Status};
+use iroha_telemetry::metrics::Status;
 #[cfg(feature = "telemetry")]
 use iroha_telemetry::privacy::{PrivacyBucketConfig, PrivacyEventError, PrivacyShareError};
 use mv::storage::StorageReadOnly;
@@ -272,19 +272,6 @@ derived_items! {
 struct EvidenceListWire {
     total: u64,
     items: Vec<EvidenceRecord>,
-}
-(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)
-struct SumeragiPacemakerResponse {
-    backoff_ms: u64,
-    rtt_floor_ms: u64,
-    jitter_ms: u64,
-    backoff_multiplier: u64,
-    rtt_floor_multiplier: u64,
-    max_backoff_ms: u64,
-    jitter_frac_permille: u64,
-    round_elapsed_ms: u64,
-    view_timeout_target_ms: u64,
-    view_timeout_remaining_ms: u64,
 }
 (Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)
 struct PrfContext {
@@ -1221,46 +1208,36 @@ mod streaming_pager_tests {
     }
 }
 }
-/// Telemetry handle that pairs a runtime [`Telemetry`] instance with capability gating.
+/// Telemetry handle that pairs a runtime [`Telemetry`] instance with its configured profile.
 #[derive(Clone)]
-pub struct MaybeTelemetry<G = TelemetryProfile> {
-    gate: G,
+pub struct MaybeTelemetry {
+    profile: TelemetryProfile,
     telemetry: Option<Telemetry>,
 }
-impl<G> fmt::Debug for MaybeTelemetry<G>
-where
-    G: fmt::Debug,
-{
+impl fmt::Debug for MaybeTelemetry {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("MaybeTelemetry")
-            .field("gate", &self.gate)
+            .field("profile", &self.profile)
             .field("has_telemetry", &self.telemetry.is_some())
             .finish()
     }
 }
-impl<G> MaybeTelemetry<G>
-where
-    G: TelemetryGate + Clone,
-{
-    /// Create a new telemetry handle with the given gate and optional runtime handle.
-    pub fn new(telemetry: Option<Telemetry>, gate: G) -> Self {
-        Self { gate, telemetry }
-    }
+impl MaybeTelemetry {
     /// Return the active telemetry profile.
     pub fn profile(&self) -> TelemetryProfile {
-        self.gate.profile()
+        self.profile
     }
     /// Whether metrics collection/exposure is permitted.
     pub fn allows_metrics(&self) -> bool {
-        self.telemetry.is_some() && self.gate.allows_metrics()
+        self.telemetry.is_some() && self.profile.metrics_enabled()
     }
     /// Whether expensive metrics are permitted.
     pub fn allows_expensive_metrics(&self) -> bool {
-        self.telemetry.is_some() && self.gate.allows_expensive_metrics()
+        self.telemetry.is_some() && self.profile.expensive_metrics_enabled()
     }
     /// Whether developer-only telemetry outputs are permitted.
     pub fn allows_developer_outputs(&self) -> bool {
-        self.telemetry.is_some() && self.gate.allows_developer_outputs()
+        self.telemetry.is_some() && self.profile.developer_outputs_enabled()
     }
     /// Whether telemetry observations are currently enabled.
     pub fn is_enabled(&self) -> bool {
@@ -1269,10 +1246,6 @@ where
     /// Access the underlying telemetry handle if available.
     pub fn telemetry(&self) -> Option<&Telemetry> {
         self.telemetry.as_ref()
-    }
-    /// Clone the underlying telemetry handle if available.
-    pub fn telemetry_cloned(&self) -> Option<Telemetry> {
-        self.telemetry.clone()
     }
     /// Execute the callback when metrics are allowed and telemetry is present.
     pub fn with_metrics<T>(&self, f: impl FnOnce(&Telemetry) -> T) -> Option<T> {
@@ -1329,10 +1302,6 @@ where
             None => Ok(()),
         }
     }
-    /// Whether the handle currently has an underlying telemetry instance.
-    pub fn is_configured(&self) -> bool {
-        self.telemetry.is_some()
-    }
     /// Access metrics after synchronizing with the telemetry worker.
     #[cfg(feature = "telemetry")]
     #[allow(clippy::future_not_send)]
@@ -1358,14 +1327,11 @@ where
             .expect("telemetry metrics requested without handle");
         telemetry.metrics_fresh_checked().await
     }
-    /// Map the handle to another gate value while retaining the telemetry instance.
-    pub fn map_gate<H>(self, gate: H) -> MaybeTelemetry<H>
-    where
-        H: TelemetryGate + Clone,
-    {
+    /// Replace the profile while retaining the telemetry instance.
+    pub fn with_profile(self, profile: TelemetryProfile) -> Self {
         MaybeTelemetry {
             telemetry: self.telemetry,
-            gate,
+            profile,
         }
     }
 }
@@ -3240,18 +3206,10 @@ pub struct IdentifierClaimLookupResponseDto {
 }
 }
 }
-impl<G> TelemetryGate for MaybeTelemetry<G>
-where
-    G: TelemetryGate + Clone,
-{
-    fn profile(&self) -> TelemetryProfile {
-        self.gate.profile()
-    }
-}
 impl MaybeTelemetry {
     /// Construct a handle from a telemetry profile and optional runtime telemetry.
     pub fn from_profile(telemetry: Option<Telemetry>, profile: TelemetryProfile) -> Self {
-        Self::new(telemetry, profile)
+        Self { profile, telemetry }
     }
     /// Disabled handle without telemetry backing.
     pub fn disabled() -> Self {
@@ -5635,38 +5593,6 @@ mod proof_query_envelope_tests {
     }
 }
 }
-/// GET /v1/sumeragi/pacemaker — snapshot of pacemaker timers and config
-#[cfg(feature = "telemetry")]
-#[iroha_futures::telemetry_future]
-pub async fn handle_v1_sumeragi_pacemaker(
-    telemetry: &MaybeTelemetry,
-    accept: Option<axum::http::HeaderValue>,
-) -> Result<Response> {
-    if !telemetry.allows_developer_outputs() {
-        return Err(Error::telemetry_profile_forbidden(
-            "sumeragi_pacemaker",
-            telemetry.profile(),
-        ));
-    }
-    let m = telemetry.metrics().await;
-    let payload = SumeragiPacemakerResponse {
-        backoff_ms: m.sumeragi_pacemaker_backoff_ms.get(),
-        rtt_floor_ms: m.sumeragi_pacemaker_rtt_floor_ms.get(),
-        jitter_ms: m.sumeragi_pacemaker_jitter_ms.get(),
-        backoff_multiplier: m.sumeragi_pacemaker_backoff_multiplier.get(),
-        rtt_floor_multiplier: m.sumeragi_pacemaker_rtt_floor_multiplier.get(),
-        max_backoff_ms: m.sumeragi_pacemaker_max_backoff_ms.get(),
-        jitter_frac_permille: m.sumeragi_pacemaker_jitter_frac_permille.get(),
-        round_elapsed_ms: m.sumeragi_pacemaker_round_elapsed_ms.get(),
-        view_timeout_target_ms: m.sumeragi_pacemaker_view_timeout_target_ms.get(),
-        view_timeout_remaining_ms: m.sumeragi_pacemaker_view_timeout_remaining_ms.get(),
-    };
-    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
-        Ok(fmt) => fmt,
-        Err(resp) => return Ok(resp),
-    };
-    Ok(crate::utils::respond_with_format(payload, format))
-}
 /// GET /v1/sumeragi/qc — authoritative PrepareQC lock and high-certificate references.
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sumeragi_qc(accept: Option<axum::http::HeaderValue>) -> Result<Response> {
@@ -6994,16 +6920,8 @@ mod sccp_first_release_api_tests {
             message_id: fixture.bundle.commitment.message_id,
         };
         let pending = iroha_data_model::bridge::SccpOutboundPendingMessageRecordV1 {
-            destination_binding_hash: fixture
-                .bundle
-                .commitment
-                .context
-                .destination_binding_hash,
-            route_configuration_hash: fixture
-                .bundle
-                .commitment
-                .context
-                .route_configuration_hash,
+            destination_binding_hash: fixture.bundle.commitment.context.destination_binding_hash,
+            route_configuration_hash: fixture.bundle.commitment.context.route_configuration_hash,
             payload_hash: fixture.bundle.commitment.payload_hash,
             payload_bytes,
             recorded_at_height: 2,
@@ -8005,6 +7923,7 @@ mod sccp_first_release_api_tests {
             &authority,
             creation_time_ms,
             &bridge_proof,
+            None,
             &payload_b64,
             &signature_b64,
             "race test",
@@ -8018,6 +7937,52 @@ mod sccp_first_release_api_tests {
         transaction
             .verify_signature()
             .expect("exact generic signature remains valid");
+
+        let replay_witness =
+            iroha_data_model::bridge::SccpSparseMerkleWitnessV1::empty_shard();
+        let mut unexpected_witness_builder = TransactionBuilder::new(
+            *state.network_id_ref(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
+        unexpected_witness_builder
+            .set_creation_time(Duration::from_millis(creation_time_ms));
+        let unexpected_witness_builder = unexpected_witness_builder.with_instructions([
+            SubmitBridgeProof::new(bridge_proof.clone())
+                .with_replay_witness(replay_witness.clone()),
+        ]);
+        let unexpected_witness_payload = unexpected_witness_builder.payload();
+        let unexpected_witness_payload_bytes = unexpected_witness_builder.encode_payload();
+        let error = exact_sccp_transaction_builder(
+            state.network_id_ref(),
+            &authority,
+            creation_time_ms,
+            &bridge_proof,
+            None,
+            unexpected_witness_payload,
+            &unexpected_witness_payload_bytes,
+        )
+        .expect_err("generic destination submission must reject a replay witness");
+        assert!(conversion_message(&error).is_some_and(|message| {
+            message.contains("different bridge proof or replay witness")
+        }));
+
+        let mut different_witness = replay_witness.clone();
+        different_witness.expected_shard_root = [0xA5; 32];
+        let error = exact_sccp_transaction_builder(
+            state.network_id_ref(),
+            &authority,
+            creation_time_ms,
+            &bridge_proof,
+            Some(&different_witness),
+            unexpected_witness_payload,
+            &unexpected_witness_payload_bytes,
+        )
+        .expect_err("native submission must reject a substituted replay witness");
+        assert!(conversion_message(&error).is_some_and(|message| {
+            message.contains("different bridge proof or replay witness")
+        }));
+
         let mut non_default_ttl = builder;
         non_default_ttl.set_ttl(Duration::from_secs(1));
         let non_default_payload_b64 =
@@ -8034,6 +7999,7 @@ mod sccp_first_release_api_tests {
             &authority,
             creation_time_ms,
             &bridge_proof,
+            None,
             &non_default_payload_b64,
             &non_default_signature_b64,
             "TTL mutation test",
@@ -8158,6 +8124,7 @@ mod sccp_first_release_api_tests {
             signature_b64: None,
             transaction_payload_b64: None,
             native_proof_b64: "AA==".to_owned(),
+            replay_witness_b64: "AA==".to_owned(),
             creation_time_ms: None,
         };
         let encoded = norito::json::to_json(&request).expect("encode native submit request");
@@ -8183,10 +8150,43 @@ mod sccp_first_release_api_tests {
             .as_object()
             .expect("native request object")
             .clone();
+        assert!(missing.remove("replay_witness_b64").is_some());
+        assert!(
+            norito::json::from_value::<BridgeMessageSubmitDto>(Value::Object(missing)).is_err()
+        );
+        let mut missing = norito::json::from_str::<Value>(&encoded)
+            .expect("native request JSON value")
+            .as_object()
+            .expect("native request object")
+            .clone();
         assert!(missing.remove("fee_payment").is_some());
         assert!(
             norito::json::from_value::<BridgeMessageSubmitDto>(Value::Object(missing)).is_err()
         );
+        use base64::Engine as _;
+        for (mut witness, label) in [
+            (
+                iroha_data_model::bridge::SccpSparseMerkleWitnessV1::empty_shard(),
+                "zero expected root",
+            ),
+            (
+                iroha_data_model::bridge::SccpSparseMerkleWitnessV1::empty_shard(),
+                "membership witness",
+            ),
+        ] {
+            if label == "zero expected root" {
+                witness.expected_shard_root = [0; 32];
+            } else {
+                witness.prior_record_digest = [0xA5; 32];
+            }
+            let encoded = base64::engine::general_purpose::STANDARD.encode(
+                norito::to_bytes(&witness).expect("encode invalid replay witness fixture"),
+            );
+            assert!(
+                decode_sccp_replay_witness_b64(&encoded).is_err(),
+                "{label} must reject"
+            );
+        }
     }
     routing_test! { sync sccp_finality_encoding_is_the_exact_v2_bridge_proof
         let fixture = iroha_sccp::sccp_exact_outbound_test_fixture_v1();
@@ -10128,7 +10128,9 @@ fn bind_permanent_asset_alias_for_test(
     .execute(authority, &mut tx)
     .expect("bind permanent asset alias");
     tx.apply();
-    block.commit().expect("commit permanent asset alias");
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit permanent asset alias");
 }
 #[cfg(test)]
 fn insert_account_alias_binding_for_test(
@@ -10244,7 +10246,9 @@ fn bind_account_alias_for_test(
     .execute(account_id, &mut tx)
     .expect("repair account alias binding from active SNS lease");
     tx.apply();
-    block.commit().expect("commit account alias for test");
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit account alias for test");
     let state_view = state.view();
     assert_eq!(
         iroha_core::sns::active_account_alias_owner(state_view.world(), &catalog, &label, 0,)
@@ -10348,7 +10352,7 @@ fn grant_account_alias_resolve_for_test(
         .expect("grant account-alias resolve permission");
     tx.apply();
     block
-        .commit()
+        .commit_world_overlay_for_testing()
         .expect("commit account-alias resolve permission");
 }
 #[cfg(all(test, feature = "app_api"))]
@@ -10432,7 +10436,9 @@ mod zk_roots_selector_tests {
                 .insert(definition_id.clone(), zk_state);
         }
         tx.apply();
-        block.commit().expect("commit zk asset frontier for test");
+        block
+            .commit_empty_block_for_testing()
+            .expect("commit zk asset frontier for test");
         root
     }
     fn seed_zk_frontier_checkpoints_for_test(
@@ -10460,7 +10466,7 @@ mod zk_roots_selector_tests {
         }
         tx.apply();
         block
-            .commit()
+            .commit_empty_block_for_testing()
             .expect("commit frontier checkpoints for test");
     }
     fn assert_query_conversion_contains(err: Error, expected: &str) {
@@ -17377,6 +17383,55 @@ fn decode_sccp_native_proof_b64(
         .map_err(|error| conversion_error(format!("invalid native SCCP proof: {error}")))?;
     Ok((proof, bytes))
 }
+fn decode_sccp_replay_witness_b64(
+    encoded: &str,
+) -> Result<iroha_data_model::bridge::SccpSparseMerkleWitnessV1> {
+    use base64::Engine as _;
+    let maximum =
+        iroha_data_model::bridge::SCCP_REPLAY_WITNESS_MAX_BASE64_BYTES_V1;
+    if encoded.is_empty() || encoded.len() > maximum {
+        return Err(conversion_error(format!(
+            "replay_witness_b64 length must be between 1 and {maximum} bytes"
+        )));
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(encoded.as_bytes())
+        .map_err(|error| conversion_error(format!("invalid replay_witness_b64: {error}")))?;
+    if bytes.len()
+        > iroha_data_model::bridge::SCCP_REPLAY_WITNESS_MAX_ENCODED_BYTES_V1
+        || base64::engine::general_purpose::STANDARD.encode(&bytes) != encoded
+    {
+        return Err(conversion_error(
+            "replay_witness_b64 must use canonical padded base64 within the protocol bound"
+                .to_owned(),
+        ));
+    }
+    let witness = norito::decode_from_bytes::<
+        iroha_data_model::bridge::SccpSparseMerkleWitnessV1,
+    >(&bytes)
+    .map_err(|error| {
+        conversion_error(format!(
+            "replay_witness_b64 must contain one canonical sparse replay witness: {error}"
+        ))
+    })?;
+    if norito::to_bytes(&witness).ok().as_deref() != Some(bytes.as_slice()) {
+        return Err(conversion_error(
+            "replay_witness_b64 must contain exactly one canonical sparse replay witness"
+                .to_owned(),
+        ));
+    }
+    witness.validate().map_err(|error| {
+        conversion_error(format!(
+            "replay_witness_b64 contains a non-canonical sparse replay witness: {error}"
+        ))
+    })?;
+    if witness.prior_record_digest != [0; 32] {
+        return Err(conversion_error(
+            "replay_witness_b64 must contain a replay non-membership witness".to_owned(),
+        ));
+    }
+    Ok(witness)
+}
 fn validate_sccp_creation_time(creation_time_ms: Option<u64>) -> Result<()> {
     if creation_time_ms == Some(0) {
         return Err(conversion_error(
@@ -17531,6 +17586,7 @@ fn exact_sccp_transaction_builder(
     authority: &AccountId,
     creation_time_ms: u64,
     expected_bridge_proof: &iroha_data_model::bridge::BridgeProof,
+    expected_replay_witness: Option<&iroha_data_model::bridge::SccpSparseMerkleWitnessV1>,
     payload: &iroha_data_model::transaction::signed::TransactionPayload,
     canonical_payload_bytes: &[u8],
 ) -> Result<TransactionBuilder> {
@@ -17578,9 +17634,12 @@ fn exact_sccp_transaction_builder(
                 "prepared SCCP transaction payload must contain only SubmitBridgeProof".to_owned(),
             )
         })?;
-    if submit.proof != *expected_bridge_proof {
+    if submit.proof != *expected_bridge_proof
+        || submit.replay_witness.as_ref() != expected_replay_witness
+    {
         return Err(conversion_error(
-            "prepared SCCP transaction payload contains a different bridge proof".to_owned(),
+            "prepared SCCP transaction payload contains a different bridge proof or replay witness"
+                .to_owned(),
         ));
     }
     // The fixed default TTL and absent nonce were validated above. Rehydrate every remaining
@@ -17603,6 +17662,7 @@ fn build_exact_sccp_signed_transaction(
     authority: &AccountId,
     creation_time_ms: u64,
     expected_bridge_proof: &iroha_data_model::bridge::BridgeProof,
+    expected_replay_witness: Option<&iroha_data_model::bridge::SccpSparseMerkleWitnessV1>,
     transaction_payload_b64: &str,
     signature_b64: &str,
     context: &str,
@@ -17613,6 +17673,7 @@ fn build_exact_sccp_signed_transaction(
         authority,
         creation_time_ms,
         expected_bridge_proof,
+        expected_replay_witness,
         &payload,
         &payload_bytes,
     )?;
@@ -18017,6 +18078,7 @@ fn prepare_bridge_proof_submit(
             &authority,
             creation_time_ms,
             &bridge_proof,
+            None,
             transaction_payload_b64
                 .as_deref()
                 .expect("validated direct SCCP transaction payload"),
@@ -18173,6 +18235,7 @@ fn prepare_bridge_message_submit(
         signature_b64,
         transaction_payload_b64,
         native_proof_b64,
+        replay_witness_b64,
         creation_time_ms,
     } = req;
     validate_app_api_fee_payment(&fee_payment, false)?;
@@ -18184,6 +18247,7 @@ fn prepare_bridge_message_submit(
         creation_time_ms,
     )?;
     let (native_proof, native_proof_bytes) = decode_sccp_native_proof_b64(&native_proof_b64)?;
+    let replay_witness = decode_sccp_replay_witness_b64(&replay_witness_b64)?;
     validate_sccp_taira_transfer_recipient(&native_proof.payload)?;
     let source_height = native_proof.source.source_finality.height;
     let lane = native_proof.source.lane;
@@ -18250,6 +18314,7 @@ fn prepare_bridge_message_submit(
             &authority,
             creation_time_ms,
             &bridge_proof,
+            Some(&replay_witness),
             transaction_payload_b64
                 .as_deref()
                 .expect("validated direct SCCP transaction payload"),
@@ -18296,8 +18361,9 @@ fn prepare_bridge_message_submit(
         }
     } else {
         let creation_time_ms = creation_time_ms.unwrap_or_else(current_time_millis);
-        let instruction: dm::InstructionBox =
-            dm::SubmitBridgeProof::new(bridge_proof.clone()).into();
+        let instruction: dm::InstructionBox = dm::SubmitBridgeProof::new(bridge_proof.clone())
+            .with_replay_witness(replay_witness)
+            .into();
         let mut builder = dm::TransactionBuilder::new(
             *state.network_id_ref(),
             authority.clone().into(),
@@ -23933,7 +23999,9 @@ mod multisig_selector_tests {
             .expect("bind contract alias");
         }
         stx.apply();
-        block.commit().expect("commit block");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit block");
     }
     fn expect_not_found(err: Error) {
         match err {
@@ -30100,6 +30168,8 @@ pub struct BridgeMessageSubmitDto {
     pub transaction_payload_b64: Option<String>,
     /// Base64-encoded canonical Norito native inbound SCCP proof.
     pub native_proof_b64: String,
+    /// Base64-encoded canonical Norito sparse replay non-membership witness.
+    pub replay_witness_b64: String,
     /// Optional fixed transaction creation timestamp used to keep detached-sign flows deterministic.
     #[norito(default)]
     pub creation_time_ms: Option<u64>,
@@ -30114,6 +30184,7 @@ struct BridgeMessageSubmitDtoWire {
     #[norito(default)]
     transaction_payload_b64: Option<String>,
     native_proof_b64: String,
+    replay_witness_b64: String,
     #[norito(default)]
     creation_time_ms: Option<u64>,
 }
@@ -30125,6 +30196,7 @@ impl From<BridgeMessageSubmitDtoWire> for BridgeMessageSubmitDto {
             signature_b64,
             transaction_payload_b64,
             native_proof_b64,
+            replay_witness_b64,
             creation_time_ms,
         } = wire;
         Self {
@@ -30133,6 +30205,7 @@ impl From<BridgeMessageSubmitDtoWire> for BridgeMessageSubmitDto {
             signature_b64,
             transaction_payload_b64,
             native_proof_b64,
+            replay_witness_b64,
             creation_time_ms,
         }
     }
@@ -30149,6 +30222,7 @@ impl norito::json::JsonDeserialize for BridgeMessageSubmitDto {
                 "signature_b64",
                 "transaction_payload_b64",
                 "native_proof_b64",
+                "replay_witness_b64",
                 "creation_time_ms",
             ],
         )?;
@@ -30163,6 +30237,7 @@ impl norito::json::JsonDeserialize for BridgeMessageSubmitDto {
                 "signature_b64",
                 "transaction_payload_b64",
                 "native_proof_b64",
+                "replay_witness_b64",
                 "creation_time_ms",
             ],
         )?;
@@ -32278,7 +32353,9 @@ mod soradns_tests {
             *world.soradns_directory_latest_mut_for_testing().get_mut() = Some(record.root_hash);
         }
         tx.apply();
-        block.commit().expect("commit block");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit block");
         let view = state.view();
         assert_eq!(
             *view.world().soradns_directory_latest(),
@@ -46913,6 +46990,7 @@ mod validation_fee_torii_ingress_tests {
                             nay: 1,
                             abstain: 0,
                         },
+                        2,
                         166,
                     )
                     .expect("finalize deterministic aggregate ballot");
@@ -47198,7 +47276,9 @@ mod validation_fee_torii_ingress_tests {
             .get_mut()
             .set_parameter(Parameter::Custom(custom_registry));
         stx.apply();
-        block.commit().expect("commit validation-fee policy");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit validation-fee policy");
     }
     fn metadata_for_policy(
         policy: &ValidationFeePolicyV1,
@@ -64936,7 +65016,7 @@ routing_test! { async public_lane_handlers_hide_future_created_autoscale_stale_r
         );
         stx.apply();
         block
-            .commit()
+            .commit_world_overlay_for_testing()
             .expect("commit stale future-created lane fixture");
     }
     let state = Arc::new(state);
@@ -69463,9 +69543,6 @@ pub async fn handle_status(
         &nexus_routing_policy,
     ));
     status.offline = offline;
-    if let Some(handle) = telemetry.telemetry() {
-        status.sorafs_micropayments = handle.sorafs_micropayment_samples();
-    }
     iroha_logger::debug!(
         blocks = status.blocks,
         blocks_non_empty = status.blocks_non_empty,

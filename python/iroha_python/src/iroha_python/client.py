@@ -11083,52 +11083,6 @@ class SumeragiParamsSnapshot:
 
 
 @dataclass(frozen=True)
-class SumeragiPacemakerSnapshot:
-    """Pacemaker runtime metrics from `/v1/sumeragi/pacemaker`."""
-
-    backoff_ms: int
-    rtt_floor_ms: int
-    jitter_ms: int
-    backoff_multiplier: int
-    rtt_floor_multiplier: int
-    max_backoff_ms: int
-    jitter_frac_permille: int
-    round_elapsed_ms: int
-    view_timeout_target_ms: int
-    view_timeout_remaining_ms: int
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "SumeragiPacemakerSnapshot":
-        if not isinstance(payload, Mapping):
-            raise TypeError("pacemaker payload must be an object")
-        try:
-            backoff_ms = int(payload.get("backoff_ms", 0))
-            rtt_floor_ms = int(payload.get("rtt_floor_ms", 0))
-            jitter_ms = int(payload.get("jitter_ms", 0))
-            backoff_multiplier = int(payload.get("backoff_multiplier", 0))
-            rtt_floor_multiplier = int(payload.get("rtt_floor_multiplier", 0))
-            max_backoff_ms = int(payload.get("max_backoff_ms", 0))
-            jitter_frac_permille = int(payload.get("jitter_frac_permille", 0))
-            round_elapsed_ms = int(payload.get("round_elapsed_ms", 0))
-            view_timeout_target_ms = int(payload.get("view_timeout_target_ms", 0))
-            view_timeout_remaining_ms = int(payload.get("view_timeout_remaining_ms", 0))
-        except (TypeError, ValueError) as exc:
-            raise TypeError("pacemaker metrics must be numeric") from exc
-        return cls(
-            backoff_ms=backoff_ms,
-            rtt_floor_ms=rtt_floor_ms,
-            jitter_ms=jitter_ms,
-            backoff_multiplier=backoff_multiplier,
-            rtt_floor_multiplier=rtt_floor_multiplier,
-            max_backoff_ms=max_backoff_ms,
-            jitter_frac_permille=jitter_frac_permille,
-            round_elapsed_ms=round_elapsed_ms,
-            view_timeout_target_ms=view_timeout_target_ms,
-            view_timeout_remaining_ms=view_timeout_remaining_ms,
-        )
-
-
-@dataclass(frozen=True)
 class SumeragiLeaderSnapshot:
     """Leader index snapshot from `/v1/sumeragi/leader`."""
 
@@ -13014,7 +12968,6 @@ __all__ = [
     "SumeragiNativeAmxLeg",
     "SumeragiNativeAmxReceipt",
     "SumeragiParamsSnapshot",
-    "SumeragiPacemakerSnapshot",
     "SumeragiLeaderSnapshot",
     "SumeragiV2QcResponse",
     "SumeragiEvidenceCount",
@@ -21965,19 +21918,6 @@ class ToriiClient(
             parser=parse_sumeragi_json_object,
         )
         return SumeragiDiagnosticsSnapshot.from_payload(payload)
-    def get_sumeragi_pacemaker(self) -> Optional[Any]:
-        """Fetch pacemaker configuration (`GET /v1/sumeragi/pacemaker`)."""
-
-        return self.request_json("GET", "/v1/sumeragi/pacemaker", expected_status=(200,))
-
-    def get_sumeragi_pacemaker_typed(self) -> SumeragiPacemakerSnapshot:
-        """Typed wrapper for :meth:`get_sumeragi_pacemaker`."""
-
-        payload = self.request_json("GET", "/v1/sumeragi/pacemaker", expected_status=(200,))
-        if not isinstance(payload, Mapping):
-            raise TypeError("pacemaker response must be a JSON object")
-        return SumeragiPacemakerSnapshot.from_payload(payload)
-
     def get_sumeragi_qc(self) -> Optional[Any]:
         """Fetch the operator-authenticated v2 PrepareQC references."""
 

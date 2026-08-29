@@ -1,0 +1,5 @@
+error: ffi_impl_opaque does not accept arguments
+ --> tests/ui_fail/ffi_impl_opaque_arguments.rs:5:33
+  |
+5 | #[iroha_derive::ffi_impl_opaque(unexpected)]
+  |                                 ^^^^^^^^^^

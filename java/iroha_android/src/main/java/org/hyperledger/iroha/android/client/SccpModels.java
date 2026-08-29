@@ -262,6 +262,7 @@ public final class SccpModels {
     public final String messageBundlePath;
     public final String proofRequestPath;
     public final String recentMessagesPath;
+    public final String soraOutboundMaterialPath;
     public final RegistryLimits registryLimits;
     public final ResourceLimits resourceLimits;
     public final String proofSubmitPath;
@@ -274,6 +275,7 @@ public final class SccpModels {
         final String messageBundlePath,
         final String proofRequestPath,
         final String recentMessagesPath,
+        final String soraOutboundMaterialPath,
         final RegistryLimits registryLimits,
         final ResourceLimits resourceLimits,
         final String proofSubmitPath,
@@ -284,6 +286,7 @@ public final class SccpModels {
       this.messageBundlePath = messageBundlePath;
       this.proofRequestPath = proofRequestPath;
       this.recentMessagesPath = recentMessagesPath;
+      this.soraOutboundMaterialPath = soraOutboundMaterialPath;
       this.registryLimits = registryLimits;
       this.resourceLimits = resourceLimits;
       this.proofSubmitPath = proofSubmitPath;

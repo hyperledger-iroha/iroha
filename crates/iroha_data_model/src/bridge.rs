@@ -208,7 +208,7 @@ pub enum BridgeNativeProofBackendV1 {
     #[norito(rename = "tron_dpos_v1")]
     TronDpos,
     /// TON proof using authenticated masterchain finality and account/message inclusion.
-    #[codec(index = 4)]
+    #[codec(index = 3)]
     #[norito(rename = "ton_masterchain_v1")]
     TonMasterchain,
 }
@@ -328,7 +328,7 @@ pub enum BridgeSccpDestinationProofBackendV1 {
     #[norito(rename = "tron_groth16_bn254_v1")]
     TronGroth16Bn254,
     /// TON Groth16 verifier over BLS12-381 wrapping the governed Taira statement.
-    #[codec(index = 3)]
+    #[codec(index = 2)]
     #[norito(rename = "ton_groth16_bls12381_v1")]
     TonGroth16Bls12381,
 }

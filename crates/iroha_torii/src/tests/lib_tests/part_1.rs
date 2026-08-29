@@ -1575,7 +1575,9 @@ fn bind_asset_alias_for_test(
     .execute(authority, &mut tx)
     .expect("bind asset alias for test");
     tx.apply();
-    block.commit().expect("commit asset alias for test");
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit asset alias for test");
 }
 fn sample_iso_bridge_config(alias: &str, account_id: &AccountId) -> actual::IsoBridge {
     let signer_keypair =

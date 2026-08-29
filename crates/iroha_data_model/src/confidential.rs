@@ -9,12 +9,18 @@ use crate::{
     DeriveFastJson as DeriveFast, DeriveJsonDeserialize as DeriveJsonDe,
     DeriveJsonSerialize as DeriveJsonSer, json_helpers::fixed_bytes,
 };
-use core::fmt::{self, Display, Formatter};
+use core::{
+    fmt::{self, Display, Formatter},
+    ops::{Index, IndexMut},
+};
 use iroha_schema::IntoSchema;
 use norito::{
     codec::{Decode, Encode},
     core::{self as norito_core, DecodeFromSlice, Error as NoritoError},
 };
+
+/// Permanent point-query spentness checkpoints for confidential assets.
+pub mod spentness;
 /// Exact magic prefix for the first-release confidential memo wire.
 pub const CONFIDENTIAL_MEMO_WIRE_MAGIC_V1: [u8; 8] = *b"IRHCM1\xA5\x5A";
 /// Exact number of padded recipient slots carried by every confidential memo.
@@ -259,6 +265,158 @@ impl Default for ConfidentialMemoRecipientSlotV1 {
     }
 }
 
+/// The exact eight ordered recipient slots carried by a V1 confidential memo.
+///
+/// JSON represents this fixed-cardinality value as the closed object
+/// `slot_0` through `slot_7`. A named object is intentional: Norito does not
+/// treat a variable-length JSON sequence as a candidate representation, so
+/// seven-slot, nine-slot, and unknown-field inputs all fail decoding.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct ConfidentialMemoRecipientSlotsV1 {
+    slot_0: ConfidentialMemoRecipientSlotV1,
+    slot_1: ConfidentialMemoRecipientSlotV1,
+    slot_2: ConfidentialMemoRecipientSlotV1,
+    slot_3: ConfidentialMemoRecipientSlotV1,
+    slot_4: ConfidentialMemoRecipientSlotV1,
+    slot_5: ConfidentialMemoRecipientSlotV1,
+    slot_6: ConfidentialMemoRecipientSlotV1,
+    slot_7: ConfidentialMemoRecipientSlotV1,
+}
+
+impl ConfidentialMemoRecipientSlotsV1 {
+    /// Return the fixed V1 cardinality.
+    #[must_use]
+    pub const fn len(&self) -> usize {
+        CONFIDENTIAL_MEMO_RECIPIENT_SLOTS_V1
+    }
+
+    /// Return `false`; a V1 memo always carries all eight slots.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        false
+    }
+
+    /// Borrow the slot at `index`, if it is one of the exact eight positions.
+    #[must_use]
+    pub const fn get(&self, index: usize) -> Option<&ConfidentialMemoRecipientSlotV1> {
+        match index {
+            0 => Some(&self.slot_0),
+            1 => Some(&self.slot_1),
+            2 => Some(&self.slot_2),
+            3 => Some(&self.slot_3),
+            4 => Some(&self.slot_4),
+            5 => Some(&self.slot_5),
+            6 => Some(&self.slot_6),
+            7 => Some(&self.slot_7),
+            _ => None,
+        }
+    }
+
+    /// Iterate over the slots in canonical wire order.
+    pub fn iter(
+        &self,
+    ) -> impl ExactSizeIterator<Item = &ConfidentialMemoRecipientSlotV1> + DoubleEndedIterator {
+        [
+            &self.slot_0,
+            &self.slot_1,
+            &self.slot_2,
+            &self.slot_3,
+            &self.slot_4,
+            &self.slot_5,
+            &self.slot_6,
+            &self.slot_7,
+        ]
+        .into_iter()
+    }
+
+    /// Consume the wrapper and recover the exact canonical slot array.
+    #[must_use]
+    pub fn into_array(
+        self,
+    ) -> [ConfidentialMemoRecipientSlotV1; CONFIDENTIAL_MEMO_RECIPIENT_SLOTS_V1] {
+        [
+            self.slot_0,
+            self.slot_1,
+            self.slot_2,
+            self.slot_3,
+            self.slot_4,
+            self.slot_5,
+            self.slot_6,
+            self.slot_7,
+        ]
+    }
+
+    fn get_mut(&mut self, index: usize) -> Option<&mut ConfidentialMemoRecipientSlotV1> {
+        match index {
+            0 => Some(&mut self.slot_0),
+            1 => Some(&mut self.slot_1),
+            2 => Some(&mut self.slot_2),
+            3 => Some(&mut self.slot_3),
+            4 => Some(&mut self.slot_4),
+            5 => Some(&mut self.slot_5),
+            6 => Some(&mut self.slot_6),
+            7 => Some(&mut self.slot_7),
+            _ => None,
+        }
+    }
+}
+
+impl From<[ConfidentialMemoRecipientSlotV1; CONFIDENTIAL_MEMO_RECIPIENT_SLOTS_V1]>
+    for ConfidentialMemoRecipientSlotsV1
+{
+    fn from(
+        slots: [ConfidentialMemoRecipientSlotV1; CONFIDENTIAL_MEMO_RECIPIENT_SLOTS_V1],
+    ) -> Self {
+        let [
+            slot_0,
+            slot_1,
+            slot_2,
+            slot_3,
+            slot_4,
+            slot_5,
+            slot_6,
+            slot_7,
+        ] = slots;
+        Self {
+            slot_0,
+            slot_1,
+            slot_2,
+            slot_3,
+            slot_4,
+            slot_5,
+            slot_6,
+            slot_7,
+        }
+    }
+}
+
+impl Index<usize> for ConfidentialMemoRecipientSlotsV1 {
+    type Output = ConfidentialMemoRecipientSlotV1;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        self.get(index)
+            .unwrap_or_else(|| panic!("confidential memo slot index {index} is outside 0..8"))
+    }
+}
+
+impl IndexMut<usize> for ConfidentialMemoRecipientSlotsV1 {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        self.get_mut(index)
+            .unwrap_or_else(|| panic!("confidential memo slot index {index} is outside 0..8"))
+    }
+}
+
+impl Default for ConfidentialMemoRecipientSlotsV1 {
+    fn default() -> Self {
+        core::array::from_fn(|_| ConfidentialMemoRecipientSlotV1::default()).into()
+    }
+}
+
 /// Exact eight-slot confidential memo envelope.
 ///
 /// The independent body key is wrapped into all eight slots. Unused slots are
@@ -271,7 +429,7 @@ impl Default for ConfidentialMemoRecipientSlotV1 {
 )]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct ConfidentialMemoEnvelopeV1 {
-    slots: [ConfidentialMemoRecipientSlotV1; CONFIDENTIAL_MEMO_RECIPIENT_SLOTS_V1],
+    slots: ConfidentialMemoRecipientSlotsV1,
     /// XChaCha20-Poly1305 nonce for the encrypted memo body.
     #[cfg_attr(feature = "json", norito(json = "fixed_bytes"))]
     payload_nonce: [u8; CONFIDENTIAL_MEMO_XCHACHA_NONCE_BYTES_V1],
@@ -348,12 +506,12 @@ impl ConfidentialMemoEnvelopeV1 {
     /// body that cannot contain exactly one XChaCha20-Poly1305 tag or exceeds
     /// the consensus allocation cap.
     pub fn new(
-        slots: [ConfidentialMemoRecipientSlotV1; CONFIDENTIAL_MEMO_RECIPIENT_SLOTS_V1],
+        slots: impl Into<ConfidentialMemoRecipientSlotsV1>,
         payload_nonce: [u8; CONFIDENTIAL_MEMO_XCHACHA_NONCE_BYTES_V1],
         ciphertext: Vec<u8>,
     ) -> Result<Self, NoritoError> {
         let envelope = Self {
-            slots,
+            slots: slots.into(),
             payload_nonce,
             ciphertext,
         };
@@ -363,9 +521,7 @@ impl ConfidentialMemoEnvelopeV1 {
 
     /// Borrow all eight real-or-padding recipient slots.
     #[must_use]
-    pub const fn slots(
-        &self,
-    ) -> &[ConfidentialMemoRecipientSlotV1; CONFIDENTIAL_MEMO_RECIPIENT_SLOTS_V1] {
+    pub const fn slots(&self) -> &ConfidentialMemoRecipientSlotsV1 {
         &self.slots
     }
 
@@ -401,7 +557,7 @@ impl ConfidentialMemoEnvelopeV1 {
                     "invalid confidential memo recipient slot {index}: {error}"
                 ))
             })?;
-            if self.slots[..index].contains(slot) {
+            if self.slots.iter().take(index).any(|earlier| earlier == slot) {
                 return Err(NoritoError::Message(format!(
                     "confidential memo recipient slot {index} duplicates an earlier slot"
                 )));
@@ -434,7 +590,7 @@ impl ConfidentialMemoEnvelopeV1 {
         self.validate()?;
         let mut bytes = Vec::with_capacity(self.encoded_len());
         bytes.extend_from_slice(&CONFIDENTIAL_MEMO_WIRE_MAGIC_V1);
-        for slot in &self.slots {
+        for slot in self.slots.iter() {
             bytes.push(slot.suite.wire_tag());
             bytes.extend_from_slice(&slot.encapsulation);
             bytes.extend_from_slice(&slot.wrap_nonce);
@@ -530,7 +686,7 @@ impl ConfidentialMemoEnvelopeV1 {
             .map_err(|error| ConfidentialMemoOperationErrorV1::WireShape(error.to_string()))?;
         Ok(
             iroha_crypto::confidential_memo::ConfidentialMemoCiphertextV1 {
-                slots: self.slots.clone().map(|slot| {
+                slots: self.slots.clone().into_array().map(|slot| {
                     iroha_crypto::confidential_memo::ConfidentialMemoCiphertextSlotV1 {
                         suite: slot.suite.into(),
                         encapsulation: slot.encapsulation,
@@ -564,7 +720,7 @@ impl ConfidentialMemoEnvelopeV1 {
 impl Default for ConfidentialMemoEnvelopeV1 {
     fn default() -> Self {
         Self {
-            slots: core::array::from_fn(|_| ConfidentialMemoRecipientSlotV1::default()),
+            slots: ConfidentialMemoRecipientSlotsV1::default(),
             payload_nonce: [0; CONFIDENTIAL_MEMO_XCHACHA_NONCE_BYTES_V1],
             ciphertext: Vec::new(),
         }
@@ -956,9 +1112,16 @@ impl PoseidonParams {
 pub mod prelude {
     #[cfg(feature = "pqc")]
     pub use super::ConfidentialMemoOperationErrorV1;
+    pub use super::spentness::{
+        ConfidentialSpentnessCheckpointDigestV1, ConfidentialSpentnessCheckpointV1,
+        ConfidentialSpentnessErrorV1, ConfidentialSpentnessPathV1, ConfidentialSpentnessProofV1,
+        ConfidentialSpentnessRootV1, ConfidentialSpentnessStateKindV1,
+        ConfidentialSpentnessStateV1,
+    };
     pub use super::{
-        ConfidentialMemoEnvelopeV1, ConfidentialMemoRecipientSlotV1, ConfidentialMemoSuiteV1,
-        ConfidentialParamsId, ConfidentialStatus, PedersenParams, PoseidonParams,
+        ConfidentialMemoEnvelopeV1, ConfidentialMemoRecipientSlotV1,
+        ConfidentialMemoRecipientSlotsV1, ConfidentialMemoSuiteV1, ConfidentialParamsId,
+        ConfidentialStatus, PedersenParams, PoseidonParams,
     };
 }
 #[cfg(test)]

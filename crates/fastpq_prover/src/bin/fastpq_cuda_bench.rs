@@ -9,15 +9,13 @@ use clap::Parser;
 use fastpq_isi::find_by_name;
 #[cfg(feature = "fastpq-gpu")]
 use fastpq_isi::poseidon::RATE as POSEIDON_RATE;
-#[cfg(feature = "fastpq-gpu")]
-use fastpq_prover::trace::{
-    PoseidonColumnBatch, hash_columns_cpu_batch_inputs, hash_columns_gpu_batch,
-};
 use fastpq_prover::{
     Bn254PoseidonBatchSlice, CudaBackendError, ExecutionMode, Planner,
     clear_execution_mode_observer, fastpq_bn254_fft, fastpq_bn254_lde, set_execution_mode_observer,
     try_hash_bn254_poseidon_word_batches,
 };
+#[cfg(feature = "fastpq-gpu")]
+use fastpq_prover::{PoseidonColumnBatch, hash_columns_cpu_batch_inputs, hash_columns_gpu_batch};
 use halo2curves::{bn256::Fr as Bn254Fr, ff::PrimeField};
 use iroha_zkp_halo2::{Bn254Scalar, IpaScalar};
 use norito::{
@@ -163,7 +161,7 @@ struct BenchMetadata {
 #[derive(Debug, Clone, JsonSerialize)]
 struct RowUsageSnapshot {
     source: String,
-    batches: Value,
+    fastpq_batches: Value,
 }
 #[derive(Debug, Clone, JsonSerialize)]
 struct BenchmarksBlock {
@@ -171,8 +169,7 @@ struct BenchmarksBlock {
     padded_rows: usize,
     iterations: usize,
     warmups: usize,
-    #[norito(skip_serializing_if = "Option::is_none")]
-    column_count: Option<usize>,
+    column_count: usize,
     execution_mode: String,
     gpu_backend: String,
     gpu_available: bool,
@@ -186,8 +183,7 @@ struct BenchmarksBlock {
 #[derive(Debug, Clone, JsonSerialize)]
 struct OperationEntry {
     operation: String,
-    #[norito(skip_serializing_if = "Option::is_none")]
-    columns: Option<usize>,
+    columns: usize,
     input_len: usize,
     output_len: usize,
     input_bytes: usize,
@@ -227,8 +223,7 @@ struct ReportMetadata {
 #[derive(Debug, Clone, JsonSerialize)]
 struct ReportOperation {
     operation: String,
-    #[norito(skip_serializing_if = "Option::is_none")]
-    columns: Option<usize>,
+    columns: usize,
     input_len: usize,
     output_len: usize,
     input_bytes: usize,
@@ -362,7 +357,7 @@ fn run() -> Result<(), String> {
             padded_rows: padded,
             iterations: config.iterations,
             warmups: config.warmups,
-            column_count: Some(config.column_count),
+            column_count: config.column_count,
             execution_mode: probe.resolved_mode.as_str().to_owned(),
             gpu_backend: probe.backend_label.clone(),
             gpu_available: probe.gpu_available,
@@ -927,7 +922,7 @@ fn operation_entry(
     let speedup_delta_ms = gpu.map(|summary| cpu.mean_ms() - summary.mean_ms());
     OperationEntry {
         operation: operation.to_owned(),
-        columns: Some(columns),
+        columns,
         input_len,
         output_len,
         input_bytes,
@@ -1345,13 +1340,85 @@ fn load_row_usage(path: &Path) -> Result<RowUsageSnapshot, String> {
         .unwrap_or_else(|| path.to_string_lossy().into_owned());
     parse_row_usage(&data, source).map_err(|err| format!("parse {}: {err}", display_path(path)))
 }
-fn parse_row_usage(data: &[u8], source: String) -> Result<RowUsageSnapshot, json::Error> {
-    let value: Value = json::from_slice(data)?;
+fn parse_row_usage(data: &[u8], source: String) -> Result<RowUsageSnapshot, String> {
+    const ROW_USAGE_FIELDS: [&str; 5] = [
+        "total_rows",
+        "transfer_rows",
+        "non_transfer_rows",
+        "meta_set_rows",
+        "transfer_ratio",
+    ];
+    let value: Value = json::from_slice(data).map_err(|err| err.to_string())?;
     let batches = value
-        .get("batches")
-        .cloned()
-        .unwrap_or_else(|| value.clone());
-    Ok(RowUsageSnapshot { source, batches })
+        .as_object()
+        .and_then(|object| object.get("fastpq_batches"))
+        .and_then(Value::as_array)
+        .filter(|batches| !batches.is_empty())
+        .ok_or_else(|| "fastpq_batches must be a non-empty array".to_owned())?;
+    for (index, batch) in batches.iter().enumerate() {
+        let usage = batch
+            .as_object()
+            .and_then(|object| object.get("row_usage"))
+            .and_then(Value::as_object)
+            .ok_or_else(|| format!("fastpq_batches[{index}] must contain a row_usage object"))?;
+        if usage.len() != ROW_USAGE_FIELDS.len()
+            || usage
+                .keys()
+                .any(|field| !ROW_USAGE_FIELDS.contains(&field.as_str()))
+        {
+            return Err(format!(
+                "fastpq_batches[{index}].row_usage must contain exactly the V1 fields"
+            ));
+        }
+        let count = |field: &str| {
+            usage
+                .get(field)
+                .and_then(Value::as_u64)
+                .and_then(|value| u32::try_from(value).ok())
+                .ok_or_else(|| {
+                    format!(
+                        "fastpq_batches[{index}].row_usage.{field} must be a V1-sized non-negative integer"
+                    )
+                })
+        };
+        let total = count("total_rows")?;
+        let transfer = count("transfer_rows")?;
+        let non_transfer = count("non_transfer_rows")?;
+        let meta_set = count("meta_set_rows")?;
+        if transfer.checked_add(non_transfer) != Some(total) {
+            return Err(format!(
+                "fastpq_batches[{index}].row_usage totals are inconsistent"
+            ));
+        }
+        if non_transfer != meta_set {
+            return Err(format!(
+                "fastpq_batches[{index}].row_usage.non_transfer_rows must equal meta_set_rows"
+            ));
+        }
+        let ratio = usage
+            .get("transfer_ratio")
+            .and_then(Value::as_f64)
+            .filter(|ratio| ratio.is_finite() && (0.0..=1.0).contains(ratio))
+            .ok_or_else(|| {
+                format!(
+                    "fastpq_batches[{index}].row_usage.transfer_ratio must be finite and between 0 and 1"
+                )
+            })?;
+        let expected_ratio = if total == 0 {
+            0.0
+        } else {
+            f64::from(transfer) / f64::from(total)
+        };
+        if (ratio - expected_ratio).abs() > 1.0e-9 {
+            return Err(format!(
+                "fastpq_batches[{index}].row_usage.transfer_ratio does not match the row counts"
+            ));
+        }
+    }
+    Ok(RowUsageSnapshot {
+        source,
+        fastpq_batches: Value::Array(batches.clone()),
+    })
 }
 fn detect_hostname() -> Option<String> {
     Command::new("hostname")
@@ -1716,7 +1783,7 @@ mod tests {
             padded_rows: padded_rows(config.rows),
             iterations: config.iterations,
             warmups: config.warmups,
-            column_count: Some(config.column_count),
+            column_count: config.column_count,
             execution_mode: probe.resolved_mode.as_str().to_owned(),
             gpu_backend: probe.backend_label,
             gpu_available: probe.gpu_available,
@@ -1739,16 +1806,27 @@ mod tests {
         );
     }
     #[test]
-    fn parse_row_usage_picks_batches_block_when_present() {
+    fn parse_row_usage_accepts_current_snapshot_schema() {
         let snapshot = parse_row_usage(
-            br#"{ "batches": [{ "id": 1 }] }"#,
+            br#"{
+                "fastpq_batches": [{
+                    "id": 1,
+                    "row_usage": {
+                        "total_rows": 8,
+                        "transfer_rows": 6,
+                        "non_transfer_rows": 2,
+                        "meta_set_rows": 2,
+                        "transfer_ratio": 0.75
+                    }
+                }]
+            }"#,
             "fastpq_cuda_bench_row_usage.json".to_owned(),
         )
         .expect("parse snapshot");
         assert_eq!(snapshot.source, "fastpq_cuda_bench_row_usage.json");
         assert_eq!(
             snapshot
-                .batches
+                .fastpq_batches
                 .get(0)
                 .and_then(Value::as_object)
                 .and_then(|map| map.get("id"))
@@ -1757,11 +1835,40 @@ mod tests {
         );
     }
     #[test]
+    fn parse_row_usage_rejects_non_snapshot_json() {
+        let error = parse_row_usage(
+            br#"{ "metadata": "not row usage" }"#,
+            "invalid.json".to_owned(),
+        )
+        .expect_err("unrelated JSON must not be accepted as release evidence");
+        assert_eq!(error, "fastpq_batches must be a non-empty array");
+    }
+    #[test]
+    fn parse_row_usage_rejects_retired_selector_fields() {
+        let error = parse_row_usage(
+            br#"{
+                "fastpq_batches": [{
+                    "row_usage": {
+                        "total_rows": 1,
+                        "transfer_rows": 1,
+                        "non_transfer_rows": 0,
+                        "meta_set_rows": 0,
+                        "transfer_ratio": 1.0,
+                        "mint_rows": 0
+                    }
+                }]
+            }"#,
+            "retired.json".to_owned(),
+        )
+        .expect_err("retired selector counts must not enter V1 evidence");
+        assert!(error.contains("exactly the V1 fields"));
+    }
+    #[test]
     fn load_row_usage_reports_source_filename() {
-        let path =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/lookup_grand_product.json");
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../scripts/fastpq/examples/row_usage_baseline.json");
         let snapshot = load_row_usage(&path).expect("load row usage fixture");
-        assert_eq!(snapshot.source, "lookup_grand_product.json");
+        assert_eq!(snapshot.source, "row_usage_baseline.json");
     }
     #[test]
     fn load_row_usage_parse_error_retains_full_path() {

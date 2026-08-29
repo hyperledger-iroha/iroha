@@ -700,7 +700,7 @@ pub enum SccpSemanticProofProfileV1 {
     SoraTairaFinalityInclusionGroth16Bls12381(SccpGroth16Bls12381SemanticCircuitV1),
 }
 impl SccpSemanticProofProfileV1 {
-    /// Return whether this profile uses the legacy BN254 destination proof.
+    /// Return whether this profile uses the EVM/TRON BN254 destination proof.
     #[must_use]
     pub const fn is_bn254(self) -> bool {
         matches!(self, Self::SoraTairaFinalityInclusionGroth16Bn254(_))
@@ -1326,7 +1326,7 @@ pub enum SccpDestinationDeploymentV1 {
     #[norito(rename = "tron")]
     Tron(SccpTronDestinationDeploymentV1),
     /// TON basechain Jetton route and BLS12-381 Groth16 verifier deployment.
-    #[codec(index = 3)]
+    #[codec(index = 2)]
     #[norito(rename = "ton")]
     Ton(SccpTonDestinationDeploymentV1),
 }
@@ -1359,14 +1359,6 @@ impl SccpDestinationDeploymentV1 {
             Self::Tron(deployment) => deployment.verifier_key_hash,
             Self::Ton(deployment) => deployment.verifier_key_hash,
         }
-    }
-    /// Return the governed verification-key commitment.
-    ///
-    /// This compatibility accessor predates the TON BLS12-381 backend. New
-    /// code should use [`Self::verifier_key_hash`], whose name is backend-neutral.
-    #[must_use]
-    pub const fn groth16_verifier_key_hash(&self) -> [u8; 32] {
-        self.verifier_key_hash()
     }
     /// Return the mandatory immutable outbound proof policy.
     #[must_use]
@@ -2327,7 +2319,7 @@ pub fn canonical_sccp_source_emitter_bytes_v1(emitter: &SccpSourceEmitterV1) -> 
             code_hash,
             route_config_hash,
         }) => {
-            out.push(3);
+            out.push(2);
             push_ton_registry_address(&mut out, *address);
             out.extend_from_slice(code_hash);
             out.extend_from_slice(route_config_hash);
@@ -3786,16 +3778,33 @@ mod tests {
             destination_lane_hash,
             hex32("d5f7a0caf114d9af169ecf0871fcc6683301ffda7276cbf3944e7a6a12056b72")
         );
+        let deployment = tron_deployment();
+        let route_hash = sccp_exact_tron_xor_route_config_hash_v1(
+            SccpNetworkV1::TronMainnet,
+            source_lane_hash,
+            destination_lane_hash,
+            &deployment,
+            7,
+        )
+        .expect("valid exact TRON route");
         assert_eq!(
+            route_hash,
+            hex32("95c70a2f7b0125ae8c2d765a537d8ff9f7b4a903a13a96488bf5b33d88aec29c")
+        );
+        let changed_cap = SccpTronDestinationDeploymentV1 {
+            max_wrapped_supply: deployment.max_wrapped_supply - 1,
+            ..deployment
+        };
+        assert_ne!(
+            route_hash,
             sccp_exact_tron_xor_route_config_hash_v1(
                 SccpNetworkV1::TronMainnet,
                 source_lane_hash,
                 destination_lane_hash,
-                &tron_deployment(),
+                &changed_cap,
                 7,
             )
-            .expect("valid exact TRON route"),
-            hex32("95c70a2f7b0125ae8c2d765a537d8ff9f7b4a903a13a96488bf5b33d88aec29c")
+            .expect("positive changed cap remains hashable")
         );
     }
     #[test]
@@ -3846,7 +3855,7 @@ mod tests {
             deployment.verifier_key_hash
         );
         assert_eq!(
-            destination.groth16_verifier_key_hash(),
+            destination.verifier_key_hash(),
             deployment.verifier_key_hash
         );
         assert_eq!(

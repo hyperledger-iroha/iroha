@@ -90,7 +90,7 @@ public final class SccpClientExactTests {
     final SccpNativeMessageSubmitRequest message =
         messageRequest(AUTHORITY, nativeArtifact);
     assert message.toJsonMap().keySet().equals(
-        Set.of("authority", "fee_payment", "native_proof_b64"));
+        Set.of("authority", "fee_payment", "native_proof_b64", "replay_witness_b64"));
     HttpClientTransport.preflightSccpBridgeSubmitJson(
         message.toJsonBytes(), "/v1/bridge/messages");
 
@@ -161,6 +161,7 @@ public final class SccpClientExactTests {
             "authority",
             "fee_payment",
             "native_proof_b64",
+            "replay_witness_b64",
             "signature_b64",
             "transaction_payload_b64",
             "creation_time_ms"));
@@ -298,6 +299,7 @@ public final class SccpClientExactTests {
     new SccpNativeMessageSubmitRequest(
         AUTHORITY,
         canonicalNativeArtifact(),
+        canonicalReplayWitnessArtifact(),
         expectedFeePayment,
         signature,
         transaction,
@@ -1673,6 +1675,9 @@ public final class SccpClientExactTests {
     value.put("message_bundle_path", "/v1/sccp/proofs/message/{message_id}");
     value.put("proof_request_path", "/v1/sccp/proof-requests/{message_id}");
     value.put("recent_messages_path", "/v1/sccp/messages/recent");
+    value.put(
+        "sora_outbound_material_path",
+        "/v1/sccp/routes/{source_profile}/{route_id}/{asset_key}/{revision}/sora-outbound-material");
     final Map<String, Object> registryLimits = map();
     registryLimits.put("max_governed_lanes", 16);
     registryLimits.put("max_live_governed_routes", 64);
@@ -2709,6 +2714,12 @@ public final class SccpClientExactTests {
             canonicalArtifactBytes(SccpSubmitEncoding.NATIVE_INBOUND_PROOF_SCHEMA_NAME, 0));
   }
 
+  private static String canonicalReplayWitnessArtifact() {
+    return Base64.getEncoder()
+        .encodeToString(
+            canonicalArtifactBytes(SccpSubmitEncoding.REPLAY_WITNESS_SCHEMA_NAME, 0));
+  }
+
   private static byte[] canonicalArtifactBytes(
       final String schemaName, final int padding) {
     final byte[] schema = SchemaHash.hash16(schemaName);
@@ -2938,6 +2949,7 @@ public final class SccpClientExactTests {
     return new SccpNativeMessageSubmitRequest(
         authority,
         nativeProofB64,
+        canonicalReplayWitnessArtifact(),
         BRIDGE_FEE_PAYMENT,
         signatureB64,
         transactionPayloadB64,

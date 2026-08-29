@@ -1083,6 +1083,11 @@ public enum CanonicalNorito {
             } else {
                 out.append(String(number))
             }
+        case .integer(let integer):
+            guard SccpUInt128.parse(integer) != nil else {
+                throw CanonicalNoritoError.invalidMetadata("invalid canonical UInt128 integer")
+            }
+            out.append(integer)
         case .string(let text):
             writeJsonString(text, into: &out)
         case .array(let items):

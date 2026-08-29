@@ -2527,37 +2527,6 @@ fn get_tools_follow_exact_catalog_operator_authorization() {
     }
 }
 #[test]
-fn telemetry_operator_get_tools_are_operator_only_when_feature_enabled() {
-    const TELEMETRY_GROUPS: &[CatalogProjectionGroup] = &[CatalogProjectionGroup {
-        routes: route_catalog::CATALOGED_ROUTES,
-        enabled_features: EnabledFeatures::new(&["telemetry"]),
-    }];
-    let mut cfg = iroha_config::parameters::actual::ToriiMcp::default();
-    cfg.profile = ToriiMcpProfile::Operator;
-    cfg.expose_operator_routes = true;
-    let mut tools = vec![iroha_sumeragi_pacemaker_tool()];
-    retain_catalog_mcp_tools(&mut tools, TELEMETRY_GROUPS);
-    assert_eq!(tools.len(), 1, "telemetry feature keeps the exact route");
-    apply_catalog_auth_schemas_to_tools(&mut tools, TELEMETRY_GROUPS);
-    validate_tool_registry(&tools, TELEMETRY_GROUPS).expect("valid operator registry");
-    for tool in &tools {
-        assert!(tool_requires_operator(tool), "{}", tool.name);
-        let mut restricted = cfg.clone();
-        restricted.profile = ToriiMcpProfile::ReadOnly;
-        assert!(
-            !is_tool_allowed_by_policy(&restricted, tool),
-            "{}",
-            tool.name
-        );
-        restricted.profile = ToriiMcpProfile::Writer;
-        assert!(
-            !is_tool_allowed_by_policy(&restricted, tool),
-            "{}",
-            tool.name
-        );
-    }
-}
-#[test]
 fn mcp_policy_keeps_operator_tools_operator_only() {
     let protected_update = sample_tool_at(
         "iroha.gov.protected_namespaces.update",

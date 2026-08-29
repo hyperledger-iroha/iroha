@@ -185,6 +185,28 @@ impl TestNetworkParliamentTlePartialReleaseSignerV1 {
 }
 
 impl TlePartialReleaseSignerV1 for TestNetworkParliamentTlePartialReleaseSignerV1 {
+    fn attest_partial_release_capability(
+        &self,
+        session: &ValidatedTleKeySessionV1,
+        expected_participant_index: u16,
+    ) -> Result<
+        super::TlePartialReleaseCapabilityAttestationV1,
+        super::TlePartialReleaseCapabilityErrorV1,
+    > {
+        if expected_participant_index != self.local_signer_index {
+            return Err(super::TlePartialReleaseCapabilityErrorV1::NotOwned);
+        }
+        let fixture = deterministic_fixture_v1(self.network_id, &self.ordered_roster)
+            .map_err(|_| super::TlePartialReleaseCapabilityErrorV1::Unavailable)?;
+        if fixture.session.public_state() != session.public_state() {
+            return Err(super::TlePartialReleaseCapabilityErrorV1::NotOwned);
+        }
+        super::TlePartialReleaseCapabilityAttestationV1::for_validated_session(
+            session,
+            expected_participant_index,
+        )
+    }
+
     fn sign_partial_release(
         &self,
         context: &AuthorizedTleReleaseContextV1,

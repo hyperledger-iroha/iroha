@@ -1159,7 +1159,7 @@ fn build_fixture_map_rejects_duplicate_names() {
 fn apply_fixture_action_rejects_unknown_action() {
     let caller = parse_account_literal(DEFAULT_CALLER).expect("caller");
     let mut host = KotoTestHost::new(
-        WsvHost::new_with_subject(MockWorldStateView::default(), caller, HashMap::new()),
+        WsvHost::new_with_subject(MockWorldStateView::default(), caller),
         None,
         HashMap::new(),
     );
@@ -1179,7 +1179,7 @@ fn apply_fixture_action_rejects_unknown_action() {
 fn apply_fixture_action_populates_state_and_public_inputs() {
     let caller = parse_account_literal(DEFAULT_CALLER).expect("caller");
     let mut host = KotoTestHost::new(
-        WsvHost::new_with_subject(MockWorldStateView::default(), caller, HashMap::new()),
+        WsvHost::new_with_subject(MockWorldStateView::default(), caller),
         None,
         HashMap::new(),
     );
@@ -1278,7 +1278,7 @@ fn build_host_for_fixture_applies_bound_caller() {
 fn apply_fixture_action_registers_actor_seed() {
     let caller = parse_account_literal(DEFAULT_CALLER).expect("caller");
     let mut host = KotoTestHost::new(
-        WsvHost::new_with_subject(MockWorldStateView::default(), caller, HashMap::new()),
+        WsvHost::new_with_subject(MockWorldStateView::default(), caller),
         None,
         HashMap::new(),
     );
@@ -1319,7 +1319,7 @@ fn fixture_entrypoint_grant_is_address_and_selector_scoped() {
     let caller = parse_account_literal(DEFAULT_CALLER).expect("caller");
     let actor = caller.clone();
     let mut host = KotoTestHost::new(
-        WsvHost::new_with_subject(MockWorldStateView::default(), caller, HashMap::new()),
+        WsvHost::new_with_subject(MockWorldStateView::default(), caller),
         None,
         HashMap::new(),
     );
@@ -1361,7 +1361,7 @@ fn fixture_entrypoint_grant_is_address_and_selector_scoped() {
 fn fixture_feature_actions_use_seiyaku_and_kotoage_names_only() {
     let caller = parse_account_literal(DEFAULT_CALLER).expect("caller");
     let mut host = KotoTestHost::new(
-        WsvHost::new_with_subject(MockWorldStateView::default(), caller, HashMap::new()),
+        WsvHost::new_with_subject(MockWorldStateView::default(), caller),
         None,
         HashMap::new(),
     );
@@ -1417,9 +1417,7 @@ fn fixture_contract_effect_grant_targets_only_the_immutable_contract_subject() {
     let mut host = KotoTestHost::new(
         WsvHost::new_with_subject(
             MockWorldStateView::default(),
-            caller.clone(),
-            HashMap::new(),
-        ),
+            caller.clone()),
         None,
         HashMap::new(),
     );
@@ -1466,9 +1464,7 @@ fn transfer_control_effects_require_exact_subject_asset_domain_and_dataspace_sco
     let mut host = KotoTestHost::new(
         WsvHost::new_with_subject(
             MockWorldStateView::default(),
-            controller.clone(),
-            HashMap::new(),
-        ),
+            controller.clone()),
         None,
         HashMap::new(),
     );
@@ -1712,9 +1708,7 @@ fn fixture_account_alias_registration_is_canonical_unique_and_resolvable() {
     let mut host = KotoTestHost::new(
         WsvHost::new_with_subject(
             MockWorldStateView::default(),
-            caller.clone(),
-            HashMap::new(),
-        ),
+            caller.clone()),
         None,
         HashMap::new(),
     );

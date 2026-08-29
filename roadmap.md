@@ -1,9 +1,78 @@
 # Roadmap
 
-Last updated: 2026-08-28
+Last updated: 2026-08-29
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
+
+## Atomic private settlement release qualification
+
+- Complete and qualify matching prepared-leg, audit, coordination, carrier,
+  status, and receipt APIs in Kotlin, mirrored Java, Swift, CLI, Python, and
+  every other maintained scripting SDK. Use shared canonical Norito fixtures,
+  preserve opaque witness handles, and keep exact plaintext out of high-level
+  runtimes, logs, errors, and telemetry.
+- Run real four-validator processes for every participating dataspace at
+  N=2,3,4,8,16, with N=3 as the paper configuration and mandatory signed RS16
+  DA/RBC throughout. Exercise one validator unavailable per committee,
+  coordinator/global restarts, acknowledged authenticated 5/10/20-percent
+  message loss, phase-cut partitions, delay/healing, and crashes after every
+  sidecar, staged-delta, QC, Kura, WSV, and receipt-publication boundary.
+  Continuously assert that no strict subset of legs becomes visible or
+  spendable. Keep N=17..255 claims limited to codec, wire-size, deterministic
+  state-machine, and formal-model evidence.
+- Execute the structured-canary and differential leakage matrix over Torii,
+  restricted/public P2P, block wire, Kura/merge artifacts, snapshots, queries,
+  events, logs, and telemetry. Publish the intentional residual linkability:
+  routes/count, timing, sponsor/fee, stable pools/roots, and possible asset
+  inference in single-CBDC dataspaces.
+- On pinned hardware, collect at least five warmups and thirty measured bundles
+  per real N and multiple seeds. Publish p50/p95/p99 plus confidence intervals
+  for proof, availability, audit, committee verification, Prepare, Commit,
+  finality, and end-to-end latency, alongside throughput, CPU, RSS, network,
+  proof/receipt size, storage growth, and transparent-AMX controls. Sign the
+  first measured envelope and enforce the documented later-release regression
+  thresholds.
+- Close focused/workspace tests, strict all-target Clippy, formatting, ten
+  randomized seeds, two-hour soak, serial privacy-release checks, release
+  inventory, reproducible build, and SBOM from one settled candidate. Qualify
+  auditor HSM/KMS rotation, retired-key retention or capsule rewrapping, and
+  finality/restart reconciliation on every shipping host filesystem.
+- Obtain independent review of the AIR, dummy selectors, asset/capsule and
+  reimbursement bindings, hybrid cryptography, auditor/QC domains, and the
+  cross-dataspace state machine. Archive the exact commit, manifests, raw
+  CSV/JSON, configurations, sanitized captures, plots, logs, hardware/threat
+  descriptions, limitations, and audit reports in a DOI-backed BCK26 artifact.
+  Keep the feature disabled by default until every gate passes.
+
+## Telemetry first-release closure
+
+- Add a production-source reachability gate for Prometheus metric families,
+  structured-event exporter features, and public telemetry routes so
+  definition-only observability surfaces cannot return without an explicit
+  producer and consumer.
+- Qualify integrity journaling and optional-exporter supervision under repeated
+  process crashes, collector half-closes, full disks, and checkpoint permission
+  failures on every shipping host platform. Preserve exact-record retry and
+  keep exporter failure isolated from validator liveness.
+- Benchmark status encoding, Prometheus gathering, logger field filtering, and
+  exporter persistence/reconnect paths. Add allocation and latency ceilings
+  before introducing caching or concurrency, while preserving deterministic
+  payloads and bounded memory.
+
+## Derive/proc-macro first-release closure
+
+- Remove the remaining unused `darling` development pin from `iroha_derive`
+  during the next lockfile-owned dependency refresh; the normal dependency
+  graph no longer uses it.
+- Replace the authenticated generated-emitter source copy with one shared
+  implementation only in a dependency-edge and lockfile-owned change. Keep its
+  source-integrity guard until all five consumer macro crates use that shared
+  implementation.
+- Add compile-time and generated-token-size budgets for the shipping derive
+  feature sets, plus a production-source reachability check for helper methods
+  and compatibility attributes, before making further caching or parsing
+  changes.
 
 ## Mochi first-release closure
 
@@ -130,6 +199,11 @@ Completed history lives in [`status.md`](./status.md).
 
 ## Iroha Core first-release closure
 
+- Split the remaining `state.rs` monolith along existing ownership boundaries:
+  world storage/schema, snapshot restoration, canonical merge admission,
+  transaction execution, and derived caches. Keep one atomic block overlay and
+  one canonical serialization definition; do not introduce facade layers that
+  merely rename storage operations.
 - Add consensus-configured per-block and per-authority trigger-count, matching,
   and native-instruction work budgets. Back trigger-scoped permission cleanup
   with a maintained reverse index so mass one-shot depletion never scans the
@@ -141,13 +215,22 @@ Completed history lives in [`status.md`](./status.md).
 - Remove the crate-wide Clippy suppression in bounded module groups. Delete or test-gate each
   resulting dead surface, and add a CI target that checks the production library without test-only
   features so unused shipping code cannot accumulate again.
-- Move invariant-bypassing `*_for_testing` state mutators behind `cfg(test)` or the narrow
-  `iroha-core-tests` feature, then migrate dependent-crate fixtures through an explicit build
-  matrix. Preserve historical-format rejection and recovery detection that fail closed; those are
-  safety controls, not compatibility support.
+- Move the remaining used invariant-bypassing `*_for_testing` state mutators
+  behind `cfg(test)` or the narrow `iroha-core-tests` feature. The strict
+  block-commit migration now gives core, CLI, Torii, and daemon fixtures
+  explicit world-overlay or empty-block helpers and an explicit build matrix;
+  retain that boundary while migrating the remaining mutators. Add a
+  production-source reachability gate so definition-only WSV facades and raw
+  mutable index accessors cannot return. Preserve historical-format rejection
+  and recovery detection that fail closed; those are safety controls, not
+  compatibility support.
 - Add deterministic benchmarks for query dispatch/metering, block admission, state transitions,
   and startup indexes. Use the profiles to remove avoidable encoding, cloning, and full-collection
   scans while asserting identical outputs across hardware paths.
+- Qualify the canonical-only autonomous lane path on a settled four-validator
+  candidate, including compact merge-carrier restart, exact transaction
+  membership, rollback/replay, lane reset, and snapshot restore. No direct WSV
+  application or legacy receipt/snapshot migration path may be reintroduced.
 
 ## P2P first-release closure
 
@@ -348,7 +431,30 @@ Completed history lives in [`status.md`](./status.md).
   missed-deadline classification, objective release failure,
   opening-deadline expiry, fresh-TLE retry, restart/restore replay,
   narrow-result fresh Confirmation Jury, stale-head supersession, exact-height
-  enactment, and rollback-isolated execution failure.
+  enactment, and rollback-isolated execution failure. The reservation-bound
+  carrier attestation, manifest-less certified-Fetch Phase-B completion, and
+  ordinary/recovered exact-retransmission ownership-history refresh are
+  implemented and covered by focused source/regression checks, but fresh strict
+  four-validator evidence for their resulting source is still required.
+- Carry the completed zero/singleton hidden-electorate capacity path, bounded
+  generation-16 exhaustion, live-candidate bond retention, atomic narrow-Policy
+  Confirmation capacity decision, account-rekey containment, and protected
+  validation-fee restore checks through that four-peer matrix. Preserve the
+  fail-closed terminal shapes and prove that retries, restore, and exact-height
+  execution cannot strand a bond, an unfillable body requirement, an account
+  identity, or fee admission behind missing provenance. The isolated target now
+  contains source-budgeted four-validator tests for bond retention/release,
+  Confirmation-capacity abort, exact stale-head supersession, fail-fast
+  execution-failure unchanged-state isolation, state equality, and restart;
+  run them from the settled candidate before treating the matrix as evidence.
+- Candidate-qualify the exact Ready-Proposal-Sign producer-point preemption and
+  the certified-response queue-refresh retry. The first patched four-validator
+  rerun showed no recurrence of the former queue-cut fail-stop, but its
+  threshold-key installation transaction timed out after 600 seconds under
+  severe unrelated host contention, so it is diagnostic evidence rather than a
+  liveness receipt. Repeat below-threshold install, epoch-boundary activation,
+  and the full Policy-to-enactment corridor on an uncontended same-source
+  four-validator candidate.
 - Qualify the implemented live threshold-beacon partial-share transport,
   per-session runtime custody, threshold aggregation, candidate-effect
   assembly, and authoritative finalized-pulse persistence on at least four
@@ -374,13 +480,22 @@ Completed history lives in [`status.md`](./status.md).
   the refreshed finalized height immediately before normal signed submission.
   Qualify the implemented certified
   public-session install, atomic active-pointer cutover/retirement, new-ballot
-  selection guard, and local-custody retirement guard against every committed
-  ballot/retry deadline. Complete the authenticated broker transport and HSM
-  provisioning path; then demonstrate old-share retention/zeroization, restart
-  recovery, peer authentication/rate limits, freshness expiry, canonical
-  collection, and operator submission on at least four peers. Do not describe
-  aggregate opening as operationally automatic or claim secure erasure from the
-  software adapter.
+  selection guard, immutable session-to-ordered-roster binding, and
+  local-custody retirement guard against every committed ballot/retry deadline.
+  Startup now derives the local seat separately for the active and every
+  deadline-retained historical session and requires an exact non-signing
+  key-session/transcript/seat lookup through the same signer. The authenticated
+  broker operation and software custody implementation are complete, including
+  independent result matching, surrounding requalification, mismatch poisoning,
+  and fail-closed defaults. Source tests now exercise exact active-plus-retained
+  daemon call sets, historical expiry, all three independent result-binding
+  substitutions, and truncated replies. Qualify that source against a genuine
+  HSM provider;
+  then demonstrate old-share retention/zeroization, restart recovery, peer
+  authentication/rate limits, freshness expiry, canonical collection, and
+  operator submission on at least four peers. Do not describe a point-in-time
+  custody attestation as future availability, aggregate opening as operationally
+  automatic, or the software adapter as secure erasure.
 - Qualify the implemented Core-authorized pre-seal timed-OVN casting-context
   archive read and its maximum-4,194,304-byte canonical header-framed Norito
   `ParliamentTimedOvnCastingContextArchiveV1`. The archive is public diagnostic
@@ -416,35 +531,70 @@ Completed history lives in [`status.md`](./status.md).
   the source and pinned Cargo input are sealed, then publish the exact
   proposal-kind/body/route inventory. Keep the retired equal Parliament ballot
   route and proposal-backed referendum/finalize/enact surfaces absent from the
-  served OpenAPI as they already are from source and SDKs. Standalone referenda
-  must remain explicitly separate from Parliament attempts, and automatic
-  execution must remain only its non-submit-able audit outcome.
-- Add reviewed operator dashboards and alarms for stuck attempts and deadline
-  misses using the implemented aggregate-only Parliament counters/gauges;
-  qualify their restart and four-peer behavior without adding identifiers,
-  free-form labels, or private ballot material.
-- Run the bounded Parliament model and deterministic source/model contract from
-  the immutable candidate, then pass focused data-model/Core/Torii tests, the
-  legacy-codec guard, workspace tests, strict all-target Clippy, formatting, and
-  a clean signed release corridor. Bounded model checking is regression
-  evidence only and does not replace cryptographic review or multi-peer tests.
+  served OpenAPI as they already are from source and SDKs. The three current
+  mirrors are byte-identical at 3,078,501 bytes and SHA-256
+  `6f1d88fe8503d56e8fb1bb1b0115d5a1cef8228b41c953bab4fc565be706e8bd`,
+  with the retired `GovernanceFinalizeRequestV1` and
+  `GovernanceEnactRequestV1` schemas removed, and the focused Python Parliament
+  API gate is green at 36/36. Their deliberately unchanged provenance manifests
+  remain unsigned dirty-tree output and cannot be promoted. Standalone
+  referenda must remain explicitly separate from Parliament attempts, and
+  automatic execution must remain only its non-submit-able audit outcome.
+- Review and candidate-qualify the implemented aggregate-only Parliament alert
+  rules for stuck attempts and deadline misses. Their five-rule `promtool` suite
+  is green locally; restart and four-peer behavior still require evidence
+  without identifiers, free-form labels, or private ballot material.
+- Freeze and rerun the implemented 23-case threshold-BLS/timed-OVN Criterion
+  and logical-allocation matrix from the same immutable candidate. The local
+  evidence checker passes all 18 collected cases across 15 test functions, and
+  byte-identical pre-merge allocation runs establish the harness contract, but
+  do not replace fresh candidate measurements and an archived sealed report.
+- Re-run the bounded Parliament model and deterministic source/model contract
+  from the immutable candidate, then pass focused data-model/Core/Torii tests,
+  the legacy-codec guard, workspace tests, strict all-target Clippy, formatting,
+  strict TLAPS, pinned Verus, chaos/soak qualification, and a clean externally
+  signed release corridor. The local TLC run now covers the typed zero/singleton
+  pre-request capacity path, bounded exhaustion, and atomic Confirmation-capacity
+  decision in addition to the original lifecycle, while the deterministic
+  source/model gate and all 14 lifecycle corridor source checks with 113
+  adversarial subtests are green.
+  Bounded model checking remains regression evidence and does not replace
+  cryptographic review, real-HSM custody, or multi-peer tests.
 
 ## ZK algorithm release qualification
 
-- Keep FASTPQ ledger qualification blocked until its proof boundary uses a
-  commitment and transcript with at least 128-bit security. Cross-check the
-  dense-MDS Goldilocks `x^7` permutation against an independent implementation
-  or replace it with a standardized commitment, and produce a quantitative
-  proof for the implemented quadratic-bound FRI schedule. The current catalogue
-  now honestly declares extension degree `1`, zero grinding, and a 32-bit
-  target; that is a diagnostic ceiling, not ledger release qualification.
+- Resolve FASTPQ's verifier architecture before qualification. The current
+  verifier deterministically rebuilds the full trace, FFT/LDE data, row hashes,
+  AIR composition, and roots from the supplied batch while also authenticating
+  an unquotiented FRI composition polynomial. That is prover-scale replay with
+  redundant probabilistic proof plumbing, not succinct verification. Either
+  implement the quotient/zerofier and degree argument needed to verify from
+  bounded openings without replay, or deliberately reduce the format to one
+  clearly documented full-replay artifact; benchmark the chosen single path.
+- Keep FASTPQ ledger qualification blocked until independent review connects
+  the implemented arithmetic bound to the complete protocol adversary and
+  validates the final-artifact multi-target digest accounting. V1 now pins six
+  independently domain-separated Poseidon-x7 Goldilocks lanes for 384-bit
+  commitments/transcript state, degree-four FRI challenges, binary folds, an
+  eightfold LDE, zero grinding, and 136 queries. Its exact dyadic qROM
+  calculator passes the 128-bit aggregate target across 54 release artifacts
+  under the declared `Q ≤ 2^32` oracle-query bound, but intentionally reports
+  production qualification unavailable until the protocol-specific reduction
+  is reviewed. Cross-check the dense-MDS permutation and six-lane construction
+  against an independent implementation and bind that review to final artifact
+  digests before clearing the gate.
+- Qualify the simplified accelerator boundary on release-class Apple and NVIDIA
+  hardware. Compile the native Metal and CUDA sources, inject copy, launch,
+  event, stream, and timeout failures to confirm process-lifetime quarantine,
+  and archive CPU/Metal/CUDA root parity plus throughput and peak-memory results.
+  A Rust feature build that selects runtime Metal source fallback does not
+  replace native shader compilation or an `nvcc` build.
 - Keep non-null IVM `AXT_VERIFY_DS_PROOF` admission fail closed until the exact
   source roots and transaction set are matched to an authoritative finalized/QC
   source-state statement. Before releasing handle-backed remote spend, either
   make the issuer authentication cover the exact intent, proof, and effective
-  amount or give those facts an independently anchored binding with at least
-  128-bit security; the current handle signature plus roughly 32-bit FASTPQ
-  metadata is not a release authorization boundary.
+  amount or give those facts an independently anchored binding. Commitment
+  width cannot compensate for facts omitted from the authenticated statement.
 - Keep ZK-ACE proving, verification, and activation unavailable until its four
   public commitment words come from independent domain-separated invocations
   (or an equivalently strong replacement) with at least 128-bit collision
@@ -792,8 +942,8 @@ close the internal blockers below:
 ## Workspace review closure
 
 - Run the remaining release-wide workspace matrix against the regenerated
-  eight-limb Blake2b-256 FastPQ proof/trace
-  fixtures and the first-release AXT hard cut. Retired single-field metadata
+  six-lane 384-bit FastPQ proof fixture, the BLAKE2b-256 ordering/metadata
+  commitments, and the first-release AXT hard cut. Retired single-field metadata
   proofs, pre-incarnation handles, and pre-ratchet snapshots must not be
   accepted or migrated by relabelling; pre-transition-set block results and
   fixtures must be regenerated rather than defaulting the required set to
@@ -1072,10 +1222,10 @@ The outstanding revision-4 work includes:
   lane-incarnation retirement cycles, and rejection of the retired
   `[sumeragi.debug.rbc]` table.
 - Execute the migrated realistic localnet outage/restart/catch-up scenario and
-  the remaining revision-4 queue/baseline fixtures. Then complete the separate
-  telemetry/API/SDK compatibility pass: legacy-labeled RBC/collector/adaptive
-  observations may remain non-authoritative and zero, but must not be described
-  as configuration or an alternate protocol authority.
+  the remaining revision-4 queue/baseline fixtures using authoritative status,
+  queue, admission, cadence, and view-change signals. Keep the retired
+  pacemaker endpoint and definition-only phase/backpressure metric families out
+  of the first-release API and SDK surfaces.
 - Execute the focused Rust coverage for the source-implemented Kura-root WAL
   handoff. Kura now retains the exact opened locked root; the lifecycle runner mints
   and consumes a move-only exact-instance `sumeragi_v2/wal` authority through
@@ -2071,18 +2221,23 @@ green at that checkpoint. That historical checkpoint did not include a Cargo
 result against its split source; newer receipts above supersede it, without
 replacing the complete release gates.
 
-The static release inventory contract now enumerates `864/864` production tests
-across 43 modules and `522/522` focused `G-UNIT` entries. Its canonical 523-line
+The static release inventory contract now enumerates `863/863` production tests
+across 44 modules and `518/518` focused `G-UNIT` entries. Its canonical 519-line
 TSV has
 SHA-256
-`e83efb1bd375226d379831d9f6e11c4bd4726fda3293849f0d12349f4b7565ea`.
+`3d2c93cab0528cb668d977642eecfe78e9c20378e887a0b7db4198ffd220eb29`.
 The separate canonical production module/test TSV has SHA-256
-`9e149c2cdfa751d087e3dbc8e7ae8aeadb3bbdf4ee6c0fdf49078fbb90d0262a`;
-the newest rows bind the proposal-height namespace for exact retired attempts,
-canonical successor acceptance while local sidecars lag, two-link raw
+`42509872b04f64962dc8edc09ca9f007bafffe402c4e0847255dc937a105888c`;
+the newest inventoried rows bind stale exact `TimeoutVote` retransmission
+coalescing without reply-route regression, Ready local Proposal Sign plus
+its exact output taking precedence over a pending Timeout Certificate, the
+eligible-only authority for that ordinary-head preemption, and replica
+disposition observing the exact FIFO beneath the global-selection overlay. The
+broader current inventory binds the proposal-height namespace for exact retired
+attempts, canonical successor acceptance while local sidecars lag, two-link raw
 lane-chain hydration on receipt-free cold restart, and exact noncanonical
 autonomous-output retirement at applied-height handoff, plus ordinary and
-record-backed autonomous historical predecessor durability. They also bind
+record-backed autonomous historical predecessor durability. It also binds
 crash-safe autonomous lifecycle terminal completion,
 startup reconciliation before lane-work activation, and the exact pre-mutation
 terminal-sweep partition. The duplicate inline V2 core network simulations
@@ -2105,10 +2260,10 @@ source inventory consistency, not execution evidence.
 Schema 5 machine-maps 34 conceptual multilane rows to 106 exact mutation
 configurations. The authenticated Kura retention contract binds 44 production
 symbols, three ordered checks, and 14 mutations with no pending structural
-source check. The reviewed Rust include topology contains 66 parents and 398
+source check. The reviewed Rust include topology contains 70 parents and 425
 direct entries; its canonical payload SHA-256 is
-`6830478f0523f8e320378200b67894bf9a6a3c09574a99741a3a04b76a457990`.
-The release-inventory contract is statically reconciled at 84/864/522, and the
+`0e92b92181eb915d6b70f2ec963fb721ebdd6c0519446a1c5bc7ef1d5013635f`.
+The release-inventory contract is statically reconciled at 85/863/518, and the
 structural model/source contract suite passes. The aggregate proof-ledger
 checker discharges its current Rust/model/mutation/source obligations except
 for the separately recorded task-start `Cargo.lock` mismatch; the static
@@ -2142,7 +2297,7 @@ source/distribution `88`, Swift `34`, Kotlin `43`, and Java `42` tests. Its
 Swift/Kotlin/Java wire consumers are runner- and receipt-bound; the Rust wire
 consumer is bound directly by the release runner and receipt. The
 receipt-required unsupported-version-before-signing regression preserves the exact
-864-production-test and 522-G-UNIT-test counts. Rust's separated client test
+863-production-test and 518-G-UNIT-test counts. Rust's separated client test
 module covers both complete endpoint-payload swaps while retaining its
 14-test count, so the API-separation source gap is closed. This is
 mutable-source inventory consistency, not deterministic regeneration, SDK
@@ -2200,13 +2355,13 @@ The remaining work is evidence-driven and must stay in order:
   merge-sidecar/lane/runner/worker/core tests, formatting, clippy, codec guard,
   proof-ledger and TLAPS-sharding tests, proof checker, and source-fidelity
   mutations before release evidence is accepted, then finish the remaining
-  864-test,
-  43-module production inventory legs and archived G-UNIT execution.
+  863-test,
+  44-module production inventory legs and archived G-UNIT execution.
   The asynchronous reply-route product assigns all 54 structural TLAPS
   projection rows; that is source inventory only. Its V2 inductive-safety,
   successor-isolation, and temporal-product obligations remain in the formal
   dependency queue.
-- Finish `G-UNIT` with a fresh archived run of all 522 source-bound focused tests
+- Finish `G-UNIT` with a fresh archived run of all 518 source-bound focused tests
   across core multilane and queue-journal code, `iroha_data_model`, Torii, and
   the integration-support library, then complete and archive the Rust-owned
   control-corpus replay across OpenAPI, both Python surfaces, JavaScript
@@ -3194,15 +3349,11 @@ proof summary digest, one valid policy digest, one valid provider-roster digest,
 and one valid repair-handoff digest before proof-summary-bound, policy-bound,
 provider-roster-bound, or repair-handoff metadata can satisfy final promotion.
 
-The following direct-WSV paragraphs retain historical compatibility context.
-The earlier first-release scaffold neither synthesized nor signed autonomous
-lane execution batches and filtered candidates carrying `execution_batch`.
-That exclusion has since been removed: the live runner schedules autonomous
-lane work, carries one durable reservation identity through availability and
-merge certification, and applies it only through the canonical global carrier.
-Historical embedded batches continue to validate and replay deterministically.
-Relay-settlement and autonomous candidates are both live merge sources; neither
-permits a participant lane to mutate WSV independently.
+The live runner schedules autonomous lane work, carries one durable reservation
+identity through availability and merge certification, and applies it only
+through the canonical global carrier. Relay-settlement and autonomous
+candidates are both live merge sources; neither permits a participant lane to
+mutate WSV independently.
 
 Nexus autoscale scale-in now preserves certified standalone lane-block
 progress. Managed retire candidates are skipped when their current
@@ -3216,11 +3367,9 @@ authoritative carrier remains pending. Generic authenticated sidecar responders
 serve the canonical bytes for either form, subject to the same request and
 committee bounds. Kura publishes the full entry, sparse carrier record, and
 canonical block through one rollback-safe boundary before State becomes
-visible. Legacy direct-preflight/marker artifacts remain
-fail-closed cleanup evidence for old stores and tests, but no production path
-creates standalone WSV mutations or non-canonical transaction membership.
-Autoscale scale-in therefore treats any unrepaired legacy marker or unmerged
-certified source as a blocker and never skips the highest blocked managed lane.
+visible. Retired direct-receipt and marker fields are rejected rather than
+restored. Autoscale scale-in treats every unmerged certified source as a
+blocker and never skips the highest blocked managed lane.
 Nexus-active lane-block queueing also prunes in-memory lane-block
 proposal/QC sessions and committed-lane execution queue entries against the
 current active `(LaneId, DataSpaceId)` routes plus lane reset watermarks before
@@ -3297,26 +3446,19 @@ stale same-lane sidecars at or below the reset height no longer seed proposal
 tips, restart execution queues, or autoscale unapplied-progress checks, while
 fresh post-reset sidecars remain visible; Sumeragi startup preloads the
 persisted DA reset journal before certified sidecar recovery.
-Direct application marker scale-in guards now apply the same reset-watermark
-boundary per queried lane, so stale key or marker evidence reintroduced after
-lifecycle cleanup cannot block fresh-lane scale-in, while fresh post-reset
-unrepaired markers and malformed key/payload rows still block destruction.
 Autoscale commit also re-prunes lane-scoped block-local cleanup state
 immediately before publishing the world block, covering AXT replay rows, DA
-pin indexes, direct application markers, public-lane validators/economics, and
+pin indexes, public-lane validators/economics, and
 verified relay contract storage, then repeats durable cleanup in committed
 storage to prevent late inserts after lifecycle staging from surviving
 scale-in for retired lanes.
-Committed lane-block status now distinguishes direct WSV application as
-`state_applied_by_direct_execution` instead of reporting it as canonical block
-application.
 Autoscale localnet cycle summaries and soak JSONL artifacts now also record
-how many peers reported certified direct-applied committed lane blocks, so
-rollout evidence can distinguish direct WSV application from generic expansion
-signals. The rollout parser also rejects conflicting latest committed-lane
+how many peers reported canonically applied committed lane blocks, so rollout
+evidence can distinguish application from generic expansion signals. The
+rollout parser also rejects conflicting latest committed-lane
 status rows for the same lane height/view instead of choosing one by dataspace
 id, only counts default-dataspace committed-lane rows as autoscale
-expansion/direct-application/destruction evidence, treats ambiguous or
+expansion/application/destruction evidence, treats ambiguous or
 certified elastic-lane committed-block evidence as non-idle for scale-in,
 rejects duplicate elastic-lane status rows as malformed destruction evidence,
 rejects ambiguous baseline lane evidence repairs for status, commitment,
@@ -3396,9 +3538,8 @@ evidence with the final post-prune queue snapshot, keeping rollout telemetry
 accurate across that recovery transition. Startup status also merges the latest
 durable application-receipted certified sidecar per active lane with the
 in-memory pending queue, so restarted peers keep publishing applied
-committed-lane evidence for canonical block receipts and historical
-direct-execution receipts even when already receipted sessions are skipped by
-execution hydration.
+committed-lane evidence for canonical block and merge receipts even when
+already receipted sessions are skipped by execution hydration.
 The independent-lane data model, deterministic merge execution/replay,
 compact-carrier recovery, transaction inclusion proofs, and fail-closed
 validation are implemented. The former first-release gap in autonomous local
@@ -4569,7 +4710,7 @@ workflows remain excluded from the first release.
 - Move the shared Iroha 2 / Iroha 3 codebase toward a broadly consumable
   release with clear release notes, SDK parity, and operator documentation.
 - CUDA acceleration release readiness now has focused Norito helper, IVM CUDA
-  grouped-test, scheduler GPU fallback/adversarial, FASTPQ fused Poseidon
+  grouped-test, scheduler GPU fallback/adversarial, FASTPQ batched Poseidon
   parity/negative, strict workspace warnings-as-errors clippy, workspace build,
   and workspace test no-run coverage on the local CUDA toolchain. Remaining
   release work is to keep those gates in CI and extend the hardware matrix to
@@ -25416,7 +25557,7 @@ exact TON shard-state
 source-state OpenVerify/FastPQ request from UI/mobile witness material,
 including statement bytes, witness commitment bytes, verification context,
 schema descriptor, public-input columns, FastPQ metadata transitions, and the
-`sccp-ton-shard-state-light-client-v1`/`fastpq-lane-balanced` identifiers. The
+`sccp-ton-shard-state-light-client-v1`/`fastpq-state-transition-stark-v1` identifiers. The
 shared vector now uses the production-consistent masterchain config proof hash
 for the same `ShardStateUnsplit` root that the TON shard-state opening proves,
 matching the Rust FastPQ batch gate. The
@@ -28244,8 +28385,8 @@ rejects escaping or writable-output symlinks plus hard-linked source files.
 
 The original checkout manifest and sealed manifest are both retained; every
 child completion uses the latter. One canonical aggregate receipt binds
-original HEAD/tree/`Cargo.lock`, all 84 pre-network legs and their exact
-864-test inventory plus the separate exact 522-test G-UNIT inventory, the
+original HEAD/tree/`Cargo.lock`, all 85 pre-network legs and their exact
+863-test inventory plus the separate exact 518-test G-UNIT inventory, the
 formal harness lock/toolchain, matrix, chaos, and soak
 evidence. The formal leg archives a tee-captured all-legs log plus
 `proof_coverage.json` and `proof_evidence.json`; receipt publication reruns the

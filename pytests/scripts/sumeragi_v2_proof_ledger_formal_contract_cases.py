@@ -325,7 +325,13 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('tests/v2_lifecycle_coordinator_explorer_cases.rs'),
     ),
     Path('crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs'): (Path('v2_lifecycle_launch_tests.rs'),),
-    Path('crates/iroha_core/src/sumeragi/v2_lifecycle_launch_tests.rs'): (Path('v2_lifecycle_launch_recovered_fetch_source_tests.rs'), Path('v2_lifecycle_launch_recovered_fetch_settlement_source_tests.rs')),
+    Path('crates/iroha_core/src/sumeragi/v2_lifecycle_launch_tests.rs'): (
+        Path('v2_lifecycle_launch_ready_proposal_sign_test_fixtures.rs'),
+        Path('v2_lifecycle_launch_recovered_sign_settlement_source_tests.rs'),
+        Path('v2_lifecycle_launch_recovered_fetch_source_tests.rs'),
+        Path('v2_lifecycle_launch_certified_response_retry_source_tests.rs'),
+        Path('v2_lifecycle_launch_recovered_fetch_settlement_source_tests.rs'),
+    ),
     Path('crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs'): (
         Path('v2_lifecycle_ledger_operations.rs'),
         Path('v2_lifecycle_ledger_store.rs'),

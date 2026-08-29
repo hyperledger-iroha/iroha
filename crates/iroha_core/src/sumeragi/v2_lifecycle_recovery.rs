@@ -1584,7 +1584,7 @@ pub(crate) fn reconcile_autonomous_lifecycle_startup(
     } else {
         receipt_slot
             .take()
-            .expect("empty Queue recovery retains exactly one direct receipt")
+            .expect("empty Queue recovery retains exactly one reconciliation receipt")
     };
     let mut recovered_attempts = 0_usize;
     for (lane_id, dataspace_id, lane_incarnation) in routes {

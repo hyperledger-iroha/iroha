@@ -1,8 +1,8 @@
-#! FASTPQ Production Migration Guide
+#! FASTPQ V1 Operations Guide
 
-This runbook describes how to validate the Stage 6 production FASTPQ prover.
-The deterministic placeholder backend was removed as part of this migration plan.
-It complements the staged plan in `specs/fastpq_plan.md` and assumes you already track
+This runbook describes how to build, validate, and operate the sole V1 FASTPQ
+prover. V1 has no legacy or placeholder backend. It complements the
+implementation boundary in `specs/fastpq_plan.md` and assumes you already track
 workspace status in `status.md`.
 
 ## Audience & Scope
@@ -16,7 +16,7 @@ execution model).
 ## Feature Matrix
 | Path | Cargo features to enable | Result | When to use |
 | ---- | ----------------------- | ------ | ----------- |
-| Production prover (default) | _none_ | Stage 6 FASTPQ backend with FFT/LDE planner and DEEP-FRI pipeline.【crates/fastpq_prover/src/backend.rs:1144】 | Default for all production binaries. |
+| Production prover (default) | _none_ | V1 FASTPQ backend with FFT/LDE planner and DEEP-FRI pipeline.【crates/fastpq_prover/src/backend.rs:1】 | Default for all production binaries. |
 | Optional GPU acceleration | `fastpq_prover/fastpq-gpu` | Enables CUDA/Metal kernels. Production `gpu` mode fails closed when kernels or preflight are unavailable; `cpu` remains the default.【crates/fastpq_prover/Cargo.toml:9】【crates/iroha_core/src/fastpq/lane.rs:228】 | Hosts with supported accelerators. |
 
 ## Build Procedure
@@ -32,40 +32,43 @@ execution model).
    cargo build --release -p irohad --bin iroha3d --features fastpq-gpu
    ```
    Linux/NVIDIA builds require an SM80+ CUDA toolkit with `nvcc` available during the build.
-   macOS builds use Metal and prepare Xcode's optional MetalToolchain as described below.【crates/fastpq_prover/Cargo.toml:11】【crates/fastpq_prover/build.rs:100】
+   macOS builds use Metal and probe Xcode's optional MetalToolchain as described below.【crates/fastpq_prover/Cargo.toml:11】【crates/fastpq_prover/build.rs:30】
 
 3. **Self-tests**
    ```bash
    cargo test -p fastpq_prover
    ```
-   Run this once per release build to confirm the Stage 6 path before packaging.
+   Run this once per release build to confirm the V1 path before packaging.
    The public V1 verifier applies `fastpq_prover::VerifyLimits`, checks the
    canonical batch commitment and public inputs, authenticates sampled LDE query
-   chunks against Merkle paths rooted at `lookup_root`, and uses the proof's
-   `lde_domain_size` when deriving query indices. It no longer rebuilds the LDE
-   or folds the full evaluation vector. Keep node-facing proof batches within
-   the transition-count, payload, query, and path caps. V1 proofs now carry
-   exactly two AIR composition challenges, sampled AIR trace rows, sampled AIR
+   chunks against Merkle paths rooted at `lde_root`, and uses the proof's
+   `lde_domain_size` when deriving query indices. It rebuilds the canonical
+   trace, LDE, and AIR commitments before accepting proof-carried
+   openings. Proof roots, FRI layer commitments, and Merkle siblings use the
+   canonical `GoldilocksDigest384V1` carrier, so malformed field representatives
+   are rejected during construction or decoding. Keep node-facing proof batches
+   within the transition-count, payload, query, and path caps. V1 proofs now carry
+   exactly 16 AIR composition challenges, sampled AIR trace rows, sampled AIR
    composition openings, and per-round FRI
    openings; the verifier recomputes the sampled AIR composition value from
    opened adjacent rows and requires that value to match the FRI base-layer
    opening.
 
 ### Metal toolchain preparation (macOS)
-1. Install full Xcode and select it with `xcode-select` (or `DEVELOPER_DIR`); the standalone Command Line Tools package is not sufficient for `xcodebuild -downloadComponent`. The macOS build resolves and executes both `metal -v` and `metallib -v`; only when either compiler or linker is unavailable does it run exactly `xcodebuild -downloadComponent MetalToolchain`, clear the `xcrun` cache, and probe both tools again before offline compilation. Download and redetection failures identify the failing command and point to the selected Xcode installation, pending license acceptance, the manual download command, and the explicit runtime-source opt-out. A failed bootstrap or offline compilation uses runtime source compilation instead of misclassifying the Metal device as unavailable.【crates/fastpq_prover/build.rs:111】【crates/fastpq_prover/src/backend.rs:716】【crates/fastpq_prover/src/metal.rs:2331】
+1. Install full Xcode and select it with `xcode-select` (or `DEVELOPER_DIR`); the standalone Command Line Tools package is not sufficient for the offline Metal compiler. The macOS build probes both `metal -v` and `metallib -v` but never installs components or clears system caches. If either tool is unavailable, install it explicitly with `xcodebuild -downloadComponent MetalToolchain`; the build warns and falls back to runtime source compilation in the meantime.【crates/fastpq_prover/build.rs:107】【crates/fastpq_prover/src/backend.rs:716】【crates/fastpq_prover/src/metal.rs:2331】
 2. To validate the pipeline ahead of CI, you can mirror the build script locally:
    ```bash
    export OUT_DIR=$PWD/target/metal && mkdir -p "$OUT_DIR"
    xcrun metal -std=macos-metal2.4 -O3 -c -I crates/fastpq_prover/metal/include -I crates/fastpq_prover/metal/kernels crates/fastpq_prover/metal/kernels/ntt_stage.metal -o "$OUT_DIR/ntt_stage.air"
-   xcrun metal -std=macos-metal2.4 -O3 -c -I crates/fastpq_prover/metal/include -I crates/fastpq_prover/metal/kernels crates/fastpq_prover/metal/kernels/poseidon2.metal -o "$OUT_DIR/poseidon2.air"
+   xcrun metal -std=macos-metal2.4 -O3 -c -I crates/fastpq_prover/metal/include -I crates/fastpq_prover/metal/kernels crates/fastpq_prover/metal/kernels/poseidon.metal -o "$OUT_DIR/poseidon.air"
    xcrun metal -std=macos-metal2.4 -O3 -c -I crates/fastpq_prover/metal/include -I crates/fastpq_prover/metal/kernels crates/fastpq_prover/metal/kernels/bn254.metal -o "$OUT_DIR/bn254.air"
-   xcrun metallib "$OUT_DIR/ntt_stage.air" "$OUT_DIR/poseidon2.air" "$OUT_DIR/bn254.air" -o "$OUT_DIR/fastpq.metallib"
+   xcrun metallib "$OUT_DIR/ntt_stage.air" "$OUT_DIR/poseidon.air" "$OUT_DIR/bn254.air" -o "$OUT_DIR/fastpq.metallib"
    ```
    Release builds should let `build.rs` generate the library and embed its Cargo `OUT_DIR` path at compile time. `FASTPQ_METAL_LIB` is only a debug/dev override, not production configuration; a relocated release whose embedded path is stale compiles the embedded source instead.【crates/fastpq_prover/build.rs:210】【crates/fastpq_prover/src/metal.rs:2475】
-3. Set `FASTPQ_SKIP_GPU_BUILD=1` to opt out of the toolchain download and offline shader build. On macOS this does not disable visible Metal hardware: the runtime compiles the embedded, self-contained source through `MTLDevice`.【crates/fastpq_prover/build.rs:28】【crates/fastpq_prover/src/metal.rs:2348】
+3. Set `FASTPQ_SKIP_GPU_BUILD=1` to skip the offline shader build. On macOS this does not disable visible Metal hardware: the runtime compiles the embedded, self-contained source through `MTLDevice`.【crates/fastpq_prover/build.rs:32】【crates/fastpq_prover/src/metal.rs:2348】
 4. Nodes configured with `zk.fastpq.execution_mode = "gpu"` fail closed if no usable `MTLDevice` exists, the preferred build-time library cannot load, embedded source/pipeline compilation fails, or parity preflight fails. Nodes configured with `cpu` stay on the deterministic scalar path.【crates/iroha_core/src/fastpq/lane.rs:283】【crates/fastpq_prover/src/metal.rs:2334】
 
-### Release checklist (Stage 6)
+### V1 release checklist
 Keep the FASTPQ release ticket blocked until every item below is complete and attached.
 
 1. **Sub-second proof metrics** — Inspect the freshly captured `fastpq_metal_bench_*.json` and
@@ -76,13 +79,13 @@ Keep the FASTPQ release ticket blocked until every item below is complete and at
    `cargo xtask fastpq-bench-manifest --bench metal=<json> --bench cuda=<json> --matrix artifacts/fastpq_benchmarks/matrix/matrix_manifest.json --signing-key <path> --out artifacts/fastpq_bench_manifest.json`
    so the release ticket carries both the manifest and its detached signature
    (`artifacts/fastpq_bench_manifest.sig`). Reviewers verify the digest/signature pair before
-   promoting a release.【xtask/src/fastpq.rs:128】【xtask/src/main.rs:845】 The matrix manifest (built
-   via `scripts/fastpq/capture_matrix.sh`) already encodes the 20 k row floor and
-   debugging a regression.
+   promoting a release.【xtask/src/fastpq.rs:128】【xtask/src/main.rs:845】 The matrix manifest,
+   built via `scripts/fastpq/capture_matrix.sh`, already encodes the 20 k row floor used by the
+   gate.
 3. **Evidence attachments** — Upload the Metal benchmark JSON, stdout log (or Instruments trace),
    CUDA/Metal manifest outputs, and the detached signature to the release ticket. The checklist entry
    should link to all artefacts plus the public key fingerprint used for signing so downstream audits
-   can replay the verification step.【artifacts/fastpq_benchmarks/README.md:65】
+   can replay the verification step.
 
 ### Metal validation workflow
 1. After a GPU-enabled build, optionally confirm that Cargo produced `fastpq.metallib`; this is the preferred release path and its Cargo `OUT_DIR` location is embedded into the binary. A missing or stale embedded path selects runtime source compilation and is not, by itself, evidence that Metal is disabled.【crates/fastpq_prover/build.rs:210】【crates/fastpq_prover/src/metal.rs:2475】
@@ -90,7 +93,7 @@ Keep the FASTPQ release ticket blocked until every item below is complete and at
    `FASTPQ_GPU=gpu cargo test -p fastpq_prover --features fastpq-gpu --release`. The backend will exercise the Metal kernels; investigate any unavailable-backend warning before enabling production `gpu` mode.【crates/fastpq_prover/src/backend.rs:114】【crates/fastpq_prover/src/metal.rs:418】
 3. Capture a benchmark sample for dashboards using the release binary's build-time library (or its embedded-source fallback):\
   `cargo run -p fastpq_prover --features fastpq-gpu,dev-tools --bin fastpq_metal_bench --release -- --rows 20000 --iterations 5 --output fastpq_metal_bench.json --trace-dir traces`.
-  The canonical `fastpq-lane-balanced` profile now pads every capture to 32,768 rows (2¹⁵), so the JSON carries both `rows` and `padded_rows` along with the Metal LDE latency; rerun the capture if `zero_fill` or queue settings push the GPU LDE beyond the 950 ms (<1 s) target on Apple M-series hosts. Archive the resulting JSON/log alongside other release evidence; the nightly macOS workflow performs the same run and uploads its artefacts for comparison.【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:697】【.github/workflows/fastpq-metal-nightly.yml:1】
+  The canonical `fastpq-state-transition-stark-v1` profile now pads every capture to 32,768 rows (2¹⁵), so the JSON carries both `rows` and `padded_rows` along with the Metal LDE latency; rerun the capture if `zero_fill` or queue settings push the GPU LDE beyond the 950 ms (<1 s) target on Apple M-series hosts. Archive the resulting JSON/log alongside other release evidence. No nightly FastPQ Metal workflow or reference capture is checked in, so the release ticket must carry the fresh result.【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:697】
   When you need Poseidon-only telemetry (e.g., to record an Instruments trace), add `--operation poseidon_hash_columns` to the command above; the bench will still respect `FASTPQ_GPU=gpu`, emit `metal_dispatch_queue.poseidon`, and include the new `poseidon_profiles` block so the release bundle documents the Poseidon bottleneck explicitly.
   Evidence now includes `zero_fill.{bytes,ms,queue_delta}` plus `kernel_profiles` (per-kernel
   occupancy, estimated GB/s, and duration stats) so GPU efficiency can be graphed without
@@ -101,9 +104,9 @@ Keep the FASTPQ release ticket blocked until every item below is complete and at
   `--trace-output` (with optional `--trace-template` / `--trace-seconds`) when capturing to a
   custom location/template. The JSON records `metal_trace_{template,seconds,output}` for auditing.【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:177】
   After each capture run `python3 scripts/fastpq/wrap_benchmark.py --require-lde-mean-ms 950 --require-poseidon-mean-ms 1000 fastpq_metal_bench.json artifacts/fastpq_benchmarks/fastpq_metal_bench_<date>_macos14_arm64.json` so the publication carries host metadata (now including `metadata.metal_trace`) for the Grafana board/alerting bundle (`dashboards/grafana/fastpq_acceleration.json`, `dashboards/alerts/fastpq_acceleration_rules.yml`). The report now carries a `speedup` object per operation (`speedup.ratio`, `speedup.delta_ms`), the wrapper hoists `zero_fill_hotspots` (bytes, latency, derived GB/s, and the Metal queue delta counters), flattens `kernel_profiles` into `benchmarks.kernel_summary`, keeps the `twiddle_cache` block intact, copies the new `post_tile_dispatches` block/summary so reviewers can prove the multi-pass kernel ran during the capture, and now summarizes the Poseidon microbench evidence into `benchmarks.poseidon_microbench` so dashboards can quote the scalar-vs-default latency without reparsing the raw report. The manifest gate reads the same block and rejects GPU evidence bundles that omit it, forcing operators to refresh captures whenever the post-tiling path is skipped or misconfigured.【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:1048】【scripts/fastpq/wrap_benchmark.py:714】【scripts/fastpq/wrap_benchmark.py:732】【xtask/src/fastpq.rs:280】
-  The dense-MDS Poseidon Metal kernel retains the legacy filename `poseidon2.metal` (the construction is not Poseidon2). Production Goldilocks dispatches use one independent state per lane and derive their grid from the actual state count; the former minimum-thread floor and multi-state production profile are gone. `FASTPQ_METAL_POSEIDON_LANES` can still pin the lane width for profiling, while effective benchmark telemetry reports `states_per_lane = 1`. BN254 Poseidon keeps a separate multi-state path capped at 128 threads per group. Leave debug overrides unset for normal runs; the harness exits immediately when `FASTPQ_GPU=gpu` is requested but no GPU backend is available, so silent CPU fallbacks cannot enter performance evidence.【crates/fastpq_prover/src/metal.rs:3115】【crates/fastpq_prover/src/metal.rs:3405】
+  The dense-MDS Poseidon Metal kernel is `poseidon.metal`. Production Goldilocks dispatches use one independent state per lane and derive their grid from the actual state count; the former minimum-thread floor and multi-state production profile are gone. `FASTPQ_METAL_POSEIDON_LANES` can still pin the lane width for profiling, while effective benchmark telemetry reports `states_per_lane = 1`. BN254 Poseidon keeps a separate multi-state path capped at 128 threads per group. Leave debug overrides unset for normal runs; the harness exits immediately when `FASTPQ_GPU=gpu` is requested but no GPU backend is available, so silent CPU fallbacks cannot enter performance evidence.【crates/fastpq_prover/src/metal.rs:3115】【crates/fastpq_prover/src/metal.rs:3405】
   The wrapper rejects Poseidon captures that are missing the `metal_dispatch_queue.poseidon` delta, the shared `column_staging` counters, or the `poseidon_profiles`/`poseidon_microbench` evidence blocks so operators must refresh any capture that fails to prove overlapping staging or the scalar-vs-default speedup.【scripts/fastpq/wrap_benchmark.py:732】 When you need a standalone JSON for dashboards or CI deltas, run `python3 scripts/fastpq/export_poseidon_microbench.py --bundle <bundle>`; the helper accepts both wrapped artifacts and raw `fastpq_metal_bench*.json` captures, emitting `benchmarks/poseidon/poseidon_microbench_<timestamp>.json` with the default/scalar timings, tuning metadata, and recorded speedup.【scripts/fastpq/export_poseidon_microbench.py:1】
-  Finish the run by executing `cargo xtask fastpq-bench-manifest --bench metal=artifacts/fastpq_benchmarks/fastpq_metal_bench_<date>_macos14_arm64.json --bench cuda=artifacts/fastpq_benchmarks/fastpq_cuda_bench_<date>_sm80.json --matrix artifacts/fastpq_benchmarks/matrix/matrix_manifest.json --signing-key secrets/fastpq_bench.ed25519 --out artifacts/fastpq_bench_manifest.json` so the Stage 6 release checklist enforces the `<1 s` LDE ceiling and emits a signed manifest/digest bundle that ships with the release ticket.【xtask/src/fastpq.rs:1】【artifacts/fastpq_benchmarks/README.md:65】
+  Finish the run by executing `cargo xtask fastpq-bench-manifest --bench metal=artifacts/fastpq_benchmarks/fastpq_metal_bench_<date>_macos14_arm64.json --bench cuda=artifacts/fastpq_benchmarks/fastpq_cuda_bench_<date>_sm80.json --matrix artifacts/fastpq_benchmarks/matrix/matrix_manifest.json --signing-key secrets/fastpq_bench.ed25519 --out artifacts/fastpq_bench_manifest.json` so the V1 release checklist enforces the `<1 s` LDE ceiling and emits a signed manifest/digest bundle that ships with the release ticket.【xtask/src/fastpq.rs:1】
 4. Verify telemetry before rollout: curl the Prometheus endpoint (`fastpq_execution_mode_total{device_class="<matrix>", backend="metal"}`) and inspect `telemetry::fastpq.execution_mode` logs for unexpected `backend="none"` or failed GPU preflight entries.【crates/iroha_telemetry/src/metrics.rs:8887】【crates/fastpq_prover/src/backend.rs:174】
 5. Document the explicit CPU operating path by setting `zk.fastpq.execution_mode = "cpu"` so SRE playbooks stay aligned with the deterministic default.【crates/iroha_config/src/parameters/user.rs:3964】
 6. Optional tuning: by default the host selects 16 lanes for short traces, 32 for medium, and 64/128 once `log_len ≥ 10/14`, landing at 256 when `log_len ≥ 18`. The 256-word threadgroup tile can execute at most eight radix-2 stages; smaller FFTs retain the five-/four-stage heuristics, while larger FFTs and every LDE are capped at eight before the post-tiling kernel completes the wide butterflies. Export `FASTPQ_METAL_FFT_LANES` (power-of-two between 8 and 256) and/or `FASTPQ_METAL_FFT_TILE_STAGES` (1–8) before running the steps above to override those heuristics. Both the FFT/IFFT and LDE column batch sizes derive from the resolved threadgroup width (roughly 4 096 logical threads per dispatch, capped at 64 columns, and ratcheting down through 64→32→16→8→4→2→1 as the domain grows) while the LDE path still enforces its domain caps; set `FASTPQ_METAL_FFT_COLUMNS` (1–64) to pin a deterministic FFT batch size and `FASTPQ_METAL_LDE_COLUMNS` (1–64) to apply the same override to the LDE dispatcher when you need bit-for-bit comparisons across hosts. You can pin the LDE limit with `FASTPQ_METAL_LDE_TILE_STAGES` (1–8). The runtime threads all values through the Metal kernel args, clamps unsupported overrides, and logs the resolved values so experiments remain reproducible without rebuilding the metallib; the benchmark JSON surfaces both the resolved tuning and the host zero-fill budget (`zero_fill.{bytes,ms,queue_delta}`) captured via LDE stats so queue deltas are tied directly to each capture, and adds a `column_staging` block (batches flattened, flatten_ms, wait_ms, wait_ratio) so reviewers can verify host/device overlap.【crates/fastpq_prover/src/metal_config.rs:15】【crates/fastpq_prover/src/metal.rs:742】
@@ -112,12 +115,12 @@ Keep the FASTPQ release ticket blocked until every item below is complete and at
 ### Evidence to archive
 | Artefact | Capture | Notes |
 |----------|---------|-------|
-| `.metallib` bundle | Compile `metal/kernels/ntt_stage.metal`, `metal/kernels/poseidon2.metal`, and `metal/kernels/bn254.metal` into the corresponding `.air` files, then run `xcrun metallib "$OUT_DIR/ntt_stage.air" "$OUT_DIR/poseidon2.air" "$OUT_DIR/bn254.air" -o "$OUT_DIR/fastpq.metallib"`. | Proves the Metal CLI/toolchain was installed and produced a deterministic library containing every runtime-required pipeline for this commit. Release builds generate and embed their own Cargo `OUT_DIR` path.【crates/fastpq_prover/build.rs:144】【crates/fastpq_prover/build.rs:210】 |
+| `.metallib` bundle | Compile `metal/kernels/ntt_stage.metal`, `metal/kernels/poseidon.metal`, and `metal/kernels/bn254.metal` into the corresponding `.air` files, then run `xcrun metallib "$OUT_DIR/ntt_stage.air" "$OUT_DIR/poseidon.air" "$OUT_DIR/bn254.air" -o "$OUT_DIR/fastpq.metallib"`. | Proves the Metal CLI/toolchain was installed and produced a deterministic library containing every runtime-required pipeline for this commit. Release builds generate and embed their own Cargo `OUT_DIR` path.【crates/fastpq_prover/build.rs:144】【crates/fastpq_prover/build.rs:210】 |
 | Library-path evidence | Archive the relevant `build.rs` warning/output and record whether the packaged binary retained its embedded Cargo `OUT_DIR` library or exercised embedded runtime source. | A stale or absent build-time path means embedded source compilation is in use, not that Metal was disabled. `FASTPQ_METAL_LIB` remains a debug/dev-only override.【crates/fastpq_prover/build.rs:29】【crates/fastpq_prover/src/metal.rs:2475】 |
 | GPU parity log | `FASTPQ_GPU=gpu cargo test -p fastpq_prover --features fastpq-gpu --release` and archive the snippet that contains `backend="metal"` or the unavailable-backend warning. | Demonstrates that kernels run before you promote a production `gpu` build.【crates/fastpq_prover/src/backend.rs:114】【crates/fastpq_prover/src/backend.rs:195】 |
 | Benchmark output | `cargo run -p fastpq_prover --features fastpq-gpu,dev-tools --bin fastpq_metal_bench --release -- --rows 20000 --iterations 5 --output fastpq_metal_bench.json --trace-dir traces`; wrap and sign via `python3 scripts/fastpq/wrap_benchmark.py --require-lde-mean-ms 950 --require-poseidon-mean-ms 1000 fastpq_metal_bench.json artifacts/fastpq_benchmarks/fastpq_metal_bench_<date>_macos14_arm64.json --sign-output [--gpg-key <fingerprint>]`. | The wrapped JSON records `speedup.ratio`, `speedup.delta_ms`, FFT tuning, padded rows (32,768), enriched `zero_fill`/`kernel_profiles`, the flattened `kernel_summary`, the verified `metal_dispatch_queue.poseidon`/`poseidon_profiles` blocks (when `--operation poseidon_hash_columns` is used), and the trace metadata so the GPU LDE mean stays ≤950 ms and Poseidon stays <1 s; keep both the bundle and the generated `.json.asc` signature with the release ticket so dashboards and auditors can verify the artefact without rerunning workloads.【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:697】【scripts/fastpq/wrap_benchmark.py:714】【scripts/fastpq/wrap_benchmark.py:732】 |
-| Bench manifest | `cargo xtask fastpq-bench-manifest --bench metal=artifacts/fastpq_benchmarks/fastpq_metal_bench_<date>_macos14_arm64.json --bench cuda=artifacts/fastpq_benchmarks/fastpq_cuda_bench_<date>_sm80.json --matrix artifacts/fastpq_benchmarks/matrix/matrix_manifest.json --signing-key secrets/fastpq_bench.ed25519 --out artifacts/fastpq_bench_manifest.json`. | Validates both GPU artefacts, fails if the LDE mean breaks the `<1 s` ceiling, records BLAKE3/SHA-256 digests, and emits a signed manifest so the release checklist cannot advance without verifiable metrics.【xtask/src/fastpq.rs:1】【artifacts/fastpq_benchmarks/README.md:65】 |
-| CUDA bundle | Run `FASTPQ_GPU=gpu cargo run -p fastpq_prover --features dev-tools --bin fastpq_cuda_bench --release -- --rows 20000 --iterations 5 --column-count 16 --device 0 --row-usage artifacts/fastpq_benchmarks/fastpq_row_usage_2025-05-12.json` on the SM80 lab host, wrap/sign the JSON into `artifacts/fastpq_benchmarks/fastpq_cuda_bench_<date>_sm80.json` (use `--label device_class=xeon-rtx-sm80` so dashboards pick up the correct class), add the path to `artifacts/fastpq_benchmarks/matrix/devices/xeon-rtx-sm80.txt`, and keep the `.json`/`.asc` pair with the Metal artefact before regenerating the manifest. The raw CUDA bundle includes FFT/IFFT/LDE, Poseidon columns, Poseidon Merkle parent pairs, and BN254 Poseidon word batches unless `--operation` narrows the capture. The checked-in `fastpq_cuda_bench_2025-11-12T090501Z_ubuntu24_x86_64.json` illustrates the exact bundle format auditors expect.【scripts/fastpq/wrap_benchmark.py:714】【artifacts/fastpq_benchmarks/matrix/devices/xeon-rtx-sm80.txt:1】 |
+| Bench manifest | `cargo xtask fastpq-bench-manifest --bench metal=artifacts/fastpq_benchmarks/fastpq_metal_bench_<date>_macos14_arm64.json --bench cuda=artifacts/fastpq_benchmarks/fastpq_cuda_bench_<date>_sm80.json --matrix artifacts/fastpq_benchmarks/matrix/matrix_manifest.json --signing-key secrets/fastpq_bench.ed25519 --out artifacts/fastpq_bench_manifest.json`. | Validates both GPU artefacts, fails if the LDE mean breaks the `<1 s` ceiling, records BLAKE3/SHA-256 digests, and emits a signed manifest so the release checklist cannot advance without verifiable metrics.【xtask/src/fastpq.rs:1】 |
+| CUDA bundle | Run `FASTPQ_GPU=gpu cargo run -p fastpq_prover --features dev-tools --bin fastpq_cuda_bench --release -- --rows 20000 --iterations 5 --column-count 16 --device 0 --row-usage artifacts/fastpq_benchmarks/fastpq_row_usage_<date>.json` on the SM80 lab host, wrap/sign the JSON into `artifacts/fastpq_benchmarks/fastpq_cuda_bench_<date>_sm80.json` (use `--label device_class=xeon-rtx-sm80` so dashboards pick up the correct class), add the generated path to `artifacts/fastpq_benchmarks/matrix/devices/xeon-rtx-sm80.txt`, and keep the `.json`/`.asc` pair with the Metal artefact before regenerating the manifest. The raw CUDA bundle includes FFT/IFFT/LDE, Poseidon columns, Poseidon Merkle parent pairs, and BN254 Poseidon word batches unless `--operation` narrows the capture. No reference CUDA bundle or device-list file is checked in; the release ticket is the evidence source.【scripts/fastpq/wrap_benchmark.py:1】 |
 | Telemetry proof | `curl -s http://<host>:8180/metrics | rg 'fastpq_execution_mode_total{device_class'` plus the `telemetry::fastpq.execution_mode` log emitted at startup. | Confirms Prometheus/OTEL expose `device_class="<matrix>", backend="metal"` (or a downgrade log) before enabling traffic.【crates/iroha_telemetry/src/metrics.rs:8887】【crates/fastpq_prover/src/backend.rs:174】 |
 | Explicit CPU drill | Run a short batch with `zk.fastpq.execution_mode = "cpu"` and capture the startup log. | Keeps SRE runbooks aligned with the deterministic default path in case a rollback is needed mid-release.【crates/iroha_config/src/parameters/user.rs:3964】 |
 | Trace capture (optional) | Repeat a parity test with `FASTPQ_METAL_TRACE=1 FASTPQ_GPU=gpu …` and save the emitted dispatch trace. | Preserves occupancy/threadgroup evidence for later profiling reviews without rerunning benchmarks.【crates/fastpq_prover/src/metal.rs:346】【crates/fastpq_prover/src/backend.rs:208】 |
@@ -125,7 +128,7 @@ Keep the FASTPQ release ticket blocked until every item below is complete and at
 The multilingual `fastpq_plan.*` files reference this checklist so staging and production operators follow the same evidence trail.【specs/fastpq_plan.md:1】
 
 ## Reproducible Builds
-Use the pinned container workflow to produce reproducible Stage 6 artefacts:
+Use the pinned container workflow to produce reproducible V1 artefacts:
 
 ```bash
 scripts/fastpq/repro_build.sh --mode cpu                     # CPU-only toolchain
@@ -198,22 +201,26 @@ Environment overrides:
 - **Resolved mode stays CPU on GPU hosts** — check that the daemon was built with
   `irohad/fastpq-gpu`, CUDA libraries are on the loader path, and `FASTPQ_GPU` is not forcing
   `cpu`.
-- **Metal unavailable on Apple Silicon** — in a debug/dev diagnostic build, set `FASTPQ_DEBUG_METAL_ENUM=1` and verify `MTLCreateSystemDefaultDevice` or `MTLCopyAllDevices` sees the GPU. The build automatically downloads a missing Metal compiler unless `FASTPQ_SKIP_GPU_BUILD` is set, while a missing offline library uses embedded source compilation. Treat a runtime compiler or parity-preflight error as a library/pipeline failure rather than a hardware-discovery failure; `FASTPQ_METAL_LIB` is only a debug/dev override.【crates/fastpq_prover/build.rs:103】【crates/fastpq_prover/src/backend.rs:745】【crates/fastpq_prover/src/metal.rs:2334】
+- **Metal unavailable on Apple Silicon** — in a debug/dev diagnostic build, set `FASTPQ_DEBUG_METAL_ENUM=1` and verify `MTLCreateSystemDefaultDevice` or `MTLCopyAllDevices` sees the GPU. A missing offline compiler produces a build warning and uses embedded source compilation; install the optional Xcode component explicitly when an offline library is required. Treat a runtime compiler or parity-preflight error as a library/pipeline failure rather than a hardware-discovery failure; `FASTPQ_METAL_LIB` is only a debug/dev override.【crates/fastpq_prover/build.rs:107】【crates/fastpq_prover/src/backend.rs:745】【crates/fastpq_prover/src/metal.rs:2334】
 - **`Unknown parameter` errors** — ensure both prover and verifier use the same canonical catalogue
   emitted by `fastpq_isi`; mismatches surface as `Error::UnknownParameter`.【crates/fastpq_prover/src/proof.rs:133】
 - **GPU mode disabled at startup** — inspect `cargo tree -p fastpq_prover --features` and
   confirm `fastpq_prover/fastpq-gpu` is present in GPU builds; verify `nvcc`/CUDA libraries or the Metal library are available and that the preflight succeeds.
+- **CUDA asynchronous completion failure** — a CUDA stream or event wait is bounded at 120 seconds,
+  and every non-success completion status (not only a timeout) quarantines the CUDA backend for the
+  rest of the process. Direct CUDA calls return an error, while proof hashing records the dispatch
+  failure and uses the deterministic CPU fallback rather than allocating more device buffers or
+  freeing resources whose ownership is uncertain.
+  This runtime fallback is distinct from mandatory-GPU startup preflight; restart the process only
+  after diagnosing the device or driver stall.【crates/fastpq_prover/cuda/fastpq_cuda.cu:22】【crates/fastpq_prover/src/trace.rs:1252】
 - **Telemetry counter missing** — verify the node was started with `--features telemetry` (default)
   and that OTEL export (if enabled) includes the metric pipeline.【crates/iroha_telemetry/src/metrics.rs:8887】
 
-## Fallback Procedure
-The deterministic placeholder backend has been removed. If a regression requires rollback,
-redeploy the previously known-good release artefacts and investigate before reissuing Stage 6
-binaries. Document the change management decision and ensure forward roll completes only after the
-regression is understood.
-
-3. Monitor telemetry to ensure `fastpq_execution_mode_total{device_class="<matrix>", backend="none"}` reflects the expected
-   placeholder execution.
+## Failure Procedure
+There is no compatibility backend. If a regression requires a deployment
+rollback, redeploy previously qualified V1 release artefacts and investigate
+before issuing a replacement. Confirm telemetry reports the configured CPU or
+GPU backend; `backend="none"` is a failure signal, not a usable execution path.
 
 ## Hardware Baseline
 | Profile | CPU | GPU | Notes |
@@ -224,10 +231,11 @@ regression is understood.
 ## Regression Tests
 - `cargo test -p fastpq_prover --release`
 - `cargo test -p fastpq_prover --release --features fastpq-gpu` (on GPU hosts)
-- Optional golden fixture check:
+- Optional canonical 64-row raw-transcript fixture check
+  (`tests/fixtures/v1_raw_transcript_64.bin`):
   ```bash
-  cargo test -p fastpq_prover --test backend_regression --release -- --ignored
+  cargo test -p fastpq_prover --features dev-tools --test transcript_replay --release -- --nocapture
   ```
 
-Document any deviations from this checklist in your ops runbook and update `status.md` after the
-migration window completes.
+Document any deviations from this checklist in your ops runbook and update
+`status.md` after validation completes.

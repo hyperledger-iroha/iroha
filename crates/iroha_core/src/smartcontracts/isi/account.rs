@@ -2233,7 +2233,7 @@ pub mod query {
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
             stx.apply();
-            state_block.commit().unwrap();
+            state_block.commit_world_overlay_for_testing().unwrap();
             // Query should only return acc2
             let view = state.view();
             let results: Vec<_> = FindAccountsWithAsset::new(ad)
@@ -2409,7 +2409,7 @@ pub mod query {
                 .expect_err("timelock should block immediate finalization");
                 assert_smart_contract_error_contains(err, "timelocked");
                 stx.apply();
-                block.commit().unwrap();
+                block.commit_world_overlay_for_testing().unwrap();
             }
             let mut block = state.block(new_block_header(2, 10));
             let mut stx = block.transaction();
@@ -2599,7 +2599,7 @@ pub mod query {
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
             stx.apply();
-            state_block.commit().unwrap();
+            state_block.commit_world_overlay_for_testing().unwrap();
             let view = state.view();
             let mut results: Vec<_> = FindAccounts
                 .execute(CompoundPredicate::PASS, &view)
@@ -2639,7 +2639,7 @@ pub mod query {
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
             stx.apply();
-            state_block.commit().unwrap();
+            state_block.commit_world_overlay_for_testing().unwrap();
             let view = state.view();
             let predicate =
                 CompoundPredicate::<Account>::build(|p| p.equals("metadata.tier", "gold"));
@@ -2671,7 +2671,7 @@ pub mod query {
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
             stx.apply();
-            state_block.commit().unwrap();
+            state_block.commit_world_overlay_for_testing().unwrap();
             let view = state.view();
             let predicate =
                 CompoundPredicate::<Account>::build(|p| p.equals("id", acc2.to_string()));
@@ -2707,7 +2707,7 @@ pub mod query {
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
             stx.apply();
-            state_block.commit().unwrap();
+            state_block.commit_world_overlay_for_testing().unwrap();
             let view = state.view();
             let predicate = CompoundPredicate::<Account>::build(|p| {
                 p.in_values("id", [acc2.to_string(), acc3.to_string()])
@@ -2753,7 +2753,7 @@ pub mod query {
                 &alias_in_domain("merchant", &oasis_id),
             );
             stx.apply();
-            state_block.commit().unwrap();
+            state_block.commit_world_overlay_for_testing().unwrap();
             let view = state.view();
             let predicate = CompoundPredicate::<Account>::build(|p| {
                 p.equals("domain", wonderland_id.to_string())
@@ -2829,7 +2829,7 @@ pub mod query {
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
             stx.apply();
-            state_block.commit().unwrap();
+            state_block.commit_world_overlay_for_testing().unwrap();
             let view = state.view();
             let predicate = CompoundPredicate::<Account>::build(|p| {
                 p.equals("id.domain", wonderland_id.to_string())
@@ -2870,7 +2870,7 @@ pub mod query {
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
             stx.apply();
-            state_block.commit().unwrap();
+            state_block.commit_world_overlay_for_testing().unwrap();
             let view = state.view();
             let predicate = CompoundPredicate::<Account>::build(|p| {
                 p.equals("id", acc1.to_string())
@@ -2904,7 +2904,7 @@ pub mod query {
                     .unwrap();
             }
             stx.apply();
-            state_block.commit().unwrap();
+            state_block.commit_world_overlay_for_testing().unwrap();
             let view = state.view();
             let predicate = CompoundPredicate::<AccountId>::build(|p| {
                 p.in_values("id", [acc1.to_string(), acc3.to_string()])
@@ -2935,7 +2935,7 @@ pub mod query {
                     .unwrap();
             }
             stx.apply();
-            state_block.commit().unwrap();
+            state_block.commit_world_overlay_for_testing().unwrap();
             let view = state.view();
             let predicate = CompoundPredicate::<AccountId>::build(|p| {
                 p.in_values(
@@ -3004,7 +3004,7 @@ pub mod query {
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
             stx.apply();
-            state_block.commit().unwrap();
+            state_block.commit_world_overlay_for_testing().unwrap();
             let view = state.view();
             let predicate =
                 CompoundPredicate::<Account>::build(|p| p.equals("metadata.tier", "gold"));
@@ -3063,7 +3063,7 @@ pub mod query {
             let holders = nonzero_asset_holders_for_definition(&stx.world, &definition_id);
             assert_eq!(holders, BTreeSet::from([nonzero_holder.clone()]));
             stx.apply();
-            state_block.commit().unwrap();
+            state_block.commit_world_overlay_for_testing().unwrap();
             let view = state.view();
             let results: Vec<_> = FindAccountsWithAsset::new(definition_id)
                 .execute(CompoundPredicate::PASS, &view)
@@ -3125,7 +3125,7 @@ pub mod query {
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
             stx.apply();
-            state_block.commit().unwrap();
+            state_block.commit_world_overlay_for_testing().unwrap();
             let view = state.view();
             let predicate = CompoundPredicate::<Account>::build(|p| {
                 p.equals("domain", wonderland_id.to_string())
@@ -3180,7 +3180,7 @@ pub mod query {
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
             stx.apply();
-            state_block.commit().unwrap();
+            state_block.commit_world_overlay_for_testing().unwrap();
             let view = state.view();
             let predicate =
                 CompoundPredicate::<Account>::build(|p| p.equals("id", acc2.to_string()));
@@ -3238,7 +3238,7 @@ pub mod query {
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
             stx.apply();
-            state_block.commit().unwrap();
+            state_block.commit_world_overlay_for_testing().unwrap();
             let view = state.view();
             let predicate = CompoundPredicate::<Account>::build(|p| {
                 p.in_values("id", [acc2.to_string(), acc3.to_string()])
@@ -3300,7 +3300,7 @@ pub mod query {
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
             stx.apply();
-            state_block.commit().unwrap();
+            state_block.commit_world_overlay_for_testing().unwrap();
             let view = state.view();
             let predicate = CompoundPredicate::<Account>::build(|p| {
                 p.equals("id", acc1.to_string())
@@ -3367,7 +3367,7 @@ pub mod query {
                     account_id.clone(),
                 ));
             stx.apply();
-            state_block.commit().unwrap();
+            state_block.commit_world_overlay_for_testing().unwrap();
             let view = state.view();
             let aliases = FindAliasesByAccountId::new(
                 account_id.clone(),
@@ -3401,7 +3401,7 @@ pub mod query {
             stx.world
                 .replace_account_rekey_record(AccountRekeyRecord::new(alias, ALICE_ID.clone()));
             stx.apply();
-            state_block.commit().unwrap();
+            state_block.commit_world_overlay_for_testing().unwrap();
             let aliases =
                 FindAliasesByAccountId::new(ALICE_ID.clone(), Some("paynet".to_owned()), None)
                     .execute(&state.view())
@@ -3466,7 +3466,7 @@ pub mod query {
                     account_id.clone(),
                 ));
             stx.apply();
-            state_block.commit().unwrap();
+            state_block.commit_world_overlay_for_testing().unwrap();
             let view = state.view();
             let aliases = FindAliasesByAccountId::new(
                 account_id,
@@ -3530,7 +3530,7 @@ pub mod query {
                     account_id.clone(),
                 ));
             stx.apply();
-            state_block.commit().unwrap();
+            state_block.commit_world_overlay_for_testing().unwrap();
             let view = state.view();
             let account = FindAccountByAlias::new(primary_label)
                 .execute(&view)
@@ -3574,7 +3574,7 @@ pub mod query {
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
             stx.apply();
-            state_block.commit().unwrap();
+            state_block.commit_world_overlay_for_testing().unwrap();
             let view = state.view();
             let aliases =
                 FindAliasesByAccountId::new(account_id, Some("centralbank".to_owned()), None)

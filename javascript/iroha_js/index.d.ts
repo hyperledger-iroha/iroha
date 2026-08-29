@@ -1209,6 +1209,7 @@ export type SccpBridgeMessageSubmitPayload = Readonly<{
   authority: string;
   fee_payment: NoritoFeePaymentIntent;
   native_proof_b64: string;
+  replay_witness_b64: string;
 }> & SccpDetachedSigningState;
 export interface SccpBridgeSubmitResponse { readonly submitted: boolean; readonly payload_kind: SccpPayloadKind; readonly message_id_hex: string; readonly backend: string; readonly counterparty_domain: number; readonly counterparty_chain: SccpNetworkProfile; readonly route_configuration_hash_hex: string; readonly range_start_height: number; readonly range_end_height: number; readonly creation_time_ms: number; readonly tx_hash_hex: string | null; readonly transaction_payload_b64: string | null; readonly signing_message_b64: string | null; }
 export interface SccpBridgeResponseExpectations { readonly submitted?: boolean; readonly creation_time_ms?: number; }

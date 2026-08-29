@@ -6,6 +6,7 @@ import { blake2b256 } from "./blake2b.js";
 import { validateNoritoFrame } from "./norito.js";
 import { normalizeAssetDefinitionId } from "./normalizers.js";
 import { NumericV1 } from "./numericV1.js";
+import { parseStrictLosslessIntegerJson } from "./strictLosslessJson.js";
 
 /** First-release SCCP protocol domains. */
 export const SCCP_DOMAIN_SORA = 0;
@@ -80,6 +81,9 @@ const DESTINATION_PROOF_NORITO_TYPE =
   "iroha_data_model::bridge::BridgeSccpDestinationProofV1";
 const NATIVE_MESSAGE_PROOF_NORITO_TYPE =
   "iroha_sccp::native_admission::SccpNativeInboundMessageProofV1";
+const REPLAY_WITNESS_NORITO_TYPE =
+  "iroha_data_model::bridge::sccp_replay::SccpSparseMerkleWitnessV1";
+const MAX_REPLAY_WITNESS_BYTES = 16 * 1024;
 const MAX_U64 = 0xffff_ffff_ffff_ffffn;
 const MAX_U128 = 0xffff_ffff_ffff_ffff_ffff_ffff_ffff_ffffn;
 const MAX_TON_COINS = (1n << 120n) - 1n;
@@ -4201,16 +4205,23 @@ export function normalizeBridgeMessageSubmitPayload(value) {
       "signature_b64",
       "transaction_payload_b64",
       "native_proof_b64",
+      "replay_witness_b64",
       "creation_time_ms",
     ]),
     "bridge message submit",
-    new Set(["authority", "fee_payment", "native_proof_b64"]),
+    new Set(["authority", "fee_payment", "native_proof_b64", "replay_witness_b64"]),
   );
   canonicalNoritoBase64(
     record.native_proof_b64,
     "bridge message submit.native_proof_b64",
     NATIVE_MESSAGE_PROOF_NORITO_TYPE,
     MAX_WIRE_BYTES,
+  );
+  canonicalNoritoBase64(
+    record.replay_witness_b64,
+    "bridge message submit.replay_witness_b64",
+    REPLAY_WITNESS_NORITO_TYPE,
+    MAX_REPLAY_WITNESS_BYTES,
   );
   const creationTime =
     record.creation_time_ms === undefined
@@ -4228,6 +4239,7 @@ export function normalizeBridgeMessageSubmitPayload(value) {
     ),
     ...detachedSigningState(record, "bridge message submit", creationTime),
     native_proof_b64: record.native_proof_b64,
+    replay_witness_b64: record.replay_witness_b64,
   };
   if (creationTime !== undefined) result.creation_time_ms = creationTime;
   return Object.freeze(result);
@@ -4260,8 +4272,26 @@ export function normalizeSccpBridgeSubmitResponse(value, expectations = {}) {
     throw new TypeError("bridge submit response counterparty profile/domain disagree");
   }
   const backend = canonicalText(record.backend, "bridge submit response.backend", 128);
-  if (!/^bridge\/[a-z0-9/_-]+$/u.test(backend)) {
-    throw new TypeError("bridge submit response.backend is not canonical");
+  const backendsForProfile = Object.freeze({
+    "ethereum-mainnet": [
+      "evm-groth16-bn254-v1",
+      "bridge/sccp/native/ethereum-beacon-v1",
+    ],
+    "bsc-mainnet": [
+      "evm-groth16-bn254-v1",
+      "bridge/sccp/native/bsc-parlia-v1",
+    ],
+    "ton-mainnet": [
+      "ton-groth16-bls12381-v1",
+      "bridge/sccp/native/ton-masterchain-v1",
+    ],
+    "tron-mainnet": [
+      "tron-groth16-bn254-v1",
+      "bridge/sccp/native/tron-dpos-v1",
+    ],
+  });
+  if (!backendsForProfile[counterparty.profile]?.includes(backend)) {
+    throw new TypeError("bridge submit response.backend does not match the counterparty");
   }
   const rangeStart = integer(record.range_start_height, "range_start_height", 1);
   const rangeEnd = integer(record.range_end_height, "range_end_height", rangeStart);
@@ -4346,7 +4376,7 @@ export function parseSccpBridgeSubmitResponseJson(text, expectations = {}) {
   );
 }
 
-/** Parse one strict SCCP JSON object, rejecting duplicate keys and trailing input. */
+/** Parse one strict lossless-integer SCCP JSON object. */
 export function parseSccpJsonObject(text, label = "SCCP response") {
   if (typeof text !== "string" || text.length === 0) {
     throw new TypeError(`${label} must be nonempty UTF-8 JSON text`);
@@ -4355,97 +4385,5 @@ export function parseSccpJsonObject(text, label = "SCCP response") {
   if (new TextDecoder("utf-8", { fatal: true }).decode(encoded) !== text) {
     throw new TypeError(`${label} must be canonical UTF-8 JSON text`);
   }
-  assertNoDuplicateJsonObjectKeys(text, label);
-  let value;
-  try {
-    value = JSON.parse(text);
-  } catch (error) {
-    throw new TypeError(`${label} must be valid JSON`, { cause: error });
-  }
-  return plainObject(value, label);
-}
-
-function assertNoDuplicateJsonObjectKeys(source, label) {
-  let cursor = 0;
-  const whitespace = () => {
-    while (cursor < source.length && /[\x20\t\r\n]/u.test(source[cursor])) cursor += 1;
-  };
-  const string = () => {
-    if (source[cursor] !== '"') throw new TypeError(`${label} contains invalid JSON`);
-    const start = cursor;
-    cursor += 1;
-    while (cursor < source.length) {
-      const character = source[cursor];
-      if (character === "\\") cursor += 2;
-      else if (character === '"') {
-        cursor += 1;
-        return JSON.parse(source.slice(start, cursor));
-      } else cursor += 1;
-    }
-    throw new TypeError(`${label} contains an unterminated JSON string`);
-  };
-  const value = () => {
-    whitespace();
-    if (source[cursor] === "{") return object();
-    if (source[cursor] === "[") return list();
-    if (source[cursor] === '"') {
-      string();
-      return;
-    }
-    // Every numeric field in the closed SCCP V1 JSON surface is an unsigned
-    // integer. Preserve its exact wire meaning by rejecting signs, fractions,
-    // exponents, and leading zeroes before JSON.parse can coerce them.
-    const match = /^(?:(?:0|[1-9][0-9]*)|true|false|null)/u.exec(
-      source.slice(cursor),
-    );
-    if (!match) throw new TypeError(`${label} contains invalid JSON`);
-    cursor += match[0].length;
-  };
-  const object = () => {
-    cursor += 1;
-    whitespace();
-    const keys = new Set();
-    if (source[cursor] === "}") {
-      cursor += 1;
-      return;
-    }
-    for (;;) {
-      whitespace();
-      const key = string();
-      if (keys.has(key)) throw new TypeError(`${label} contains duplicate field \`${key}\``);
-      keys.add(key);
-      whitespace();
-      if (source[cursor] !== ":") throw new TypeError(`${label} contains invalid JSON`);
-      cursor += 1;
-      value();
-      whitespace();
-      if (source[cursor] === "}") {
-        cursor += 1;
-        return;
-      }
-      if (source[cursor] !== ",") throw new TypeError(`${label} contains invalid JSON`);
-      cursor += 1;
-    }
-  };
-  const list = () => {
-    cursor += 1;
-    whitespace();
-    if (source[cursor] === "]") {
-      cursor += 1;
-      return;
-    }
-    for (;;) {
-      value();
-      whitespace();
-      if (source[cursor] === "]") {
-        cursor += 1;
-        return;
-      }
-      if (source[cursor] !== ",") throw new TypeError(`${label} contains invalid JSON`);
-      cursor += 1;
-    }
-  };
-  value();
-  whitespace();
-  if (cursor !== source.length) throw new TypeError(`${label} contains trailing JSON data`);
+  return plainObject(parseStrictLosslessIntegerJson(text, label), label);
 }

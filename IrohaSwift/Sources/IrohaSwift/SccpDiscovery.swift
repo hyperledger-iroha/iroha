@@ -55,6 +55,7 @@ public struct SccpCapabilities: Equatable, Sendable {
     public let messageBundlePath: String
     public let proofRequestPath: String
     public let recentMessagesPath: String
+    public let soraOutboundMaterialPath: String
     public let registryLimits: SccpRegistryLimits
     public let resourceLimits: SccpResourceLimits
     public let proofSubmitPath: String?
@@ -429,6 +430,7 @@ enum SccpExactParser {
         "message_bundle_path": "/v1/sccp/proofs/message/{message_id}",
         "proof_request_path": "/v1/sccp/proof-requests/{message_id}",
         "recent_messages_path": "/v1/sccp/messages/recent",
+        "sora_outbound_material_path": "/v1/sccp/routes/{source_profile}/{route_id}/{asset_key}/{revision}/sora-outbound-material",
         "proof_submit_path": "/v1/bridge/proofs/submit",
         "native_message_submit_path": "/v1/bridge/messages",
     ]
@@ -480,7 +482,8 @@ enum SccpExactParser {
         let root = try SccpStrictJSON.object(data, label: "SCCP capabilities")
         let required: Set<String> = [
             "version", "registry_revision", "registry_path", "message_bundle_path",
-            "proof_request_path", "recent_messages_path", "registry_limits", "resource_limits",
+            "proof_request_path", "recent_messages_path", "sora_outbound_material_path",
+            "registry_limits", "resource_limits",
         ]
         let allowed = required.union(["proof_submit_path", "native_message_submit_path"])
         try SccpStrictJSON.exactFields(root, allowed: allowed, required: required, label: "SCCP capabilities")
@@ -492,6 +495,7 @@ enum SccpExactParser {
         let bundlePath = try fixedPath(root, "message_bundle_path")
         let proofRequestPath = try fixedPath(root, "proof_request_path")
         let recentPath = try fixedPath(root, "recent_messages_path")
+        let outboundMaterialPath = try fixedPath(root, "sora_outbound_material_path")
         let registryLimits = try registryLimits(object(root, "registry_limits"))
         let resourceLimits = try resourceLimits(object(root, "resource_limits"))
         let proofSubmitPath = try optionalFixedPath(root, "proof_submit_path")
@@ -506,6 +510,7 @@ enum SccpExactParser {
             messageBundlePath: bundlePath,
             proofRequestPath: proofRequestPath,
             recentMessagesPath: recentPath,
+            soraOutboundMaterialPath: outboundMaterialPath,
             registryLimits: registryLimits,
             resourceLimits: resourceLimits,
             proofSubmitPath: proofSubmitPath,

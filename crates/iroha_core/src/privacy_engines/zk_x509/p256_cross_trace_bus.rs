@@ -53,11 +53,11 @@ use super::{
         P256_VALUE_BUS_SEGMENT_ROWS_V1,
     },
 };
+#[cfg(test)]
+use crate::privacy_engines::transparent_stark::GoldilocksDigest384V1;
 use crate::privacy_engines::transparent_stark::{
     GoldilocksFieldV1 as F, TransparentStarkErrorV1, TransparentTranscriptV1,
 };
-#[cfg(test)]
-use crate::privacy_engines::transparent_stark::GoldilocksDigest384V1;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use std::sync::Arc;
 use thiserror::Error;

@@ -146,6 +146,9 @@ impl_direct_instruction_box!(crate::isi::privacy::RegisterPrivacyZkX509CrlV1);
 impl_direct_instruction_box!(crate::isi::privacy::RotatePrivacyZkX509CrlV1);
 impl_direct_instruction_box!(crate::isi::privacy::RevokePrivacyZkX509CrlV1);
 impl_direct_instruction_box!(crate::isi::privacy::SubmitPrivacyProofV1);
+impl_direct_instruction_box!(crate::isi::private_settlement::ActivatePrivateSettlementPoolV1);
+impl_direct_instruction_box!(crate::isi::private_settlement::AbortAtomicPrivateSettlementV1);
+impl_direct_instruction_box!(crate::isi::private_settlement::FinalizeAtomicPrivateSettlementV1);
 impl_direct_instruction_box!(crate::isi::bridge::SubmitBridgeProof);
 impl_direct_instruction_box!(crate::isi::bridge::RecordBridgeReceipt);
 impl_direct_instruction_box!(crate::isi::bridge::RecordSccpMessage);
@@ -351,12 +354,15 @@ impl_sorafs_reserve_instruction_box!(
     crate::isi::sorafs::SubmitSorafsReserveAppeal,
     crate::isi::sorafs::DecideSorafsReserveAppeal,
 );
-impl_direct_instruction_box!(crate::isi::sorafs::SetSorafsPopIssuerPolicy);
-impl_direct_instruction_box!(crate::isi::sorafs::CommitSorafsPopCredentialBatch);
-impl_direct_instruction_box!(crate::isi::sorafs::PublishSorafsPopRevocationList);
+impl_direct_instruction_box!(crate::isi::sorafs::RegisterSorafsCitizenBond);
+impl_direct_instruction_box!(crate::isi::sorafs::RotateSorafsCitizenBondAuthorization);
+impl_direct_instruction_box!(crate::isi::sorafs::RequestSorafsCitizenBondExit);
+impl_direct_instruction_box!(crate::isi::sorafs::RegisterSorafsAnonymousServiceNote);
+impl_direct_instruction_box!(crate::isi::sorafs::RegisterSorafsAnonymousJurorCandidacy);
+impl_direct_instruction_box!(crate::isi::sorafs::RefundSorafsAnonymousServiceEscrow);
+impl_direct_instruction_box!(crate::isi::sorafs::SlashSorafsAnonymousServiceEscrow);
 impl_direct_instruction_box!(crate::isi::sorafs::SetSorafsModerationPolicy);
 impl_direct_instruction_box!(crate::isi::sorafs::SubmitSorafsModerationAppeal);
-impl_direct_instruction_box!(crate::isi::sorafs::RegisterSorafsModerationJurorEligibility);
 impl_direct_instruction_box!(crate::isi::sorafs::FinalizeSorafsModerationSortition);
 impl_direct_instruction_box!(crate::isi::sorafs::AcceptSorafsModerationJurorAssignment);
 impl_direct_instruction_box!(crate::isi::sorafs::ActivateSorafsModerationCase);
@@ -1830,6 +1836,8 @@ pub mod offline;
 pub mod oracle;
 /// First-release privacy governance and proof-admission instructions.
 pub mod privacy;
+/// Atomic private cross-dataspace settlement carrier instructions.
+pub mod private_settlement;
 /// Generic RAM-LFE program-policy instructions.
 pub mod ram_lfe;
 /// Registration-related instructions (accounts, assets, domains, etc.).
@@ -2713,6 +2721,10 @@ pub mod prelude {
             SchedulePrivacyProtocolLimitsTighteningV1, SubmitPrivacyProofV1,
             TransitionPrivacyProtocolLifecycleV1,
         },
+        private_settlement::{
+            AbortAtomicPrivateSettlementV1, ActivatePrivateSettlementPoolV1,
+            FinalizeAtomicPrivateSettlementV1, PrivateSettlementPoolActivationValidationErrorV1,
+        },
         ram_lfe::{
             ActivateRamLfeProgramPolicy, DeactivateRamLfeProgramPolicy, RegisterRamLfeProgramPolicy,
         },
@@ -2745,20 +2757,22 @@ pub mod prelude {
             AcceptSorafsModerationJurorAssignment, ActivateSorafsModerationCase,
             AdvanceSorafsReserveLifecycle, AppendSorafsPorReputationJournalEntry,
             AppendSorafsStreamTokenReputationJournalEntry, ApprovePinManifest, BindManifestAlias,
-            CancelSorafsOrderbookOrder, ChargeSorafsReserveRent, CommitSorafsPopCredentialBatch,
-            CompleteReplicationOrder, DecideSorafsReserveAppeal, DecideSorafsReserveMovement,
-            DrawSorafsReserveCredit, ExpireReplicationOrder, FinalizeSorafsModerationCase,
+            CancelSorafsOrderbookOrder, ChargeSorafsReserveRent, CompleteReplicationOrder,
+            DecideSorafsReserveAppeal, DecideSorafsReserveMovement, DrawSorafsReserveCredit,
+            ExpireReplicationOrder, FinalizeSorafsModerationCase,
             FinalizeSorafsModerationSortition, IssueReplicationOrder, MaintainSorafsOrderbook,
-            MatchSorafsOrderbook, PublishSorafsPopRevocationList, RaiseSorafsModerationChallenge,
-            RecordCapacityTelemetry, RecordSorafsOrderbookSettlementReceipt,
+            MatchSorafsOrderbook, RaiseSorafsModerationChallenge, RecordCapacityTelemetry,
+            RecordSorafsOrderbookSettlementReceipt, RefundSorafsAnonymousServiceEscrow,
             RegisterCapacityDeclaration, RegisterCapacityDispute, RegisterPinManifest,
-            RegisterSorafsModerationJurorEligibility, RegisterSorafsReserveAccount,
-            RepaySorafsReserveCredit, RequestSorafsReserveMovement, ResolveSorafsCapacityDispute,
-            ResolveSorafsModerationChallenge, RetirePinManifest, ReviseReplicationOrderAssignments,
-            RevokeProviderIngestCompletionAuthority, SetPricingSchedule,
+            RegisterSorafsAnonymousJurorCandidacy, RegisterSorafsAnonymousServiceNote,
+            RegisterSorafsCitizenBond, RegisterSorafsReserveAccount, RepaySorafsReserveCredit,
+            RequestSorafsCitizenBondExit, RequestSorafsReserveMovement,
+            ResolveSorafsCapacityDispute, ResolveSorafsModerationChallenge, RetirePinManifest,
+            ReviseReplicationOrderAssignments, RevokeProviderIngestCompletionAuthority,
+            RotateSorafsCitizenBondAuthorization, SetPricingSchedule,
             SetProviderIngestCompletionAuthority, SetSorafsModerationPolicy,
-            SetSorafsOrderbookPolicy, SetSorafsPopIssuerPolicy,
-            SetSorafsReputationJournalAuthorityPolicy, SetSorafsReservePolicy,
+            SetSorafsOrderbookPolicy, SetSorafsReputationJournalAuthorityPolicy,
+            SetSorafsReservePolicy, SlashSorafsAnonymousServiceEscrow,
             SubmitSorafsModerationAppeal, SubmitSorafsModerationCommit,
             SubmitSorafsModerationReveal, SubmitSorafsOrderbookOrder, SubmitSorafsReserveAppeal,
             UpsertProviderCredit,

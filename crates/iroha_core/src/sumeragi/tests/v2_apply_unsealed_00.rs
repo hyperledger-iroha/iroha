@@ -2977,7 +2977,7 @@ fn deferred_canonical_carrier_startup_fixture() -> DeferredCanonicalCarrierStart
         .persist_merge_lane_block_application_receipts(&entry, 2, carrier.hash())
         .expect("persist deferred carrier application receipts");
     commit_exact_fixture_carrier_chain_to_state(&fixture, &parent, &carrier);
-    fixture.state.record_direct_committed_entrypoints(
+    fixture.state.record_committed_entrypoints_for_tests(
         [first_key.entrypoint_hash, second_key.entrypoint_hash],
         NonZeroUsize::new(2).expect("deferred carrier State height"),
     );

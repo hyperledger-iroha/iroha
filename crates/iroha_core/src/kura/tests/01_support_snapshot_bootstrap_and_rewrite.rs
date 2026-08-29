@@ -322,20 +322,15 @@ fn strict_startup_rejects_every_retired_kura_artifact_after_fast_defers_the_audi
         }
         let mut fast_config = config.clone();
         fast_config.init_mode = InitMode::Fast;
-        let (fast_kura, _) = Kura::open_test_kura_with_configured_lane_config(
-            &fast_config,
-            &lane_config,
-        )
-        .expect("Fast startup must defer retired-artifact audits");
+        let (fast_kura, _) =
+            Kura::open_test_kura_with_configured_lane_config(&fast_config, &lane_config)
+                .expect("Fast startup must defer retired-artifact audits");
         drop(fast_kura);
         assert!(
             fs::symlink_metadata(&path).is_ok(),
             "Fast startup must not inspect or mutate retired artifacts",
         );
-        let err = match Kura::open_test_kura_with_configured_lane_config(
-            &config,
-            &lane_config,
-        ) {
+        let err = match Kura::open_test_kura_with_configured_lane_config(&config, &lane_config) {
             Ok(_) => panic!("retired artifact {name} must abort Kura startup"),
             Err(err) => err,
         };
@@ -1629,7 +1624,7 @@ fn v2_finality_summary_maps_to_public_status_without_regression() {
     assert_eq!(sumeragi.locked_qc_height, artifacts[1].height);
 }
 #[test]
-fn disabled_telemetry_tracks_durable_v2_finality_before_enable() {
+fn disabled_telemetry_tracks_durable_v2_finality() {
     let kura = Kura::blank_kura_for_testing();
     let block = DummyBlocks::new().next();
     kura.store_block(Arc::clone(&block))
@@ -1641,8 +1636,6 @@ fn disabled_telemetry_tracks_durable_v2_finality_before_enable() {
     let _disabled_receipt = kura
         .store_v2_finality_artifact(&artifact)
         .expect("persist finality while telemetry observations are disabled");
-    assert_v2_finality_telemetry(&metrics, &artifact);
-    telemetry.enable();
     assert_v2_finality_telemetry(&metrics, &artifact);
 }
 #[test]

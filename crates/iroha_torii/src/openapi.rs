@@ -27,7 +27,7 @@ static COMPILED_OPENAPI_SPEC: LazyLock<Value> = LazyLock::new(|| {
             .expect("package-local Torii OpenAPI authority must contain a paths object");
         retain_catalog_openapi_operations(paths, crate::router::builder::compiled_route_features());
     }
-    remove_retired_soracloud_runtime_schemas(&mut document);
+    remove_hard_retired_schemas(&mut document);
     document
 });
 static COMPILED_OPENAPI_JSON: LazyLock<String> = LazyLock::new(|| {
@@ -119,7 +119,7 @@ fn retain_catalog_openapi_operations(paths: &mut Map, enabled_features: EnabledF
         })
     });
 }
-fn remove_retired_soracloud_runtime_schemas(document: &mut Value) {
+fn remove_hard_retired_schemas(document: &mut Value) {
     let schemas = document
         .as_object_mut()
         .and_then(|document| document.get_mut("components"))
@@ -128,6 +128,8 @@ fn remove_retired_soracloud_runtime_schemas(document: &mut Value) {
         .and_then(Value::as_object_mut)
         .expect("package-local Torii OpenAPI authority must contain component schemas");
     for schema in [
+        "GovernanceEnactRequestV1",
+        "GovernanceFinalizeRequestV1",
         "UploadedModelEncryptionRecipientResponse",
         "PrivateUploadedModelExecuteRequest",
         "PrivateUploadedModelExecuteResponse",
@@ -5227,6 +5229,7 @@ mod tests {
         assert!(!paths.contains_key("/v1/multisig/proposals/list"));
         assert!(!paths.contains_key("/v1/multisig/proposals/get"));
         assert!(!paths.contains_key("/v1/multisig/proposals/search"));
+        assert!(!paths.contains_key("/v1/sumeragi/pacemaker"));
         let protected_namespaces = paths
             .get("/v1/gov/protected-namespaces")
             .and_then(Value::as_object)
@@ -5239,26 +5242,6 @@ mod tests {
                 .and_then(Value::as_str),
             Some("operator")
         );
-        for path in ["/v1/sumeragi/pacemaker"] {
-            let operation = paths
-                .get(path)
-                .and_then(Value::as_object)
-                .and_then(|path| path.get("get"))
-                .and_then(Value::as_object);
-            let expected = catalog_openapi_route_enabled(CatalogHttpMethod::Get, path);
-            assert_eq!(
-                operation.is_some(),
-                expected,
-                "{path} presence must follow the enabled catalog OpenAPI projection"
-            );
-            if let Some(operation) = operation {
-                assert_eq!(
-                    operation.get(TOOL_EFFECT_EXTENSION).and_then(Value::as_str),
-                    Some("operator"),
-                    "{path} must remain operator-only"
-                );
-            }
-        }
         for route in RouteCatalog::new(CATALOGED_ROUTES)
             .project(
                 iroha_torii_shared::route_catalog::CatalogProjection::OpenApi,

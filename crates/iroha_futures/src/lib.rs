@@ -12,7 +12,7 @@ use std::{
     pin::Pin,
     sync::atomic::{AtomicU64, Ordering},
     task::{Context, Poll},
-    time::{Duration, Instant},
+    time::Instant,
 };
 /// Future which sends info with telemetry about number and length of polls
 #[derive(Debug, Clone, Copy)]
@@ -38,13 +38,6 @@ pub struct FuturePollTelemetry {
     /// Duration of poll encoded in nanoseconds
     pub duration: u64,
 }
-impl FuturePollTelemetry {
-    /// Poll duration as a `Duration` value.
-    #[inline]
-    pub fn duration(&self) -> Duration {
-        Duration::from_nanos(self.duration)
-    }
-}
 const ID: &str = "id";
 const NAME: &str = "name";
 const DURATION: &str = "duration";
@@ -52,38 +45,6 @@ static NEXT_TELEMETRY_FUTURE_ID: AtomicU64 = AtomicU64::new(1);
 /// Telemetry conversion error
 #[derive(Debug, Clone, Copy)]
 pub struct TelemetryConversionError;
-impl TryFrom<&Telemetry> for FuturePollTelemetry {
-    type Error = TelemetryConversionError;
-    fn try_from(
-        Telemetry { target, fields }: &Telemetry,
-    ) -> Result<Self, TelemetryConversionError> {
-        if *target != "iroha_futures" {
-            return Err(TelemetryConversionError);
-        }
-        let TelemetryFields(fields) = fields;
-        let (mut id, mut name, mut duration) = (None, None, None);
-        for field in fields {
-            match field {
-                (ID, Value::Number(id_value)) if id.is_none() => {
-                    id = Some(id_value.as_u64().ok_or(TelemetryConversionError)?)
-                }
-                (NAME, Value::String(name_value)) if name.is_none() => name = Some(name_value),
-                (DURATION, Value::Number(duration_value)) if duration.is_none() => {
-                    duration = Some(duration_value.as_u64().ok_or(TelemetryConversionError)?)
-                }
-                _ => {}
-            }
-        }
-        let (Some(id), Some(name), Some(duration)) = (id, name, duration) else {
-            return Err(TelemetryConversionError);
-        };
-        Ok(Self {
-            id,
-            name: name.clone(),
-            duration,
-        })
-    }
-}
 impl TryFrom<Telemetry> for FuturePollTelemetry {
     type Error = TelemetryConversionError;
     fn try_from(Telemetry { target, fields }: Telemetry) -> Result<Self, TelemetryConversionError> {
@@ -132,7 +93,6 @@ mod tests {
     use super::*;
     use iroha_logger::telemetry::{Event as Telemetry, Fields as TelemetryFields};
     use norito::json::Value;
-    use std::time::Duration;
     fn telemetry_event(id: Value, duration: Value) -> Telemetry {
         Telemetry {
             target: "iroha_futures",
@@ -156,7 +116,6 @@ mod tests {
         assert_eq!(decoded.id, sample.id);
         assert_eq!(decoded.name, sample.name);
         assert_eq!(decoded.duration, sample.duration);
-        assert_eq!(decoded.duration(), Duration::from_nanos(sample.duration));
     }
     #[test]
     fn telemetry_future_ids_are_monotonic() {
@@ -181,18 +140,6 @@ mod tests {
         assert_eq!(telemetry.id, 42);
         assert_eq!(telemetry.name, "basic::sleep");
         assert_eq!(telemetry.duration, 123);
-    }
-    #[test]
-    fn borrowed_future_poll_telemetry_rejects_non_u64_numbers() {
-        for event in [
-            telemetry_event(Value::from(-1_i64), Value::from(123_u64)),
-            telemetry_event(Value::from(42_u64), Value::from(0.5_f64)),
-        ] {
-            assert!(
-                FuturePollTelemetry::try_from(&event).is_err(),
-                "negative or fractional numbers must return a conversion error"
-            );
-        }
     }
     #[test]
     fn owned_future_poll_telemetry_rejects_non_u64_numbers() {

@@ -77,11 +77,13 @@ public struct ToriiBridgeMessageSubmitRequest: Encodable, Equatable, Sendable {
     public let signatureB64: String?
     public let transactionPayloadB64: String?
     public let nativeProofB64: String
+    public let replayWitnessB64: String
     public let creationTimeMs: UInt64?
 
     public init(
         authority: String,
         nativeProofB64: String,
+        replayWitnessB64: String,
         signatureB64: String? = nil,
         transactionPayloadB64: String? = nil,
         creationTimeMs: UInt64? = nil,
@@ -113,6 +115,16 @@ public struct ToriiBridgeMessageSubmitRequest: Encodable, Equatable, Sendable {
             expectedTypeName: SccpSubmitValidation.nativeInboundProofTypeName
         )
         self.nativeProofB64 = nativeProofB64
+        let replayWitnessArchive = try SccpSubmitValidation.canonicalNoritoBase64(
+            replayWitnessB64,
+            field: "replay_witness_b64",
+            maximumBytes: SccpSubmitValidation.maximumReplayWitnessBytes,
+            expectedTypeName: SccpSubmitValidation.replayWitnessTypeName
+        )
+        try SccpSubmitValidation.requireCanonicalReplayNonMembershipWitness(
+            replayWitnessArchive
+        )
+        self.replayWitnessB64 = replayWitnessB64
         if let creationTimeMs, creationTimeMs == 0 {
             throw SccpV1Error.invalid("creation_time_ms must be positive")
         }
@@ -130,6 +142,7 @@ public struct ToriiBridgeMessageSubmitRequest: Encodable, Equatable, Sendable {
         case signatureB64 = "signature_b64"
         case transactionPayloadB64 = "transaction_payload_b64"
         case nativeProofB64 = "native_proof_b64"
+        case replayWitnessB64 = "replay_witness_b64"
         case creationTimeMs = "creation_time_ms"
     }
 }
@@ -214,6 +227,7 @@ public struct SccpBridgeSubmitResponse: Equatable, Sendable {
         let exactBackends = Set(SccpNativeBackendV1.allCases.map(\.backendLabel)).union([
             "evm-groth16-bn254-v1",
             "tron-groth16-bn254-v1",
+            "ton-groth16-bls12381-v1",
         ])
         guard exactBackends.contains(backend) else {
             throw SccpV1Error.invalid("backend must be one closed SCCP V1 backend label")
@@ -234,6 +248,11 @@ public struct SccpBridgeSubmitResponse: Equatable, Sendable {
             backendsForDomain = [
                 "evm-groth16-bn254-v1",
                 "bridge/sccp/native/bsc-parlia-v1",
+            ]
+        case 4:
+            backendsForDomain = [
+                "ton-groth16-bls12381-v1",
+                "bridge/sccp/native/ton-masterchain-v1",
             ]
         case 5:
             backendsForDomain = [
@@ -327,6 +346,8 @@ enum SccpSubmitValidation {
         "iroha_data_model::bridge::BridgeSccpDestinationProofV1"
     static let nativeInboundProofTypeName =
         "iroha_sccp::native_admission::SccpNativeInboundMessageProofV1"
+    static let replayWitnessTypeName =
+        "iroha_data_model::bridge::sccp_replay::SccpSparseMerkleWitnessV1"
     static let registryTypeName =
         "iroha_data_model::bridge::sccp_registry::SccpRegistryV1"
     static let messageBundleTypeName = "iroha_sccp::TairaSccpMessageProofV1"
@@ -338,6 +359,7 @@ enum SccpSubmitValidation {
         tonProofRequestTypeName,
     ]
     static let maximumNativeArtifactBytes = 16 * 1024 * 1024
+    static let maximumReplayWitnessBytes = 16 * 1024
     static let maximumGroth16ArtifactBytes = maximumNativeArtifactBytes + 64 * 1024
     static let maximumDestinationArtifactBytes = maximumGroth16ArtifactBytes + 64 * 1024
     static let maximumDestinationArtifactBase64Bytes =
@@ -842,6 +864,51 @@ enum SccpSubmitValidation {
             )
         }
         return data
+    }
+
+    static func requireCanonicalReplayNonMembershipWitness(_ archive: Data) throws {
+        guard let frame = noritoDecodeFrame(archive),
+              frame.header.flags == NoritoHeader.compactLen else {
+            throw SccpV1Error.invalid(
+                "replay_witness_b64 must use the exact compact Norito layout"
+            )
+        }
+        var witness = SccpCompactTransactionCursor(frame.payload)
+        let expectedShardRoot = try witness.takeField("replay witness expected shard root")
+        let priorRecordDigest = try witness.takeField("replay witness prior record digest")
+        let siblingBitmap = try witness.takeField("replay witness sibling bitmap")
+        let encodedSiblings = try witness.takeField("replay witness siblings")
+        guard witness.isFinished,
+              priorRecordDigest.count == 32,
+              priorRecordDigest.allSatisfy({ $0 == 0 }) else {
+            throw SccpV1Error.invalid(
+                "replay_witness_b64 must contain one replay non-membership witness"
+            )
+        }
+        var siblingSequence = SccpCompactTransactionCursor(encodedSiblings)
+        let siblingCount = try siblingSequence.takeUInt64("replay witness sibling count")
+        guard siblingCount <= UInt64(SccpReplayV1.depth) else {
+            throw SccpV1Error.invalid("replay witness contains too many siblings")
+        }
+        var siblings: [Data] = []
+        siblings.reserveCapacity(Int(siblingCount))
+        for index in 0..<Int(siblingCount) {
+            siblings.append(try siblingSequence.takeField("replay witness sibling[\(index)]"))
+        }
+        guard siblingSequence.isFinished else {
+            throw SccpV1Error.invalid("replay witness sibling sequence contains trailing bytes")
+        }
+        let decoded = try SccpSparseMerkleWitnessV1(
+            expectedShardRoot: expectedShardRoot,
+            priorRecordDigest: priorRecordDigest,
+            siblingBitmap: siblingBitmap,
+            siblings: siblings
+        )
+        _ = try SccpReplayV1.rootFromWitness(
+            key: Data(repeating: 1, count: 32),
+            recordDigest: nil,
+            witness: decoded
+        )
     }
 
     static func canonicalBase64(

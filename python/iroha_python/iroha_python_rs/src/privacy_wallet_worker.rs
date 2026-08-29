@@ -2,10 +2,12 @@
 //!
 //! This module deliberately exposes no operation that returns witness bytes.
 //! A caller may import a credential file, inspect or cancel its opaque handle,
-//! or consume it exactly once through opcode 5.  Execution validates the
-//! canonical public intent and witness-free transaction plan before entering a
-//! native Rust closure, decodes the exact owner bundle there, builds and
-//! self-inspects one signed transaction, and returns public signed wire only.
+//! consume a generic privacy credential exactly once through opcode 5, or use
+//! the purpose-separated settlement opcodes 6--9. Generic execution validates
+//! canonical public intent and a witness-free transaction plan before entering
+//! a native Rust closure. Settlement proving accepts only canonical public
+//! Norito objects. Both paths decode owner material only inside Rust, wipe it
+//! after terminal use, and return public artifacts only.
 use crate::{
     privacy_native_actions::{
         PRIVACY_NATIVE_ACTION_MAX_SIGNED_TRANSACTION_BYTES_V1, PrivacyActionTransactionContextV1,
@@ -18,9 +20,20 @@ use crate::{
         decode_privacy_wallet_execution_bundle_v1, inspect_privacy_wallet_execution_bundle_v1,
     },
 };
+use iroha_core::privacy_engines::atomic_private_settlement::{
+    AtomicPrivateSettlementPreparedProofV1, AtomicPrivateSettlementWalletErrorV1,
+    AtomicPrivateSettlementWalletInspectionV1, consume_atomic_private_settlement_wallet_bundle_v1,
+    inspect_atomic_private_settlement_wallet_bundle_v1,
+};
 use iroha_crypto::Algorithm;
 use iroha_data_model::{
-    metadata::Metadata, prelude::AccountId, privacy::PrivacyProtocolIdV1,
+    metadata::Metadata,
+    nexus::{
+        AtomicPrivateSettlementV1, PrivateSettlementAuditCapsuleV1, PrivateSettlementAuditPolicyV1,
+        PrivateSettlementProofProfileV1, PrivateSettlementProofStatementV1,
+    },
+    prelude::AccountId,
+    privacy::PrivacyProtocolIdV1,
     transaction::FeePaymentIntent,
 };
 use rand_core_06::{OsRng, RngCore};
@@ -50,6 +63,9 @@ const NONCE_BYTES: usize = 32;
 const MAX_SIGNER_BYTES: usize = 512;
 const MAX_PROTOCOL_BYTES: usize = 96;
 const MAX_PATH_BYTES: usize = 4_096;
+const MAX_SETTLEMENT_PUBLIC_OBJECT_BYTES: usize = 4 * 1_024 * 1_024;
+const MAX_SETTLEMENT_PROOF_BYTES: usize = 8 * 1_024 * 1_024;
+const ATOMIC_PRIVATE_SETTLEMENT_PROTOCOL_LABEL_V1: &str = "atomic-private-settlement-v1";
 const PUBLIC_INTENT_DIGEST_DOMAIN: &[u8] = b"iroha-privacy-wallet-binding-v1\0";
 const COMPILED_PROFILE_DIGEST_DOMAIN: &[u8] = b"iroha-privacy-compiled-profile-binding-v1\0";
 const PUBLIC_INTENT_BASE_FIELDS: &[&str] = &[
@@ -110,9 +126,10 @@ impl WitnessBinding {
     pub fn validate(&self) -> Result<(), WorkerError> {
         validate_text("signer", &self.signer, MAX_SIGNER_BYTES)?;
         validate_text("protocol", &self.protocol, MAX_PROTOCOL_BYTES)?;
-        retained_protocol(&self.protocol)?;
+        validate_worker_protocol(&self.protocol)?;
         if self.network_id == [0; DIGEST_BYTES]
-            || self.network_id[DIGEST_BYTES - 1] & 1 != 1
+            || (self.protocol != ATOMIC_PRIVATE_SETTLEMENT_PROTOCOL_LABEL_V1
+                && self.network_id[DIGEST_BYTES - 1] & 1 != 1)
             || self.profile_digest == [0; DIGEST_BYTES]
             || self.public_intent_digest == [0; DIGEST_BYTES]
             || self.nonce == [0; NONCE_BYTES]
@@ -168,7 +185,7 @@ pub fn compiled_profile_digest(
     binding: &CompiledProfileBinding,
 ) -> Result<[u8; DIGEST_BYTES], WorkerError> {
     validate_text("compiled profile protocol", protocol, MAX_PROTOCOL_BYTES)?;
-    retained_protocol(protocol)?;
+    validate_worker_protocol(protocol)?;
     binding.validate()?;
     let mut digest = Sha256::new();
     digest.update(COMPILED_PROFILE_DIGEST_DOMAIN);
@@ -398,6 +415,7 @@ impl WitnessVault {
             OsRng
                 .try_fill_bytes(&mut bytes)
                 .map_err(|_| WorkerError::EntropyUnavailable)?;
+            bytes[0] &= 0x7f;
             if bytes != [0; HANDLE_BYTES] {
                 let candidate = WitnessHandle(bytes);
                 if !self.entries.contains_key(&candidate) {
@@ -408,6 +426,182 @@ impl WitnessVault {
         Err(WorkerError::EntropyUnavailable)
     }
 }
+
+#[derive(Clone, PartialEq, Eq)]
+struct PrivateSettlementWitnessLeaseV1 {
+    handle: WitnessHandle,
+    expires_at_millis: u64,
+    inspection: AtomicPrivateSettlementWalletInspectionV1,
+}
+
+struct StoredPrivateSettlementWitnessV1 {
+    binding: WitnessBinding,
+    binding_digest: [u8; DIGEST_BYTES],
+    expires_at_millis: u64,
+    inspection: AtomicPrivateSettlementWalletInspectionV1,
+    material: Zeroizing<Vec<u8>>,
+}
+
+struct PrivateSettlementWitnessVaultV1 {
+    entries: HashMap<WitnessHandle, StoredPrivateSettlementWitnessV1>,
+    maximum_handles: usize,
+}
+
+impl Default for PrivateSettlementWitnessVaultV1 {
+    fn default() -> Self {
+        Self {
+            entries: HashMap::new(),
+            maximum_handles: MAX_HANDLES,
+        }
+    }
+}
+
+impl Drop for PrivateSettlementWitnessVaultV1 {
+    fn drop(&mut self) {
+        for witness in self.entries.values_mut() {
+            witness.material.zeroize();
+        }
+        self.entries.clear();
+    }
+}
+
+impl PrivateSettlementWitnessVaultV1 {
+    fn import_credential(
+        &mut self,
+        request: ImportRequest,
+    ) -> Result<PrivateSettlementWitnessLeaseV1, WorkerError> {
+        let now_millis = unix_time_millis()?;
+        request.binding.validate()?;
+        if request.binding.protocol != ATOMIC_PRIVATE_SETTLEMENT_PROTOCOL_LABEL_V1 {
+            return Err(WorkerError::UnsupportedProtocol);
+        }
+        validate_clock_and_ttl(now_millis, request.ttl_millis)?;
+        self.purge_expired_at(now_millis);
+        if self.entries.len() >= self.maximum_handles {
+            return Err(WorkerError::CapacityExceeded);
+        }
+        let material = read_credential_file(&request.credential_path)?;
+        let inspection = inspect_atomic_private_settlement_wallet_bundle_v1(&material)
+            .map_err(|_| WorkerError::InvalidPrivateSettlementBundle)?;
+        let expected_profile = PrivateSettlementProofProfileV1::IvmPrivateNoteFixed2In3Out.digest();
+        if request.binding.signer != inspection.wallet_id
+            || !constant_time_eq(
+                &request.binding.public_intent_digest,
+                inspection.proof_binding_digest.as_ref(),
+            )
+            || !constant_time_eq(&request.binding.profile_digest, expected_profile.as_ref())
+        {
+            return Err(WorkerError::WrongBinding);
+        }
+        let expires_at_millis = now_millis
+            .checked_add(request.ttl_millis)
+            .ok_or(WorkerError::InvalidTtl)?;
+        let handle = self.unique_handle()?;
+        let binding_digest = request.binding.digest();
+        self.entries.insert(
+            handle,
+            StoredPrivateSettlementWitnessV1 {
+                binding: request.binding,
+                binding_digest,
+                expires_at_millis,
+                inspection: inspection.clone(),
+                material,
+            },
+        );
+        Ok(PrivateSettlementWitnessLeaseV1 {
+            handle,
+            expires_at_millis,
+            inspection,
+        })
+    }
+
+    fn inspect(
+        &mut self,
+        handle: WitnessHandle,
+        expected_binding: &WitnessBinding,
+    ) -> Result<PrivateSettlementWitnessLeaseV1, WorkerError> {
+        let now_millis = unix_time_millis()?;
+        self.purge_expired_at(now_millis);
+        let stored = self
+            .entries
+            .get(&handle)
+            .ok_or(WorkerError::UnknownHandle)?;
+        validate_private_settlement_expected_binding(stored, expected_binding)?;
+        Ok(PrivateSettlementWitnessLeaseV1 {
+            handle,
+            expires_at_millis: stored.expires_at_millis,
+            inspection: stored.inspection.clone(),
+        })
+    }
+
+    fn cancel(
+        &mut self,
+        handle: WitnessHandle,
+        expected_binding: &WitnessBinding,
+    ) -> Result<(), WorkerError> {
+        let now_millis = unix_time_millis()?;
+        self.purge_expired_at(now_millis);
+        {
+            let stored = self
+                .entries
+                .get(&handle)
+                .ok_or(WorkerError::UnknownHandle)?;
+            validate_private_settlement_expected_binding(stored, expected_binding)?;
+        }
+        let mut removed = self
+            .entries
+            .remove(&handle)
+            .ok_or(WorkerError::UnknownHandle)?;
+        removed.material.zeroize();
+        Ok(())
+    }
+
+    fn consume_with<T, E>(
+        &mut self,
+        handle: WitnessHandle,
+        expected_binding: &WitnessBinding,
+        operation: impl FnOnce(&mut [u8]) -> Result<T, E>,
+    ) -> Result<T, ConsumeError<E>> {
+        let now_millis = unix_time_millis().map_err(ConsumeError::Custody)?;
+        self.purge_expired_at(now_millis);
+        {
+            let stored = self
+                .entries
+                .get(&handle)
+                .ok_or(ConsumeError::Custody(WorkerError::UnknownHandle))?;
+            validate_private_settlement_expected_binding(stored, expected_binding)
+                .map_err(ConsumeError::Custody)?;
+        }
+        let mut stored = self
+            .entries
+            .remove(&handle)
+            .ok_or(ConsumeError::Custody(WorkerError::UnknownHandle))?;
+        let result = operation(stored.material.as_mut_slice()).map_err(ConsumeError::Operation);
+        stored.material.zeroize();
+        result
+    }
+
+    fn purge_expired_at(&mut self, now_millis: u64) {
+        self.entries
+            .retain(|_, witness| witness.expires_at_millis > now_millis);
+    }
+
+    fn unique_handle(&self) -> Result<WitnessHandle, WorkerError> {
+        for _ in 0..32 {
+            let mut bytes = [0_u8; HANDLE_BYTES];
+            OsRng
+                .try_fill_bytes(&mut bytes)
+                .map_err(|_| WorkerError::EntropyUnavailable)?;
+            bytes[0] |= 0x80;
+            let candidate = WitnessHandle(bytes);
+            if !self.entries.contains_key(&candidate) {
+                return Ok(candidate);
+            }
+        }
+        Err(WorkerError::EntropyUnavailable)
+    }
+}
+
 #[derive(Debug)]
 pub enum ConsumeError<E> {
     Custody(WorkerError),
@@ -421,6 +615,10 @@ pub enum CommandKind {
     Inspect = 3,
     Cancel = 4,
     Execute = 5,
+    ImportPrivateSettlement = 6,
+    InspectPrivateSettlement = 7,
+    CancelPrivateSettlement = 8,
+    ProvePrivateSettlement = 9,
 }
 impl TryFrom<u8> for CommandKind {
     type Error = WorkerError;
@@ -431,6 +629,10 @@ impl TryFrom<u8> for CommandKind {
             3 => Ok(Self::Inspect),
             4 => Ok(Self::Cancel),
             5 => Ok(Self::Execute),
+            6 => Ok(Self::ImportPrivateSettlement),
+            7 => Ok(Self::InspectPrivateSettlement),
+            8 => Ok(Self::CancelPrivateSettlement),
+            9 => Ok(Self::ProvePrivateSettlement),
             _ => Err(WorkerError::UnknownCommand),
         }
     }
@@ -567,6 +769,7 @@ pub fn run_pipe_session(
         return Err(WorkerError::AuthenticationFailed);
     }
     let mut vault = WitnessVault::default();
+    let mut private_settlement_vault = PrivateSettlementWitnessVaultV1::default();
     let mut expected_sequence = 1_u64;
     while let Some(frame) = read_frame(reader, &auth_key)? {
         if frame.sequence != expected_sequence {
@@ -575,7 +778,17 @@ pub fn run_pipe_session(
         expected_sequence = expected_sequence
             .checked_add(1)
             .ok_or(WorkerError::ReplayOrOutOfOrder)?;
-        let response = dispatch(&mut vault, frame.kind, &frame.payload);
+        let response = match frame.kind {
+            CommandKind::ImportPrivateSettlement
+            | CommandKind::InspectPrivateSettlement
+            | CommandKind::CancelPrivateSettlement
+            | CommandKind::ProvePrivateSettlement => dispatch_private_settlement(
+                &mut private_settlement_vault,
+                frame.kind,
+                &frame.payload,
+            ),
+            _ => dispatch(&mut vault, frame.kind, &frame.payload),
+        };
         write_frame(
             writer,
             &AuthenticatedFrame {
@@ -593,6 +806,8 @@ enum CommandResponse {
     Lease(WitnessLease),
     Cancelled,
     SignedAction(Box<SignedActionResponseV1>),
+    PrivateSettlementLease(PrivateSettlementWitnessLeaseV1),
+    PrivateSettlementProof(Box<PrivateSettlementProofResponseV1>),
     Error(WorkerError),
 }
 struct SignedActionResponseV1 {
@@ -620,6 +835,27 @@ struct ExecuteRequestV1 {
     binding: WitnessBinding,
     canonical_public_intent: Vec<u8>,
     canonical_execution_plan: Vec<u8>,
+}
+
+struct PrivateSettlementProveRequestV1 {
+    handle: WitnessHandle,
+    binding: WitnessBinding,
+    manifest: AtomicPrivateSettlementV1,
+    statement: PrivateSettlementProofStatementV1,
+    capsule: PrivateSettlementAuditCapsuleV1,
+    policy: PrivateSettlementAuditPolicyV1,
+    canonical_genesis_hash: [u8; DIGEST_BYTES],
+    current_height: u64,
+}
+
+struct PrivateSettlementProofResponseV1 {
+    wallet_id: String,
+    canonical_genesis_hash: [u8; DIGEST_BYTES],
+    proof_binding_digest: [u8; DIGEST_BYTES],
+    statement_digest: [u8; DIGEST_BYTES],
+    capsule_digest: [u8; DIGEST_BYTES],
+    audit_plaintext_commitment: [u8; DIGEST_BYTES],
+    prepared: AtomicPrivateSettlementPreparedProofV1,
 }
 struct ValidatedPublicIntentV1 {
     operation_schema: String,
@@ -654,6 +890,48 @@ fn dispatch(vault: &mut WitnessVault, kind: CommandKind, payload: &[u8]) -> Comm
                 .map(Box::new)
                 .map(CommandResponse::SignedAction)
         }),
+        CommandKind::ImportPrivateSettlement
+        | CommandKind::InspectPrivateSettlement
+        | CommandKind::CancelPrivateSettlement
+        | CommandKind::ProvePrivateSettlement => Err(WorkerError::UnknownCommand),
+    };
+    result.unwrap_or_else(CommandResponse::Error)
+}
+
+fn dispatch_private_settlement(
+    vault: &mut PrivateSettlementWitnessVaultV1,
+    kind: CommandKind,
+    payload: &[u8],
+) -> CommandResponse {
+    let result = match kind {
+        CommandKind::ImportPrivateSettlement => decode_import(payload)
+            .and_then(|request| vault.import_credential(request))
+            .map(CommandResponse::PrivateSettlementLease),
+        CommandKind::InspectPrivateSettlement => {
+            decode_handle_request(payload).and_then(|(handle, binding)| {
+                vault
+                    .inspect(handle, &binding)
+                    .map(CommandResponse::PrivateSettlementLease)
+            })
+        }
+        CommandKind::CancelPrivateSettlement => {
+            decode_handle_request(payload).and_then(|(handle, binding)| {
+                vault
+                    .cancel(handle, &binding)
+                    .map(|()| CommandResponse::Cancelled)
+            })
+        }
+        CommandKind::ProvePrivateSettlement => decode_private_settlement_prove_payload(payload)
+            .and_then(|request| {
+                prove_private_settlement_v1(vault, request)
+                    .map(Box::new)
+                    .map(CommandResponse::PrivateSettlementProof)
+            }),
+        CommandKind::Ping
+        | CommandKind::Import
+        | CommandKind::Inspect
+        | CommandKind::Cancel
+        | CommandKind::Execute => Err(WorkerError::UnknownCommand),
     };
     result.unwrap_or_else(CommandResponse::Error)
 }
@@ -705,6 +983,62 @@ pub fn encode_execute_payload(
     put_bytes_u32(&mut payload, canonical_execution_plan)?;
     Ok(payload)
 }
+
+/// Encode one witness-free atomic private-settlement proving request.
+///
+/// Only canonical public objects and an opaque handle cross this IPC boundary;
+/// spending secrets and membership paths remain in the owner-only credential.
+pub fn encode_private_settlement_prove_payload(
+    handle: WitnessHandle,
+    binding: &WitnessBinding,
+    manifest: &AtomicPrivateSettlementV1,
+    statement: &PrivateSettlementProofStatementV1,
+    capsule: &PrivateSettlementAuditCapsuleV1,
+    policy: &PrivateSettlementAuditPolicyV1,
+    canonical_genesis_hash: [u8; DIGEST_BYTES],
+    current_height: u64,
+) -> Result<Vec<u8>, WorkerError> {
+    binding.validate()?;
+    if binding.protocol != ATOMIC_PRIVATE_SETTLEMENT_PROTOCOL_LABEL_V1 {
+        return Err(WorkerError::UnsupportedProtocol);
+    }
+    let manifest_bytes = norito::encode_canonical(manifest)
+        .map_err(|_| WorkerError::InvalidPrivateSettlementBundle)?;
+    let statement_bytes = norito::encode_canonical(statement)
+        .map_err(|_| WorkerError::InvalidPrivateSettlementBundle)?;
+    let capsule_bytes = norito::encode_canonical(capsule)
+        .map_err(|_| WorkerError::InvalidPrivateSettlementBundle)?;
+    let policy_bytes = norito::encode_canonical(policy)
+        .map_err(|_| WorkerError::InvalidPrivateSettlementBundle)?;
+    for bytes in [
+        manifest_bytes.as_slice(),
+        statement_bytes.as_slice(),
+        capsule_bytes.as_slice(),
+        policy_bytes.as_slice(),
+    ] {
+        if bytes.is_empty() || bytes.len() > MAX_SETTLEMENT_PUBLIC_OBJECT_BYTES {
+            return Err(WorkerError::InvalidPayload);
+        }
+    }
+    let mut payload = Vec::with_capacity(
+        768 + manifest_bytes.len()
+            + statement_bytes.len()
+            + capsule_bytes.len()
+            + policy_bytes.len(),
+    );
+    payload.extend_from_slice(handle.as_bytes());
+    encode_binding(&mut payload, binding);
+    put_bytes_u32(&mut payload, &manifest_bytes)?;
+    put_bytes_u32(&mut payload, &statement_bytes)?;
+    put_bytes_u32(&mut payload, &capsule_bytes)?;
+    put_bytes_u32(&mut payload, &policy_bytes)?;
+    payload.extend_from_slice(&canonical_genesis_hash);
+    payload.extend_from_slice(&current_height.to_be_bytes());
+    if payload.len() > MAX_FRAME_BYTES {
+        return Err(WorkerError::FrameTooLarge);
+    }
+    Ok(payload)
+}
 fn decode_import(payload: &[u8]) -> Result<ImportRequest, WorkerError> {
     let mut cursor = Cursor::new(payload);
     let path = cursor.text(MAX_PATH_BYTES)?;
@@ -742,6 +1076,187 @@ fn decode_execute_payload(payload: &[u8]) -> Result<ExecuteRequestV1, WorkerErro
         canonical_public_intent,
         canonical_execution_plan,
     })
+}
+
+fn decode_private_settlement_prove_payload(
+    payload: &[u8],
+) -> Result<PrivateSettlementProveRequestV1, WorkerError> {
+    let mut cursor = Cursor::new(payload);
+    let handle = WitnessHandle(cursor.array()?);
+    let binding = decode_binding(&mut cursor)?;
+    if binding.protocol != ATOMIC_PRIVATE_SETTLEMENT_PROTOCOL_LABEL_V1 {
+        return Err(WorkerError::UnsupportedProtocol);
+    }
+    let manifest_bytes = cursor.bytes_u32(MAX_SETTLEMENT_PUBLIC_OBJECT_BYTES)?;
+    let statement_bytes = cursor.bytes_u32(MAX_SETTLEMENT_PUBLIC_OBJECT_BYTES)?;
+    let capsule_bytes = cursor.bytes_u32(MAX_SETTLEMENT_PUBLIC_OBJECT_BYTES)?;
+    let policy_bytes = cursor.bytes_u32(MAX_SETTLEMENT_PUBLIC_OBJECT_BYTES)?;
+    let canonical_genesis_hash = cursor.array()?;
+    let current_height = cursor.u64()?;
+    cursor.finish()?;
+    let manifest = norito::decode_canonical::<AtomicPrivateSettlementV1>(manifest_bytes)
+        .map_err(|_| WorkerError::InvalidPrivateSettlementBundle)?;
+    let statement = norito::decode_canonical::<PrivateSettlementProofStatementV1>(statement_bytes)
+        .map_err(|_| WorkerError::InvalidPrivateSettlementBundle)?;
+    let capsule = norito::decode_canonical::<PrivateSettlementAuditCapsuleV1>(capsule_bytes)
+        .map_err(|_| WorkerError::InvalidPrivateSettlementBundle)?;
+    let policy = norito::decode_canonical::<PrivateSettlementAuditPolicyV1>(policy_bytes)
+        .map_err(|_| WorkerError::InvalidPrivateSettlementBundle)?;
+    if norito::encode_canonical(&manifest)
+        .map_err(|_| WorkerError::InvalidPrivateSettlementBundle)?
+        != manifest_bytes
+        || norito::encode_canonical(&statement)
+            .map_err(|_| WorkerError::InvalidPrivateSettlementBundle)?
+            != statement_bytes
+        || norito::encode_canonical(&capsule)
+            .map_err(|_| WorkerError::InvalidPrivateSettlementBundle)?
+            != capsule_bytes
+        || norito::encode_canonical(&policy)
+            .map_err(|_| WorkerError::InvalidPrivateSettlementBundle)?
+            != policy_bytes
+    {
+        return Err(WorkerError::InvalidPrivateSettlementBundle);
+    }
+    Ok(PrivateSettlementProveRequestV1 {
+        handle,
+        binding,
+        manifest,
+        statement,
+        capsule,
+        policy,
+        canonical_genesis_hash,
+        current_height,
+    })
+}
+
+fn prove_private_settlement_v1(
+    vault: &mut PrivateSettlementWitnessVaultV1,
+    request: PrivateSettlementProveRequestV1,
+) -> Result<PrivateSettlementProofResponseV1, WorkerError> {
+    let lease = vault.inspect(request.handle, &request.binding)?;
+    validate_private_settlement_public_request(&lease, &request)?;
+    let inspection = lease.inspection;
+    let wallet_id = inspection.wallet_id.clone();
+    let prepared = vault
+        .consume_with(request.handle, &request.binding, |material| {
+            consume_atomic_private_settlement_wallet_bundle_v1(
+                material,
+                &wallet_id,
+                &request.manifest,
+                &request.statement,
+                &request.capsule,
+                &request.policy,
+                request.canonical_genesis_hash,
+                request.current_height,
+            )
+            .map_err(|error| match error {
+                AtomicPrivateSettlementWalletErrorV1::Proof(_) => {
+                    WorkerError::NativePrivateSettlementProofFailed
+                }
+                _ => WorkerError::InvalidPrivateSettlementBundle,
+            })
+        })
+        .map_err(|error| match error {
+            ConsumeError::Custody(error) | ConsumeError::Operation(error) => error,
+        })?;
+    if prepared.statement != request.statement || prepared.audit_capsule != request.capsule {
+        return Err(WorkerError::NativePrivateSettlementProofFailed);
+    }
+    if prepared.proof.is_empty() || prepared.proof.len() > MAX_SETTLEMENT_PROOF_BYTES {
+        return Err(WorkerError::NativePrivateSettlementProofFailed);
+    }
+    Ok(PrivateSettlementProofResponseV1 {
+        wallet_id: inspection.wallet_id,
+        canonical_genesis_hash: request.canonical_genesis_hash,
+        proof_binding_digest: *inspection.proof_binding_digest.as_ref(),
+        statement_digest: *inspection.statement_digest.as_ref(),
+        capsule_digest: *inspection.capsule_digest.as_ref(),
+        audit_plaintext_commitment: *inspection.audit_plaintext_commitment.as_ref(),
+        prepared,
+    })
+}
+
+fn validate_private_settlement_public_request(
+    lease: &PrivateSettlementWitnessLeaseV1,
+    request: &PrivateSettlementProveRequestV1,
+) -> Result<(), WorkerError> {
+    request
+        .manifest
+        .validate()
+        .map_err(|_| WorkerError::InvalidPrivateSettlementBundle)?;
+    request
+        .statement
+        .validate()
+        .map_err(|_| WorkerError::InvalidPrivateSettlementBundle)?;
+    request
+        .policy
+        .validate()
+        .map_err(|_| WorkerError::InvalidPrivateSettlementBundle)?;
+    request
+        .capsule
+        .validate_against(&request.policy)
+        .map_err(|_| WorkerError::InvalidPrivateSettlementBundle)?;
+    let proof_binding_digest = request
+        .manifest
+        .proof_binding_digest()
+        .map_err(|_| WorkerError::InvalidPrivateSettlementBundle)?;
+    let statement_digest = request
+        .statement
+        .digest()
+        .map_err(|_| WorkerError::InvalidPrivateSettlementBundle)?;
+    let capsule_digest = request
+        .capsule
+        .digest()
+        .map_err(|_| WorkerError::InvalidPrivateSettlementBundle)?;
+    let manifest_genesis_hash = *request.manifest.network_id.as_genesis_hash().as_ref();
+    let leg = request
+        .manifest
+        .legs
+        .get(usize::from(request.statement.leg_ordinal))
+        .ok_or(WorkerError::InvalidPrivateSettlementBundle)?;
+    if request.binding.protocol != ATOMIC_PRIVATE_SETTLEMENT_PROTOCOL_LABEL_V1
+        || request.binding.signer != lease.inspection.wallet_id
+        || request.binding.network_id != request.canonical_genesis_hash
+        || manifest_genesis_hash != request.canonical_genesis_hash
+        || !constant_time_eq(
+            &request.binding.public_intent_digest,
+            proof_binding_digest.as_ref(),
+        )
+        || !constant_time_eq(
+            &request.binding.profile_digest,
+            request.statement.profile.digest().as_ref(),
+        )
+        || lease.inspection.proof_binding_digest != proof_binding_digest
+        || lease.inspection.statement_digest != statement_digest
+        || lease.inspection.capsule_digest != capsule_digest
+        || lease.inspection.audit_plaintext_commitment
+            != request.statement.audit_plaintext_commitment
+        || request.statement.network_id != request.manifest.network_id
+        || request.statement.bundle_id != request.manifest.bundle_id
+        || request.statement.authority_context_height != request.manifest.authority_context_height
+        || request.statement.expiry_height != request.manifest.expiry_height
+        || request.statement.reimbursement_leg_ordinal != request.manifest.reimbursement_leg_ordinal
+        || request.statement.fee_intent_digest != request.manifest.fee_intent_digest
+        || request.statement.reimbursement_terms_commitment
+            != request.manifest.reimbursement_terms_commitment
+        || request.statement.route != leg.route
+        || request.statement.pool_id != leg.pool_id
+        || request.statement.asset_binding_commitment != leg.asset_binding_commitment
+        || request.statement.audit_policy_digest != leg.audit_policy_digest
+        || request.statement.audit_policy_digest != request.policy.policy_digest
+        || request.statement.audit_key_epoch != request.policy.body.key_epoch
+        || request.statement.audit_capsule_digest != capsule_digest
+        || request.capsule.aad.network_id != request.statement.network_id
+        || request.capsule.aad.bundle_id != request.statement.bundle_id
+        || request.capsule.aad.leg_ordinal != request.statement.leg_ordinal
+        || request.capsule.aad.route != request.statement.route
+        || request.capsule.aad.plaintext_commitment != request.statement.audit_plaintext_commitment
+        || request.current_height < request.manifest.authority_context_height
+        || request.current_height > request.manifest.expiry_height
+    {
+        return Err(WorkerError::WrongBinding);
+    }
+    Ok(())
 }
 fn execute_native_action_v1(
     vault: &mut WitnessVault,
@@ -927,6 +1442,33 @@ fn encode_response(response: CommandResponse) -> Vec<u8> {
             output.extend_from_slice(&signed.adaptive_signed_transaction_bytes.to_be_bytes());
             output.extend_from_slice(&signed.submitted_versioned_transaction_bytes.to_be_bytes());
         }
+        CommandResponse::PrivateSettlementLease(lease) => {
+            output.push(4);
+            output.extend_from_slice(lease.handle.as_bytes());
+            output.extend_from_slice(&lease.expires_at_millis.to_be_bytes());
+            put_text(&mut output, &lease.inspection.wallet_id);
+            output.extend_from_slice(lease.inspection.proof_binding_digest.as_ref());
+            output.extend_from_slice(lease.inspection.statement_digest.as_ref());
+            output.extend_from_slice(lease.inspection.capsule_digest.as_ref());
+            output.extend_from_slice(lease.inspection.audit_plaintext_commitment.as_ref());
+        }
+        CommandResponse::PrivateSettlementProof(response) => {
+            output.push(5);
+            put_text(&mut output, &response.wallet_id);
+            output.extend_from_slice(&response.canonical_genesis_hash);
+            output.extend_from_slice(&response.proof_binding_digest);
+            output.extend_from_slice(&response.statement_digest);
+            output.extend_from_slice(&response.capsule_digest);
+            output.extend_from_slice(&response.audit_plaintext_commitment);
+            let statement = norito::encode_canonical(&response.prepared.statement)
+                .expect("validated private-settlement statement");
+            let capsule = norito::encode_canonical(&response.prepared.audit_capsule)
+                .expect("validated private-settlement audit capsule");
+            put_bytes_u32(&mut output, &statement).expect("bounded private-settlement statement");
+            put_bytes_u32(&mut output, &response.prepared.proof)
+                .expect("bounded private-settlement proof");
+            put_bytes_u32(&mut output, &capsule).expect("bounded private-settlement audit capsule");
+        }
         CommandResponse::Error(error) => {
             output.push(255);
             output.extend_from_slice(&error.code().to_be_bytes());
@@ -1011,6 +1553,7 @@ pub enum WorkerError {
     InvalidCredentialPath,
     InvalidExecutionBundle,
     InvalidExecutionPlan,
+    InvalidPrivateSettlementBundle,
     InvalidFrame,
     InvalidHandle,
     InvalidPayload,
@@ -1018,6 +1561,7 @@ pub enum WorkerError {
     InvalidTtl,
     Io(io::ErrorKind),
     NativeActionFailed,
+    NativePrivateSettlementProofFailed,
     NativeSelfInspectionFailed,
     PublicActionMismatch,
     PublicIntentDigestMismatch,
@@ -1045,11 +1589,13 @@ impl WorkerError {
             Self::InvalidCredentialPath => 11,
             Self::InvalidExecutionBundle => 25,
             Self::InvalidExecutionPlan => 26,
+            Self::InvalidPrivateSettlementBundle => 30,
             Self::InvalidFrame => 12,
             Self::InvalidHandle => 13,
             Self::InvalidPayload => 14,
             Self::InvalidPublicIntent => 23,
             Self::NativeActionFailed => 27,
+            Self::NativePrivateSettlementProofFailed => 31,
             Self::NativeSelfInspectionFailed => 28,
             Self::PublicActionMismatch => 29,
             Self::InvalidTtl => 15,
@@ -1079,11 +1625,17 @@ impl WorkerError {
             Self::InvalidCredentialPath => "credential path is invalid",
             Self::InvalidExecutionBundle => "owner-only privacy execution bundle is invalid",
             Self::InvalidExecutionPlan => "witness-free privacy execution plan is invalid",
+            Self::InvalidPrivateSettlementBundle => {
+                "owner-only atomic private-settlement bundle is invalid"
+            }
             Self::InvalidFrame => "IPC frame is non-canonical",
             Self::InvalidHandle => "witness handle is invalid",
             Self::InvalidPayload => "IPC payload is non-canonical",
             Self::InvalidPublicIntent => "public intent bytes are not canonical typed JSON",
             Self::NativeActionFailed => "native privacy action construction failed",
+            Self::NativePrivateSettlementProofFailed => {
+                "native atomic private-settlement proof failed"
+            }
             Self::NativeSelfInspectionFailed => {
                 "native signed privacy action self-inspection failed"
             }
@@ -1128,6 +1680,28 @@ fn validate_expected_binding(
         return Err(WorkerError::WrongBinding);
     }
     Ok(())
+}
+
+fn validate_private_settlement_expected_binding(
+    stored: &StoredPrivateSettlementWitnessV1,
+    expected: &WitnessBinding,
+) -> Result<(), WorkerError> {
+    expected.validate()?;
+    if expected.protocol != ATOMIC_PRIVATE_SETTLEMENT_PROTOCOL_LABEL_V1 {
+        return Err(WorkerError::UnsupportedProtocol);
+    }
+    let expected_digest = expected.digest();
+    if !constant_time_eq(&stored.binding_digest, &expected_digest) || stored.binding != *expected {
+        return Err(WorkerError::WrongBinding);
+    }
+    Ok(())
+}
+
+fn validate_worker_protocol(protocol: &str) -> Result<(), WorkerError> {
+    if protocol == ATOMIC_PRIVATE_SETTLEMENT_PROTOCOL_LABEL_V1 {
+        return Ok(());
+    }
+    retained_protocol(protocol).map(|_| ())
 }
 fn retained_protocol(protocol: &str) -> Result<PrivacyProtocolIdV1, WorkerError> {
     let protocol_id = PrivacyProtocolIdV1::from_canonical_label(protocol)
@@ -1592,7 +2166,7 @@ fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha_crypto::{PrivateKey, PublicKey};
+    use iroha_crypto::{Hash, PrivateKey, PublicKey};
     use iroha_data_model::transaction::SignedTransaction;
     use iroha_version::codec::DecodeVersioned;
     use std::{
@@ -1620,6 +2194,47 @@ mod tests {
             nonce: [4; 32],
             signed_release_authority_digest: [5; 32],
         }
+    }
+
+    fn settlement_binding() -> WitnessBinding {
+        WitnessBinding {
+            network_id: [0x10; 32],
+            signer: "settlement-wallet-1".to_owned(),
+            protocol: ATOMIC_PRIVATE_SETTLEMENT_PROTOCOL_LABEL_V1.to_owned(),
+            profile_digest: *PrivateSettlementProofProfileV1::IvmPrivateNoteFixed2In3Out
+                .digest()
+                .as_ref(),
+            public_intent_digest: [0x25; 32],
+            nonce: [0x33; 32],
+            signed_release_authority_digest: [0x44; 32],
+        }
+    }
+
+    fn settlement_inspection() -> AtomicPrivateSettlementWalletInspectionV1 {
+        AtomicPrivateSettlementWalletInspectionV1 {
+            wallet_id: "settlement-wallet-1".to_owned(),
+            proof_binding_digest: Hash::prehashed([0x25; 32]),
+            statement_digest: Hash::prehashed([0x62; 32]),
+            capsule_digest: Hash::prehashed([0x63; 32]),
+            audit_plaintext_commitment: Hash::prehashed([0x64; 32]),
+        }
+    }
+
+    fn seeded_settlement_vault() -> (PrivateSettlementWitnessVaultV1, WitnessHandle) {
+        let binding = settlement_binding();
+        let handle = WitnessHandle::from_bytes([0xD1; 32]);
+        let mut vault = PrivateSettlementWitnessVaultV1::default();
+        vault.entries.insert(
+            handle,
+            StoredPrivateSettlementWitnessV1 {
+                binding: binding.clone(),
+                binding_digest: binding.digest(),
+                expires_at_millis: u64::MAX,
+                inspection: settlement_inspection(),
+                material: Zeroizing::new(b"owner-only-settlement-secret".to_vec()),
+            },
+        );
+        (vault, handle)
     }
     fn credential_file(directory: &TempDir, name: &str, bytes: &[u8]) -> PathBuf {
         let path = directory.path().join(name);
@@ -1677,6 +2292,92 @@ mod tests {
         ] {
             assert!(retained_protocol(protocol).is_ok(), "{protocol}");
         }
+    }
+
+    #[test]
+    fn private_settlement_commands_and_handle_namespace_are_closed() {
+        for (wire, expected) in [
+            (6, CommandKind::ImportPrivateSettlement),
+            (7, CommandKind::InspectPrivateSettlement),
+            (8, CommandKind::CancelPrivateSettlement),
+            (9, CommandKind::ProvePrivateSettlement),
+        ] {
+            assert!(CommandKind::try_from(wire).expect("assigned command") == expected);
+        }
+        assert!(settlement_binding().validate().is_ok());
+        let mut even_generic = binding();
+        even_generic.network_id = [0x10; 32];
+        assert!(matches!(
+            even_generic.validate(),
+            Err(WorkerError::InvalidBinding(_))
+        ));
+        let (settlement_vault, _) = seeded_settlement_vault();
+        let settlement_handle = settlement_vault.unique_handle().expect("settlement handle");
+        let generic_handle = WitnessVault::default()
+            .unique_handle()
+            .expect("generic handle");
+        assert_ne!(settlement_handle.as_bytes()[0] & 0x80, 0);
+        assert_eq!(generic_handle.as_bytes()[0] & 0x80, 0);
+    }
+
+    #[test]
+    fn private_settlement_inspect_cancel_and_failed_consume_are_single_use() {
+        let (mut vault, handle) = seeded_settlement_vault();
+        let lease = vault
+            .inspect(handle, &settlement_binding())
+            .expect("inspect public lease");
+        assert_eq!(lease.inspection, settlement_inspection());
+        let outcome = vault.consume_with(handle, &settlement_binding(), |material| {
+            assert!(
+                material
+                    .windows(b"settlement-secret".len())
+                    .any(|window| window == b"settlement-secret")
+            );
+            Err::<(), _>(WorkerError::NativePrivateSettlementProofFailed)
+        });
+        assert!(matches!(
+            outcome,
+            Err(ConsumeError::Operation(
+                WorkerError::NativePrivateSettlementProofFailed
+            ))
+        ));
+        assert!(matches!(
+            vault.inspect(handle, &settlement_binding()),
+            Err(WorkerError::UnknownHandle)
+        ));
+
+        let (mut vault, handle) = seeded_settlement_vault();
+        vault
+            .cancel(handle, &settlement_binding())
+            .expect("cancel settlement handle");
+        assert!(matches!(
+            vault.inspect(handle, &settlement_binding()),
+            Err(WorkerError::UnknownHandle)
+        ));
+    }
+
+    #[test]
+    fn private_settlement_lease_response_contains_only_public_commitments() {
+        let (vault, handle) = seeded_settlement_vault();
+        let stored = vault.entries.get(&handle).expect("stored settlement");
+        let response = encode_response(CommandResponse::PrivateSettlementLease(
+            PrivateSettlementWitnessLeaseV1 {
+                handle,
+                expires_at_millis: stored.expires_at_millis,
+                inspection: stored.inspection.clone(),
+            },
+        ));
+        assert_eq!(response.first(), Some(&4));
+        assert!(
+            response
+                .windows(stored.inspection.wallet_id.len())
+                .any(|window| window == stored.inspection.wallet_id.as_bytes())
+        );
+        assert!(
+            !response
+                .windows(stored.material.len())
+                .any(|window| window == stored.material.as_slice())
+        );
     }
     fn canonical_execution_plan() -> Vec<u8> {
         let (_, public_key, authority) = test_signer();
@@ -2087,8 +2788,12 @@ mod tests {
             decoded_frame.kind,
             decoded_frame.payload.as_slice(),
         );
-        let CommandResponse::SignedAction(signed) = response else {
-            panic!("valid Jindo execute did not return a signed action");
+        let signed = match response {
+            CommandResponse::SignedAction(signed) => signed,
+            CommandResponse::Error(error) => {
+                panic!("valid Jindo execute returned worker error: {error:?}")
+            }
+            _ => panic!("valid Jindo execute returned the wrong response kind"),
         };
         let (_, expected_public_key, expected_authority) = test_signer();
         assert_eq!(signed.protocol_id, "iroha-jindo-polynomial-commitment-v1");

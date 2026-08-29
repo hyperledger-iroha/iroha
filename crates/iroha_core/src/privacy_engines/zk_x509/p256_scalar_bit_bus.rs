@@ -25,8 +25,7 @@ use super::{
     p256_window_air::{P256WindowAirErrorV1, P256WindowScalarV1, P256WindowTraceV1},
 };
 use crate::privacy_engines::transparent_stark::{
-    GoldilocksDigest384V1, GoldilocksFieldV1 as F, TransparentStarkErrorV1,
-    TransparentTranscriptV1,
+    GoldilocksDigest384V1, GoldilocksFieldV1 as F, TransparentStarkErrorV1, TransparentTranscriptV1,
 };
 use thiserror::Error;
 /// Stable descriptor for the aggregate-only first-release scalar-bit copy bus.
@@ -1715,6 +1714,7 @@ mod tests {
         p256_window_air::{
             P256_WINDOW_CANDIDATES_V1, P256WindowPointV1, build_p256_window_trace_v1,
         },
+        stark::zk_x509_test_digest384_v1,
     };
     use std::sync::OnceLock;
     struct FixtureV1 {
@@ -1827,14 +1827,14 @@ mod tests {
             [seed; 32],
             [seed.wrapping_add(1); 32],
             core::array::from_fn::<_, ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1, _>(|index| {
-                [seed.wrapping_add(index as u8).wrapping_add(2); 32]
+                zk_x509_test_digest384_v1(seed.wrapping_add(index as u8).wrapping_add(2))
             }),
         );
         derive_zk_x509_credential_pre_aux_binding_v1(
             main,
-            [seed.wrapping_add(0x20); 32],
-            [seed.wrapping_add(0x40); 32],
-            [seed.wrapping_add(0x60); 32],
+            zk_x509_test_digest384_v1(seed.wrapping_add(0x20)),
+            zk_x509_test_digest384_v1(seed.wrapping_add(0x40)),
+            zk_x509_test_digest384_v1(seed.wrapping_add(0x60)),
         )
         .expect("opaque X5B1 binding")
         .main_post_base()
@@ -2980,8 +2980,7 @@ mod tests {
             ),
             Err(P256ScalarBitBusErrorV1::Constraint)
         );
-        let arithmetic_commitment =
-            GoldilocksDigest384V1::new([0x81; 6]).expect("arithmetic root");
+        let arithmetic_commitment = GoldilocksDigest384V1::new([0x81; 6]).expect("arithmetic root");
         let window_commitments: [GoldilocksDigest384V1; 128] = core::array::from_fn(|index| {
             GoldilocksDigest384V1::new(core::array::from_fn(|lane| (index + lane + 1) as u64))
                 .expect("window root")

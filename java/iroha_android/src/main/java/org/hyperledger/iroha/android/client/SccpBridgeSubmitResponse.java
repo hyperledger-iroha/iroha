@@ -20,9 +20,11 @@ public final class SccpBridgeSubmitResponse {
       Set.of(
           "evm-groth16-bn254-v1",
           "tron-groth16-bn254-v1",
+          "ton-groth16-bls12381-v1",
           "bridge/sccp/native/ethereum-beacon-v1",
           "bridge/sccp/native/bsc-parlia-v1",
-          "bridge/sccp/native/tron-dpos-v1");
+          "bridge/sccp/native/tron-dpos-v1",
+          "bridge/sccp/native/ton-masterchain-v1");
   private static final NoritoJavaCodecAdapter TRANSACTION_CODEC =
       new NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1);
   private static final Set<String> FIELDS =
@@ -217,6 +219,7 @@ public final class SccpBridgeSubmitResponse {
           Set.of(
               "evm-groth16-bn254-v1", "bridge/sccp/native/ethereum-beacon-v1");
       case 2 -> Set.of("evm-groth16-bn254-v1", "bridge/sccp/native/bsc-parlia-v1");
+      case 4 -> Set.of("ton-groth16-bls12381-v1", "bridge/sccp/native/ton-masterchain-v1");
       case 5 -> Set.of("tron-groth16-bn254-v1", "bridge/sccp/native/tron-dpos-v1");
       default -> Set.of();
     };

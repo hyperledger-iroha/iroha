@@ -36,7 +36,7 @@ iroha_crypto = { path = "../iroha_crypto", default-features = false, features = 
 norito = { path = "../norito", default-features = false, features = ["node-codec"] }
 iroha_zkp_halo2 = { path = "../iroha_zkp_halo2" }
 iroha_primitives = { path = "../iroha_primitives" }
-iroha_telemetry = { path = "../iroha_telemetry", features = ["metric-instrumentation"] }
+iroha_telemetry = { path = "../iroha_telemetry" }
 iroha_i18n = { path = "../iroha_i18n" }
 ivm_abi = { path = "../ivm_abi" }
 ivm_artifact_admission = { path = "../ivm_artifact_admission" }

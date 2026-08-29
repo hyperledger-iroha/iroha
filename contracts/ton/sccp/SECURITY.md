@@ -69,3 +69,12 @@ Regenerate checked-in wrappers with the pinned Acton 1.1.0 toolchain whenever
 the contract ABI changes. Production artifacts must be built with the
 repository's digest-pinned Linux/amd64 corridor; a developer-local Acton binary
 does not produce release evidence.
+
+The cross-language StateInit boundary is pinned by
+`fixtures/sccp/ton_stateinit_golden_v1.json`. The values are printed by
+`scripts/generate-stateinit-golden.tolk` after invoking the same canonical
+storage constructors and compiled-code cells used by deployment. The host
+wrapper authenticates the exact Acton archive, requires embedded Tolk 1.4.1,
+records the full source closure, and rejects any checked-in byte drift. Both
+roles expose their code and initial-data cell depths directly from Tolk so a
+consumer can reproduce StateInit hashing without inferring hidden child depth.

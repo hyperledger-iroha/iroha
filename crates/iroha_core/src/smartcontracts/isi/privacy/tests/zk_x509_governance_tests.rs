@@ -65,7 +65,7 @@ fn zk_x509_governance_and_roots_are_exact_failure_atomic_and_preactivation() {
         transaction.apply();
     }
     block
-        .commit()
+        .commit_world_overlay_for_testing()
         .expect("commit X.509 anchor and policy block");
     block_height += 1;
     block = state.block(test_header_at(block_height));
@@ -274,7 +274,7 @@ fn zk_x509_governance_and_roots_are_exact_failure_atomic_and_preactivation() {
         transaction.apply();
     }
     block
-        .commit()
+        .commit_world_overlay_for_testing()
         .expect("commit X.509 CRL and anchor-rotation block");
     block_height += 1;
     block = state.block(test_header_at(block_height));
@@ -344,7 +344,7 @@ fn zk_x509_governance_and_roots_are_exact_failure_atomic_and_preactivation() {
         transaction.apply();
     }
     block
-        .commit()
+        .commit_world_overlay_for_testing()
         .expect("commit X.509 policy and CRL-rotation block");
     block_height += 1;
     block = state.block(test_header_at(block_height));
@@ -420,7 +420,7 @@ fn zk_x509_governance_and_roots_are_exact_failure_atomic_and_preactivation() {
         transaction.apply();
     }
     block
-        .commit()
+        .commit_world_overlay_for_testing()
         .expect("commit X.509 CRL and policy-revocation block");
     block_height += 1;
     block = state.block(test_header_at(block_height));

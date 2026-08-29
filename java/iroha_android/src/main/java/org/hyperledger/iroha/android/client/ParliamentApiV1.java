@@ -130,7 +130,8 @@ public final class ParliamentApiV1 {
           new NoResultKindLayout(4, "BallotCommitmentDeadlineExpired"),
           new NoResultKindLayout(5, "BallotReleasePulseUnavailable"),
           new NoResultKindLayout(6, "BallotOpeningDeadlineExpired"),
-          new NoResultKindLayout(7, "SortitionRetriesExhausted"));
+          new NoResultKindLayout(7, "SortitionRetriesExhausted"),
+          new NoResultKindLayout(8, "ConfirmationJuryCapacityUnavailable"));
 
   public static final Map<String, String> CERTIFICATE_RESULT_ROOT_DOMAINS =
       certificateResultRootDomains();

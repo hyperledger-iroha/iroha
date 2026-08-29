@@ -53,6 +53,7 @@ public sealed record SccpCapabilities(
     string MessageBundlePath,
     string ProofRequestPath,
     string RecentMessagesPath,
+    string SoraOutboundMaterialPath,
     SccpRegistryLimits RegistryLimits,
     SccpResourceLimits ResourceLimits,
     string? ProofSubmitPath,
@@ -470,6 +471,7 @@ internal static class SccpExactParser
             ["message_bundle_path"] = "/v1/sccp/proofs/message/{message_id}",
             ["proof_request_path"] = "/v1/sccp/proof-requests/{message_id}",
             ["recent_messages_path"] = "/v1/sccp/messages/recent",
+            ["sora_outbound_material_path"] = "/v1/sccp/routes/{source_profile}/{route_id}/{asset_key}/{revision}/sora-outbound-material",
             ["proof_submit_path"] = "/v1/bridge/proofs/submit",
             ["native_message_submit_path"] = "/v1/bridge/messages",
         };
@@ -486,6 +488,7 @@ internal static class SccpExactParser
             "message_bundle_path",
             "proof_request_path",
             "recent_messages_path",
+            "sora_outbound_material_path",
             "registry_limits",
             "resource_limits",
         ];
@@ -509,6 +512,7 @@ internal static class SccpExactParser
             FixedPath(root, "message_bundle_path"),
             FixedPath(root, "proof_request_path"),
             FixedPath(root, "recent_messages_path"),
+            FixedPath(root, "sora_outbound_material_path"),
             ParseRegistryLimits(Object(root, "registry_limits")),
             ParseResourceLimits(Object(root, "resource_limits")),
             proofSubmitPath,

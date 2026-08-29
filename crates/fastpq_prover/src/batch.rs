@@ -1,13 +1,11 @@
-use core::cmp::Ordering;
-#[allow(unused_imports)]
-use norito::json::{JsonDeserialize, JsonSerialize};
 use norito::{NoritoDeserialize, NoritoSerialize};
+use std::borrow::Cow;
 use std::collections::BTreeMap;
-/// Stable nominal Norito schema identity for [`TransitionBatch`].
+/// Canonical nominal Norito schema identity for [`TransitionBatch`].
 ///
-/// This intentionally preserves the type-name hash carried by the existing canonical FASTPQ
-/// fixtures while making it independent of Cargo features and Rust module refactors.
-pub const TRANSITION_BATCH_SCHEMA_NAME: &str = "fastpq_prover::batch::TransitionBatch";
+/// An explicit name keeps the release wire format independent of Cargo features
+/// and Rust module refactors.
+pub const TRANSITION_BATCH_SCHEMA_NAME: &str = "fastpq_prover::batch::TransitionBatchV1";
 /// Public inputs supplied by the host for a FASTPQ batch.
 #[derive(
     Debug,
@@ -39,6 +37,8 @@ pub struct PublicInputs {
 #[derive(
     Debug,
     Clone,
+    PartialEq,
+    Eq,
     NoritoSerialize,
     NoritoDeserialize,
     norito::derive::JsonSerialize,
@@ -53,23 +53,7 @@ pub struct StateTransition {
     pub post_value: Vec<u8>,
     /// Operation selector driving the AIR row semantics.
     pub operation: OperationKind,
-    /// Original insertion index used to preserve submission ordering during
-    /// the canonical sort. Skipped from serialization to keep the Norito
-    /// encoding stable irrespective of local batch construction.
-    #[norito(skip)]
-    pub(crate) ordinal: usize,
 }
-// `ordinal` is local sort state and is deliberately absent from canonical equality, matching its
-// omission from Norito and JSON encodings.
-impl PartialEq for StateTransition {
-    fn eq(&self, other: &Self) -> bool {
-        self.key == other.key
-            && self.pre_value == other.pre_value
-            && self.post_value == other.post_value
-            && self.operation == other.operation
-    }
-}
-impl Eq for StateTransition {}
 impl StateTransition {
     /// Construct a new transition.
     pub fn new(
@@ -83,7 +67,6 @@ impl StateTransition {
             pre_value,
             post_value,
             operation,
-            ordinal: 0,
         }
     }
     /// Rank associated with the operation selector as defined by FASTPQ.
@@ -95,6 +78,7 @@ impl StateTransition {
 /// FASTPQ selector describing the semantics of a transition row.
 #[derive(
     Debug,
+    Copy,
     Clone,
     PartialEq,
     Eq,
@@ -106,30 +90,10 @@ impl StateTransition {
 #[norito(tag = "kind", content = "payload")]
 pub enum OperationKind {
     /// Asset transfer between two existing accounts.
+    #[codec(index = 16)]
     Transfer,
-    /// Asset mint increasing the circulating supply.
-    Mint,
-    /// Asset burn decreasing the circulating supply.
-    Burn,
-    /// Grant a permission to a role.
-    RoleGrant {
-        /// Canonical role identifier (little-endian bytes).
-        role_id: Vec<u8>,
-        /// Canonical permission identifier (little-endian bytes).
-        permission_id: Vec<u8>,
-        /// Epoch at which the change becomes effective (little-endian u64).
-        epoch: u64,
-    },
-    /// Revoke a permission from a role.
-    RoleRevoke {
-        /// Canonical role identifier (little-endian bytes).
-        role_id: Vec<u8>,
-        /// Canonical permission identifier (little-endian bytes).
-        permission_id: Vec<u8>,
-        /// Epoch at which the change becomes effective (little-endian u64).
-        epoch: u64,
-    },
-    /// Metadata mutation (domains, accounts, assets, etc.).
+    /// Opaque metadata effect whose meaning is authenticated by its outer statement.
+    #[codec(index = 17)]
     MetaSet,
 }
 impl OperationKind {
@@ -138,18 +102,8 @@ impl OperationKind {
     pub const fn rank(&self) -> u8 {
         match self {
             Self::Transfer => 0,
-            Self::Mint => 1,
-            Self::Burn => 2,
-            Self::RoleGrant { .. } => 3,
-            Self::RoleRevoke { .. } => 4,
-            Self::MetaSet => 5,
+            Self::MetaSet => 1,
         }
-    }
-    /// Returns true when the selector participates in the permission lookup
-    /// grand-product (role grant/revoke).
-    #[inline]
-    pub const fn is_permission_selector(&self) -> bool {
-        matches!(self, Self::RoleGrant { .. } | Self::RoleRevoke { .. })
     }
 }
 /// A batch of state transitions representing a single DS proof input.
@@ -163,7 +117,7 @@ impl OperationKind {
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
 )]
-#[norito(schema_name = "fastpq_prover::batch::TransitionBatch")]
+#[norito(schema_name = "fastpq_prover::batch::TransitionBatchV1")]
 pub struct TransitionBatch {
     /// Canonical parameter set name expected for this proof.
     pub parameter: String,
@@ -186,28 +140,56 @@ impl TransitionBatch {
         }
     }
     /// Add a transition entry.
-    pub fn push(&mut self, mut transition: StateTransition) {
-        transition.ordinal = self.transitions.len();
+    pub fn push(&mut self, transition: StateTransition) {
         self.transitions.push(transition);
     }
     /// Normalise transitions by sorting on keys to achieve deterministic encoding.
     pub fn sort(&mut self) {
-        for (idx, transition) in self.transitions.iter_mut().enumerate() {
-            transition.ordinal = idx;
+        // `slice::sort_by` is stable, so rows with the same key and operation
+        // retain their input order without carrying a separate local ordinal.
+        self.transitions.sort_by(|lhs, rhs| {
+            lhs.key
+                .cmp(&rhs.key)
+                .then_with(|| lhs.operation_rank().cmp(&rhs.operation_rank()))
+        });
+    }
+
+    /// Borrow this batch when it is already canonical, otherwise return one
+    /// sorted clone. This lets the prover canonicalise once and reuse the same
+    /// batch across every commitment stage.
+    pub(crate) fn canonicalized(&self) -> Cow<'_, Self> {
+        if self.transitions.windows(2).all(|pair| {
+            let [lhs, rhs] = pair else {
+                unreachable!("windows(2) always contains two entries")
+            };
+            lhs.key < rhs.key
+                || (lhs.key == rhs.key && lhs.operation_rank() <= rhs.operation_rank())
+        }) {
+            Cow::Borrowed(self)
+        } else {
+            let mut canonical = self.clone();
+            canonical.sort();
+            Cow::Owned(canonical)
         }
-        self.transitions
-            .sort_by(|lhs, rhs| match lhs.key.cmp(&rhs.key) {
-                Ordering::Equal => match lhs.operation_rank().cmp(&rhs.operation_rank()) {
-                    Ordering::Equal => lhs.ordinal.cmp(&rhs.ordinal),
-                    other => other,
-                },
-                other => other,
-            });
     }
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+    use norito::codec::{Decode, Encode};
+
+    #[test]
+    fn operation_wire_indices_reject_the_pre_release_enum() {
+        assert_eq!(OperationKind::Transfer.encode(), 16_u32.to_le_bytes());
+        assert_eq!(OperationKind::MetaSet.encode(), 17_u32.to_le_bytes());
+        for retired in 0_u32..=5 {
+            assert!(
+                OperationKind::decode(&mut retired.to_le_bytes().as_slice()).is_err(),
+                "retired pre-release operation index {retired} must not decode"
+            );
+        }
+    }
+
     #[test]
     fn transition_batch_schema_identity_is_stable() {
         let expected = norito::core::schema_hash_for_name(TRANSITION_BATCH_SCHEMA_NAME);
@@ -222,9 +204,21 @@ mod tests {
         assert_eq!(
             expected,
             [
-                0x51, 0x76, 0x0d, 0xe0, 0xa1, 0x40, 0x63, 0xa6, 0x83, 0xc3, 0x80, 0x1f, 0xe0, 0x79,
-                0xd1, 0x1f,
+                0xe0, 0x07, 0xd2, 0xe7, 0xbb, 0x2f, 0x1a, 0x08, 0xfe, 0x51, 0x81, 0x5a, 0x98, 0x9e,
+                0x25, 0x2c,
             ]
+        );
+
+        let batch =
+            TransitionBatch::new("fastpq-state-transition-stark-v1", PublicInputs::default());
+        let mut encoded = norito::core::to_bytes(&batch).expect("encode release batch");
+        assert_eq!(&encoded[6..22], expected.as_slice());
+        let pre_release =
+            norito::core::schema_hash_for_name("fastpq_prover::batch::TransitionBatch");
+        encoded[6..22].copy_from_slice(&pre_release);
+        assert!(
+            norito::decode_from_bytes::<TransitionBatch>(&encoded).is_err(),
+            "the pre-release batch schema must not decode as release V1"
         );
     }
     #[test]
@@ -255,7 +249,7 @@ mod tests {
             b"key".to_vec(),
             vec![0],
             vec![1],
-            OperationKind::Mint,
+            OperationKind::MetaSet,
         ));
         batch.push(StateTransition::new(
             b"key".to_vec(),
@@ -263,22 +257,16 @@ mod tests {
             vec![2],
             OperationKind::Transfer,
         ));
-        batch.push(StateTransition::new(
-            b"key".to_vec(),
-            vec![2],
-            vec![3],
-            OperationKind::Burn,
-        ));
         batch.sort();
         let ranks: Vec<_> = batch
             .transitions
             .iter()
             .map(StateTransition::operation_rank)
             .collect();
-        assert_eq!(ranks, vec![0, 1, 2]);
+        assert_eq!(ranks, vec![0, 1]);
     }
     #[test]
-    fn sorted_batch_norito_roundtrip_ignores_local_ordinals() {
+    fn stable_sort_and_norito_roundtrip_preserve_equal_row_order() {
         let mut batch =
             TransitionBatch::new("fastpq-state-transition-stark-v1", PublicInputs::default());
         batch.push(StateTransition::new(
@@ -310,19 +298,31 @@ mod tests {
             vec![&[1_u8][..], &[2_u8][..], &[0_u8][..]],
             "equal key/operation rows must retain insertion order"
         );
-        assert_eq!(
-            batch
-                .transitions
-                .iter()
-                .map(|transition| transition.ordinal)
-                .collect::<Vec<_>>(),
-            vec![1, 2, 0],
-            "regression requires non-serialized local ordinals"
-        );
-
         let encoded = norito::to_bytes(&batch).expect("encode transition batch");
         let decoded = norito::decode_from_bytes::<TransitionBatch>(&encoded)
             .expect("decode transition batch");
         assert_eq!(decoded, batch);
+    }
+
+    #[test]
+    fn canonicalized_borrows_sorted_batches_and_owns_unsorted_batches() {
+        let mut batch =
+            TransitionBatch::new("fastpq-state-transition-stark-v1", PublicInputs::default());
+        batch.push(StateTransition::new(
+            b"b".to_vec(),
+            vec![0],
+            vec![1],
+            OperationKind::Transfer,
+        ));
+        batch.push(StateTransition::new(
+            b"a".to_vec(),
+            vec![1],
+            vec![2],
+            OperationKind::Transfer,
+        ));
+
+        assert!(matches!(batch.canonicalized(), Cow::Owned(_)));
+        batch.sort();
+        assert!(matches!(batch.canonicalized(), Cow::Borrowed(_)));
     }
 }

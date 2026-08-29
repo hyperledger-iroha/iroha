@@ -80,7 +80,6 @@ Dashboards and alert rules are versioned under `dashboards/` and documented in
 | `nexus_da_backlog_chunks{lane_id}` | Unprocessed DA chunks per lane. | Alert above configured limit (default: 64 for public, 8 for private). |
 | `nexus_settlement_latency_seconds{lane_id}` | Time between lane commit and global settlement. | Alert >900 ms P99 (public) or >1200 ms (private). |
 | `torii_request_failures_total{scheme="norito_rpc"}` | Norito RPC error count. | Alert if 5-minute error ratio >2 %. |
-| `telemetry_redaction_override_total` | Overrides issued for telemetry redaction. | Alert immediately (Sev 2) and require compliance ticket. |
 
 ### Multilane lifecycle and application evidence
 

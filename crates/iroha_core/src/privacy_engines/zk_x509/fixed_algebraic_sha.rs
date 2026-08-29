@@ -3907,9 +3907,11 @@ mod tests {
                 }),
                 SHA_FIXED_ALGEBRAIC_CHILD_ATOM_COUNTS_V1,
             );
-            assert!(schedule.children_v1().iter().all(|child| {
-                child.descriptor_digest_v1() != GoldilocksDigest384V1::default()
-            }));
+            assert!(
+                schedule.children_v1().iter().all(|child| {
+                    child.descriptor_digest_v1() != GoldilocksDigest384V1::default()
+                })
+            );
         }
         let shape = ZkX509ShaCallPublicShapeV1 {
             disclosed_attributes: 0,

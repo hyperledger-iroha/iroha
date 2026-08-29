@@ -6772,6 +6772,189 @@ mod tests {
     }
 
     #[test]
+    fn final_tolk_stateinit_golden_matches_rust_hash_depth_binding() {
+        fn field<'a>(value: &'a norito::json::Value, key: &str) -> &'a norito::json::Value {
+            value
+                .as_object()
+                .and_then(|object| object.get(key))
+                .unwrap_or_else(|| panic!("missing TON StateInit fixture field {key}"))
+        }
+
+        fn text<'a>(value: &'a norito::json::Value, key: &str) -> &'a str {
+            field(value, key)
+                .as_str()
+                .unwrap_or_else(|| panic!("TON StateInit fixture field {key} must be text"))
+        }
+
+        fn depth(value: &norito::json::Value, key: &str) -> u16 {
+            u16::try_from(
+                field(value, key)
+                    .as_u64()
+                    .unwrap_or_else(|| panic!("TON StateInit fixture field {key} must be u16")),
+            )
+            .expect("TON StateInit fixture depth fits u16")
+        }
+
+        fn child(value: &norito::json::Value, hash_key: &str, depth_key: &str) -> TonCellHashDepth {
+            TonCellHashDepth::new(hex32(text(value, hash_key)), depth(value, depth_key))
+                .expect("Tolk emitted a nonzero bounded child hash and depth")
+        }
+
+        const FIXTURE_BYTES: &[u8] =
+            include_bytes!("../../../fixtures/sccp/ton_stateinit_golden_v1.json");
+        let artifact_sha256: H256 = Sha256::digest(FIXTURE_BYTES).into();
+        assert_eq!(
+            artifact_sha256,
+            hex32("b6a1d220b4a3618d59f42b4c79d6094dd10cab56c71209a575a13cd6d4a1b27d")
+        );
+
+        let fixture = norito::json::from_str::<norito::json::Value>(
+            core::str::from_utf8(FIXTURE_BYTES).expect("fixture is UTF-8"),
+        )
+        .expect("parse final Tolk StateInit fixture");
+        assert_eq!(
+            text(&fixture, "schema"),
+            "iroha.sccp.ton-stateinit-golden.final-v1"
+        );
+        let provenance = field(&fixture, "provenance");
+        assert_eq!(
+            text(provenance, "source_closure_sha256"),
+            "61e06f489875a0a15edd9ea04b7c0024dade5d6992b1567102967b517d9662f9"
+        );
+        assert_eq!(
+            text(provenance, "tolk_output_sha256"),
+            "a3eddf2376fb2fbf9b588e582be214782cb15a20f7c59ed52b3ecbc7898791e2"
+        );
+
+        let route = field(&fixture, "route");
+        let master = field(&fixture, "master");
+        let route_code = child(route, "code_hash", "code_depth");
+        let route_data = child(route, "initial_data_cell_hash", "initial_data_cell_depth");
+        let master_code = child(master, "code_hash", "code_depth");
+        let master_data = child(master, "initial_data_cell_hash", "initial_data_cell_depth");
+        assert_eq!((route_code.depth, route_data.depth), (52, 11));
+        assert_eq!((master_code.depth, master_data.depth), (37, 11));
+
+        let expected_route = hex32(text(route, "state_init_hash"));
+        let expected_master = hex32(text(master, "state_init_hash"));
+        let route_state = ton_state_init_hash_from_children(route_code, route_data)
+            .expect("compose canonical route StateInit");
+        let master_state = ton_state_init_hash_from_children(master_code, master_data)
+            .expect("compose canonical master StateInit");
+        assert_eq!(
+            route_state,
+            TonCellHashDepth::new(expected_route, 53).expect("expected route hash is nonzero")
+        );
+        assert_eq!(
+            master_state,
+            TonCellHashDepth::new(expected_master, 38).expect("expected master hash is nonzero")
+        );
+
+        let route_address = field(route, "address");
+        let master_address = field(master, "address");
+        assert_eq!(hex32(text(route_address, "account_hash")), expected_route);
+        assert_eq!(hex32(text(master_address, "account_hash")), expected_master);
+        assert_eq!(
+            text(route_address, "raw").strip_prefix("0:").map(hex32),
+            Some(expected_route)
+        );
+        assert_eq!(
+            text(master_address, "raw").strip_prefix("0:").map(hex32),
+            Some(expected_master)
+        );
+        assert_eq!(field(route_address, "workchain").as_u64(), Some(0));
+        assert_eq!(field(master_address, "workchain").as_u64(), Some(0));
+
+        for (label, code, data, expected) in [
+            (
+                "route code depth",
+                TonCellHashDepth {
+                    depth: route_code
+                        .depth
+                        .checked_add(1)
+                        .expect("fixture route code depth leaves mutation room"),
+                    ..route_code
+                },
+                route_data,
+                expected_route,
+            ),
+            (
+                "route data depth",
+                route_code,
+                TonCellHashDepth {
+                    depth: route_data
+                        .depth
+                        .checked_add(1)
+                        .expect("fixture route data depth leaves mutation room"),
+                    ..route_data
+                },
+                expected_route,
+            ),
+            (
+                "master code depth",
+                TonCellHashDepth {
+                    depth: master_code
+                        .depth
+                        .checked_add(1)
+                        .expect("fixture master code depth leaves mutation room"),
+                    ..master_code
+                },
+                master_data,
+                expected_master,
+            ),
+            (
+                "master data depth",
+                master_code,
+                TonCellHashDepth {
+                    depth: master_data
+                        .depth
+                        .checked_add(1)
+                        .expect("fixture master data depth leaves mutation room"),
+                    ..master_data
+                },
+                expected_master,
+            ),
+        ] {
+            assert_ne!(
+                ton_state_init_hash_from_children(code, data)
+                    .unwrap_or_else(|| panic!("{label} mutation remains structurally bounded"))
+                    .hash,
+                expected,
+                "{label} must be authenticated by the StateInit hash"
+            );
+        }
+        for (label, code, data, expected) in [
+            ("route child swap", route_data, route_code, expected_route),
+            (
+                "master child swap",
+                master_data,
+                master_code,
+                expected_master,
+            ),
+            (
+                "route code substitution",
+                master_code,
+                route_data,
+                expected_route,
+            ),
+            (
+                "master code substitution",
+                route_code,
+                master_data,
+                expected_master,
+            ),
+        ] {
+            assert_ne!(
+                ton_state_init_hash_from_children(code, data)
+                    .unwrap_or_else(|| panic!("{label} remains structurally bounded"))
+                    .hash,
+                expected,
+                "{label} must not preserve the governed address"
+            );
+        }
+    }
+
+    #[test]
     fn breaker_boc_gate_accepts_only_one_canonical_representation() {
         const EMPTY: &[u8] = &[
             0xb5, 0xee, 0x9c, 0x72, 0x01, 0x01, 0x01, 0x01, 0x00, 0x02, 0x00, 0x00, 0x00,

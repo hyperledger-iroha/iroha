@@ -17,13 +17,9 @@ const MIN_TILE_STAGE_LIMIT: u32 = 1;
 /// Maximum radix-2 stage count that fits in the 256-word Metal threadgroup tile.
 pub const FFT_TILE_STAGE_LIMIT_MAX: u32 = 8;
 const POSEIDON_LANES_ENV: &str = "FASTPQ_METAL_POSEIDON_LANES";
-const POSEIDON_BATCH_ENV: &str = "FASTPQ_METAL_POSEIDON_BATCH";
 const DEFAULT_POSEIDON_LANES: u32 = 256;
 const MIN_POSEIDON_LANES: u32 = 32;
 const MAX_POSEIDON_LANES: u32 = 256;
-const DEFAULT_POSEIDON_BATCH: u32 = 8;
-const MIN_POSEIDON_BATCH: u32 = 1;
-const MAX_POSEIDON_BATCH: u32 = 32;
 const GIB_BYTES: u64 = 1024 * 1024 * 1024;
 const GIB_F64: f64 = 1024.0 * 1024.0 * 1024.0;
 #[allow(clippy::doc_markdown)]
@@ -35,7 +31,6 @@ pub const LDE_TILE_STAGE_LIMIT_MIN: u32 = 1;
 static FFT_LANE_OVERRIDE: OnceLock<Option<u32>> = OnceLock::new();
 static FFT_TILE_OVERRIDE: OnceLock<Option<u32>> = OnceLock::new();
 static POSEIDON_LANE_OVERRIDE: OnceLock<Option<u32>> = OnceLock::new();
-static POSEIDON_BATCH_OVERRIDE: OnceLock<Option<u32>> = OnceLock::new();
 static DEVICE_HINTS: OnceLock<DeviceHints> = OnceLock::new();
 #[cfg(test)]
 static TEST_DEVICE_HINTS: OnceLock<Mutex<TestDeviceHints>> = OnceLock::new();
@@ -199,10 +194,7 @@ pub fn poseidon_tuning(exec_width: u32, max_threads: u32) -> PoseidonTuning {
         .clamp(MIN_POSEIDON_LANES, MAX_POSEIDON_LANES)
         .max(exec_requirement)
         .min(hardware_ceiling);
-    let default_states = default_poseidon_states_per_lane(hints, lanes);
-    let states_per_lane = poseidon_batch_override()
-        .unwrap_or(default_states)
-        .clamp(MIN_POSEIDON_BATCH, MAX_POSEIDON_BATCH);
+    let states_per_lane = default_poseidon_states_per_lane(hints, lanes);
     PoseidonTuning {
         threadgroup_lanes: lanes,
         states_per_lane,
@@ -227,32 +219,6 @@ fn poseidon_lane_override() -> Option<u32> {
                         %error,
                         default_lanes = DEFAULT_POSEIDON_LANES,
                         "ignoring invalid {POSEIDON_LANES_ENV} override; keeping default lanes"
-                    );
-                    None
-                }
-            }
-        })
-    })
-}
-fn poseidon_batch_override() -> Option<u32> {
-    *POSEIDON_BATCH_OVERRIDE.get_or_init(|| {
-        env::var(POSEIDON_BATCH_ENV).ok().and_then(|raw| {
-            match parse_poseidon_batch_override(raw.trim()) {
-                Ok(value) => {
-                    debug!(
-                        target: "fastpq::metal",
-                        states = value,
-                        "overriding Metal Poseidon batch size via {POSEIDON_BATCH_ENV}"
-                    );
-                    Some(value)
-                }
-                Err(error) => {
-                    warn!(
-                        target: "fastpq::metal",
-                        raw,
-                        %error,
-                        default_batch = DEFAULT_POSEIDON_BATCH,
-                        "ignoring invalid {POSEIDON_BATCH_ENV} override; keeping default batch"
                     );
                     None
                 }
@@ -303,13 +269,6 @@ fn parse_poseidon_lane_override(raw: &str) -> Result<u32, &'static str> {
     }
     if !value.is_power_of_two() {
         return Err("lane count must be a power of two");
-    }
-    Ok(value)
-}
-fn parse_poseidon_batch_override(raw: &str) -> Result<u32, &'static str> {
-    let value: u32 = raw.parse().map_err(|_| "not an integer")?;
-    if !(MIN_POSEIDON_BATCH..=MAX_POSEIDON_BATCH).contains(&value) {
-        return Err("batch size out of supported range (1–32 states)");
     }
     Ok(value)
 }
@@ -467,13 +426,6 @@ mod tests {
         assert!(parse_poseidon_lane_override("512").is_err());
     }
     #[test]
-    fn poseidon_batch_override_bounds() {
-        assert_eq!(parse_poseidon_batch_override("1").unwrap(), 1);
-        assert_eq!(parse_poseidon_batch_override("16").unwrap(), 16);
-        assert!(parse_poseidon_batch_override("0").is_err());
-        assert!(parse_poseidon_batch_override("64").is_err());
-    }
-    #[test]
     fn default_lane_target_scales_with_log_len() {
         assert!(default_lane_target(18) > default_lane_target(8));
     }
@@ -501,8 +453,7 @@ mod tests {
         let tuning = poseidon_tuning(40, 128);
         assert!(tuning.threadgroup_lanes >= MIN_POSEIDON_LANES);
         assert!(tuning.threadgroup_lanes <= MAX_POSEIDON_LANES);
-        assert!(tuning.states_per_lane >= MIN_POSEIDON_BATCH);
-        assert!(tuning.states_per_lane <= MAX_POSEIDON_BATCH);
+        assert!(matches!(tuning.states_per_lane, 1 | 2));
     }
     #[test]
     fn poseidon_tuning_scales_with_device_hints() {

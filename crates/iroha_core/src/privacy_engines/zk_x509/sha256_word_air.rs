@@ -18,11 +18,11 @@ use super::air::{U32RangeAirRowV1, ZkX509AirErrorV1};
 use super::io_air::{
     ZkX509IoChallengesV1, ZkX509IoEndpointV1, ZkX509IoSegmentRoleV1, ZkX509IoTraceV1,
 };
+#[cfg(test)]
+use crate::privacy_engines::transparent_stark::GoldilocksDigest384V1;
 use crate::privacy_engines::transparent_stark::{
     GoldilocksFieldV1 as F, TransparentStarkErrorV1, TransparentTranscriptV1,
 };
-#[cfg(test)]
-use crate::privacy_engines::transparent_stark::GoldilocksDigest384V1;
 use thiserror::Error;
 /// Manifest descriptor for the resource-bounded local SHA-256 chip.
 pub(crate) const ZK_X509_SHA256_WORD_AIR_DESCRIPTOR_V1: &[u8] = b"sha256-word-air-v1-incompatible:u32-range-row=packed-plus32bits:sigma-degree3:choose-degree2:majority-degree3:add-up-to5-plus-u32-constant:carry-3bits:local-rows-per-block=1728:local-initial-rows=8:word-copy=four-independent-transcript-challenged-address-value-write-grand-products:sorted-address-step-0-or1:exactly-one-write-per-address:read-value-equals-write:memory-rows-per-block=2136:memory-fixed-rows=16:fixed-canonical-topology:physical-segment-offset-and-copy-product-continuations:shared-sha-call-bus-binding-required";

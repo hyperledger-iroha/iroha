@@ -1,8 +1,8 @@
 //! Emit the strict line protocol consumed by the final-V1 StateInit golden generator.
 
-import "@acton/build"
 import "@acton/io"
 import "@contracts/constants"
+import "@contracts/storage"
 import "@tests/stateinit-golden-fixture"
 
 fun emitHash(name: string, value: int) {
@@ -27,6 +27,13 @@ fun main() {
     val (_, masterAddressHash) = masterAddress.getWorkchainAndHash();
 
     println("schema=iroha.sccp.ton-stateinit-golden.final-v1");
+    println("sora_network_profile={}", SCCP_NETWORK_PROFILE_SORA_V1);
+    println("ton_network_profile={}", SCCP_NETWORK_PROFILE_TON_V1);
+    println("sora_domain={}", SCCP_DOMAIN_SORA);
+    println("ton_domain={}", SCCP_DOMAIN_TON);
+    emitHash("sora_taira_chain_id", SCCP_SORA_TAIRA_CHAIN_ID_V1);
+    emitHash("ton_zero_state_root_hash", SCCP_TON_MAINNET_ZERO_STATE_ROOT_HASH_V1);
+    emitHash("ton_zero_state_file_hash", SCCP_TON_MAINNET_ZERO_STATE_FILE_HASH_V1);
     println("expected_global_id={}", config.expectedGlobalId);
     println("workchain={}", SCCP_WORKCHAIN);
     println("storage_version={}", SCCP_STORAGE_VERSION);
@@ -55,12 +62,16 @@ fun main() {
     emitHash("guardian_4", guardianTail.guardian4);
     emitHash("destination_binding_hash", routeTail.destinationBindingHash);
     emitHash("route_configuration_hash", routeHashes.routeConfigurationHash);
-    emitHash("bridge_config_cell_hash", configCell.hash());
-    emitHash("bridge_replay_cell_hash", emptyBridgeReplayState().hash());
-    emitHash("bridge_pending_cell_hash", emptyBridgePendingState().hash());
+    emitHash("route_config_cell_hash", configCell.hash());
+    emitHash("route_replay_cell_hash", emptyBridgeReplayState().hash());
+    emitHash("route_pending_cell_hash", emptyBridgePendingState().hash());
     emitHash("master_replay_cell_hash", emptyMasterReplayState().hash());
-    emitHash("bridge_initial_data_cell_hash", bridgeState.data.hash());
-    emitHash("bridge_state_init_account_hash", bridgeAddressHash);
+    emitHash("route_initial_data_cell_hash", bridgeState.data.hash());
+    println("route_code_depth={}", bridgeState.code.depth());
+    println("route_initial_data_cell_depth={}", bridgeState.data.depth());
+    emitHash("route_state_init_account_hash", bridgeAddressHash);
     emitHash("master_initial_data_cell_hash", masterState.data.hash());
+    println("master_code_depth={}", masterState.code.depth());
+    println("master_initial_data_cell_depth={}", masterState.data.depth());
     emitHash("master_state_init_account_hash", masterAddressHash);
 }

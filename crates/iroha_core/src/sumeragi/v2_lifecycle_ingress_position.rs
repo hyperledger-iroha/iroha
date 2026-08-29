@@ -71,6 +71,16 @@ impl PendingFairIngressIdentity {
     pub(super) const fn physical_admission_ordinal(&self) -> u64 {
         self.physical_admission_ordinal
     }
+    /// Whether two snapshots name the same queue-bound physical coordinates.
+    ///
+    /// Exact retransmission coalescence deliberately changes the ownership-history
+    /// digest without replacing the physical row. Callers must still compare the
+    /// authenticated carrier and its semantic owner before treating such snapshots
+    /// as one persistence handoff.
+    pub(super) fn shares_physical_coordinates(&self, other: &Self) -> bool {
+        self.context == other.context
+            && self.physical_admission_ordinal == other.physical_admission_ordinal
+    }
 }
 /// Failure to freeze or revalidate one exact pre-dequeue fair-ingress cut.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -415,10 +425,10 @@ impl PreparedFairIngressQueueWitness {
     /// Atomically remove the exact selected occurrence while retaining this
     /// witness on every rejected comparison.
     ///
-    /// The lifecycle LedgerV1 transaction uses this surface after its durable
-    /// cut. A failed CAS can therefore carry the still-live queue authority
-    /// into a restart-required result instead of degrading it into raw
-    /// coordinates or a retryable error.
+    /// This retained comparison remains a queue-level diagnostic and test seam.
+    /// Durable lifecycle transactions must instead acquire
+    /// [`Self::lock_exact_dequeue_retaining`] before LedgerV1 so producer
+    /// coalescence cannot create a fallible post-publication CAS.
     #[allow(clippy::result_large_err)]
     pub(super) fn commit_exact_dequeue_retaining(
         self,
@@ -483,9 +493,11 @@ impl PreparedFairIngressQueueWitness {
     /// the queue-minted witness. Expensive carrier validation runs outside the
     /// queue-state lock while exclusive dequeue service remains held. The
     /// final state-locked comparison performs no network, crypto, or body work
-    /// before entering the ordinary production mutation tail. The future
-    /// enclosing selector transaction must already have dropped its retained
-    /// inbound `Arc` clones; the shared tail refuses non-exclusive envelopes.
+    /// before entering the ordinary mutation tail. A caller must already have
+    /// dropped its retained inbound `Arc` clones; the shared tail refuses
+    /// non-exclusive envelopes. Production durability paths use the locked
+    /// surface above, while this wrapper retains direct queue regression
+    /// coverage.
     #[cfg_attr(not(test), allow(dead_code))]
     pub(super) fn commit_exact_dequeue(
         self,
@@ -642,6 +654,24 @@ impl PreparedFairIngressQueueWitness {
     }
 }
 impl LockedPreparedFairIngressExactDequeue<'_> {
+    /// Release the pre-publication locks while retaining the exact witness.
+    ///
+    /// Restart-only callers use this after a durable publication attempt has
+    /// failed. The witness remains diagnostic authority for the same physical
+    /// row, but cannot be committed without passing a fresh lock/revalidation.
+    pub(super) fn unlock_retaining(self) -> PreparedFairIngressQueueWitness {
+        let Self {
+            queue: _,
+            _service_guard,
+            _producer_publication_guard,
+            witness,
+            selection: _,
+        } = self;
+        drop(_producer_publication_guard);
+        drop(_service_guard);
+        witness
+    }
+
     /// Assertion-remove the prevalidated occurrence after LedgerV1 fsync.
     pub(super) fn commit(self) -> (InboundBlockMessage, FairV2IngressDequeueDisposition) {
         let Self {

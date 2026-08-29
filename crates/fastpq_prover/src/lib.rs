@@ -1,8 +1,8 @@
-//! FASTPQ lane prover scaffolding.
+//! FASTPQ lane prover.
 //!
 //! This crate provides the production FASTPQ-ISI prover and verifier
 //! implementation.  It exposes deterministic commitments, wiring to the
-//! canonical parameter catalogue, and the Stage 6 backend that drives the
+//! sole V1 parameter set, and the backend that drives the
 //! end-to-end STARK pipeline.  Downstream callers interact with the canonical
 //! constructor which initialises the production backend.
 //!
@@ -15,6 +15,7 @@
 mod axt_binding;
 mod backend;
 mod batch;
+#[cfg(any(test, feature = "dev-tools", feature = "fastpq-gpu"))]
 mod bn254;
 mod bn254_poseidon;
 #[cfg(feature = "fastpq-gpu")]
@@ -22,6 +23,7 @@ mod bn254_poseidon_params;
 mod cyclotomic;
 mod digest;
 mod error;
+#[cfg(any(test, feature = "dev-tools", feature = "fastpq-gpu"))]
 mod fastpq_cuda;
 mod fft;
 mod field;
@@ -35,14 +37,14 @@ mod gpu;
 #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
 mod metal;
 mod metal_config;
-pub mod ordering;
+mod ordering;
 pub(crate) mod overrides;
-pub mod packing;
+mod packing;
 mod poseidon;
 mod poseidon_manifest;
 mod proof;
 mod semantics;
-pub mod trace;
+mod trace;
 pub use axt_binding::{
     AXT_FASTPQ_BATCH_SEAL_METADATA_KEY, AXT_FASTPQ_BINDING_METADATA_KEY,
     AXT_FASTPQ_COMMITTED_AMOUNT_METADATA_KEY, AXT_FASTPQ_DA_COMMITMENT_METADATA_KEY,
@@ -57,13 +59,12 @@ pub use axt_binding::{
     verify_axt_proof_envelope, verify_axt_proof_envelope_with_outer_metadata,
 };
 pub use backend::{
-    Backend, BackendConfig, ExecutionMode, PoseidonExecutionMode, clear_execution_mode_observer,
+    ExecutionMode, PoseidonExecutionMode, clear_execution_mode_observer,
     set_execution_mode_observer,
 };
+#[cfg(feature = "dev-tools")]
 #[doc(hidden)]
-pub use backend::{
-    compute_lookup_grand_product, hash_lde_leaves, lde_chunk_size, merkle_paths_for_queries,
-};
+pub use backend::{hash_lde_leaves, lde_chunk_size, merkle_paths_for_queries};
 pub use batch::{
     OperationKind, PublicInputs, StateTransition, TRANSITION_BATCH_SCHEMA_NAME, TransitionBatch,
 };
@@ -73,9 +74,9 @@ pub use bn254_poseidon::{
 };
 pub use digest::trace_commitment;
 pub use error::{Error, Result};
-pub use fastpq_cuda::{
-    CudaBackendError, fastpq_bn254_fft, fastpq_bn254_lde, fastpq_fft, fastpq_ifft, fastpq_lde,
-};
+#[cfg(feature = "dev-tools")]
+#[doc(hidden)]
+pub use fastpq_cuda::{CudaBackendError, fastpq_bn254_fft, fastpq_bn254_lde};
 /// Canonical FASTPQ parameter and six-lane native-STARK digest API.
 pub use fastpq_isi as fastpq_isi_v1;
 pub use fft::Planner;
@@ -95,7 +96,7 @@ pub use metal::{
 pub use metal_config::{FftTuning, PoseidonTuning};
 pub use ordering::ordering_hash;
 pub use overrides::{MetalOverrides, apply_metal_overrides};
-pub use packing::{LIMB_BYTES, PackedBytes, pack_bytes, unpack_bytes};
+pub use packing::{LIMB_BYTES, PackedBytes, pack_bytes};
 #[cfg(feature = "fastpq-gpu")]
 pub use poseidon::preflight_gpu_backend as preflight_poseidon_gpu_backend;
 pub use poseidon::{FIELD_MODULUS, PoseidonSponge, hash_field_elements};
@@ -103,13 +104,22 @@ pub use poseidon::{FIELD_MODULUS, PoseidonSponge, hash_field_elements};
 pub use proof::verify_raw_statement;
 pub use proof::{Proof, Prover, VerifyLimits, verify, verify_with_limits};
 pub use semantics::{ProofSemantics, validate_batch_semantics};
+#[cfg(feature = "dev-tools")]
+#[doc(hidden)]
+pub use trace::merkle_root;
+#[cfg(all(feature = "dev-tools", feature = "fastpq-gpu"))]
+#[doc(hidden)]
 pub use trace::{
-    ColumnDigests, PoseidonPipelinePolicy, RowUsage, Trace, TraceColumn, build_trace,
-    clear_poseidon_gpu_event_observer, clear_poseidon_pipeline_observer, column_hashes,
-    merkle_root, merkle_root_with_first_level, set_poseidon_gpu_event_observer,
-    set_poseidon_pipeline_observer,
+    ColumnDigests, PoseidonColumnBatch, hash_columns_cpu_batch_inputs, hash_columns_gpu_batch,
+    hash_columns_gpu_with_first_level,
 };
-#[cfg(feature = "fastpq-gpu")]
+pub use trace::{
+    PoseidonPipelinePolicy, RowUsage, Trace, TraceColumn, build_trace,
+    clear_poseidon_gpu_event_observer, clear_poseidon_pipeline_observer,
+    set_poseidon_gpu_event_observer, set_poseidon_pipeline_observer,
+};
+#[cfg(all(feature = "dev-tools", feature = "fastpq-gpu"))]
+#[doc(hidden)]
 pub use trace::{
     PoseidonPipelineStats, enable_poseidon_pipeline_stats, take_poseidon_pipeline_stats,
 };

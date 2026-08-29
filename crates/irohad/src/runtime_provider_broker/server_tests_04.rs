@@ -35,6 +35,29 @@ fn read_consensus_signer_operation(
     request
 }
 
+fn expect_and_answer_consensus_signer_qualification(
+    stream: &mut UnixStream,
+    expected_request_id: u64,
+    revision: u64,
+    policy_digest: [u8; 32],
+) {
+    let qualify = read_operation(stream);
+    assert_eq!(qualify.request_id, expected_request_id);
+    assert_eq!(qualify.operation, OPERATION_QUALIFY_V1);
+    let qualification = encode_canonical(
+        &QualificationResultWireV1 {
+            revision,
+            policy_digest,
+        },
+        MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1,
+    )
+    .expect("encode exact consensus-signer qualification");
+    send_operation(
+        stream,
+        &operation_response(&qualify, STATUS_OK_V1, qualification),
+    );
+}
+
 #[test]
 fn fenced_privacy_head_reader_binding_is_exact_and_drift_checked() {
     let binding = privacy_reader_binding();
@@ -2315,6 +2338,17 @@ impl ParliamentTlePartialReleaseSignerBrokerBackendV1 for TestParliamentTleBroke
         Ok(self.qualification)
     }
 
+    fn attest_partial_release_capability(
+        &self,
+        _session: &iroha_core::tle_release::ValidatedTleKeySessionV1,
+        _expected_participant_index: u16,
+    ) -> Result<
+        iroha_core::tle_release::TlePartialReleaseCapabilityAttestationV1,
+        ParliamentTlePartialReleaseSignerBrokerBackendErrorV1,
+    > {
+        Err(ParliamentTlePartialReleaseSignerBrokerBackendErrorV1::Rejected)
+    }
+
     fn sign_projected_partial_release(
         &self,
         _projection: &iroha_core::tle_release::ValidatedTleReleaseProjectionV1,
@@ -2940,6 +2974,161 @@ fn correlated_malformed_beacon_response_is_rejected_by_typed_proxy() {
 }
 
 #[test]
+fn parliament_tle_capability_attestation_round_trips_over_authenticated_broker() {
+    let fixture = consensus_threshold_tle_broker_test_fixture_v1();
+    let (_directory, policy, shutdown, server) =
+        start_signer(fixture.catalog.clone(), fixture.backends);
+    let requested_catalog = fixture
+        .catalog
+        .iter()
+        .map(ProviderBindingWireV1::try_from_binding)
+        .collect::<Result<Vec<_>, _>>()
+        .expect("project exact TLE broker catalog");
+    let (client, observations) = BrokerSession::connect(
+        &policy,
+        fixture.catalog.chain_id(),
+        *fixture.catalog.network_id(),
+        requested_catalog.clone(),
+    )
+    .expect("authenticate TLE capability broker client session");
+    let payload = encode_canonical(
+        &ParliamentTleCapabilityAttestRequestWireV1 {
+            key_session: fixture.session.public_state().clone(),
+            participant_index: 1,
+        },
+        MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1,
+    )
+    .expect("encode exact TLE capability operation");
+    let result = client
+        .call(
+            &requested_catalog[0],
+            observations[0].metadata_digest,
+            OPERATION_PARLIAMENT_TLE_CAPABILITY_ATTEST_V1,
+            payload,
+            false,
+        )
+        .expect("round-trip Parliament TLE capability through authenticated broker");
+    let attested = client
+        .decode_operation_result::<ParliamentTleCapabilityAttestResultWireV1>(
+            &result,
+            OPERATION_PARLIAMENT_TLE_CAPABILITY_ATTEST_V1,
+        )
+        .expect("decode brokered Parliament TLE capability");
+    assert_eq!(
+        attested.key_session_id,
+        fixture.session.public_state().key_session_id
+    );
+    assert_eq!(
+        attested.transcript_hash,
+        fixture.session.public_state().transcript_hash
+    );
+    assert_eq!(attested.participant_index, 1);
+    let wrong_seat_payload = encode_canonical(
+        &ParliamentTleCapabilityAttestRequestWireV1 {
+            key_session: fixture.session.public_state().clone(),
+            participant_index: 2,
+        },
+        MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1,
+    )
+    .expect("encode wrong-seat TLE capability operation");
+    assert!(matches!(
+        client.call(
+            &requested_catalog[0],
+            observations[0].metadata_digest,
+            OPERATION_PARLIAMENT_TLE_CAPABILITY_ATTEST_V1,
+            wrong_seat_payload,
+            false,
+        ),
+        Err(BrokerError::Rejected)
+    ));
+    drop(client);
+    shutdown.request_shutdown();
+    server
+        .join()
+        .expect("join Parliament TLE capability broker")
+        .expect("Parliament TLE capability broker exits cleanly");
+}
+
+#[test]
+fn parliament_tle_capability_typed_proxy_requalifies_before_and_after_lookup() {
+    let fixture = consensus_threshold_tle_broker_test_fixture_v1();
+    let catalog = fixture.catalog;
+    let session = fixture.session;
+    drop(fixture.backends);
+    let binding = ProviderBindingWireV1::try_from_binding(
+        catalog.iter().next().expect("one TLE signer binding"),
+    )
+    .expect("project exact-capability TLE binding");
+    let revision = binding.revision.expect("TLE signer revision");
+    let policy_digest = binding.policy_digest.expect("TLE signer policy digest");
+    let expected_public_state = session.public_state().clone();
+    let expected_key_session_id = expected_public_state.key_session_id;
+    let expected_transcript_hash = expected_public_state.transcript_hash;
+    let server_network_id = *catalog.network_id();
+    let (_directory, _path, policy, listener) = bind_fake_broker();
+    let server_binding = binding.clone();
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener
+            .accept()
+            .expect("accept exact-capability TLE client");
+        let handshake = read_handshake(&mut stream);
+        assert_eq!(handshake.requested_catalog, vec![server_binding]);
+        send_handshake(&mut stream, &handshake_response(&handshake));
+
+        expect_and_answer_consensus_signer_qualification(&mut stream, 1, revision, policy_digest);
+        let attest = read_consensus_signer_operation(&mut stream, &server_network_id);
+        assert_eq!(attest.request_id, 2);
+        assert_eq!(
+            attest.operation,
+            OPERATION_PARLIAMENT_TLE_CAPABILITY_ATTEST_V1
+        );
+        let request = decode_canonical::<ParliamentTleCapabilityAttestRequestWireV1>(
+            &attest.payload,
+            MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1,
+        )
+        .expect("decode exact typed-proxy TLE capability request");
+        assert_eq!(request.key_session, expected_public_state);
+        assert_eq!(request.participant_index, 1);
+        let exact = encode_canonical(
+            &ParliamentTleCapabilityAttestResultWireV1 {
+                key_session_id: expected_key_session_id,
+                transcript_hash: expected_transcript_hash,
+                participant_index: 1,
+            },
+            MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1,
+        )
+        .expect("encode exact typed-proxy TLE capability result");
+        send_operation(
+            &mut stream,
+            &operation_response(&attest, STATUS_OK_V1, exact),
+        );
+        expect_and_answer_consensus_signer_qualification(&mut stream, 3, revision, policy_digest);
+    });
+    let requested_catalog = catalog
+        .iter()
+        .map(ProviderBindingWireV1::try_from_binding)
+        .collect::<Result<Vec<_>, _>>()
+        .expect("project exact-capability TLE catalog");
+    let (broker_session, observations) = BrokerSession::connect(
+        &policy,
+        catalog.chain_id(),
+        *catalog.network_id(),
+        requested_catalog.clone(),
+    )
+    .expect("authenticate exact-capability TLE broker session");
+    let signer = ParliamentTleBrokerPartialReleaseSigner {
+        session: broker_session,
+        binding: requested_catalog[0].clone(),
+        metadata_digest: observations[0].metadata_digest,
+    };
+    let attestation = signer
+        .attest_projected_capability(&session, 1)
+        .expect("typed proxy accepts the exact capability result");
+    assert!(attestation.matches(&session, 1));
+    server.join().expect("join exact-capability TLE broker");
+}
+
+#[test]
 fn parliament_tle_partial_release_round_trips_over_authenticated_broker() {
     let fixture = consensus_threshold_tle_broker_test_fixture_v1();
     let (_directory, policy, shutdown, server) =
@@ -3173,6 +3362,140 @@ fn correlated_malformed_tle_response_is_rejected_by_typed_proxy() {
         "semantic rejection must permanently poison the TLE session without replay"
     );
     server.join().expect("join malformed-response TLE broker");
+}
+
+#[derive(Clone, Copy)]
+enum ParliamentTleCapabilityResultFault {
+    WrongKeySessionId,
+    WrongTranscriptHash,
+    WrongParticipantIndex,
+    Truncated,
+}
+
+fn assert_invalid_tle_capability_result_is_rejected(fault: ParliamentTleCapabilityResultFault) {
+    let fixture = consensus_threshold_tle_broker_test_fixture_v1();
+    let catalog = fixture.catalog;
+    let session = fixture.session;
+    drop(fixture.backends);
+    let binding = ProviderBindingWireV1::try_from_binding(
+        catalog.iter().next().expect("one TLE signer binding"),
+    )
+    .expect("project mismatched-capability TLE binding");
+    let revision = binding.revision.expect("TLE signer revision");
+    let policy_digest = binding.policy_digest.expect("TLE signer policy digest");
+    let key_session_id = session.public_state().key_session_id;
+    let transcript_hash = session.public_state().transcript_hash;
+    let server_network_id = *catalog.network_id();
+    let (_directory, _path, policy, listener) = bind_fake_broker();
+    let server_binding = binding.clone();
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener
+            .accept()
+            .expect("accept mismatched-capability TLE client");
+        let handshake = read_handshake(&mut stream);
+        assert_eq!(handshake.requested_catalog, vec![server_binding]);
+        send_handshake(&mut stream, &handshake_response(&handshake));
+        expect_and_answer_consensus_signer_qualification(&mut stream, 1, revision, policy_digest);
+        let attest = read_consensus_signer_operation(&mut stream, &server_network_id);
+        assert_eq!(attest.request_id, 2);
+        assert_eq!(
+            attest.operation,
+            OPERATION_PARLIAMENT_TLE_CAPABILITY_ATTEST_V1
+        );
+        let mut result = ParliamentTleCapabilityAttestResultWireV1 {
+            key_session_id,
+            transcript_hash,
+            participant_index: 1,
+        };
+        match fault {
+            ParliamentTleCapabilityResultFault::WrongKeySessionId => {
+                let candidate =
+                    iroha_data_model::governance::types::TleKeySessionId::new([0xC7; 32]);
+                result.key_session_id = if candidate == result.key_session_id {
+                    iroha_data_model::governance::types::TleKeySessionId::new([0xC8; 32])
+                } else {
+                    candidate
+                };
+            }
+            ParliamentTleCapabilityResultFault::WrongTranscriptHash => {
+                result.transcript_hash[0] ^= 1;
+            }
+            ParliamentTleCapabilityResultFault::WrongParticipantIndex => {
+                result.participant_index = 2;
+            }
+            ParliamentTleCapabilityResultFault::Truncated => {}
+        }
+        let mut invalid = encode_canonical(&result, MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1)
+            .expect("encode correlated invalid TLE capability result");
+        if matches!(fault, ParliamentTleCapabilityResultFault::Truncated) {
+            invalid
+                .pop()
+                .expect("canonical TLE capability result is nonempty");
+        }
+        send_operation(
+            &mut stream,
+            &operation_response(&attest, STATUS_OK_V1, invalid),
+        );
+    });
+    let requested_catalog = catalog
+        .iter()
+        .map(ProviderBindingWireV1::try_from_binding)
+        .collect::<Result<Vec<_>, _>>()
+        .expect("project mismatched-capability TLE catalog");
+    let (broker_session, observations) = BrokerSession::connect(
+        &policy,
+        catalog.chain_id(),
+        *catalog.network_id(),
+        requested_catalog.clone(),
+    )
+    .expect("authenticate mismatched-capability TLE broker session");
+    let signer = ParliamentTleBrokerPartialReleaseSigner {
+        session: broker_session,
+        binding: requested_catalog[0].clone(),
+        metadata_digest: observations[0].metadata_digest,
+    };
+    let expected_error = if matches!(fault, ParliamentTleCapabilityResultFault::Truncated) {
+        BrokerError::Protocol
+    } else {
+        BrokerError::Rejected
+    };
+    assert_eq!(
+        signer.attest_projected_capability(&session, 1),
+        Err(expected_error),
+        "an envelope-correlated response cannot substitute or truncate a public TLE capability"
+    );
+    assert_eq!(
+        signer.attest_projected_capability(&session, 1),
+        Err(BrokerError::Protocol),
+        "an invalid capability must permanently poison the TLE session without replay"
+    );
+    server.join().expect("join invalid-capability TLE broker");
+}
+
+#[test]
+fn correlated_wrong_tle_key_session_id_is_rejected_by_typed_proxy() {
+    assert_invalid_tle_capability_result_is_rejected(
+        ParliamentTleCapabilityResultFault::WrongKeySessionId,
+    );
+}
+
+#[test]
+fn correlated_wrong_tle_transcript_hash_is_rejected_by_typed_proxy() {
+    assert_invalid_tle_capability_result_is_rejected(
+        ParliamentTleCapabilityResultFault::WrongTranscriptHash,
+    );
+}
+
+#[test]
+fn correlated_wrong_tle_participant_index_is_rejected_by_typed_proxy() {
+    assert_invalid_tle_capability_result_is_rejected(
+        ParliamentTleCapabilityResultFault::WrongParticipantIndex,
+    );
+}
+
+#[test]
+fn correlated_truncated_tle_capability_is_rejected_by_typed_proxy() {
+    assert_invalid_tle_capability_result_is_rejected(ParliamentTleCapabilityResultFault::Truncated);
 }
 
 #[test]

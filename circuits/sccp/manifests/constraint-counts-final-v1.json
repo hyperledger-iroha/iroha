@@ -8,13 +8,13 @@
     "module_mode": "vendor",
     "network": "none"
   },
-  "definition_state": "post-block-header-consensus-projection-root-binding",
+  "definition_state": "post-block-header-root-and-composable-epoch-anchor-binding",
   "profiles": [
     {
       "profile": "sccp-final-v1-bsc-mainnet-epoch-anchor-update",
       "role": "epoch-anchor-update",
       "outer_curve": "bn254",
-      "constraints": 115576723,
+      "constraints": 115576820,
       "kat_sha256": "602def10b174dd298ed1f44bdbcb2ab9010b67ecb6f81ef832e9558a07f1d14d"
     },
     {
@@ -28,7 +28,7 @@
       "profile": "sccp-final-v1-ethereum-mainnet-epoch-anchor-update",
       "role": "epoch-anchor-update",
       "outer_curve": "bn254",
-      "constraints": 115576804,
+      "constraints": 115576901,
       "kat_sha256": "eec2fa96f1ec575e53aeaab74fcc80d99aad6a3425e27b41078cae6cf73cb878"
     },
     {
@@ -42,7 +42,7 @@
       "profile": "sccp-final-v1-ton-mainnet-epoch-anchor-update",
       "role": "epoch-anchor-update",
       "outer_curve": "bls12-381",
-      "constraints": 113226984,
+      "constraints": 113227081,
       "kat_sha256": "542b5d46a121aa144458be6666b109d8cb37e1b117895f237201c087b285af66"
     },
     {
@@ -56,7 +56,7 @@
       "profile": "sccp-final-v1-tron-mainnet-epoch-anchor-update",
       "role": "epoch-anchor-update",
       "outer_curve": "bn254",
-      "constraints": 115576735,
+      "constraints": 115576832,
       "kat_sha256": "ed115b44ccfb5e1b19444021c03f1da604ad749c2f2aa656799004afeb368cf6"
     },
     {
@@ -67,6 +67,57 @@
       "kat_sha256": "28be620f9ccefa56859717c04b9c2d4a70b25b743b7d060af449aafba2296a22"
     }
   ],
+  "epoch_anchor_recurrence": {
+    "r1cs_serialization": "gnark-v0.16.3-constraint-system-writeto",
+    "invalidated_artifact_roles": [
+      "r1cs",
+      "phase2_transcript",
+      "proving_key",
+      "verifying_key",
+      "fixed_key_verifier",
+      "destination_deployment"
+    ],
+    "fresh_closure_required": [
+      "circuit_specific_phase2_mpc",
+      "semantic_cryptographic_audit",
+      "reproducibility_ceremony_audit",
+      "destination_integration_audit"
+    ],
+    "profiles": [
+      {
+        "profile": "sccp-final-v1-bsc-mainnet-epoch-anchor-update",
+        "constraint_delta": 97,
+        "r1cs_bytes": 7315806903,
+        "r1cs_sha256": "a9ce853283e12688ad57682131764fc3c5899f2a6b3ca171b2acd4a3cb298209",
+        "kat_public_values_changed": false,
+        "invalidated_phase2_ceremony": "sccp-final-v1-bsc-mainnet-epoch-anchor-update-phase2"
+      },
+      {
+        "profile": "sccp-final-v1-ethereum-mainnet-epoch-anchor-update",
+        "constraint_delta": 97,
+        "r1cs_bytes": 7315811354,
+        "r1cs_sha256": "74784b6b470fe5e491d6fc0f57a1502210a416641750a9c0a2361f5dd13f4270",
+        "kat_public_values_changed": false,
+        "invalidated_phase2_ceremony": "sccp-final-v1-ethereum-mainnet-epoch-anchor-update-phase2"
+      },
+      {
+        "profile": "sccp-final-v1-ton-mainnet-epoch-anchor-update",
+        "constraint_delta": 97,
+        "r1cs_bytes": 7158464567,
+        "r1cs_sha256": "e8464554cf53d3dc2e75fc069dfc15a1ffdd0cd0536b32c8790a8c9dbe892629",
+        "kat_public_values_changed": false,
+        "invalidated_phase2_ceremony": "sccp-final-v1-ton-mainnet-epoch-anchor-update-phase2"
+      },
+      {
+        "profile": "sccp-final-v1-tron-mainnet-epoch-anchor-update",
+        "constraint_delta": 97,
+        "r1cs_bytes": 7315793983,
+        "r1cs_sha256": "cd7618339502ae8453c2c218216e2eb9e1b2ca54527bdcbd60b06cdc15392ab5",
+        "kat_public_values_changed": false,
+        "invalidated_phase2_ceremony": "sccp-final-v1-tron-mainnet-epoch-anchor-update-phase2"
+      }
+    ]
+  },
   "production_admissible": false,
-  "note": "Counts and KAT hashes authenticate this source-level definition only. Ceremony-derived R1CS, PK, VK, verifier, and deployment digests remain mandatory release artifacts."
+  "note": "The composable epoch-anchor authorization adds 97 constraints to every epoch profile without changing its positive KAT public values. Every earlier epoch R1CS, Phase-2 transcript, PK, VK, fixed verifier, and destination deployment is invalid; fresh circuit-specific ceremonies and all three independent audits are mandatory."
 }

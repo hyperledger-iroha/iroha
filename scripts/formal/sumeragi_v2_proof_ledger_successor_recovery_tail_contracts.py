@@ -141,6 +141,10 @@ def _lifecycle_turn_driver_ordinary_ingress_source_fidelity_errors(
             "crates/iroha_core/src/sumeragi/tests/v2_adapter_04_wal_recovery.rs",
         ),
         (
+            "dispatch_test",
+            "crates/iroha_core/src/sumeragi/tests/v2_lifecycle_work_registry_validate_dispatch_execution_cases.rs",
+        ),
+        (
             "ledger_recovery_test",
             "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger_tests_durable_recovery_02.rs",
         ),
@@ -925,8 +929,8 @@ pub(super) struct LockedPreparedFairIngressExactDequeue<'a> {
         return target
 
     completion_pre_gate = launched_completion_item(
-        "drive_completion_pre_gate",
-        "lifecycle Completion parked/physical pre-gate",
+        "drive_completion_pre_gate_inner",
+        "lifecycle Completion parked/physical pre-gate implementation",
     )
     ready_completion = launched_completion_item(
         "drive_ready_completion_turn_with_required_ordinal",
@@ -981,12 +985,13 @@ pub(super) struct LockedPreparedFairIngressExactDequeue<'a> {
             rust_code_tokens(completion_pre_gate.source),
             rust_code_tokens("ProductionLifecycleCompletionPreGateV1::Ordinary(runner)"),
         )
-        if ordinary_returns != 3:
+        if ordinary_returns != 4:
             errors.append(
                 f"{paths['driver']}:{completion_pre_gate.line}: lifecycle Completion "
                 "pre-gate must return the exact ordinary cursor for a foreign runner "
-                "rank, the unchanged-Validate-fence ordinary bypass, and an ordinary "
-                f"physical head; found {ordinary_returns} sites"
+                "rank, the unchanged-Validate-fence bypass, an unpermitted ordinary "
+                "head, and an ordinary head whose Ready Proposal Sign is not exact; "
+                f"found {ordinary_returns} sites"
             )
     require_order(
         "driver",
@@ -2649,6 +2654,471 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
             "None",
         ),
     )
+    expected_ready_proposal_sign_items = {
+        "scheduler::ProductionLifecycleOwnerV1::ready_proposal_sign_preempts_bounded_producer_point",
+        "height::LifecycleReadyProposalSignPreemptionPermitV1",
+        "height::LifecycleProducerClaimDispositionV1::ready_proposal_sign_preemption_permit",
+        "height::drain_lifecycle_v2_ingress",
+        "height_test::only_an_eligible_claim_can_preempt_an_ordinary_head_for_ready_proposal_sign",
+        "driver::LaunchedProductionLifecycleV1::drive_completion_pre_gate_with_ready_proposal_sign_preemption",
+        "driver::LaunchedProductionLifecycleV1::drive_completion_pre_gate_inner",
+        "driver::ActivatedProductionLifecycleV1::drive_completion_pre_gate_with_ready_proposal_sign_preemption",
+        "worker_test::LifecyclePlannerIoFixture::publish_auxiliary_completion_fixture",
+        "launch_test::LaunchedProductionLifecycleV1::install_ordinary_completion_head_for_ready_sign_test",
+        "launch_test::LaunchedProductionLifecycleV1::ordinary_completion_head_retained_for_ready_sign_test",
+        "launch_test::LaunchedProductionLifecycleV1::drain_ordinary_completion_head_for_ready_sign_test",
+        "dispatch_test::local_proposal_intent_live_wal_sign_fixture",
+        "wal_test::ready_proposal_sign_boundary_predicate_authenticates_exact_control_carrier",
+        "wal_test::ready_local_proposal_sign_and_exact_output_precede_pending_timeout_certificate",
+    }
+    observed_ready_proposal_sign_items = set(
+        _PRODUCTION_READY_PROPOSAL_SIGN_PREEMPTION_ITEM_SHA256
+    )
+    if observed_ready_proposal_sign_items != expected_ready_proposal_sign_items:
+        errors.append(
+            "Ready Proposal-Sign preemption source-seal inventory must be exact; "
+            f"missing={sorted(expected_ready_proposal_sign_items - observed_ready_proposal_sign_items)}, "
+            f"extra={sorted(observed_ready_proposal_sign_items - expected_ready_proposal_sign_items)}"
+        )
+    ready_proposal_sign_preemption = _require_qualified_rust_item(
+        paths["scheduler"],
+        sources["scheduler"],
+        "ProductionLifecycleOwnerV1",
+        "ready_proposal_sign_preempts_bounded_producer_point",
+        errors,
+        "Ready Proposal-Sign producer-point preemption predicate",
+    )
+    _require_rust_item_token_sha256(
+        paths["scheduler"],
+        ready_proposal_sign_preemption,
+        _PRODUCTION_READY_PROPOSAL_SIGN_PREEMPTION_ITEM_SHA256[
+            "scheduler::ProductionLifecycleOwnerV1::ready_proposal_sign_preempts_bounded_producer_point"
+        ],
+        "Ready Proposal-Sign producer-point preemption predicate",
+        errors,
+    )
+    require_order(
+        "scheduler",
+        ready_proposal_sign_preemption,
+        "only an exact attested bounded-I/O Proposal Sign may preempt Producer",
+        (
+            "self.classify_completion_ready_work(fence)",
+            "ProductionCompletionReadyWorkV1::CompletionIo",
+            "if exact_ready != self.coordinator.ready_index",
+            "record.work_class == LifecycleWorkClass::SignProposal",
+            "attest_ready_recovered_lifecycle_sign",
+            "ReadyRecoveredLifecycleSignDemandV1::BoundedIo",
+            ".matches_height_context(self.verified.context())",
+            "Ok(true)",
+        ),
+    )
+    ready_proposal_sign_permit_structs = rust_struct_items(
+        sources["height_driver"], "LifecycleReadyProposalSignPreemptionPermitV1"
+    )
+    if len(ready_proposal_sign_permit_structs) != 1:
+        errors.append(
+            f"{paths['height_driver']}: Ready Proposal-Sign preemption permit must "
+            f"have exactly one struct declaration; found {len(ready_proposal_sign_permit_structs)}"
+        )
+        ready_proposal_sign_permit = None
+    else:
+        ready_proposal_sign_permit = ready_proposal_sign_permit_structs[0]
+    _require_rust_item_token_sha256(
+        paths["height_driver"],
+        ready_proposal_sign_permit,
+        _PRODUCTION_READY_PROPOSAL_SIGN_PREEMPTION_ITEM_SHA256[
+            "height::LifecycleReadyProposalSignPreemptionPermitV1"
+        ],
+        "sealed Ready Proposal-Sign ordinary-head preemption permit",
+        errors,
+    )
+    ready_proposal_sign_permit_mint = _require_qualified_rust_item(
+        paths["height_driver"],
+        sources["height_driver"],
+        "LifecycleProducerClaimDispositionV1",
+        "ready_proposal_sign_preemption_permit",
+        errors,
+        "eligible-only Ready Proposal-Sign preemption permit mint",
+    )
+    _require_rust_item_token_sha256(
+        paths["height_driver"],
+        ready_proposal_sign_permit_mint,
+        _PRODUCTION_READY_PROPOSAL_SIGN_PREEMPTION_ITEM_SHA256[
+            "height::LifecycleProducerClaimDispositionV1::ready_proposal_sign_preemption_permit"
+        ],
+        "eligible-only Ready Proposal-Sign preemption permit mint",
+        errors,
+    )
+    require_order(
+        "height_driver",
+        ready_proposal_sign_permit_mint,
+        "only Eligible may mint the sealed ordinary-head preemption authority",
+        (
+            "matches!(self, Self::Eligible)",
+            "Some(LifecycleReadyProposalSignPreemptionPermitV1",
+            "LifecycleReadyProposalSignPreemptionPermitSealV1",
+            "None",
+        ),
+    )
+    ready_proposal_sign_height_route = item(
+        "height_driver", "drain_lifecycle_v2_ingress"
+    )
+    _require_rust_item_token_sha256(
+        paths["height_driver"],
+        ready_proposal_sign_height_route,
+        _PRODUCTION_READY_PROPOSAL_SIGN_PREEMPTION_ITEM_SHA256[
+            "height::drain_lifecycle_v2_ingress"
+        ],
+        "live eligible-height Ready Proposal-Sign Completion route",
+        errors,
+    )
+    require_order(
+        "height_driver",
+        ready_proposal_sign_height_route,
+        "the live height driver uses the exception only through its sealed permit",
+        (
+            "LifecycleRunnerRankTarget::Completion",
+            "producer_claim.ready_proposal_sign_preemption_permit()",
+            "match proposal_sign_preemption.as_ref()",
+            "Some(permit)",
+            ".drive_completion_pre_gate_with_ready_proposal_sign_preemption(",
+            "current_turn",
+            "lane_work",
+            "permit",
+            "None => activated.drive_completion_pre_gate(current_turn, lane_work)",
+        ),
+    )
+    ready_proposal_sign_eligibility_regression = item(
+        "height_driver",
+        "only_an_eligible_claim_can_preempt_an_ordinary_head_for_ready_proposal_sign",
+    )
+    _require_rust_item_context(
+        paths["height_driver"],
+        ready_proposal_sign_eligibility_regression,
+        (("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),),
+        "eligible-only Ready Proposal-Sign preemption release regression",
+        errors,
+        expected_attributes=("#[test]",),
+    )
+    _require_rust_item_token_sha256(
+        paths["height_driver"],
+        ready_proposal_sign_eligibility_regression,
+        _PRODUCTION_READY_PROPOSAL_SIGN_PREEMPTION_ITEM_SHA256[
+            "height_test::only_an_eligible_claim_can_preempt_an_ordinary_head_for_ready_proposal_sign"
+        ],
+        "eligible-only Ready Proposal-Sign preemption release regression",
+        errors,
+    )
+    require_order(
+        "height_driver",
+        ready_proposal_sign_eligibility_regression,
+        "the named release regression accepts Eligible and rejects non-Producer owners",
+        (
+            "LifecycleProducerClaimDispositionV1::Eligible",
+            ".ready_proposal_sign_preemption_permit()",
+            ".is_some()",
+            "LifecycleProducerClaimDispositionV1::AwaitingCompletion",
+            "LifecycleProducerClaimDispositionV1::AwaitingValidateSidecar",
+            "LifecycleProducerClaimDispositionV1::AwaitingApplyCompletion",
+            "LifecycleProducerClaimDispositionV1::ApplyTerminalSettled",
+            "claim.ready_proposal_sign_preemption_permit().is_none()",
+        ),
+    )
+    launched_ready_proposal_sign_pre_gate = _require_qualified_rust_item(
+        paths["driver"],
+        sources["driver"],
+        "LaunchedProductionLifecycleV1",
+        "drive_completion_pre_gate_with_ready_proposal_sign_preemption",
+        errors,
+        "launched Ready Proposal-Sign ordinary-head pre-gate",
+    )
+    _require_rust_item_token_sha256(
+        paths["driver"],
+        launched_ready_proposal_sign_pre_gate,
+        _PRODUCTION_READY_PROPOSAL_SIGN_PREEMPTION_ITEM_SHA256[
+            "driver::LaunchedProductionLifecycleV1::drive_completion_pre_gate_with_ready_proposal_sign_preemption"
+        ],
+        "launched Ready Proposal-Sign ordinary-head pre-gate",
+        errors,
+    )
+    require_order(
+        "driver",
+        launched_ready_proposal_sign_pre_gate,
+        "the sealed permit reaches only the private Completion classifier",
+        (
+            "LifecycleReadyProposalSignPreemptionPermitV1",
+            "self.drive_completion_pre_gate_inner(runner, lane_work, Some(permit))",
+        ),
+    )
+    ready_proposal_sign_pre_gate_inner = _require_qualified_rust_item(
+        paths["driver"],
+        sources["driver"],
+        "LaunchedProductionLifecycleV1",
+        "drive_completion_pre_gate_inner",
+        errors,
+        "Ready Proposal-Sign physical Completion classifier",
+    )
+    _require_rust_item_token_sha256(
+        paths["driver"],
+        ready_proposal_sign_pre_gate_inner,
+        _PRODUCTION_READY_PROPOSAL_SIGN_PREEMPTION_ITEM_SHA256[
+            "driver::LaunchedProductionLifecycleV1::drive_completion_pre_gate_inner"
+        ],
+        "Ready Proposal-Sign physical Completion classifier",
+        errors,
+    )
+    require_order(
+        "driver",
+        ready_proposal_sign_pre_gate_inner,
+        "parked and dedicated lifecycle heads retain priority; only PassThrough may expose Ready Sign",
+        (
+            "if let Some(pending) = self.pending_lifecycle_completion.take()",
+            "return ProductionLifecycleCompletionPreGateV1::Selected(selected)",
+            "self.services.take_next_lifecycle_completion()",
+            "Ok(LifecycleCompletionTakeV1::PassThrough)",
+            "if proposal_sign_preemption.is_none()",
+            "return ProductionLifecycleCompletionPreGateV1::Ordinary(runner)",
+            ".ready_proposal_sign_preempts_bounded_producer_point(fence)",
+            "Ok(true)",
+            "Ok(false)",
+            "return ProductionLifecycleCompletionPreGateV1::Ordinary(runner)",
+            "ProductionLifecycleCompletionSelectionV1::RestartRequired",
+            "Ok(LifecycleCompletionTakeV1::CertifiedFetch(completion))",
+        ),
+    )
+    activated_ready_proposal_sign_pre_gate = _require_qualified_rust_item(
+        paths["driver"],
+        sources["driver"],
+        "ActivatedProductionLifecycleV1",
+        "drive_completion_pre_gate_with_ready_proposal_sign_preemption",
+        errors,
+        "activated Ready Proposal-Sign ordinary-head pre-gate",
+    )
+    _require_rust_item_token_sha256(
+        paths["driver"],
+        activated_ready_proposal_sign_pre_gate,
+        _PRODUCTION_READY_PROPOSAL_SIGN_PREEMPTION_ITEM_SHA256[
+            "driver::ActivatedProductionLifecycleV1::drive_completion_pre_gate_with_ready_proposal_sign_preemption"
+        ],
+        "activated Ready Proposal-Sign ordinary-head pre-gate",
+        errors,
+    )
+    require_order(
+        "driver",
+        activated_ready_proposal_sign_pre_gate,
+        "the activated owner delegates the same sealed authority without widening it",
+        (
+            "LifecycleReadyProposalSignPreemptionPermitV1",
+            ".drive_completion_pre_gate_with_ready_proposal_sign_preemption(",
+            "runner, lane_work, permit",
+        ),
+    )
+    tracked_auxiliary_completion_publisher = item(
+        "worker", "publish_auxiliary_completion_fixture"
+    )
+    _require_rust_item_context(
+        paths["worker"],
+        tracked_auxiliary_completion_publisher,
+        (
+            (
+                "#",
+                "[",
+                "cfg",
+                "(",
+                "test",
+                ")",
+                "]",
+                "pub",
+                "(",
+                "super",
+                ")",
+                "mod",
+                "tests",
+            ),
+            ("impl", "LifecyclePlannerIoFixture"),
+        ),
+        "tracked ordinary Completion physical-owner publisher",
+        errors,
+    )
+    _require_rust_item_token_sha256(
+        paths["worker"],
+        tracked_auxiliary_completion_publisher,
+        _PRODUCTION_READY_PROPOSAL_SIGN_PREEMPTION_ITEM_SHA256[
+            "worker_test::LifecyclePlannerIoFixture::publish_auxiliary_completion_fixture"
+        ],
+        "tracked ordinary Completion physical-owner publisher",
+        errors,
+    )
+    require_order(
+        "worker",
+        tracked_auxiliary_completion_publisher,
+        "the ordinary physical owner enters Completion through the tracked worker publisher",
+        (
+            "try_send_tracked_completion(",
+            "&self.completion_tx",
+            "&self.admission",
+            "V2IoCompletion::AuxiliaryNoop",
+            ").expect(",
+        ),
+    )
+    for helper_name, required_tokens in (
+        (
+            "install_ordinary_completion_head_for_ready_sign_test",
+            (
+                "planner: &crate::sumeragi::v2_worker::tests::LifecyclePlannerIoFixture",
+                "planner.publish_auxiliary_completion_fixture()",
+            ),
+        ),
+        (
+            "ordinary_completion_head_retained_for_ready_sign_test",
+            ("self.services.has_auxiliary_completion_head_for_test()",),
+        ),
+        (
+            "drain_ordinary_completion_head_for_ready_sign_test",
+            (
+                "self.services",
+                ".drain_one_ordinary_completion_after_lifecycle_pass_through(&mut self.executor)",
+            ),
+        ),
+    ):
+        helper = _require_qualified_rust_item(
+            paths["launch_tests"],
+            sources["launch_tests"],
+            "LaunchedProductionLifecycleV1",
+            helper_name,
+            errors,
+            f"Ready Proposal-Sign fixture helper {helper_name}",
+        )
+        _require_rust_item_token_sha256(
+            paths["launch_tests"],
+            helper,
+            _PRODUCTION_READY_PROPOSAL_SIGN_PREEMPTION_ITEM_SHA256[
+                f"launch_test::LaunchedProductionLifecycleV1::{helper_name}"
+            ],
+            f"Ready Proposal-Sign fixture helper {helper_name}",
+            errors,
+        )
+        require_order(
+            "launch_tests",
+            helper,
+            f"Ready Proposal-Sign fixture helper {helper_name} retains exact production semantics",
+            required_tokens,
+        )
+    ready_proposal_sign_driver_fixture = item(
+        "dispatch_test", "local_proposal_intent_live_wal_sign_fixture"
+    )
+    _require_rust_item_context(
+        paths["dispatch_test"],
+        ready_proposal_sign_driver_fixture,
+        (),
+        "production Ready local-Proposal Sign lifecycle driver fixture",
+        errors,
+        expected_attributes=(
+            "#[cfg(feature = \"bls\")]",
+            "#[allow(clippy::too_many_lines)]",
+        ),
+    )
+    _require_rust_item_token_sha256(
+        paths["dispatch_test"],
+        ready_proposal_sign_driver_fixture,
+        _PRODUCTION_READY_PROPOSAL_SIGN_PREEMPTION_ITEM_SHA256[
+            "dispatch_test::local_proposal_intent_live_wal_sign_fixture"
+        ],
+        "production Ready local-Proposal Sign lifecycle driver fixture",
+        errors,
+    )
+    require_order(
+        "dispatch_test",
+        ready_proposal_sign_driver_fixture,
+        "the production fixture retains then drains the ordinary head before Sign settlement and timeout work",
+        (
+            "runtime.enqueue_network(",
+            "TimeoutCertificate",
+            "launched.install_ordinary_completion_head_for_ready_sign_test(&planner_io)",
+            ".ready_proposal_sign_preemption_permit()",
+            ".drive_completion_pre_gate_with_ready_proposal_sign_preemption(",
+            "ProductionLifecycleCompletionPreGateV1::Ready(ready)",
+            "launched.drive_ready_completion_turn(ready)",
+            "ProductionCompletionDispatchV1::SignQueued { ordinal }",
+            "launched.ordinary_completion_head_retained_for_ready_sign_test()",
+            "launched.execute_ready_local_proposal_sign_for_test(",
+            ".drain_ordinary_completion_head_for_ready_sign_test()",
+            "1",
+            "!launched.ordinary_completion_head_retained_for_ready_sign_test()",
+            ".retain_recovered_lifecycle_sign_completion()",
+            "settle_recovered_lifecycle_proposal_prepare_wal()",
+            "ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1::Applied",
+            ".retry_exact_output_for_ready_sign_test()",
+            '"exact Proposal output drains before any TimeoutCertificate runtime work"',
+        ),
+    )
+    ready_proposal_sign_regression = item(
+        "wal_test",
+        "ready_proposal_sign_boundary_predicate_authenticates_exact_control_carrier",
+    )
+    _require_rust_item_context(
+        paths["wal_test"],
+        ready_proposal_sign_regression,
+        (),
+        "recovered-WAL Ready Proposal-Sign boundary regression",
+        errors,
+        expected_attributes=("#[test]",),
+    )
+    _require_rust_item_token_sha256(
+        paths["wal_test"],
+        ready_proposal_sign_regression,
+        _PRODUCTION_READY_PROPOSAL_SIGN_PREEMPTION_ITEM_SHA256[
+            "wal_test::ready_proposal_sign_boundary_predicate_authenticates_exact_control_carrier"
+        ],
+        "recovered-WAL Ready Proposal-Sign boundary regression",
+        errors,
+    )
+    require_order(
+        "wal_test",
+        ready_proposal_sign_regression,
+        "ProposalIntent preempts, TimeoutIntent preserves fairness, and a missing carrier fails closed",
+        (
+            "recovered_control_producer_boundary_result(true, false, 0xC3)",
+            "Ok(true)",
+            "recovered_control_producer_boundary_result(false, false, 0xC4)",
+            "Ok(false)",
+            "recovered_control_producer_boundary_result(true, true, 0xC5)",
+            "ProductionCompletionDispatchErrorV1::InvalidCarrier",
+        ),
+    )
+    ready_proposal_sign_driver_regression = item(
+        "wal_test",
+        "ready_local_proposal_sign_and_exact_output_precede_pending_timeout_certificate",
+    )
+    _require_rust_item_context(
+        paths["wal_test"],
+        ready_proposal_sign_driver_regression,
+        (),
+        "production Ready local-Proposal Sign lifecycle driver regression",
+        errors,
+        expected_attributes=("#[cfg(feature = \"bls\")]", "#[test]"),
+    )
+    _require_rust_item_token_sha256(
+        paths["wal_test"],
+        ready_proposal_sign_driver_regression,
+        _PRODUCTION_READY_PROPOSAL_SIGN_PREEMPTION_ITEM_SHA256[
+            "wal_test::ready_local_proposal_sign_and_exact_output_precede_pending_timeout_certificate"
+        ],
+        "production Ready local-Proposal Sign lifecycle driver regression",
+        errors,
+    )
+    require_order(
+        "wal_test",
+        ready_proposal_sign_driver_regression,
+        "the named release regression runs the genuine production lifecycle driver fixture",
+        (
+            'const THREAD_NAME: &str = "ready-local-proposal-sign-output-boundary"',
+            ".stack_size(32 * 1024 * 1024)",
+            ".spawn(ready_local_proposal_sign_and_exact_output_precede_pending_timeout_certificate)",
+            "rbc_status_test_guard()",
+            "ProductionLifecycleOwnerV1::run_ready_local_proposal_sign_boundary_fixture_for_test()",
+        ),
+    )
     expected_apply_terminal_ready_broadcast_items = {
         "height::LifecycleApplyTerminalReadyBroadcastPermitV1",
         "height::apply_terminal_ready_broadcast_permit",
@@ -4086,10 +4556,11 @@ Some(RuntimeQueueSelectionKind::PreTimeoutLockedPrepareQc),
             observed = _token_sequence_count(
                 height_driver_tokens, rust_code_tokens(token)
             )
-            if observed != 2:
+            if observed != 3:
                 errors.append(
                     f"{paths['height_driver']}:{lifecycle_height_driver.line}: "
-                    "the post-Apply and ordinary Ready branches must each retain "
+                    "the two post-Apply authority paths and ordinary Ready branch "
+                    "must each retain "
                     f"{token!r}; found {observed} total occurrence(s)"
                 )
     if lifecycle_height_driver is not None:

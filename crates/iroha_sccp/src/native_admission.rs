@@ -64,7 +64,7 @@ pub enum SccpNativeSourceProofV1 {
     #[codec(index = 2)]
     TronDpos(Box<TronNativeSourceProofV1>),
     /// TON masterchain-finality, shard-state, and source-message proof.
-    #[codec(index = 4)]
+    #[codec(index = 3)]
     TonMasterchain(Box<TonNativeSourceProofV1>),
 }
 impl SccpNativeSourceProofV1 {

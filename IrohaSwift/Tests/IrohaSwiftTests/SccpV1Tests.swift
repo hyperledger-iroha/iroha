@@ -305,6 +305,10 @@ final class SccpV1Tests: XCTestCase {
             typeName: "iroha_sccp::native_admission::SccpNativeInboundMessageProofV1",
             payload: Data([1])
         ).base64EncodedString()
+        let replayWitnessArtifact = noritoEncode(
+            typeName: SccpSubmitValidation.replayWitnessTypeName,
+            payload: Data([1])
+        ).base64EncodedString()
         let signature = try privateKey.signature(for: Data(repeating: 7, count: 32)).base64EncodedString()
         let transactionPayload = try canonicalSccpTransactionPayload(
             authority: authority,
@@ -331,6 +335,7 @@ final class SccpV1Tests: XCTestCase {
         let messageRequest = try ToriiBridgeMessageSubmitRequest(
             authority: authority,
             nativeProofB64: nativeArtifact,
+            replayWitnessB64: replayWitnessArtifact,
             signatureB64: signature,
             transactionPayloadB64: transactionPayload,
             creationTimeMs: 7,
@@ -341,7 +346,7 @@ final class SccpV1Tests: XCTestCase {
         )
         XCTAssertEqual(Set(messageJSON.keys), [
             "authority", "fee_payment", "signature_b64", "transaction_payload_b64",
-            "native_proof_b64", "creation_time_ms",
+            "native_proof_b64", "replay_witness_b64", "creation_time_ms",
         ])
         for retired in ["public_key_hex", "message_bundle_b64", "network_id_hex", "proof_bytes_hex", "allow_unready"] {
             XCTAssertNil(json[retired])
@@ -400,7 +405,7 @@ final class SccpV1Tests: XCTestCase {
             creationTimeMs: 7,
             feePayment: .authority(chargeLimits: [], gasLimit: nil),
         ))
-        XCTAssertThrowsError(try ToriiBridgeMessageSubmitRequest(authority: authority, nativeProofB64: nativeArtifact, creationTimeMs: 0,
+        XCTAssertThrowsError(try ToriiBridgeMessageSubmitRequest(authority: authority, nativeProofB64: nativeArtifact, replayWitnessB64: replayWitnessArtifact, creationTimeMs: 0,
             feePayment: .authority(chargeLimits: [], gasLimit: nil),))
     }
 
@@ -689,6 +694,10 @@ final class SccpV1Tests: XCTestCase {
             typeName: "iroha_sccp::native_admission::SccpNativeInboundMessageProofV1",
             payload: Data([1])
         ).base64EncodedString()
+        let replayWitnessArtifact = noritoEncode(
+            typeName: SccpSubmitValidation.replayWitnessTypeName,
+            payload: Data([1])
+        ).base64EncodedString()
         XCTAssertEqual(SccpV1.tairaI105DiscriminantV1, 369)
         XCTAssertTrue(authority.hasPrefix("test"))
         XCTAssertNoThrow(try ToriiBridgeProofSubmitRequest(
@@ -699,6 +708,7 @@ final class SccpV1Tests: XCTestCase {
         XCTAssertNoThrow(try ToriiBridgeMessageSubmitRequest(
             authority: authority,
             nativeProofB64: nativeArtifact,
+            replayWitnessB64: replayWitnessArtifact,
             feePayment: .authority(chargeLimits: [], gasLimit: nil),
         ))
 
@@ -722,6 +732,7 @@ final class SccpV1Tests: XCTestCase {
             XCTAssertThrowsError(try ToriiBridgeMessageSubmitRequest(
                 authority: invalidAuthority,
                 nativeProofB64: nativeArtifact,
+                replayWitnessB64: replayWitnessArtifact,
                 feePayment: .authority(chargeLimits: [], gasLimit: nil),
             ), label)
         }
@@ -739,6 +750,10 @@ final class SccpV1Tests: XCTestCase {
             typeName: SccpSubmitValidation.nativeInboundProofTypeName,
             payload: Data([1, 2, 3])
         )
+        let replayWitness = noritoEncode(
+            typeName: SccpSubmitValidation.replayWitnessTypeName,
+            payload: Data([1, 2, 3])
+        )
         let legacyBn254Artifact = noritoEncode(
             typeName: "iroha_sccp::SccpGroth16Bn254ProofArtifactV1",
             payload: Data([1, 2, 3])
@@ -751,6 +766,7 @@ final class SccpV1Tests: XCTestCase {
         XCTAssertNoThrow(try ToriiBridgeMessageSubmitRequest(
             authority: authority,
             nativeProofB64: native.base64EncodedString(),
+            replayWitnessB64: replayWitness.base64EncodedString(),
             feePayment: .authority(chargeLimits: [], gasLimit: nil),
         ))
         XCTAssertThrowsError(try ToriiBridgeProofSubmitRequest(
@@ -766,6 +782,7 @@ final class SccpV1Tests: XCTestCase {
         XCTAssertThrowsError(try ToriiBridgeMessageSubmitRequest(
             authority: authority,
             nativeProofB64: destination.base64EncodedString(),
+            replayWitnessB64: replayWitness.base64EncodedString(),
             feePayment: .authority(chargeLimits: [], gasLimit: nil),
         ))
         for frame in [destination, native] {
@@ -782,6 +799,7 @@ final class SccpV1Tests: XCTestCase {
                 XCTAssertThrowsError(try ToriiBridgeMessageSubmitRequest(
                     authority: authority,
                     nativeProofB64: padded.base64EncodedString(),
+                    replayWitnessB64: replayWitness.base64EncodedString(),
                     feePayment: .authority(chargeLimits: [], gasLimit: nil),
                 ))
             }
@@ -1931,6 +1949,7 @@ final class SccpV1Tests: XCTestCase {
             "message_bundle_path": "/v1/sccp/proofs/message/{message_id}",
             "proof_request_path": "/v1/sccp/proof-requests/{message_id}",
             "recent_messages_path": "/v1/sccp/messages/recent",
+            "sora_outbound_material_path": "/v1/sccp/routes/{source_profile}/{route_id}/{asset_key}/{revision}/sora-outbound-material",
             "registry_limits": [
                 "max_governed_lanes": 16,
                 "max_live_governed_routes": 64,

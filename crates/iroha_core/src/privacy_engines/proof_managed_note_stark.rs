@@ -20,9 +20,9 @@ use super::{
         transparent_stark_zk_mask_geometry_v1, verify_grinding_nonce_v1,
     },
 };
-use iroha_data_model::privacy::TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1;
 #[cfg(test)]
 use iroha_data_model::privacy::PrivacyProtocolIdV1;
+use iroha_data_model::privacy::TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1;
 use rand::TryRngCore;
 use std::collections::BTreeSet;
 use thiserror::Error;
@@ -429,9 +429,8 @@ pub(crate) trait ProofManagedNoteStarkAdapterV1 {
     /// Closed proof protocol.
     fn protocol_v1(&self) -> ProofManagedNoteStarkProtocolV1;
     /// Exact digest of all public statement fields.
-    fn public_input_digest_v1(
-        &self,
-    ) -> Result<GoldilocksDigest384V1, ProofManagedNoteStarkErrorV1>;
+    fn public_input_digest_v1(&self)
+    -> Result<GoldilocksDigest384V1, ProofManagedNoteStarkErrorV1>;
     /// Binary logarithm of the sole native trace group.
     fn trace_log2_v1(&self) -> u8;
     /// Exact base-trace width, including the eight copy cells.
@@ -1152,8 +1151,7 @@ fn new_note_transcript_v1(
         prepared.protocol.domains,
         prepared.protocol.profile_descriptor,
     )?;
-    let geometry_digest =
-        proof_managed_note_stark_geometry_digest_v1(prepared.protocol.domains)?;
+    let geometry_digest = proof_managed_note_stark_geometry_digest_v1(prepared.protocol.domains)?;
     let geometry_digest = geometry_digest.to_le_bytes();
     let mut transcript = TransparentTranscriptV1::new(
         prepared.protocol.domains.digest_context,
@@ -2426,11 +2424,9 @@ mod tests {
             PROOF_MANAGED_NOTE_STARK_GEOMETRY_DESCRIPTOR_V1,
             expected.as_bytes()
         );
-        let digest = proof_managed_note_stark_profile_digest_v1(
-            MOCK_DOMAINS_V1,
-            MOCK_PROFILE_DESCRIPTOR_V1,
-        )
-        .expect("profile digest");
+        let digest =
+            proof_managed_note_stark_profile_digest_v1(MOCK_DOMAINS_V1, MOCK_PROFILE_DESCRIPTOR_V1)
+                .expect("profile digest");
         assert_eq!(
             digest,
             proof_managed_note_stark_profile_digest_v1(

@@ -20,7 +20,6 @@ use iroha_data_model::{
     domain::{Domain, DomainId},
     peer::PeerId,
 };
-#[cfg(feature = "telemetry")]
 use iroha_primitives::time::TimeSource;
 use iroha_telemetry::metrics::Metrics;
 use iroha_torii::{
@@ -1304,11 +1303,7 @@ fn build_test_router() -> (Router, Arc<Metrics>, KeyPair) {
     ));
     let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
     let _ = peers_tx;
-    #[cfg(feature = "telemetry")]
     let metrics = fixtures::reset_shared_metrics();
-    #[cfg(not(feature = "telemetry"))]
-    let metrics = fixtures::reset_shared_metrics();
-    #[cfg(feature = "telemetry")]
     let telemetry = {
         use iroha_core::telemetry as core_telemetry;
         let (_mh, ts) = TimeSource::new_mock(core::time::Duration::default());
@@ -1326,24 +1321,7 @@ fn build_test_router() -> (Router, Arc<Metrics>, KeyPair) {
     };
     let operator_key_pair = cfg.common.key_pair.clone();
     let da_receipt_signer = operator_key_pair.clone();
-    #[cfg(feature = "telemetry")]
-    let torii = Torii::new(
-        iroha_data_model::ChainId::from("test-chain"),
-        iroha_torii::test_utils::signed_query_network_id(),
-        kiso,
-        cfg.torii.clone(),
-        queue,
-        tokio::sync::broadcast::channel(1).0,
-        LiveQueryStore::start_test(),
-        kura,
-        state,
-        da_receipt_signer.clone(),
-        iroha_torii::OnlinePeersProvider::new(peers_rx),
-        telemetry,
-        true,
-    );
-    #[cfg(not(feature = "telemetry"))]
-    let torii = Torii::new(
+    let torii = Torii::new_with_handle(
         iroha_data_model::ChainId::from("test-chain"),
         iroha_torii::test_utils::signed_query_network_id(),
         kiso,
@@ -1355,6 +1333,11 @@ fn build_test_router() -> (Router, Arc<Metrics>, KeyPair) {
         state,
         da_receipt_signer,
         iroha_torii::OnlinePeersProvider::new(peers_rx),
+        None,
+        iroha_torii::MaybeTelemetry::from_profile(
+            Some(telemetry),
+            iroha_config::parameters::actual::TelemetryProfile::Operator,
+        ),
     );
     (torii.api_router_for_tests(), metrics, operator_key_pair)
 }

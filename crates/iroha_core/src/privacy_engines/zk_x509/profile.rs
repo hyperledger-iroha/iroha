@@ -263,6 +263,67 @@ pub(crate) const ZK_X509_GRINDING_BITS_V1: u8 = 20;
 pub(crate) const ZK_X509_TARGET_SOUNDNESS_BITS_V1: u16 = 128;
 /// Consensus proof-byte ceiling inherited by this engine.
 pub(crate) const ZK_X509_MAX_PROOF_BYTES_V1: u32 = 9 * 1024 * 1024;
+// The shared first-release STARK verifier accepts exactly this geometry.  Keep
+// these requirements independent of the pre-cut zk-X509 constants below so a
+// stale local profile cannot make itself appear compatible by supplying a
+// protocol-specific theorem certificate.
+const ZK_X509_SHARED_STARK_QUERY_COUNT_V1: u8 = 136;
+const ZK_X509_SHARED_STARK_BLOWUP_FACTOR_V1: u8 = 8;
+const ZK_X509_SHARED_STARK_MAIN_LDE_LOG2_V1: u8 = 22;
+const ZK_X509_SHARED_STARK_MAIN_TERMINAL_DEGREE_BOUND_V1: u16 = 143;
+const ZK_X509_SHARED_STARK_MAIN_COMPOSITION_CHUNKS_V1: u8 = 6;
+const ZK_X509_SHARED_STARK_MAIN_MASK_DEGREE_V1: u16 = 1_815;
+const ZK_X509_SHARED_STARK_MAIN_FRI_ROUNDS_V1: u8 = 12;
+// q=136 makes the compact-CA mask degree 695.  With a log-10 terminal,
+// degree-143 terminal polynomial, and binary folds, the FRI degree cap is
+// 9/8 of the native row count.  Therefore the masking margin requires
+// `2^native_log2 / 8 > 695`; log 13 is the least satisfying native domain and
+// the mandatory blowup-eight LDE is log 16.
+const ZK_X509_SHARED_STARK_CA_PADDED_TRACE_LOG2_V1: u8 = 13;
+const ZK_X509_SHARED_STARK_CA_LDE_LOG2_V1: u8 = 16;
+const ZK_X509_SHARED_STARK_CA_TERMINAL_LOG2_V1: u8 = 10;
+const ZK_X509_SHARED_STARK_CA_TERMINAL_DEGREE_BOUND_V1: u16 = 143;
+const ZK_X509_SHARED_STARK_CA_MASK_DEGREE_V1: u16 = 695;
+const ZK_X509_SHARED_STARK_CA_FRI_ROUNDS_V1: u8 = 6;
+/// Exact maximum inner MAIN proof for the present 5,623-column opening
+/// schedule after applying q=136, blowup eight, Fp4 openings, six composition
+/// chunks, and 48-byte canonical multiproof hashes.
+const ZK_X509_SHARED_STARK_WIDE_MAIN_MAXIMUM_PROOF_BYTES_V1: u32 = 16_447_808;
+/// Unavoidable MAIN base-field payload: 136 queries times current/next
+/// openings times 5,623 columns times eight bytes.  It already exceeds the
+/// complete proof cap before roots, FRI, multiproofs, or DEEP openings.
+const ZK_X509_SHARED_STARK_WIDE_MAIN_TRACE_OPENING_BYTES_V1: u32 = 12_235_648;
+/// Exact maximum compact-CA inner proof after padding its 128 active rows to a
+/// log-13 native trace and using the shared log-16 LDE.
+const ZK_X509_SHARED_STARK_PADDED_CA_MAXIMUM_PROOF_BYTES_V1: u32 = 2_690_528;
+
+/// Whether zk-X509 has completed the non-negotiable shared-STARK hard cut.
+///
+/// The current wide MAIN wire cannot fit the consensus cap even with canonical
+/// deduplicated multiproofs.  Streaming or commitment chunking bounds memory,
+/// but does not remove opened field elements from the wire.
+// TODO: replace the wide MAIN opening schedule with recursively aggregated
+// child STARKs (or a reviewed narrower AIR), recalculate both exact bounds,
+// and remove this blocker only when the result fits the fixed 9 MiB cap.
+const fn zk_x509_shared_stark_geometry_is_release_ready_v1() -> bool {
+    ZK_X509_FRI_QUERY_COUNT_V1 == ZK_X509_SHARED_STARK_QUERY_COUNT_V1
+        && ZK_X509_FRI_BLOWUP_FACTOR_V1 == ZK_X509_SHARED_STARK_BLOWUP_FACTOR_V1
+        && ZK_X509_MAIN_COMMON_LDE_LOG2_V1 == ZK_X509_SHARED_STARK_MAIN_LDE_LOG2_V1
+        && ZK_X509_FRI_TERMINAL_DEGREE_BOUND_V1
+            == ZK_X509_SHARED_STARK_MAIN_TERMINAL_DEGREE_BOUND_V1
+        && ZK_X509_COMPOSITION_DEGREE_CHUNKS_V1 == ZK_X509_SHARED_STARK_MAIN_COMPOSITION_CHUNKS_V1
+        && ZK_X509_TRACE_MASK_DEGREE_V1 == ZK_X509_SHARED_STARK_MAIN_MASK_DEGREE_V1
+        && ZK_X509_FRI_ROUNDS_V1 == ZK_X509_SHARED_STARK_MAIN_FRI_ROUNDS_V1
+        && ZK_X509_CA_FRI_LDE_LOG2_V1 == ZK_X509_SHARED_STARK_CA_LDE_LOG2_V1
+        && ZK_X509_CA_FRI_LDE_LOG2_V1 == ZK_X509_SHARED_STARK_CA_PADDED_TRACE_LOG2_V1 + 3
+        && ZK_X509_CA_FRI_TERMINAL_LOG2_V1 == ZK_X509_SHARED_STARK_CA_TERMINAL_LOG2_V1
+        && ZK_X509_CA_FRI_TERMINAL_DEGREE_BOUND_V1
+            == ZK_X509_SHARED_STARK_CA_TERMINAL_DEGREE_BOUND_V1
+        && ZK_X509_CA_TRACE_MASK_DEGREE_V1 == ZK_X509_SHARED_STARK_CA_MASK_DEGREE_V1
+        && ZK_X509_CA_FRI_ROUNDS_V1 == ZK_X509_SHARED_STARK_CA_FRI_ROUNDS_V1
+        && ZK_X509_SHARED_STARK_WIDE_MAIN_MAXIMUM_PROOF_BYTES_V1 <= ZK_X509_MAX_PROOF_BYTES_V1
+        && ZK_X509_SHARED_STARK_PADDED_CA_MAXIMUM_PROOF_BYTES_V1 <= ZK_X509_MAX_PROOF_BYTES_V1
+}
 /// Exact maximum encoded canonical aggregate proof under the frozen layout.
 pub(crate) const ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1: u32 = 8_212_538;
 /// Exact encoded byte length of the deterministic first-release X5S1 KAT.
@@ -278,9 +339,10 @@ pub(crate) const ZK_X509_NATIVE_RELEASE_EXPECTATIONS_NORITO_SHA256_V1: [u8; 32] 
 pub(crate) const ZK_X509_NATIVE_RELEASE_EXPECTATIONS_JSON_SHA256_V1: [u8; 32] = [0; 32];
 /// Frozen first-release transparent-proof envelope descriptor.
 ///
-/// Consensus activation remains governance-gated until the deterministic KAT
-/// and maximum-shape process measurements are pinned below.
-pub(crate) const ZK_X509_STARK_PROFILE_DESCRIPTOR_V1: &[u8] = b"field=goldilocks-fp4:w4=7:base=0xffffffff00000001|wire=X5S1-containing-exactly-one-X5M1-and-one-X5C1-v1|x5m1=claims-plus-length-delimited-aggregate-only-no-fixed-sidecar|main-logical-registrations=49|main-same-log-trace-groups=6-logs5,8,15,16,18,19|main-physical-commitment-chunks=80|physical-chunk-columns=64|max-native-trace-log2=19|compact-ca-dedicated-log7-subproof-depth12|sha-fixed-calls=29-across-four-log19-slices|sha-fixed-algebraic-width=472-verifier-derived-no-proof-bytes|p256-log19-fixed-algebraic-width=404-six-role-schedules-alias-fifteen-registrations-verifier-derived-no-proof-bytes|fixed-openings=canonical-sorted-unique-current-next-union-after-grinding-max116|shared-x5b1-challenges=all-six-main-base-roots+ca-base-root+main-and-ca-public-profile+exact272-fields-ordered-sha-call,rfc,projection,io,der,sha-word-memory,sha-word-base-fold,p256-value,p256-cross,p256-scalar,p256-arithmetic-copy+one-opaque-main-post-base-token|main-io=statement-only-exact40+5d-declarations+logical55922+4736d-active-rows+fixed-capacity262144|main-trace-hiding-coefficients=802|ca-trace-hiding-coefficients=306|fri-mask-oracles=1-fp4-per-subproof-roots-before-batching|lde-column-batch=8|max-constraint-degree=7|fri-rate=1over32|main-fri-blowup=64|ca-lde-log2=14|fri-queries=58-distinct-without-replacement|composition-fp4-lanes=1|fri-batching-m=3|affine-arities=2,2,2|fri-folding=2|main-fri-terminal-length=1024-degree31|ca-fri-terminal-length=512-degree15|deep-points=1-per-subproof-current+next-openings|grinding-bits=20|target-soundness-bits=128|rbr-budget-bits=129|random-oracle-kappa=256|max-ro-queries-log2=64|max-encoded-combined-bound=8212538|max-proof-bytes=9437184|peak-memory-ceiling-bytes=12884901888|address-space-ceiling-bytes=34359738368|prover-target-seconds=300|release-evidence-schema=deterministic-X5S1-KAT+public-binding-mutations+wire-corruption-and-truncation+maximum-shape-process-measurement|full-credential-verifier=complete|activation=governance-gated";
+/// Consensus activation stays fail-closed while this descriptor records the
+/// pre-cut geometry.  Governance and release-evidence pins cannot override the
+/// shared q=136/blowup-eight verifier or the fixed proof-byte ceiling.
+pub(crate) const ZK_X509_STARK_PROFILE_DESCRIPTOR_V1: &[u8] = b"field=goldilocks-fp4:w4=7:base=0xffffffff00000001|wire=X5S1-containing-exactly-one-X5M1-and-one-X5C1-v1|x5m1=claims-plus-length-delimited-aggregate-only-no-fixed-sidecar|main-logical-registrations=49|main-same-log-trace-groups=6-logs5,8,15,16,18,19|main-physical-commitment-chunks=80|physical-chunk-columns=64|max-native-trace-log2=19|compact-ca-dedicated-log7-subproof-depth12|sha-fixed-calls=29-across-four-log19-slices|sha-fixed-algebraic-width=472-verifier-derived-no-proof-bytes|p256-log19-fixed-algebraic-width=404-six-role-schedules-alias-fifteen-registrations-verifier-derived-no-proof-bytes|fixed-openings=canonical-sorted-unique-current-next-union-after-grinding-max116|shared-x5b1-challenges=all-six-main-base-roots+ca-base-root+main-and-ca-public-profile+exact272-fields-ordered-sha-call,rfc,projection,io,der,sha-word-memory,sha-word-base-fold,p256-value,p256-cross,p256-scalar,p256-arithmetic-copy+one-opaque-main-post-base-token|main-io=statement-only-exact40+5d-declarations+logical55922+4736d-active-rows+fixed-capacity262144|main-trace-hiding-coefficients=802|ca-trace-hiding-coefficients=306|fri-mask-oracles=1-fp4-per-subproof-roots-before-batching|lde-column-batch=8|max-constraint-degree=7|fri-rate=1over32|main-fri-blowup=64|ca-lde-log2=14|fri-queries=58-distinct-without-replacement|composition-fp4-lanes=1|fri-batching-m=3|affine-arities=2,2,2|fri-folding=2|main-fri-terminal-length=1024-degree31|ca-fri-terminal-length=512-degree15|deep-points=1-per-subproof-current+next-openings|grinding-bits=20|target-soundness-bits=128|rbr-budget-bits=129|random-oracle-kappa=256|max-ro-queries-log2=64|max-encoded-combined-bound=8212538|max-proof-bytes=9437184|peak-memory-ceiling-bytes=12884901888|address-space-ceiling-bytes=34359738368|prover-target-seconds=300|release-evidence-schema=deterministic-X5S1-KAT+public-binding-mutations+wire-corruption-and-truncation+maximum-shape-process-measurement|shared-stark-v1=blocked-pending-q136-blowup8-digest384-fp4-proof-cap-redesign|activation=unavailable";
 #[cfg(feature = "privacy-release-evidence")]
 pub(crate) use readiness_certificates::{
     ZK_X509_RESOURCE_CERTIFICATE_SCHEMA_VERSION_V1, ZkX509ResourceCertificateV1,
@@ -477,20 +539,23 @@ impl ZkX509ReadinessV1 {
 /// Canonical production checklist derived from concrete release pins and
 /// independently validated certificate payloads.
 pub(crate) fn zk_x509_activation_readiness_v1() -> ZkX509ReadinessV1 {
+    let shared_stark_geometry_ready = zk_x509_shared_stark_geometry_is_release_ready_v1();
     let source_capture_pins = source_release_capture_pins_v1();
     // A proof digest by itself is not evidence that either canonical projection
     // of the 48-stage native corpus was captured. Keep the KAT and adversarial
     // bits false until the proof and both distinct fixture digests are present.
-    let deterministic_release_corpus = release_evidence_pins_are_complete_v1(
-        source_capture_pins.kat_proof_bytes,
-        source_capture_pins.kat_proof_sha256,
-        source_capture_pins.expectations_norito_sha256,
-        source_capture_pins.expectations_json_sha256,
-    );
+    let deterministic_release_corpus = shared_stark_geometry_ready
+        && release_evidence_pins_are_complete_v1(
+            source_capture_pins.kat_proof_bytes,
+            source_capture_pins.kat_proof_sha256,
+            source_capture_pins.expectations_norito_sha256,
+            source_capture_pins.expectations_json_sha256,
+        );
     let resource_source_pins_complete =
         native_release_capture_pins_complete_v1(source_capture_pins);
     let soundness_pin_populated = digest_is_nonzero_v1(ZK_X509_SOUNDNESS_CERTIFICATE_SHA256_V1);
-    let compiled_profile_digest = (soundness_pin_populated || resource_source_pins_complete)
+    let compiled_profile_digest = (shared_stark_geometry_ready
+        && (soundness_pin_populated || resource_source_pins_complete))
         .then(|| super::engine::construct_zk_x509_compiled_profile_v1().ok())
         .flatten()
         .map(super::engine::ZkX509CompiledProfileV1::digest);
@@ -504,8 +569,8 @@ pub(crate) fn zk_x509_activation_readiness_v1() -> ZkX509ReadinessV1 {
         p256_air: true,
         accumulator_air: true,
         output_projection_air: true,
-        prover: true,
-        verifier: true,
+        prover: shared_stark_geometry_ready,
+        verifier: shared_stark_geometry_ready,
         known_answer_tests: deterministic_release_corpus,
         adversarial_tests: deterministic_release_corpus,
         differential_tests: true,
@@ -543,7 +608,7 @@ fn fri_parameters_v1(
         proof_magic: *b"X5S1",
         proof_version: ZK_X509_PROOF_VERSION_V1,
         security_lanes: usize::from(ZK_X509_COMPOSITION_LANES_V1),
-        query_count: usize::from(ZK_X509_FRI_QUERY_COUNT_V1),
+        query_count: usize::from(ZK_X509_SHARED_STARK_QUERY_COUNT_V1),
         blowup_log2,
         terminal_log2,
         terminal_degree_bound,
@@ -567,8 +632,8 @@ fn fri_theorem_certificate_v1(
         l_minus_one_numerator: 3,
         l_minus_one_denominator: 2,
         batching_parameter_m: ZK_X509_FRI_BATCHING_PARAMETER_M_V1,
-        rho_numerator: ZK_X509_FRI_EFFECTIVE_RATE_NUMERATOR_V1 as u8,
-        rho_denominator: ZK_X509_FRI_EFFECTIVE_RATE_DENOMINATOR_V1 as u8,
+        rho_numerator: 1,
+        rho_denominator: 7,
         affine_arities: ZK_X509_FRI_AFFINE_ARITIES_V1,
         domain_log2,
         extension_field_lower_bound_bits: ZK_X509_EXTENSION_FIELD_LOWER_BOUND_BITS_V1,
@@ -579,10 +644,10 @@ fn fri_theorem_certificate_v1(
         fold_count,
         terminal_log2,
         terminal_degree_bound,
-        query_count: ZK_X509_FRI_QUERY_COUNT_V1,
+        query_count: ZK_X509_SHARED_STARK_QUERY_COUNT_V1,
         distinct_queries_without_replacement: true,
         uniform_rejection_sampling: true,
-        claimed_query_error_bits: 132,
+        claimed_query_error_bits: 160,
     }
 }
 fn validate_fri_subproof_v1(
@@ -626,6 +691,9 @@ fn validate_fri_subproof_v1(
 }
 /// Validate the immutable profile constants.
 pub(crate) fn validate_profile_v1() -> Result<(), ZkX509ProfileErrorV1> {
+    if !zk_x509_shared_stark_geometry_is_release_ready_v1() {
+        return Err(ZkX509ProfileErrorV1::InvalidStarkParameters);
+    }
     let maximum_native_rows = u64::from(ZK_X509_MAX_NATIVE_TRACE_ROWS_V1);
     let common_lde_rows = maximum_native_rows
         .checked_mul(u64::from(ZK_X509_FRI_BLOWUP_FACTOR_V1))
@@ -798,8 +866,33 @@ mod tests {
         }
     }
     #[test]
-    fn fixed_algebraic_profile_and_activation_match_the_source_pin_state() {
-        validate_profile_v1().expect("fixed zk-X509 profile");
+    fn pre_cut_profile_is_rejected_until_shared_stark_geometry_and_wire_fit() {
+        assert_eq!(
+            validate_profile_v1(),
+            Err(ZkX509ProfileErrorV1::InvalidStarkParameters)
+        );
+        assert!(!zk_x509_shared_stark_geometry_is_release_ready_v1());
+        assert_eq!(ZK_X509_SHARED_STARK_QUERY_COUNT_V1, 136);
+        assert_eq!(ZK_X509_SHARED_STARK_BLOWUP_FACTOR_V1, 8);
+        assert_eq!(ZK_X509_SHARED_STARK_CA_PADDED_TRACE_LOG2_V1, 13);
+        assert_eq!(ZK_X509_SHARED_STARK_CA_LDE_LOG2_V1, 16);
+        assert_eq!(
+            ZK_X509_SHARED_STARK_PADDED_CA_MAXIMUM_PROOF_BYTES_V1,
+            2_690_528
+        );
+        assert!(
+            ZK_X509_SHARED_STARK_PADDED_CA_MAXIMUM_PROOF_BYTES_V1 <= ZK_X509_MAX_PROOF_BYTES_V1
+        );
+        assert_eq!(
+            ZK_X509_SHARED_STARK_WIDE_MAIN_MAXIMUM_PROOF_BYTES_V1,
+            16_447_808
+        );
+        assert_eq!(
+            ZK_X509_SHARED_STARK_WIDE_MAIN_TRACE_OPENING_BYTES_V1,
+            12_235_648
+        );
+        assert!(ZK_X509_SHARED_STARK_WIDE_MAIN_TRACE_OPENING_BYTES_V1 > ZK_X509_MAX_PROOF_BYTES_V1);
+        assert!(ZK_X509_SHARED_STARK_WIDE_MAIN_MAXIMUM_PROOF_BYTES_V1 > ZK_X509_MAX_PROOF_BYTES_V1);
         assert_eq!(ZK_X509_LOGICAL_REGISTRATIONS_V1, 49);
         assert_eq!(ZK_X509_TRACE_GROUPS_V1, 6);
         assert_eq!(ZK_X509_PHYSICAL_COMMITMENT_CHUNKS_V1, 80);
@@ -830,31 +923,30 @@ mod tests {
         );
         assert_ne!(ZK_X509_SOUNDNESS_CERTIFICATE_SHA256_V1, [0; 32]);
         let readiness = zk_x509_activation_readiness_v1();
-        assert!(readiness.soundness_analysis);
+        assert!(!readiness.prover);
+        assert!(!readiness.verifier);
+        assert!(!readiness.soundness_analysis);
+        assert!(!readiness.resource_benchmarks);
+        assert!(!readiness.is_complete());
         match source_release_pin_state_v1(source_release_capture_pins_v1()) {
             SourceReleasePinStateV1::BootstrapOpen => {
                 assert_eq!(ZK_X509_RESOURCE_CERTIFICATE_SHA256_V1, [0; 32]);
-                assert!(!readiness.resource_benchmarks);
-                assert!(!readiness.is_complete());
-                assert_eq!(
-                    require_activation_readiness_v1(complete_readiness()),
-                    Err(ZkX509ProfileErrorV1::EngineIncomplete)
-                );
             }
             SourceReleasePinStateV1::FullyPinned => {
                 assert_ne!(ZK_X509_RESOURCE_CERTIFICATE_SHA256_V1, [0; 32]);
-                assert!(readiness.resource_benchmarks);
-                assert!(readiness.is_complete());
-                assert_eq!(require_activation_readiness_v1(readiness), Ok(()));
-                assert_eq!(
-                    require_activation_readiness_v1(complete_readiness()),
-                    Ok(())
-                );
             }
             SourceReleasePinStateV1::Mixed => {
                 panic!("source release pins must be wholly open or wholly installed")
             }
         }
+        assert_eq!(
+            require_activation_readiness_v1(readiness),
+            Err(ZkX509ProfileErrorV1::InvalidStarkParameters)
+        );
+        assert_eq!(
+            require_activation_readiness_v1(complete_readiness()),
+            Err(ZkX509ProfileErrorV1::InvalidStarkParameters)
+        );
     }
     #[test]
     fn release_evidence_pin_state_machine_is_fail_closed() {
@@ -863,7 +955,9 @@ mod tests {
         let json = [0x33; 32];
         let source_pins = source_release_capture_pins_v1();
         let readiness = zk_x509_activation_readiness_v1();
-        assert!(readiness.soundness_analysis);
+        assert!(!readiness.prover);
+        assert!(!readiness.verifier);
+        assert!(!readiness.soundness_analysis);
         match source_release_pin_state_v1(source_pins) {
             SourceReleasePinStateV1::BootstrapOpen => {
                 assert!(!zk_x509_release_evidence_pins_complete_v1());
@@ -883,10 +977,10 @@ mod tests {
                     source_pins.expectations_norito_sha256,
                     source_pins.expectations_json_sha256,
                 ));
-                assert!(readiness.known_answer_tests);
-                assert!(readiness.adversarial_tests);
-                assert!(readiness.resource_benchmarks);
-                assert!(readiness.is_complete());
+                assert!(!readiness.known_answer_tests);
+                assert!(!readiness.adversarial_tests);
+                assert!(!readiness.resource_benchmarks);
+                assert!(!readiness.is_complete());
             }
             SourceReleasePinStateV1::Mixed => {
                 panic!("source release pins must be wholly open or wholly installed")
@@ -1019,9 +1113,9 @@ mod tests {
         }
     }
     #[test]
-    fn main_and_ca_fri_theorem_substitutions_fail_closed() {
+    fn shared_main_and_ca_fri_theorem_substitutions_fail_closed() {
         for (native_log2, blowup_log2, terminal_log2, terminal_degree, fold_count, chunks) in
-            [(19, 6, 10, 31, 15, 4), (7, 7, 9, 15, 5, 3)]
+            [(19, 3, 10, 143, 12, 6), (13, 3, 10, 143, 6, 3)]
         {
             let parameters = fri_parameters_v1(
                 native_log2,
@@ -1050,7 +1144,7 @@ mod tests {
                 .expect("canonical theorem certificate");
             for mutation in [
                 AggregateFriTheorem2CertificateV1 {
-                    rho_denominator: 31,
+                    rho_denominator: 6,
                     ..certificate
                 },
                 AggregateFriTheorem2CertificateV1 {
@@ -1090,7 +1184,7 @@ mod tests {
                     ..certificate
                 },
                 AggregateFriTheorem2CertificateV1 {
-                    query_count: 57,
+                    query_count: ZK_X509_SHARED_STARK_QUERY_COUNT_V1 - 1,
                     ..certificate
                 },
                 AggregateFriTheorem2CertificateV1 {
@@ -1112,19 +1206,8 @@ mod tests {
     #[test]
     fn independent_readiness_requirements_fail_closed() {
         let canonical = zk_x509_activation_readiness_v1();
-        let expected = match source_release_pin_state_v1(source_release_capture_pins_v1()) {
-            SourceReleasePinStateV1::BootstrapOpen => {
-                assert!(!canonical.is_complete());
-                Err(ZkX509ProfileErrorV1::EngineIncomplete)
-            }
-            SourceReleasePinStateV1::FullyPinned => {
-                assert!(canonical.is_complete());
-                Ok(())
-            }
-            SourceReleasePinStateV1::Mixed => {
-                panic!("source release pins must be wholly open or wholly installed")
-            }
-        };
+        assert!(!canonical.is_complete());
+        let expected = Err(ZkX509ProfileErrorV1::InvalidStarkParameters);
         assert_eq!(require_activation_readiness_v1(canonical), expected);
         assert_eq!(
             require_activation_readiness_v1(complete_readiness()),
@@ -1185,7 +1268,7 @@ mod tests {
             assert!(!gate.is_complete());
             assert_eq!(
                 require_activation_readiness_v1(gate),
-                Err(ZkX509ProfileErrorV1::EngineIncomplete)
+                Err(ZkX509ProfileErrorV1::InvalidStarkParameters)
             );
         }
     }

@@ -138,7 +138,7 @@ async fn time_trigger_precommit_executes_and_emits_time_event() -> Result<()> {
     }));
     // Drop the mutable block scope before we borrow a view; otherwise
     // the view lock blocks waiting for this block to finish applying.
-    state_block2.commit().unwrap();
+    state_block2.commit_world_overlay_for_testing().unwrap();
     // And the effect should be visible
     let tick_val = state
         .view()
@@ -228,7 +228,7 @@ fn time_trigger_revalidates_a_sibling_replaced_after_matching() {
     });
     let mut state_block2 = state.block(block2.as_ref().header());
     let _ = state_block2.apply(&block2, Vec::new());
-    state_block2.commit().unwrap();
+    state_block2.commit_world_overlay_for_testing().unwrap();
 
     {
         let view = state.view();
@@ -252,7 +252,7 @@ fn time_trigger_revalidates_a_sibling_replaced_after_matching() {
     });
     let mut state_block3 = state.block(block3.as_ref().header());
     let _ = state_block3.apply(&block3, Vec::new());
-    state_block3.commit().unwrap();
+    state_block3.commit_world_overlay_for_testing().unwrap();
 
     let view = state.view();
     let account = view.world.account(&ALICE_ID).expect("alice account");
@@ -384,7 +384,7 @@ fn scheduled_time_trigger_retry_succeeds_once_and_consumes_repeats_on_success() 
         completions2[0].outcome(),
         TriggerCompletedOutcome::Failure(_)
     ));
-    state_block2.commit().unwrap();
+    state_block2.commit_world_overlay_for_testing().unwrap();
     persist_committed_test_block(&kura, &block2);
     {
         let view = state.view();
@@ -441,7 +441,7 @@ fn scheduled_time_trigger_retry_succeeds_once_and_consumes_repeats_on_success() 
         completions4[0].outcome(),
         TriggerCompletedOutcome::Success
     ));
-    state_block4.commit().unwrap();
+    state_block4.commit_world_overlay_for_testing().unwrap();
     persist_committed_test_block(&kura, &block4);
     let view = state.view();
     let alice_asset = view
@@ -534,7 +534,7 @@ fn scheduled_time_trigger_retry_budget_exhaustion_unregisters_trigger() {
         completions2[0].outcome(),
         TriggerCompletedOutcome::Failure(_)
     ));
-    state_block2.commit().unwrap();
+    state_block2.commit_world_overlay_for_testing().unwrap();
     persist_committed_test_block(&kura, &block2);
     {
         let view = state.view();
@@ -571,7 +571,7 @@ fn scheduled_time_trigger_retry_budget_exhaustion_unregisters_trigger() {
         completions3[0].outcome(),
         TriggerCompletedOutcome::Failure(_)
     ));
-    state_block3.commit().unwrap();
+    state_block3.commit_world_overlay_for_testing().unwrap();
     persist_committed_test_block(&kura, &block3);
     let view = state.view();
     assert!(
@@ -669,7 +669,7 @@ fn periodic_time_trigger_drops_missed_ticks_while_retry_pending() {
         completions2[0].outcome(),
         TriggerCompletedOutcome::Failure(_)
     ));
-    state_block2.commit().unwrap();
+    state_block2.commit_world_overlay_for_testing().unwrap();
     persist_committed_test_block(&kura, &block2);
     {
         let view = state.view();
@@ -717,7 +717,7 @@ fn periodic_time_trigger_drops_missed_ticks_while_retry_pending() {
         completions3.is_empty(),
         "scheduled ticks must be suppressed while retry is pending"
     );
-    state_block3.commit().unwrap();
+    state_block3.commit_world_overlay_for_testing().unwrap();
     persist_committed_test_block(&kura, &block3);
     {
         let view = state.view();
@@ -754,7 +754,7 @@ fn periodic_time_trigger_drops_missed_ticks_while_retry_pending() {
         completions4[0].outcome(),
         TriggerCompletedOutcome::Success
     ));
-    state_block4.commit().unwrap();
+    state_block4.commit_world_overlay_for_testing().unwrap();
     persist_committed_test_block(&kura, &block4);
     {
         let view = state.view();
@@ -794,7 +794,7 @@ fn periodic_time_trigger_drops_missed_ticks_while_retry_pending() {
         completions5[0].outcome(),
         TriggerCompletedOutcome::Success
     ));
-    state_block5.commit().unwrap();
+    state_block5.commit_world_overlay_for_testing().unwrap();
     persist_committed_test_block(&kura, &block5);
     let view = state.view();
     let alice_asset = view
@@ -866,7 +866,7 @@ fn ivm_trigger_respects_pipeline_cycle_cap() {
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
     stx.apply();
-    state_block.commit().unwrap();
+    state_block.commit_world_overlay_for_testing().unwrap();
     let mut state_block = state.block(block.as_ref().header());
     let mut stx = state_block.transaction();
     let evt = ExecuteTriggerEvent {
@@ -1129,7 +1129,7 @@ let _marker = marker;
             .unwrap();
         stx.apply();
     }
-    state_block.commit().unwrap();
+    state_block.commit_world_overlay_for_testing().unwrap();
     assert!(
         state.world.triggers.remove_contract_for_test(blob_hash),
         "contract entry should be removed for test setup"
@@ -1159,7 +1159,7 @@ let _marker = marker;
         "unexpected error: {err_debug}"
     );
     drop(stx);
-    state_block.commit().unwrap();
+    state_block.commit_world_overlay_for_testing().unwrap();
     let view = state.view();
     assert!(
         view.world.triggers().ids().get(&trigger_id).is_some(),
@@ -1216,7 +1216,7 @@ fn execute_trigger_isi_rejects_depleted_entry_and_prunes_trigger() {
             .unwrap();
         stx.apply();
     }
-    state_block.commit().unwrap();
+    state_block.commit_world_overlay_for_testing().unwrap();
     {
         let mut trigger_block = state.world.triggers.block();
         let mut trigger_tx = trigger_block.transaction();
@@ -1242,7 +1242,7 @@ fn execute_trigger_isi_rejects_depleted_entry_and_prunes_trigger() {
         .expect_err("depleted trigger should be rejected");
     assert!(matches!(err, Error::Find(FindError::Trigger(id)) if id == trigger_id));
     stx.apply();
-    state_block.commit().unwrap();
+    state_block.commit_world_overlay_for_testing().unwrap();
     let view = state.view();
     assert!(
         view.world.triggers().ids().get(&trigger_id).is_none(),
@@ -1304,7 +1304,7 @@ fn execute_called_trigger_rejects_disabled_trigger() {
             .unwrap();
         stx.apply();
     }
-    state_block.commit().unwrap();
+    state_block.commit_world_overlay_for_testing().unwrap();
     let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
     let mut state_block = state.block(header);
     let mut stx = state_block.transaction();
@@ -1323,7 +1323,7 @@ fn execute_called_trigger_rejects_disabled_trigger() {
         other => panic!("unexpected rejection: {other:?}"),
     }
     stx.apply();
-    state_block.commit().unwrap();
+    state_block.commit_world_overlay_for_testing().unwrap();
     let view = state.view();
     assert!(
         view.world.triggers().ids().get(&trigger_id).is_some(),
@@ -1373,7 +1373,7 @@ fn execute_called_trigger_rejects_numeric_zero_enabled_trigger() {
             .unwrap();
         stx.apply();
     }
-    state_block.commit().unwrap();
+    state_block.commit_world_overlay_for_testing().unwrap();
     let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
     let mut state_block = state.block(header);
     let mut stx = state_block.transaction();
@@ -1392,7 +1392,7 @@ fn execute_called_trigger_rejects_numeric_zero_enabled_trigger() {
         other => panic!("unexpected rejection: {other:?}"),
     }
     stx.apply();
-    state_block.commit().unwrap();
+    state_block.commit_world_overlay_for_testing().unwrap();
     let view = state.view();
     let trigger = view
         .world
@@ -1453,7 +1453,7 @@ fn execute_called_trigger_rejects_malformed_enabled_trigger() {
             .unwrap();
         stx.apply();
     }
-    state_block.commit().unwrap();
+    state_block.commit_world_overlay_for_testing().unwrap();
     let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
     let mut state_block = state.block(header);
     let mut stx = state_block.transaction();
@@ -1472,7 +1472,7 @@ fn execute_called_trigger_rejects_malformed_enabled_trigger() {
         other => panic!("unexpected rejection: {other:?}"),
     }
     stx.apply();
-    state_block.commit().unwrap();
+    state_block.commit_world_overlay_for_testing().unwrap();
     let view = state.view();
     let trigger = view
         .world
@@ -1534,7 +1534,7 @@ fn execute_data_triggers_dfs_skips_disabled_trigger() {
             .unwrap();
         stx.apply();
     }
-    state_block.commit().unwrap();
+    state_block.commit_world_overlay_for_testing().unwrap();
     let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
     let mut state_block = state.block(header);
     let mut stx = state_block.transaction();
@@ -1549,7 +1549,7 @@ fn execute_data_triggers_dfs_skips_disabled_trigger() {
         .expect("disabled trigger should be skipped");
     assert!(steps.is_empty(), "disabled trigger should not execute");
     stx.apply();
-    state_block.commit().unwrap();
+    state_block.commit_world_overlay_for_testing().unwrap();
     let view = state.view();
     assert!(
         view.world.triggers().ids().get(&trigger_id).is_some(),
@@ -1620,7 +1620,7 @@ fn execute_data_triggers_dfs_skips_numeric_zero_and_malformed_enabled_triggers()
         }
         stx.apply();
     }
-    state_block.commit().unwrap();
+    state_block.commit_world_overlay_for_testing().unwrap();
     let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
     let mut state_block = state.block(header);
     let mut stx = state_block.transaction();
@@ -1638,7 +1638,7 @@ fn execute_data_triggers_dfs_skips_numeric_zero_and_malformed_enabled_triggers()
         "numeric-zero and malformed data triggers must not execute"
     );
     stx.apply();
-    state_block.commit().unwrap();
+    state_block.commit_world_overlay_for_testing().unwrap();
     let view = state.view();
     let account = view.world.account(&ALICE_ID).expect("alice account");
     assert!(
@@ -1703,7 +1703,7 @@ fn execute_data_triggers_dfs_prunes_depleted_trigger_without_mutating_state() {
             .unwrap();
         stx.apply();
     }
-    state_block.commit().unwrap();
+    state_block.commit_world_overlay_for_testing().unwrap();
     {
         let mut trigger_block = state.world.triggers.block();
         let mut trigger_tx = trigger_block.transaction();
@@ -1731,7 +1731,7 @@ fn execute_data_triggers_dfs_prunes_depleted_trigger_without_mutating_state() {
         .expect("depleted trigger should be pruned without error");
     assert!(steps.is_empty(), "depleted trigger must not execute");
     stx.apply();
-    state_block.commit().unwrap();
+    state_block.commit_world_overlay_for_testing().unwrap();
     let view = state.view();
     assert!(
         view.world.triggers().ids().get(&trigger_id).is_none(),
@@ -1785,7 +1785,7 @@ fn execute_data_triggers_dfs_clears_events_without_triggers() {
         "buffered events should be cleared when no triggers are registered"
     );
     stx.apply();
-    state_block.commit().unwrap();
+    state_block.commit_world_overlay_for_testing().unwrap();
 }
 #[test]
 fn execute_data_triggers_dfs_uses_registered_trigger_authority() {
@@ -1846,7 +1846,7 @@ fn execute_data_triggers_dfs_uses_registered_trigger_authority() {
             .unwrap();
         stx.apply();
     }
-    state_block.commit().unwrap();
+    state_block.commit_world_overlay_for_testing().unwrap();
     let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
     let mut state_block = state.block(header);
     {
@@ -1860,7 +1860,7 @@ fn execute_data_triggers_dfs_uses_registered_trigger_authority() {
         assert_eq!(steps.len(), 1, "expected one data trigger execution");
         stx.apply();
     }
-    state_block.commit().unwrap();
+    state_block.commit_world_overlay_for_testing().unwrap();
     let flag_value = state
         .view()
         .world
@@ -1912,7 +1912,7 @@ fn execute_data_triggers_dfs_skips_missing_trigger_after_bytecode_drop() {
             .unwrap();
         stx.apply();
     }
-    state_block.commit().unwrap();
+    state_block.commit_world_overlay_for_testing().unwrap();
     assert!(
         state.world.triggers.remove_contract_for_test(blob_hash),
         "contract entry should be removed for test setup"
@@ -1939,7 +1939,7 @@ fn execute_data_triggers_dfs_skips_missing_trigger_after_bytecode_drop() {
         "unexpected error: {err_debug}"
     );
     drop(stx);
-    state_block.commit().unwrap();
+    state_block.commit_world_overlay_for_testing().unwrap();
     let view = state.view();
     assert!(
         view.world.triggers().ids().get(&trigger_id).is_some(),

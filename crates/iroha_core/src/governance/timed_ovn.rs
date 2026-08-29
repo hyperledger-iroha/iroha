@@ -24,8 +24,7 @@ use iroha_crypto::{
     tle::{TleError, TleMasterPublicKey, TleReleaseIdentityV1},
 };
 use iroha_data_model::{
-    governance::types::TleKeySessionId,
-    isi::governance::PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1,
+    governance::types::{PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1, TleKeySessionId},
     parliament_casting::ParliamentTimedOvnRegistrationCorpusCommitmentV1,
 };
 use norito::{

@@ -13,6 +13,8 @@
 //! remain false until every terminal below is wired to its numeric consumer.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::der_air::rfc5280_io_witnesses_v1;
+#[cfg(test)]
+use super::stark::ZK_X509_DIGEST_CONTEXT_V1;
 use super::{
     der_air::{
         ZK_X509_DER_AIR_MAX_DOCUMENTS_V1, ZK_X509_DER_AIR_MAX_EMBEDDED_DOCUMENTS_V1,
@@ -52,13 +54,11 @@ use super::{
     io_air::ZkX509IoEndpointV1,
 };
 #[cfg(test)]
-use super::stark::ZK_X509_DIGEST_CONTEXT_V1;
-use crate::privacy_engines::transparent_stark::{
-    GOLDILOCKS_MODULUS_V1, GoldilocksDigest384V1, GoldilocksFieldV1 as F,
-    TransparentStarkErrorV1, TransparentTranscriptV1,
-};
-#[cfg(test)]
 use crate::privacy_engines::transparent_stark::goldilocks_digest384_frame_v1;
+use crate::privacy_engines::transparent_stark::{
+    GOLDILOCKS_MODULUS_V1, GoldilocksDigest384V1, GoldilocksFieldV1 as F, TransparentStarkErrorV1,
+    TransparentTranscriptV1,
+};
 use thiserror::Error;
 /// Stable identity of the native RFC adapter integrated only through MAIN.
 #[cfg(test)]

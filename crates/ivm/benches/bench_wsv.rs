@@ -241,10 +241,7 @@ fn mock_wsv_host_with_persisted_state(entries: usize, value_bytes: usize) -> (Ws
     wsv.sc_restore(&DurableStateSnapshot::new(state))
         .expect("seed persisted mock WSV state");
     let caller = AccountId::new(KeyPair::random().public_key().clone());
-    (
-        WsvHost::new_with_subject(wsv, caller, HashMap::new()),
-        tmp_dir,
-    )
+    (WsvHost::new_with_subject(wsv, caller), tmp_dir)
 }
 fn bench_mock_wsv_checkpoint_restore(c: &mut Criterion) {
     let mut group = c.benchmark_group("mock_wsv_checkpoint_restore");

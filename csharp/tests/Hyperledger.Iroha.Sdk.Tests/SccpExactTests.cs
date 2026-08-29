@@ -316,6 +316,9 @@ public sealed partial class SccpExactTests
                 creationTimeMs: 7));
         }
         Assert.Equal(nativeArtifact, BridgeMessageRequest(authority, nativeArtifact).NativeProofBase64);
+        Assert.Equal(
+            ReplayWitnessArtifact(),
+            BridgeMessageRequest(authority, nativeArtifact).ReplayWitnessBase64);
         using var json = JsonDocument.Parse(JsonSerializer.SerializeToUtf8Bytes(request));
         var fields = json.RootElement.EnumerateObject()
             .Select(static property => property.Name)
@@ -1599,8 +1602,9 @@ public sealed partial class SccpExactTests
                 RouteConfigurationHashHex: new string('2', 64),
                 RangeStartHeight: 4,
                 RangeEndHeight: 10)));
-        Assert.Throws<ArgumentOutOfRangeException>(() => new SccpBridgeResponseExpectation(
-            CounterpartyDomain: 4).Validate());
+        var tonExpectation = new SccpBridgeResponseExpectation(CounterpartyDomain: 4);
+        tonExpectation.Validate();
+        Assert.Equal((uint)4, tonExpectation.CounterpartyDomain);
 
         var transaction = CanonicalTransactionPayload(7);
         var prepared = ResponseJson(
@@ -1728,7 +1732,7 @@ public sealed partial class SccpExactTests
             value => MutateFirstTransactionInstructionArchive(value, archive => archive[31] ^= 1),
             value => MutateFirstTransactionInstructionArchive(value, archive =>
             {
-                archive[^1] = 0;
+                archive[^1] ^= 1;
                 RewriteNoritoChecksum(archive);
             }),
         })
@@ -2134,6 +2138,7 @@ public sealed partial class SccpExactTests
         ["message_bundle_path"] = "/v1/sccp/proofs/message/{message_id}",
         ["proof_request_path"] = "/v1/sccp/proof-requests/{message_id}",
         ["recent_messages_path"] = "/v1/sccp/messages/recent",
+        ["sora_outbound_material_path"] = "/v1/sccp/routes/{source_profile}/{route_id}/{asset_key}/{revision}/sora-outbound-material",
         ["registry_limits"] = new Dictionary<string, object?>
         {
             ["max_governed_lanes"] = 16,
@@ -3749,7 +3754,11 @@ public sealed partial class SccpExactTests
             CompactField(bridgePayload));
         var instructionArchive = NoritoCodec.Encode(
             submitBridgeProofSchemaName,
-            CompactField(bridgeProof),
+            Concat(
+                CompactField(bridgeProof),
+                CompactField(destinationProof
+                    ? [(byte)0]
+                    : Concat([(byte)1], CompactField(ReplayWitnessPayload())))),
             flags: 0x02);
         var instruction = Concat(
             CompactField(CompactString(submitBridgeProofWireId)),
@@ -4018,10 +4027,23 @@ public sealed partial class SccpExactTests
         ulong? creationTimeMs = null) => new(
             authority,
             nativeProofBase64,
+            ReplayWitnessArtifact(),
             BridgeFeePayment,
             signatureBase64,
             transactionPayloadBase64,
             creationTimeMs);
+
+    private static string ReplayWitnessArtifact() => Convert.ToBase64String(
+        NoritoCodec.Encode(
+            SccpSubmitValidation.ReplayWitnessSchemaName,
+            ReplayWitnessPayload(),
+            flags: 0x02));
+
+    private static byte[] ReplayWitnessPayload() => Concat(
+        CompactField(SccpReplayV1.EmptyHashes()[SccpReplayV1.Depth]),
+        CompactField(new byte[32]),
+        CompactField(new byte[32]),
+        CompactField(UInt64(0)));
 
     private static byte[] Concat(params byte[][] values)
     {

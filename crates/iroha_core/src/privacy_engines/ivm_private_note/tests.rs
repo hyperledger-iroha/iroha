@@ -7,8 +7,10 @@ use super::{
     ivm_private_recipient_public_key_v1,
     relation::{
         IvmPrivateNoteInputWitnessV1, IvmPrivateNoteOutputWitnessV1, IvmPrivateNoteRelationErrorV1,
-        IvmPrivateNoteWitnessV1, accumulator_leaf_invocation_v1, accumulator_node_invocation_v1,
-        validate_private_note_relation_v1,
+        IvmPrivateNoteWitnessV1, PrivateNoteRelationProfileV1, accumulator_leaf_invocation_v1,
+        accumulator_node_invocation_v1, derive_profiled_input_commitment_v1,
+        derive_profiled_output_commitment_v1, preflight_private_note_relation_with_profile_v1,
+        validate_private_note_relation_v1, validate_private_note_relation_with_profile_v1,
     },
 };
 use iroha_data_model::{
@@ -174,6 +176,159 @@ pub(super) fn fixture() -> Fixture {
         input_commitment,
     }
 }
+#[derive(Clone)]
+pub(super) struct ThreeOutputFixture {
+    pub(super) statement: IrohaIvmPrivateNoteStarkStatementV1,
+    pub(super) witness: IvmPrivateNoteWitnessV1,
+    pub(super) profile: PrivateNoteRelationProfileV1,
+}
+pub(super) fn three_output_fixture() -> ThreeOutputFixture {
+    let value = fixture();
+    let memo_digests = [bytes(0x54), bytes(0x64), bytes(0x74)];
+    let profile = PrivateNoteRelationProfileV1::exact_three_output_balanced(memo_digests);
+    let mut statement = value.statement;
+    let mut first_input = value.witness.inputs[0].clone();
+    let first_input_commitment =
+        derive_note_commitment_v1(&first_input.note).expect("first input commitment");
+    let second_input_secret = bytes(0x81);
+    let second_input_note = PrivateNotePlaintextV1::new_profiled_input_v1(
+        0,
+        derive_note_authority_v1(&second_input_secret).expect("second input authority"),
+        bytes(0x82),
+        bytes(0x83),
+        bytes(0x84),
+        profile,
+    )
+    .expect("second cover input note");
+    let second_input_commitment = derive_profiled_input_commitment_v1(&second_input_note, profile)
+        .expect("second input commitment");
+    let leaf_0 = accumulator_leaf_invocation_v1(&statement, 0, first_input_commitment)
+        .expect("first input leaf")
+        .digest;
+    let leaf_1 = accumulator_leaf_invocation_v1(&statement, 1, second_input_commitment)
+        .expect("second input leaf")
+        .digest;
+    let mut path_0 = [[0_u8; 32]; super::PRIVATE_NOTE_TREE_DEPTH_V1];
+    let mut path_1 = [[0_u8; 32]; super::PRIVATE_NOTE_TREE_DEPTH_V1];
+    path_0[0] = leaf_1;
+    path_1[0] = leaf_0;
+    for level in 1..super::PRIVATE_NOTE_TREE_DEPTH_V1 {
+        let seed = u8::try_from(level)
+            .expect("tree depth fits u8")
+            .wrapping_add(0xA0);
+        path_0[level] = [seed; 32];
+        path_1[level] = [seed; 32];
+    }
+    let mut root = accumulator_node_invocation_v1(0, 0, &leaf_0, &leaf_1)
+        .expect("sibling input leaves")
+        .digest;
+    for (level, sibling) in path_0.iter().enumerate().skip(1) {
+        root = accumulator_node_invocation_v1(
+            0,
+            u8::try_from(level).expect("tree depth fits u8"),
+            &root,
+            sibling,
+        )
+        .expect("shared upper input path")
+        .digest;
+    }
+    statement.state_root = PrivacyRootV1::new(root);
+    first_input.leaf_position = 0;
+    first_input.authentication_path = path_0;
+    let second_input = IvmPrivateNoteInputWitnessV1::new_with_profile_v1(
+        second_input_note,
+        second_input_secret,
+        1,
+        path_1,
+        profile,
+    )
+    .expect("second cover input witness");
+
+    let first_output = IvmPrivateNoteOutputWitnessV1::new_with_profile_v1(
+        value.witness.outputs[0].note.clone(),
+        0,
+        profile,
+    )
+    .expect("first profiled output");
+    let second_output = IvmPrivateNoteOutputWitnessV1::new_with_profile_v1(
+        PrivateNotePlaintextV1::new_profiled_output_v1(
+            0,
+            derive_note_authority_v1(&bytes(0x91)).expect("second output authority"),
+            bytes(0x92),
+            bytes(0x93),
+            memo_digests[1],
+            1,
+            profile,
+        )
+        .expect("second output note"),
+        1,
+        profile,
+    )
+    .expect("second profiled output");
+    let cover_output = IvmPrivateNoteOutputWitnessV1::new_with_profile_v1(
+        PrivateNotePlaintextV1::new_profiled_output_v1(
+            0,
+            derive_note_authority_v1(&bytes(0xA1)).expect("cover output authority"),
+            bytes(0xA2),
+            bytes(0xA3),
+            memo_digests[2],
+            2,
+            profile,
+        )
+        .expect("zero-valued cover output note"),
+        2,
+        profile,
+    )
+    .expect("cover profiled output");
+    let outputs = vec![first_output, second_output, cover_output];
+    statement.output_commitments = outputs
+        .iter()
+        .enumerate()
+        .map(|(index, output)| {
+            derive_profiled_output_commitment_v1(&output.note, index, profile)
+                .expect("profiled output commitment")
+        })
+        .collect();
+    let encrypted_template = statement.encrypted_outputs[0].clone();
+    statement.encrypted_outputs = statement
+        .output_commitments
+        .iter()
+        .map(|commitment| {
+            let mut encrypted = encrypted_template.clone();
+            encrypted.commitment = *commitment;
+            encrypted
+        })
+        .collect();
+    statement.nullifiers = vec![
+        derive_note_nullifier_v1(
+            &statement,
+            &first_input.spending_secret,
+            &first_input.note.rho,
+            first_input_commitment,
+        )
+        .expect("first input nullifier"),
+        derive_note_nullifier_v1(
+            &statement,
+            &second_input.spending_secret,
+            &second_input.note.rho,
+            second_input_commitment,
+        )
+        .expect("second input nullifier"),
+    ];
+    redigest(&mut statement);
+    let witness = IvmPrivateNoteWitnessV1::new_with_profile_v1(
+        value.witness.program,
+        vec![first_input, second_input],
+        outputs,
+        profile,
+    )
+    .expect("three-output profiled witness");
+    ThreeOutputFixture {
+        statement,
+        witness,
+        profile,
+    }
+}
 fn redigest(statement: &mut IrohaIvmPrivateNoteStarkStatementV1) {
     statement.action_digest = PrivacyActionDigestV1::new([0; 32]);
     statement.action_digest = statement
@@ -221,6 +376,93 @@ fn canonical_relation_accepts_and_derives_only_statement_effects() {
     assert_eq!(relation.final_registers[7], 10);
     assert_eq!(relation.final_registers[4], 0);
     assert_eq!(relation.invocations.len(), 38);
+}
+#[test]
+fn exact_three_output_profile_accepts_balanced_cover_geometry_only() {
+    let value = three_output_fixture();
+    let cover_input = &value.witness.inputs[1];
+    let profiled_commitment = cover_input
+        .commitment_with_profile_v1(value.profile)
+        .expect("profiled zero-valued input commitment");
+    assert_eq!(
+        cover_input.nullifier_with_profile_v1(&value.statement, value.profile),
+        derive_note_nullifier_v1(
+            &value.statement,
+            &cover_input.spending_secret,
+            &cover_input.note.rho,
+            profiled_commitment,
+        ),
+        "the profile-aware input nullifier must use the profile-aware commitment"
+    );
+    assert_eq!(
+        cover_input.commitment_v1(),
+        Err(IvmPrivateNoteRelationErrorV1::ZeroWitnessComponent),
+        "the canonical IVM private-note commitment helper must reject zero-valued notes"
+    );
+    assert_eq!(
+        cover_input.nullifier_v1(&value.statement),
+        Err(IvmPrivateNoteRelationErrorV1::ZeroWitnessComponent),
+        "the canonical IVM private-note nullifier helper must reject zero-valued notes"
+    );
+    let relation = validate_private_note_relation_with_profile_v1(
+        &value.statement,
+        &value.witness,
+        value.profile,
+    )
+    .expect("exact three-output relation");
+    assert_eq!(relation.input_sum, 10);
+    assert_eq!(relation.output_sum, 10);
+    assert_eq!(value.witness.inputs.len(), 2);
+    assert_eq!(value.witness.outputs.len(), 3);
+    assert_eq!(value.witness.inputs[1].note.value, 0);
+    assert_eq!(value.witness.outputs[1].note.value, 0);
+    assert_eq!(value.witness.outputs[2].note.value, 0);
+    assert_eq!(relation.final_registers[6], 10);
+    assert_eq!(relation.final_registers[7], 10);
+    assert_eq!(
+        validate_private_note_relation_v1(&value.statement, &value.witness),
+        Err(IvmPrivateNoteRelationErrorV1::InvalidStatement),
+        "the canonical IVM private-note relation must enforce one-or-two-output geometry"
+    );
+    assert_eq!(
+        PrivateNotePlaintextV1::new(0, bytes(0xC1), bytes(0xC2), bytes(0xC3), bytes(0xC4),),
+        Err(IvmPrivateNoteRelationErrorV1::ZeroWitnessComponent),
+        "the canonical IVM private-note constructor must reject zero value"
+    );
+}
+#[test]
+fn exact_three_output_cover_note_still_requires_nonzero_secret_material() {
+    let canonical = three_output_fixture();
+    for component in ["authority", "rho", "blinding"] {
+        let mut changed = canonical.clone();
+        let cover = &mut changed.witness.outputs[2].note;
+        match component {
+            "authority" => cover.spending_authority = [0; 32],
+            "rho" => cover.rho = [0; 32],
+            "blinding" => cover.blinding = [0; 32],
+            _ => unreachable!(),
+        }
+        assert_eq!(
+            preflight_private_note_relation_with_profile_v1(
+                &changed.statement,
+                &changed.witness,
+                changed.profile,
+            ),
+            Err(IvmPrivateNoteRelationErrorV1::ZeroWitnessComponent),
+            "zero-valued cover output admitted zero {component}"
+        );
+    }
+    let mut changed = canonical;
+    changed.witness.inputs[1].authentication_path[7] = [0; 32];
+    assert_eq!(
+        preflight_private_note_relation_with_profile_v1(
+            &changed.statement,
+            &changed.witness,
+            changed.profile,
+        ),
+        Err(IvmPrivateNoteRelationErrorV1::ZeroWitnessComponent),
+        "the settlement profile must retain the nonzero authentication-path invariant"
+    );
 }
 #[test]
 fn program_authority_commitment_and_stable_nullifier_kats_are_pinned() {

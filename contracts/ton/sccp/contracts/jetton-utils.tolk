@@ -229,9 +229,13 @@ fun sccpPendingCapacityAvailable(count: uint16): bool {
 /// Checked supply-cap predicate. Subtraction is evaluated only after proving
 /// that the persisted supply is not already above its immutable ceiling.
 fun sccpMintFitsSupplyCap(totalSupply: coins, mintAmount: coins, cap: coins): bool {
-    return cap > 0 && cap <= SCCP_MAX_JETTON_AMOUNT && totalSupply <= cap && mintAmount > 0 &&
-    mintAmount <= SCCP_MAX_JETTON_AMOUNT &&
-    mintAmount <= cap - totalSupply;
+    if (
+        cap == 0 || cap > SCCP_MAX_JETTON_AMOUNT || totalSupply > cap || mintAmount == 0 ||
+        mintAmount > SCCP_MAX_JETTON_AMOUNT
+    ) {
+        return false;
+    }
+    return mintAmount <= cap - totalSupply;
 }
 
 /// Every amount crossing the SCCP/Jetton boundary is a positive VarUInteger

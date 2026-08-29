@@ -5,7 +5,7 @@ use ivm::{
     mock_wsv::{AccountId, MockWorldStateView, WsvHost},
     syscalls,
 };
-use std::{collections::HashMap, str::FromStr};
+use std::str::FromStr;
 mod common;
 use common::assemble_syscalls;
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
@@ -34,7 +34,7 @@ fn sample_account() -> AccountId {
 fn register_peer_then_unregister() {
     let alice: AccountId = sample_account();
     let wsv = MockWorldStateView::new();
-    let host = WsvHost::new_with_subject(wsv, alice.clone(), HashMap::new());
+    let host = WsvHost::new_with_subject(wsv, alice.clone());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
     const SAMPLE_PEER: &str =
@@ -74,7 +74,7 @@ fn register_peer_then_unregister() {
 fn create_enable_disable_remove_trigger() {
     let alice: AccountId = sample_account();
     let wsv = MockWorldStateView::new();
-    let host = WsvHost::new_with_subject(wsv, alice.clone(), HashMap::new());
+    let host = WsvHost::new_with_subject(wsv, alice.clone());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
     // Missing name -> invalid

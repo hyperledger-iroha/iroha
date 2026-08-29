@@ -7382,7 +7382,7 @@ mod tests {
             transaction.apply();
         }
         block
-            .commit()
+            .commit_world_overlay_for_testing()
             .expect("commit Bootle/Lantern registration and rotation block");
         let next_header = BlockHeader::new(
             NonZeroU64::new(TEST_BLOCK_HEIGHT + 1).expect("non-zero height"),
@@ -8000,7 +8000,7 @@ mod tests {
         );
         transaction.apply();
         block
-            .commit()
+            .commit_world_overlay_for_testing()
             .expect("commit ZK-AMS batch and provisioning transactions");
         let replay_height = fixture
             .current_height

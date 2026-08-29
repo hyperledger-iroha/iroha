@@ -105,6 +105,15 @@ pub trait ParliamentTlePartialReleaseSignerBrokerBackendV1: Send + Sync {
         ConsensusSignerProviderQualificationV1,
         ParliamentTlePartialReleaseSignerBrokerBackendErrorV1,
     >;
+    /// Attest live custody for one exact validated public session and seat.
+    fn attest_partial_release_capability(
+        &self,
+        session: &iroha_core::tle_release::ValidatedTleKeySessionV1,
+        expected_participant_index: u16,
+    ) -> Result<
+        iroha_core::tle_release::TlePartialReleaseCapabilityAttestationV1,
+        ParliamentTlePartialReleaseSignerBrokerBackendErrorV1,
+    >;
     /// Sign one exact broker-validated public release projection.
     fn sign_projected_partial_release(
         &self,

@@ -5809,6 +5809,8 @@ extension ToriiExplorerTransferDetails {
         case .number(let number):
             guard number.isFinite else { return nil }
             return String(number)
+        case .integer(let integer):
+            return integer
         default:
             return nil
         }
@@ -9011,6 +9013,14 @@ extension ToriiRuntimeUpgradeStatus: Decodable {
                                                            debugDescription: "ActivatedAt height must be a non-negative integer within range")
                 }
                 height = exactHeight
+            case .integer(let integer):
+                guard let parsed = UInt64(integer) else {
+                    throw DecodingError.dataCorruptedError(
+                        in: container,
+                        debugDescription: "ActivatedAt height must fit UInt64"
+                    )
+                }
+                height = parsed
             case .string(let string):
                 guard let parsed = UInt64(string) else {
                     throw DecodingError.dataCorruptedError(in: container,
@@ -17515,6 +17525,7 @@ public enum ToriiMetricsResponse: Equatable, Sendable {
 public enum ToriiJSONValue: Codable, Sendable, Equatable {
     case string(String)
     case number(Double)
+    case integer(String)
     case bool(Bool)
     case array([ToriiJSONValue])
     case object([String: ToriiJSONValue])
@@ -17528,6 +17539,17 @@ public enum ToriiJSONValue: Codable, Sendable, Equatable {
                 self = .string(stringValue)
             } else if let boolValue = try? container.decode(Bool.self) {
                 self = .bool(boolValue)
+            } else if let integerValue = try? container.decode(UInt128.self) {
+                if integerValue > 9_007_199_254_740_991 {
+                    self = .integer(String(integerValue))
+                } else if let doubleValue = try? container.decode(Double.self) {
+                    self = .number(doubleValue)
+                } else {
+                    throw DecodingError.dataCorruptedError(
+                        in: container,
+                        debugDescription: "Unsupported JSON number"
+                    )
+                }
             } else if let doubleValue = try? container.decode(Double.self) {
                 self = .number(doubleValue)
             } else if let arrayValue = try? container.decode([ToriiJSONValue].self) {
@@ -17551,6 +17573,17 @@ public enum ToriiJSONValue: Codable, Sendable, Equatable {
             try container.encode(string)
         case .number(let number):
             try container.encode(number)
+        case .integer(let integer):
+            guard let value = UInt128(integer), String(value) == integer else {
+                throw EncodingError.invalidValue(
+                    integer,
+                    .init(
+                        codingPath: encoder.codingPath,
+                        debugDescription: "integer must be a canonical UInt128 decimal"
+                    )
+                )
+            }
+            try container.encode(value)
         case .bool(let bool):
             try container.encode(bool)
         case .array(let array):
@@ -17760,7 +17793,7 @@ public struct ToriiStatusPayload: Decodable, Sendable, Equatable {
         switch value {
         case .bool(let bool):
             return bool ? 1 : 0
-        case .number:
+        case .number, .integer:
             guard let parsed = value.normalizedInt64 else {
                 throw ToriiClientError.invalidPayload("status field `\(field)` must be numeric")
             }

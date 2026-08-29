@@ -23,6 +23,15 @@ pub const SCCP_REPLAY_SMT_SHARD_COUNT_V1: usize = 256;
 pub const SCCP_REPLAY_SMT_DEPTH_V1: usize = 248;
 /// Maximum number of explicitly encoded non-default siblings.
 pub const SCCP_REPLAY_SMT_MAX_SIBLINGS_V1: usize = SCCP_REPLAY_SMT_DEPTH_V1;
+/// Maximum canonical Norito size accepted for one sparse replay witness.
+///
+/// The largest V1 witness carries 248 explicit 32-byte siblings; 16 KiB leaves
+/// ample fixed headroom for the Norito header and collection framing without
+/// making an untrusted HTTP allocation input-dependent.
+pub const SCCP_REPLAY_WITNESS_MAX_ENCODED_BYTES_V1: usize = 16 * 1024;
+/// Maximum canonical padded-base64 length of one sparse replay witness.
+pub const SCCP_REPLAY_WITNESS_MAX_BASE64_BYTES_V1: usize =
+    4 * SCCP_REPLAY_WITNESS_MAX_ENCODED_BYTES_V1.div_ceil(3);
 
 /// Closed replay boundary and operation inventory.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
@@ -163,16 +172,16 @@ impl SccpReplayActorV1 {
 #[norito(tag = "principal", content = "identity")]
 pub enum SccpReplayPrincipalV1 {
     /// Canonical domainless SORA account identifier.
-    #[codec(index = 1)]
+    #[codec(index = 0)]
     SoraAccount(AccountId),
     /// Raw 20-byte EVM address.
-    #[codec(index = 2)]
+    #[codec(index = 1)]
     Evm([u8; 20]),
     /// Raw 20-byte TRON account payload, excluding the `0x41` prefix.
-    #[codec(index = 3)]
+    #[codec(index = 2)]
     Tron([u8; 20]),
     /// Canonical TON workchain and account identifier.
-    #[codec(index = 4)]
+    #[codec(index = 3)]
     Ton(SccpTonAccountV1),
 }
 
@@ -273,6 +282,18 @@ impl SccpSparseMerkleWitnessV1 {
             sibling_bitmap: [0; 32],
             siblings: Vec::new(),
         }
+    }
+
+    /// Validate the canonical compressed sibling representation.
+    ///
+    /// This checks the representation independently of a particular replay
+    /// key or current shard root. State-dependent path checks remain part of
+    /// [`SccpReplayForestV1::occupy`] and the membership verifiers.
+    pub fn validate(&self) -> Result<(), SccpReplayAccumulatorError> {
+        if self.expected_shard_root == [0; 32] {
+            return Err(SccpReplayAccumulatorError::NonCanonicalWitness);
+        }
+        validate_and_expand_siblings(self, &sccp_replay_empty_hashes_v1()).map(|_| ())
     }
 }
 
@@ -905,6 +926,28 @@ mod tests {
             Err(SccpReplayAccumulatorError::StaleRoot)
         );
         assert_eq!(forest, SccpReplayForestV1::default());
+    }
+
+    #[test]
+    fn standalone_witness_validation_checks_canonical_shape() {
+        let mut witness = empty_witness();
+        witness.expected_shard_root = [0; 32];
+        assert_eq!(
+            witness.validate(),
+            Err(SccpReplayAccumulatorError::NonCanonicalWitness)
+        );
+
+        witness.expected_shard_root = [0x88; 32];
+        witness
+            .validate()
+            .expect("standalone validation does not require the current state root");
+
+        witness.sibling_bitmap[0] = 1;
+        witness.siblings.push([0x77; 32]);
+        assert_eq!(
+            witness.validate(),
+            Err(SccpReplayAccumulatorError::NonCanonicalWitness)
+        );
     }
 
     #[test]

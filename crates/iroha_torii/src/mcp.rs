@@ -752,7 +752,6 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
     tools.push(iroha_node_query_projection_checkpoint_publish_tool());
     tools.push(iroha_node_query_projection_shard_catalog_tool());
     tools.push(iroha_node_query_projection_checkpoint_tool());
-    tools.push(iroha_sumeragi_pacemaker_tool());
     tools.push(iroha_da_ingest_tool());
     tools.push(iroha_da_proof_policies_tool());
     tools.push(iroha_da_proof_policy_snapshot_tool());
@@ -1211,7 +1210,6 @@ fn is_audited_manual_read_tool_name(name: &str) -> bool {
             | "iroha.parameters.get"
             | "iroha.node.capabilities"
             | "iroha.node.query_projection_checkpoint"
-            | "iroha.sumeragi.pacemaker"
             | "iroha.da.proof_policies"
             | "iroha.da.proof_policy_snapshot"
             | "iroha.runtime.abi.active"
@@ -1989,12 +1987,6 @@ async fn handle_named_tool_call(
             match dispatch_iroha_node_query_projection_checkpoint(&app, inbound_headers, arguments)
                 .await
             {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
-        "iroha.sumeragi.pacemaker" => {
-            match dispatch_iroha_sumeragi_pacemaker(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
@@ -4904,7 +4896,6 @@ declare_mcp_dispatch_wrappers! {
         dispatch_iroha_parameters_get => "/v1/parameters";
         dispatch_iroha_node_capabilities => "/v1/node/capabilities";
         dispatch_iroha_node_query_projection_checkpoint => "/v1/node/query/projection/checkpoint";
-        dispatch_iroha_sumeragi_pacemaker => "/v1/sumeragi/pacemaker";
         dispatch_iroha_da_proof_policies => "/v1/da/proof-policies";
         dispatch_iroha_da_proof_policy_snapshot => "/v1/da/proof-policies/snapshot";
         dispatch_iroha_runtime_abi_active => "/v1/runtime/abi/active";
@@ -9487,13 +9478,6 @@ fn iroha_node_query_projection_checkpoint_tool() -> ToolSpec {
         "/v1/node/query/projection/checkpoint",
     )
 }
-fn iroha_sumeragi_pacemaker_tool() -> ToolSpec {
-    simple_manual_get_tool(
-        "iroha.sumeragi.pacemaker",
-        "Fetch pacemaker status (`/v1/sumeragi/pacemaker`).",
-        "/v1/sumeragi/pacemaker",
-    )
-}
 fn iroha_da_ingest_tool() -> ToolSpec {
     simple_manual_raw_body_post_tool(
         "iroha.da.ingest",
@@ -10587,7 +10571,6 @@ mod tests {
             iroha_parameters_get_tool(),
             iroha_node_capabilities_tool(),
             iroha_node_query_projection_checkpoint_tool(),
-            iroha_sumeragi_pacemaker_tool(),
             iroha_da_proof_policies_tool(),
             iroha_da_proof_policy_snapshot_tool(),
             iroha_runtime_abi_active_tool(),

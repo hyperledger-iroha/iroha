@@ -6880,7 +6880,7 @@ mod tests {
             .execute(&ALICE_ID, &mut stx)
             .expect("mint asset");
         stx.apply();
-        let _ = sblock.commit();
+        let _ = sblock.commit_world_overlay_for_testing();
         let state_view = state.view();
         // Default params
         let params = QueryParams {
@@ -6977,7 +6977,7 @@ mod tests {
             .execute(&ALICE_ID, &mut stx)
             .expect("mint asset");
         stx.apply();
-        let _ = sblock.commit();
+        let _ = sblock.commit_world_overlay_for_testing();
         let state_view = state.view();
         // Canonical iterable-query bundle: Accounts + payload FindAccountsWithAsset.
         let params = QueryParams {
@@ -7077,7 +7077,7 @@ mod tests {
                 .execute(&ALICE_ID, &mut stx)
                 .expect("mint asset for BOB");
             stx.apply();
-            let _ = sblock.commit();
+            let _ = sblock.commit_world_overlay_for_testing();
             (state, handle, ad_id)
         }
         fn drain_accounts(

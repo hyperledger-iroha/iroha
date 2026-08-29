@@ -415,7 +415,9 @@ async fn alias_resolve_rejects_account_label_without_authoritative_binding() {
                 .insert(authority.clone(), labels);
         }
         tx.apply();
-        block.commit().expect("commit rekey record removal");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit rekey record removal");
     }
     let request = routing::AliasResolveRequestDto {
         alias: alias.to_string(),
@@ -470,7 +472,9 @@ async fn alias_resolve_rejects_rekey_record_without_authoritative_binding() {
                 ),
             );
         tx.apply();
-        block.commit().expect("commit rekey record");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit rekey record");
     }
     let request = routing::AliasResolveRequestDto {
         alias: alias.to_string(),
@@ -633,7 +637,9 @@ async fn ram_lfe_program_policies_list_registered_program() {
     let mut tx = block.transaction();
     register_and_activate_program_policy(&authority, &mut tx, &program_policy);
     tx.apply();
-    block.commit().expect("commit block");
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit block");
     let response = handler_ram_lfe_program_policies(
         State(app),
         HeaderMap::new(),
@@ -718,7 +724,9 @@ async fn ram_lfe_execute_returns_receipt() {
     let mut tx = block.transaction();
     register_and_activate_program_policy(&authority, &mut tx, &program_policy);
     tx.apply();
-    block.commit().expect("commit block");
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit block");
     let response = handler_ram_lfe_execute(
         State(app),
         HeaderMap::new(),
@@ -789,7 +797,9 @@ async fn ram_lfe_receipt_verify_reports_valid_receipt_and_output_match() {
     let mut tx = block.transaction();
     register_and_activate_program_policy(&authority, &mut tx, &program_policy);
     tx.apply();
-    block.commit().expect("commit block");
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit block");
     let ciphertext = encrypted_identifier_ciphertext(
         &program_policy,
         b"receipt-verify-input",
@@ -857,7 +867,9 @@ async fn ram_lfe_receipt_verify_rejects_expired_receipt() {
     let mut tx = block.transaction();
     register_and_activate_program_policy(&authority, &mut tx, &program_policy);
     tx.apply();
-    block.commit().expect("commit block");
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit block");
     let ciphertext = encrypted_identifier_ciphertext(
         &program_policy,
         b"receipt-verify-input",
@@ -935,7 +947,9 @@ async fn identifier_policies_lists_registered_policy() {
     let mut tx = block.transaction();
     register_and_activate_identifier_policy_bundle(&authority, &mut tx, &policy, &program_policy);
     tx.apply();
-    block.commit().expect("commit block");
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit block");
     let response =
         handler_identifier_policies(State(app), HeaderMap::new(), crate::loopback_connect_info())
             .await
@@ -1003,7 +1017,9 @@ async fn identifier_policies_expose_programmed_ram_fhe_profile() {
     let mut tx = block.transaction();
     register_and_activate_identifier_policy_bundle(&authority, &mut tx, &policy, &program_policy);
     tx.apply();
-    block.commit().expect("commit block");
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit block");
     let response =
         handler_identifier_policies(State(app), HeaderMap::new(), crate::loopback_connect_info())
             .await
@@ -1132,7 +1148,9 @@ async fn identifier_resolve_returns_bound_account() {
     .execute(&authority, &mut tx)
     .expect("claim identifier");
     tx.apply();
-    block.commit().expect("commit block");
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit block");
     let response = handler_identifier_resolve(
         State(app),
         HeaderMap::new(),
@@ -1246,7 +1264,9 @@ async fn identifier_resolve_returns_bound_account_with_programmed_backend() {
     .execute(&authority, &mut tx)
     .expect("claim identifier");
     tx.apply();
-    block.commit().expect("commit block");
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit block");
     let response = handler_identifier_resolve(
         State(app),
         HeaderMap::new(),
@@ -1355,7 +1375,9 @@ async fn identifier_resolve_accepts_bfv_encrypted_input() {
     .execute(&authority, &mut tx)
     .expect("claim identifier");
     tx.apply();
-    block.commit().expect("commit block");
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit block");
     let response = handler_identifier_resolve(
         State(app),
         HeaderMap::new(),
@@ -1434,7 +1456,9 @@ async fn identifier_resolve_rejects_malformed_bfv_without_panicking() {
             &program_policy,
         );
         tx.apply();
-        block.commit().expect("commit block");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit block");
     }
     let mut malformed = norito::to_bytes(
         &encrypt_identifier_from_seed(
@@ -1546,7 +1570,9 @@ async fn identifier_claim_receipt_normalizes_phone_input() {
     let mut tx = block.transaction();
     register_and_activate_identifier_policy_bundle(&authority, &mut tx, &policy, &program_policy);
     tx.apply();
-    block.commit().expect("commit block");
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit block");
     let encrypted_input = encrypted_identifier_ciphertext(
         &program_policy,
         b"+15551234567",
@@ -1655,7 +1681,9 @@ async fn identifier_receipt_lookup_returns_persisted_claim() {
     .execute(&authority, &mut tx)
     .expect("claim identifier");
     tx.apply();
-    block.commit().expect("commit block");
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit block");
     let response = handler_identifier_receipt_lookup(
         State(app),
         HeaderMap::new(),

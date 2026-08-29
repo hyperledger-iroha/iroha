@@ -286,6 +286,9 @@ fn validate_block_transaction_admission(
 ) -> Result<crate::tx::StatefulAdmission, TransactionRejectionReason> {
     let privacy_intent_binding = crate::privacy::signed_privacy_transaction_intent_binding_v1(tx)
         .map_err(TransactionRejectionReason::Validation)?;
+    let private_settlement_carrier_binding =
+        crate::private_settlement::carrier::signed_private_settlement_carrier_binding_v1(tx)
+            .map_err(TransactionRejectionReason::Validation)?;
     let canary_wire_identity =
         crate::smartcontracts::isi::offline::signed_kagemusha_taira_canary_wire_identity_v1(tx)
             .map_err(TransactionRejectionReason::Validation)?;
@@ -293,6 +296,7 @@ fn validate_block_transaction_admission(
         crate::smartcontracts::isi::offline::signed_lifecycle_entrypoint_context(tx)
             .map_err(TransactionRejectionReason::Validation)?;
     state_tx.bind_privacy_transaction_intent_v1(privacy_intent_binding);
+    state_tx.bind_private_settlement_carrier_v1(private_settlement_carrier_binding);
     state_tx.kagemusha_taira_canary_external_entrypoint = true;
     state_tx.kagemusha_taira_canary_wire_identity = canary_wire_identity;
     state_tx.kagemusha_release_lifecycle_entrypoint = lifecycle_entrypoint;
@@ -11495,8 +11499,12 @@ pub(crate) mod valid {
                 Self::validate_sccp_commitment_root(block)?;
             }
             state_block
-                .transactions
-                .insert_block(block.entrypoint_hashes().collect(), block_height);
+                .stage_canonical_carrier_membership(block.entrypoint_hashes(), block_height)
+                .map_err(|error| {
+                    Self::execution_context_error(format!(
+                        "failed to stage canonical carrier membership: {error}"
+                    ))
+                })?;
             if let (Some(timings), Some(start)) = (timings.as_deref_mut(), start) {
                 let elapsed = to_ms(start.elapsed());
                 timings.execution_tx_apply_ms = elapsed;
@@ -15481,8 +15489,12 @@ pub(crate) mod valid {
                 timings.execution_tx_apply_other_ms = apply_ms.saturating_sub(known_apply_ms);
             }
             state_block
-                .transactions
-                .insert_block(block.entrypoint_hashes().collect(), block_height);
+                .stage_canonical_carrier_membership(block.entrypoint_hashes(), block_height)
+                .map_err(|error| {
+                    Self::execution_context_error(format!(
+                        "failed to stage canonical carrier membership: {error}"
+                    ))
+                })?;
             state_block
                 .resolve_queue_plan_pending_obligations_from_block(block)
                 .map_err(|error| {

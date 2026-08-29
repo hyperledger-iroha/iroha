@@ -136,7 +136,10 @@ use crate::privacy_engines::{
         ZK_ACE_PRIVACY_MAX_PROOF_BYTES_V1, ZkAcePrivacyWitnessV1, prove_zk_ace_privacy_v1_with_rng,
         verify_zk_ace_privacy_v1,
     },
-    zk_ace_stark::{QUERY_COUNT as ZK_ACE_QUERY_COUNT_V1, TRACE_LOG2 as ZK_ACE_TRACE_LOG2_V1},
+    zk_ace_stark::{
+        FRI_ROUNDS as ZK_ACE_FRI_ROUNDS_V1, QUERY_COUNT as ZK_ACE_QUERY_COUNT_V1,
+        TRACE_LOG2 as ZK_ACE_TRACE_LOG2_V1,
+    },
     zk_ams::{
         MAX_ZK_AMS_BATCH_ADMISSION_PROOF_BYTES_V1, MAX_ZK_AMS_LSAG_PROOF_BYTES_V1,
         ZK_AMS_MAX_ADMISSION_BATCH_SIZE_V1, ZK_AMS_MAX_RING_SIZE_V1, ZK_AMS_MIN_RING_SIZE_V1,
@@ -1481,8 +1484,8 @@ fn release_statement_context_from_compiled_profile_v1(
     }
 }
 const ZK_ACE_RELEASE_TRACE_ROWS_V1: u64 = 4_096;
-const ZK_ACE_RELEASE_QUERY_COUNT_V1: u64 = 108;
-const ZK_ACE_RELEASE_FRI_ROUNDS_V1: u64 = 12;
+const ZK_ACE_RELEASE_QUERY_COUNT_V1: u64 = 136;
+const ZK_ACE_RELEASE_FRI_ROUNDS_V1: u64 = 11;
 fn run_zk_ace_stage_v1(
     case_kind: PrivacyReleaseCaseKindV1,
 ) -> Result<StageMaterialV1, PrivacyReleaseEvidenceErrorClassV1> {
@@ -1500,7 +1503,8 @@ fn run_zk_ace_stage_v1(
         .ok_or(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
     let query_count = u64::try_from(ZK_ACE_QUERY_COUNT_V1)
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
-    let fri_rounds = u64::from(ZK_ACE_TRACE_LOG2_V1);
+    let fri_rounds = u64::try_from(ZK_ACE_FRI_ROUNDS_V1)
+        .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
     let proof_bytes = u64::try_from(proof.len())
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
     let proof_ceiling = u64::from(ZK_ACE_PRIVACY_MAX_PROOF_BYTES_V1);

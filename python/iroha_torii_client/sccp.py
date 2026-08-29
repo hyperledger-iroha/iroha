@@ -69,6 +69,10 @@ _DESTINATION_ARTIFACT_TYPE_NAME = (
 _NATIVE_INBOUND_PROOF_TYPE_NAME = (
     "iroha_sccp::native_admission::SccpNativeInboundMessageProofV1"
 )
+_REPLAY_WITNESS_TYPE_NAME = (
+    "iroha_data_model::bridge::sccp_replay::SccpSparseMerkleWitnessV1"
+)
+_MAX_REPLAY_WITNESS_BYTES = 16 * 1024
 _MAX_U64 = (1 << 64) - 1
 _MAX_U128 = (1 << 128) - 1
 _MAX_TON_COINS = (1 << 120) - 1
@@ -164,8 +168,29 @@ _CAPABILITY_PATHS = MappingProxyType(
         "message_bundle_path": "/v1/sccp/proofs/message/{message_id}",
         "proof_request_path": "/v1/sccp/proof-requests/{message_id}",
         "recent_messages_path": "/v1/sccp/messages/recent",
+        "sora_outbound_material_path": "/v1/sccp/routes/{source_profile}/{route_id}/{asset_key}/{revision}/sora-outbound-material",
         "proof_submit_path": "/v1/bridge/proofs/submit",
         "native_message_submit_path": "/v1/bridge/messages",
+    }
+)
+
+_BRIDGE_RESPONSE_BACKENDS = MappingProxyType(
+    {
+        "ethereum-mainnet": frozenset(
+            {"evm-groth16-bn254-v1", "bridge/sccp/native/ethereum-beacon-v1"}
+        ),
+        "bsc-mainnet": frozenset(
+            {"evm-groth16-bn254-v1", "bridge/sccp/native/bsc-parlia-v1"}
+        ),
+        "ton-mainnet": frozenset(
+            {
+                "ton-groth16-bls12381-v1",
+                "bridge/sccp/native/ton-masterchain-v1",
+            }
+        ),
+        "tron-mainnet": frozenset(
+            {"tron-groth16-bn254-v1", "bridge/sccp/native/tron-dpos-v1"}
+        ),
     }
 )
 
@@ -280,6 +305,7 @@ class SccpCapabilities:
     message_bundle_path: str
     proof_request_path: str
     recent_messages_path: str
+    sora_outbound_material_path: str
     registry_limits: SccpRegistryLimits
     resource_limits: SccpResourceLimits
     proof_submit_path: Optional[str]
@@ -1217,6 +1243,7 @@ def normalize_sccp_capabilities(value: Any) -> SccpCapabilities:
             "message_bundle_path",
             "proof_request_path",
             "recent_messages_path",
+            "sora_outbound_material_path",
             "registry_limits",
             "resource_limits",
             "proof_submit_path",
@@ -1231,6 +1258,7 @@ def normalize_sccp_capabilities(value: Any) -> SccpCapabilities:
             "message_bundle_path",
             "proof_request_path",
             "recent_messages_path",
+            "sora_outbound_material_path",
             "registry_limits",
             "resource_limits",
         }
@@ -1262,6 +1290,10 @@ def normalize_sccp_capabilities(value: Any) -> SccpCapabilities:
         or "",
         recent_messages_path=_capability_path(
             record["recent_messages_path"], "recent_messages_path"
+        )
+        or "",
+        sora_outbound_material_path=_capability_path(
+            record["sora_outbound_material_path"], "sora_outbound_material_path"
         )
         or "",
         registry_limits=_normalize_registry_limits(record["registry_limits"]),
@@ -2874,11 +2906,14 @@ def normalize_bridge_message_submit_payload(value: Any) -> Dict[str, Any]:
                 "signature_b64",
                 "transaction_payload_b64",
                 "native_proof_b64",
+                "replay_witness_b64",
                 "creation_time_ms",
             }
         ),
         "bridge message submit",
-        frozenset({"authority", "fee_payment", "native_proof_b64"}),
+        frozenset(
+            {"authority", "fee_payment", "native_proof_b64", "replay_witness_b64"}
+        ),
     )
     native_proof = _canonical_base64(
         record["native_proof_b64"], "bridge message submit.native_proof_b64"
@@ -2887,6 +2922,17 @@ def normalize_bridge_message_submit_payload(value: Any) -> Dict[str, Any]:
         native_proof,
         context="bridge message submit.native_proof_b64",
         expected_type_name=_NATIVE_INBOUND_PROOF_TYPE_NAME,
+        expected_padding_length=0,
+    )
+    replay_witness = _canonical_base64(
+        record["replay_witness_b64"],
+        "bridge message submit.replay_witness_b64",
+        maximum_bytes=_MAX_REPLAY_WITNESS_BYTES,
+    )
+    validate_norito_frame(
+        replay_witness,
+        context="bridge message submit.replay_witness_b64",
+        expected_type_name=_REPLAY_WITNESS_TYPE_NAME,
         expected_padding_length=0,
     )
     creation_time = (
@@ -2901,6 +2947,7 @@ def normalize_bridge_message_submit_payload(value: Any) -> Dict[str, Any]:
         ),
         **_detached_signing_state(record, "bridge message submit", creation_time),
         "native_proof_b64": record["native_proof_b64"],
+        "replay_witness_b64": record["replay_witness_b64"],
     }
     if creation_time is not None:
         result["creation_time_ms"] = creation_time
@@ -2955,8 +3002,8 @@ def normalize_sccp_bridge_submit_response(
     if counterparty[3] or counterparty[2] != domain:
         raise ValueError("bridge submit response counterparty profile/domain disagree")
     backend = _text(record["backend"], "backend", 128)
-    if re.fullmatch(r"bridge/[a-z0-9/_-]+", backend) is None:
-        raise ValueError("bridge submit response.backend is not canonical")
+    if backend not in _BRIDGE_RESPONSE_BACKENDS[counterparty[0]]:
+        raise ValueError("bridge submit response.backend does not match the counterparty")
     range_start = _integer(record["range_start_height"], "range_start_height", 1)
     range_end = _integer(record["range_end_height"], "range_end_height", range_start)
     creation_time = _integer(record["creation_time_ms"], "creation_time_ms", 1)

@@ -28,7 +28,7 @@ const PARTIAL_ROUNDS: usize = 57;
 // Pinned round constants followed by the MDS matrix, encoded as
 // fixed-width little-endian words and decoded entirely at compile time.
 const POSEIDON_TABLE_BYTES: &[u8; 1_632] =
-    include_bytes!("assets/poseidon2_goldilocks_width3_v1.bin");
+    include_bytes!("assets/poseidon_goldilocks_width3_v1.bin");
 const fn read_poseidon_u64_le(bytes: &[u8; 1_632], offset: usize) -> u64 {
     u64::from_le_bytes([
         bytes[offset],
@@ -286,36 +286,36 @@ impl Default for PoseidonSponge {
 mod tests {
     use super::*;
 
-    fn legacy_pow5(x: u64) -> u64 {
+    fn insecure_pow5_reference(x: u64) -> u64 {
         let x2 = mul(x, x);
         let x4 = mul(x2, x2);
         mul(x4, x)
     }
 
-    fn legacy_permute(state: &mut [u64; STATE_WIDTH]) {
+    fn insecure_pow5_permute_reference(state: &mut [u64; STATE_WIDTH]) {
         for (round, constants) in ROUND_CONSTANTS.iter().enumerate() {
             for (word, constant) in state.iter_mut().zip(constants) {
                 *word = add(*word, *constant);
             }
             if (FULL_ROUNDS_HALF..FULL_ROUNDS_HALF + PARTIAL_ROUNDS).contains(&round) {
-                state[0] = legacy_pow5(state[0]);
+                state[0] = insecure_pow5_reference(state[0]);
             } else {
                 for word in state.iter_mut() {
-                    *word = legacy_pow5(*word);
+                    *word = insecure_pow5_reference(*word);
                 }
             }
             apply_mds(state);
         }
     }
 
-    fn legacy_hash_field_elements(elements: &[u64]) -> u64 {
+    fn insecure_pow5_hash_reference(elements: &[u64]) -> u64 {
         let mut state = [0u64; STATE_WIDTH];
         let mut chunks = elements.chunks_exact(RATE);
         for chunk in &mut chunks {
             for (idx, &value) in chunk.iter().enumerate() {
                 state[idx] = add(state[idx], value);
             }
-            legacy_permute(&mut state);
+            insecure_pow5_permute_reference(&mut state);
         }
         let remainder = chunks.remainder();
         let mut block = [0u64; RATE];
@@ -324,7 +324,7 @@ mod tests {
         for (idx, &value) in block.iter().enumerate() {
             state[idx] = add(state[idx], value);
         }
-        legacy_permute(&mut state);
+        insecure_pow5_permute_reference(&mut state);
         state[0]
     }
 
@@ -368,15 +368,15 @@ mod tests {
         assert_ne!(left, right);
         assert!(left < FIELD_MODULUS && right < FIELD_MODULUS);
         assert_eq!(
-            legacy_pow5(add(left, first_constant)),
-            legacy_pow5(add(right, first_constant))
+            insecure_pow5_reference(add(left, first_constant)),
+            insecure_pow5_reference(add(right, first_constant))
         );
         assert_eq!(
-            legacy_hash_field_elements(&[left, 0]),
+            insecure_pow5_hash_reference(&[left, 0]),
             0xd531_eb7d_e55b_545a
         );
         assert_eq!(
-            legacy_hash_field_elements(&[right, 0]),
+            insecure_pow5_hash_reference(&[right, 0]),
             0xd531_eb7d_e55b_545a
         );
         assert_eq!(hash_field_elements(&[left, 0]), 0xf0ec_69fb_cdb7_5c7a);

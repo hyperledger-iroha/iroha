@@ -22,6 +22,9 @@ SPEC.loader.exec_module(worker)
 AUTH_KEY = bytes(range(1, 33))
 PROTOCOL = "iroha-jindo-polynomial-commitment-v1"
 OPERATION = "jindo_polynomial_evaluation_v1"
+SETTLEMENT_PROTOCOL = "atomic-private-settlement-v1"
+SETTLEMENT_GENESIS = b"\x10" * 32
+SETTLEMENT_PROOF_BINDING = b"\x25" * 32
 
 
 class CapturePipe:
@@ -76,6 +79,18 @@ def binding() -> worker.PrivacyWalletWitnessBindingV1:
     )
 
 
+def settlement_binding() -> worker.PrivacyWalletWitnessBindingV1:
+    return worker.PrivacyWalletWitnessBindingV1(
+        network_id=SETTLEMENT_GENESIS,
+        signer_wallet_id="settlement-wallet-1",
+        protocol_id=SETTLEMENT_PROTOCOL,
+        compiled_profile_digest=b"\x22" * 32,
+        public_intent_digest=SETTLEMENT_PROOF_BINDING,
+        nonce=b"\x33" * 32,
+        signed_release_authority_digest=b"\x44" * 32,
+    )
+
+
 def put_text(value: str) -> bytes:
     encoded = value.encode("utf-8")
     return struct.pack(">H", len(encoded)) + encoded
@@ -125,6 +140,43 @@ def signed_payload(*, network_id: bytes = b"\x11" * 32) -> bytes:
             b"\xa3" * 32,
             b"\xa4" * 32,
             struct.pack(">IIIII", 100, 200, 220, len(adaptive), len(versioned)),
+        )
+    )
+
+
+def settlement_lease_payload(*, handle: bytes = b"\xd1" * 32) -> bytes:
+    return b"".join(
+        (
+            b"\x04",
+            handle,
+            struct.pack(">Q", 50_000),
+            put_text("settlement-wallet-1"),
+            SETTLEMENT_PROOF_BINDING,
+            b"\x62" * 32,
+            b"\x63" * 32,
+            b"\x64" * 32,
+        )
+    )
+
+
+def settlement_proof_payload(
+    statement: bytes,
+    capsule: bytes,
+    *,
+    genesis: bytes = SETTLEMENT_GENESIS,
+) -> bytes:
+    return b"".join(
+        (
+            b"\x05",
+            put_text("settlement-wallet-1"),
+            genesis,
+            SETTLEMENT_PROOF_BINDING,
+            b"\x62" * 32,
+            b"\x63" * 32,
+            b"\x64" * 32,
+            put_bytes_u32(statement),
+            put_bytes_u32(b"public-stark-proof"),
+            put_bytes_u32(capsule),
         )
     )
 
@@ -191,6 +243,20 @@ def test_generic11_worker_registry_is_closed_and_ordered() -> None:
         ("iroha-ivm-private-note-stark-v1", "ivm_private_note_action_v1"),
         ("pq-masp-stark-v1", "pq_masp_note_action_v1"),
     ]
+
+
+def test_atomic_private_settlement_has_purpose_separated_commands_and_errors() -> None:
+    assert [int(command) for command in worker.PrivacyWalletWorkerCommandV1] == list(
+        range(1, 10)
+    )
+    assert worker.PrivacyWalletWorkerCommandV1.IMPORT_PRIVATE_SETTLEMENT == 6
+    assert worker.PrivacyWalletWorkerCommandV1.INSPECT_PRIVATE_SETTLEMENT == 7
+    assert worker.PrivacyWalletWorkerCommandV1.CANCEL_PRIVATE_SETTLEMENT == 8
+    assert worker.PrivacyWalletWorkerCommandV1.PROVE_PRIVATE_SETTLEMENT == 9
+    assert worker.PrivacyWalletWorkerErrorCodeV1.INVALID_PRIVATE_SETTLEMENT_BUNDLE == 30
+    assert worker.PrivacyWalletWorkerErrorCodeV1.NATIVE_PRIVATE_SETTLEMENT_PROOF_FAILED == 31
+    assert SETTLEMENT_PROTOCOL not in worker.PRIVACY_GENERIC11_WORKER_OPERATION_SCHEMAS_V1
+    assert settlement_binding().network_id == SETTLEMENT_GENESIS
 
 
 def test_public_intent_digest_matches_the_rust_domain_contract() -> None:
@@ -274,6 +340,37 @@ def test_import_transports_only_absolute_path_and_public_binding(
     assert witness_sentinel not in payload
 
 
+def test_private_settlement_import_transports_only_path_and_public_binding(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    client, process = controller(
+        monkeypatch,
+        tmp_path,
+        response_frame(
+            worker.PrivacyWalletWorkerCommandV1.IMPORT_PRIVATE_SETTLEMENT,
+            1,
+            settlement_lease_payload(),
+        ),
+    )
+    credential_path = tmp_path / "owner-only.apwb"
+    witness_sentinel = b"settlement-spending-secret-must-never-cross-ipc"
+    credential_path.write_bytes(witness_sentinel)
+    credential_path.chmod(0o600)
+
+    lease = client.import_private_settlement_credential(
+        credential_path, settlement_binding(), ttl_millis=30_000
+    )
+    assert isinstance(lease, worker.PrivateSettlementWalletLeaseV1)
+    assert lease.handle.value[0] & 0x80 != 0
+    assert lease.proof_binding_digest == SETTLEMENT_PROOF_BINDING
+    [(command, sequence, payload)] = written_frames(process)
+    assert command == worker.PrivacyWalletWorkerCommandV1.IMPORT_PRIVATE_SETTLEMENT
+    assert sequence == 1
+    assert os.fspath(credential_path).encode() in payload
+    assert SETTLEMENT_PROTOCOL.encode() in payload
+    assert witness_sentinel not in payload
+
+
 def test_inspect_rejects_a_substituted_handle_and_terminates_session(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -345,6 +442,87 @@ def test_execute_api_has_no_witness_or_bundle_byte_parameter_and_returns_typed_p
     assert (command, sequence) == (worker.PrivacyWalletWorkerCommandV1.EXECUTE, 1)
     assert b'{"public":"intent"}' in payload
     assert b'{"public":"plan"}' in payload
+
+
+def test_private_settlement_prove_accepts_only_public_norito_and_checks_exact_response(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    parameters = inspect.signature(
+        worker.PrivacyWalletWorkerControllerV1.prove_private_settlement
+    ).parameters
+    assert "witness" not in parameters
+    assert "execution_bundle" not in parameters
+    assert "owner_bundle" not in parameters
+    assert set(parameters) == {
+        "self",
+        "handle",
+        "binding",
+        "manifest_norito",
+        "statement_norito",
+        "audit_capsule_norito",
+        "audit_policy_norito",
+        "canonical_genesis_hash",
+        "current_height",
+    }
+    manifest = b"manifest\0norito"
+    statement = b"statement\0norito"
+    capsule = b"capsule\0norito"
+    policy = b"policy\0norito"
+    client, process = controller(
+        monkeypatch,
+        tmp_path,
+        response_frame(
+            worker.PrivacyWalletWorkerCommandV1.PROVE_PRIVATE_SETTLEMENT,
+            1,
+            settlement_proof_payload(statement, capsule),
+        ),
+    )
+    result = client.prove_private_settlement(
+        worker.PrivacyWalletWitnessHandleV1(b"\xd1" * 32),
+        settlement_binding(),
+        manifest_norito=manifest,
+        statement_norito=statement,
+        audit_capsule_norito=capsule,
+        audit_policy_norito=policy,
+        canonical_genesis_hash=SETTLEMENT_GENESIS,
+        current_height=41,
+    )
+    assert isinstance(result, worker.PrivateSettlementPreparedProofV1)
+    assert result.statement_norito == statement
+    assert result.audit_capsule_norito == capsule
+    assert result.proof == b"public-stark-proof"
+    [(command, sequence, payload)] = written_frames(process)
+    assert command == worker.PrivacyWalletWorkerCommandV1.PROVE_PRIVATE_SETTLEMENT
+    assert sequence == 1
+    for public_object in (manifest, statement, capsule, policy):
+        assert public_object in payload
+
+
+def test_private_settlement_proof_substitution_terminates_the_session(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    client, process = controller(
+        monkeypatch,
+        tmp_path,
+        response_frame(
+            worker.PrivacyWalletWorkerCommandV1.PROVE_PRIVATE_SETTLEMENT,
+            1,
+            settlement_proof_payload(b"substituted", b"capsule\0norito"),
+        ),
+    )
+    with pytest.raises(worker.PrivacyWalletWorkerErrorV1, match="substituted"):
+        client.prove_private_settlement(
+            worker.PrivacyWalletWitnessHandleV1(b"\xd1" * 32),
+            settlement_binding(),
+            manifest_norito=b"manifest\0norito",
+            statement_norito=b"statement\0norito",
+            audit_capsule_norito=b"capsule\0norito",
+            audit_policy_norito=b"policy\0norito",
+            canonical_genesis_hash=SETTLEMENT_GENESIS,
+            current_height=41,
+        )
+    assert client.closed
+    assert process.killed
 
 
 def test_same_display_label_cannot_substitute_a_different_network_id(

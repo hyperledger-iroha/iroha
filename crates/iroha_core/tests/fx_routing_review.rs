@@ -269,7 +269,9 @@ fn fixture(active_sns_alias: Option<&str>) -> Fixture {
     .execute(&ALICE_ID, &mut transaction)
     .expect("exact CanManageFxCorridors grant must install the valid policy");
     transaction.apply();
-    block.commit().expect("policy setup block must commit");
+    block
+        .commit_world_overlay_for_testing()
+        .expect("policy setup block must commit");
     Fixture {
         state,
         router: ConfigLaneRouter::new(policy, dataspaces, lanes),

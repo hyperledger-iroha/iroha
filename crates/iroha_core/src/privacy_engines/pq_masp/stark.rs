@@ -108,26 +108,26 @@ const PQ_MASP_PARAMETERS_V1: aggregate::AggregateStarkParametersV1 =
     };
 pub(crate) const PQ_MASP_DOMAINS_V1: aggregate::AggregateStarkDomainsV1 =
     aggregate::AggregateStarkDomainsV1 {
-    digest_context: TransparentStarkDigestContextV1::new(
-        PrivacyProtocolIdV1::PqMaspStarkV1,
-        b"pq-masp-stark-profile-v1",
-    ),
-    base_leaf: b"pq-masp-stark-base-leaf-v1",
-    base_node: b"pq-masp-stark-base-node-v1",
-    aux_leaf: b"pq-masp-stark-aux-leaf-v1",
-    aux_node: b"pq-masp-stark-aux-node-v1",
-    composition_leaf: b"pq-masp-stark-composition-leaf-v1",
-    composition_node: b"pq-masp-stark-composition-node-v1",
-    fri_leaf: b"pq-masp-stark-fri-leaf-v1",
-    fri_node: b"pq-masp-stark-fri-node-v1",
-    layout_label: b"pq-masp-stark-layout-v1",
-    base_root_label: b"pq-masp-stark-base-root-v1",
-    aux_root_label: b"pq-masp-stark-aux-root-v1",
-    composition_root_label: b"pq-masp-stark-composition-root-v1",
-    fri_root_label: b"pq-masp-stark-fri-root-v1",
-    fri_beta_label: b"pq-masp-stark-fri-beta-v1",
-    query_seed: b"pq-masp-stark-query-seed-v1",
-};
+        digest_context: TransparentStarkDigestContextV1::new(
+            PrivacyProtocolIdV1::PqMaspStarkV1,
+            b"pq-masp-stark-profile-v1",
+        ),
+        base_leaf: b"pq-masp-stark-base-leaf-v1",
+        base_node: b"pq-masp-stark-base-node-v1",
+        aux_leaf: b"pq-masp-stark-aux-leaf-v1",
+        aux_node: b"pq-masp-stark-aux-node-v1",
+        composition_leaf: b"pq-masp-stark-composition-leaf-v1",
+        composition_node: b"pq-masp-stark-composition-node-v1",
+        fri_leaf: b"pq-masp-stark-fri-leaf-v1",
+        fri_node: b"pq-masp-stark-fri-node-v1",
+        layout_label: b"pq-masp-stark-layout-v1",
+        base_root_label: b"pq-masp-stark-base-root-v1",
+        aux_root_label: b"pq-masp-stark-aux-root-v1",
+        composition_root_label: b"pq-masp-stark-composition-root-v1",
+        fri_root_label: b"pq-masp-stark-fri-root-v1",
+        fri_beta_label: b"pq-masp-stark-fri-beta-v1",
+        query_seed: b"pq-masp-stark-query-seed-v1",
+    };
 fn pq_masp_protocol_v1() -> ProofManagedNoteStarkProtocolV1 {
     ProofManagedNoteStarkProtocolV1 {
         parameters: PQ_MASP_PARAMETERS_V1,

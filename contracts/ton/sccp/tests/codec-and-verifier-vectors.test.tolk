@@ -496,8 +496,10 @@ get fun `test pre-message reserves and bounded excesses preserve old balance`() 
     expect(sccpPendingCapacityAvailable(SCCP_PENDING_OPERATION_CAP)).toEqual(false);
     expect(sccpMintFitsSupplyCap(90, 10, 100)).toEqual(true);
     expect(sccpMintFitsSupplyCap(90, 11, 100)).toEqual(false);
+    expect(sccpMintFitsSupplyCap(100, 1, 100)).toEqual(false);
     expect(sccpMintFitsSupplyCap(101, 1, 100)).toEqual(false);
     expect(sccpMintFitsSupplyCap(0, 0, 100)).toEqual(false);
+    expect(sccpMintFitsSupplyCap(0, 1, 0)).toEqual(false);
 }
 
 @test.fail_with(86)

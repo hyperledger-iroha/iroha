@@ -10,9 +10,9 @@ use crate::privacy_engines::zk_ace::{
     ZK_ACE_AIR_RELATION_SCHEMA_V1, ZK_ACE_AUTHORIZATION_PROJECTION_V1,
     ZK_ACE_DIGEST384_PARAMETER_SHA3_256_V1, ZK_ACE_FULL_ENGINE_AVAILABLE_V1,
     ZK_ACE_POSEIDON_PROFILE_V1, ZK_ACE_PRIVACY_MAX_PROOF_BYTES_V1,
-    ZK_ACE_PRIVACY_TRANSCRIPT_LABEL_V1, ZK_ACE_PROOF_WIRE_V1,
-    ZK_ACE_REQUIRED_QROM_QUALIFICATION_V1, ZK_ACE_SOURCE_PROFILE_V1,
-    zk_ace_compiled_profile_digest_v1, zk_ace_stark_profile_descriptor_v1,
+    ZK_ACE_PRIVACY_TRANSCRIPT_LABEL_V1, ZK_ACE_PROOF_WIRE_V1, ZK_ACE_QROM_CERTIFICATION_BLOCKER_V1,
+    ZK_ACE_SOURCE_PROFILE_V1, zk_ace_compiled_profile_digest_v1,
+    zk_ace_stark_profile_descriptor_v1,
 };
 use crate::privacy_engines::{
     anonymous_pgc::{
@@ -323,7 +323,7 @@ const ZK_AMS_PROVISION_EFFECT_SCHEMA_V1: &[u8] = b"issuer_id:32|registry_id:32|c
 const ZK_ACE_PROTOCOL_LABEL_V1: &[u8] = b"zk-ace-pq-authorization-v1";
 #[cfg(feature = "zk-stark")]
 const ZK_ACE_PARAMETER_SET_LABEL_V1: &[u8] =
-    b"goldilocks-dense-mds-poseidon-x7-transparent-stark-candidate-v1";
+    b"goldilocks-poseidon-x7-digest384-fp4-binary-fri8-q136-zk-ace-v1";
 const ZK_X509_PARAMETER_SET_LABEL_V1: &[u8] =
     b"goldilocks-fp4-sha256-p256-rfc5280-fixed-capacity-v1";
 const ZK_X509_PROOF_WIRE_LABEL_V1: &[u8] =
@@ -1536,7 +1536,7 @@ fn compiled_zk_ace_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPriv
             TRY_CRYPTO_PROVER_RANDOMNESS_POLICY_V1,
             poseidon_manifest,
             poseidon_profile,
-            ZK_ACE_REQUIRED_QROM_QUALIFICATION_V1,
+            ZK_ACE_QROM_CERTIFICATION_BLOCKER_V1,
             stark_profile,
             &compiled_profile_digest,
             &proof_bytes_encoded,
@@ -1553,7 +1553,7 @@ fn compiled_zk_ace_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPriv
             ZK_ACE_AUTHORIZATION_PROJECTION_V1,
             poseidon_manifest,
             poseidon_profile,
-            ZK_ACE_REQUIRED_QROM_QUALIFICATION_V1,
+            ZK_ACE_QROM_CERTIFICATION_BLOCKER_V1,
             stark_profile,
             &compiled_profile_digest,
             &proof_bytes_encoded,
@@ -1579,7 +1579,7 @@ fn compiled_zk_ace_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPriv
             ZK_ACE_AUTHORIZATION_PROJECTION_V1,
             poseidon_manifest,
             poseidon_profile,
-            ZK_ACE_REQUIRED_QROM_QUALIFICATION_V1,
+            ZK_ACE_QROM_CERTIFICATION_BLOCKER_V1,
             stark_profile,
             &compiled_profile_digest,
             &proof_bytes_encoded,
@@ -1602,7 +1602,7 @@ fn compiled_zk_ace_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPriv
             ZK_ACE_AUTHORIZATION_PROJECTION_V1,
             poseidon_manifest,
             poseidon_profile,
-            ZK_ACE_REQUIRED_QROM_QUALIFICATION_V1,
+            ZK_ACE_QROM_CERTIFICATION_BLOCKER_V1,
             stark_profile,
             &compiled_profile_digest,
             &proof_bytes_encoded,

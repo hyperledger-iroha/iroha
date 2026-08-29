@@ -7,17 +7,17 @@
 //! batching challenges, links the AIR at one quartic-extension DEEP point, runs Fp4 FRI, and carries
 //! no caller-selected backend, verifier key, parameter record, or legacy generic envelope.
 //!
-//! Production proving, verification, and profile activation remain fail-closed. The surrounding
-//! STARK still uses SHA-256 for Merkle commitments, Fiat--Shamir challenges, FRI transcripts, and
-//! query selection; its compiled 128-bit certificate is work-normalized only in the classical
-//! random-oracle model. The `pq_authorization` relation name does not assert a quantum-random-oracle
-//! reduction for that proof system.
+//! Every STARK commitment, Fiat--Shamir challenge, FRI phase, and query index uses the shared typed
+//! six-lane Goldilocks digest. The final binary-FRI geometry has an 8x LDE, Fp4 challenges, and 136
+//! distinct queries selected without replacement. Production remains fail-closed until an
+//! independent qROM Fiat--Shamir reduction and implementation review are registered.
 #[cfg(test)]
 use super::prover_randomness::TRY_CRYPTO_PROVER_RANDOMNESS_POLICY_V1;
 use super::zk_ace_stark::{
-    AIR_PUBLIC_TRANSCRIPT_SCHEMA_V1, COMPILED_STARK_PROFILE_DESCRIPTOR_V1, MAX_PROOF_BYTES,
-    MAX_ROM_QUERY_LOG2_V1, PROVABLE_SOUNDNESS_BITS_V1, ZkAceAirRelationInputsV1, ZkAceStarkError,
-    prove_zk_ace_stark_v1_with_rng, verify_zk_ace_stark_v1,
+    AIR_PUBLIC_TRANSCRIPT_SCHEMA_V1, COMPILED_STARK_PROFILE_DESCRIPTOR_V1,
+    MAX_CLASSICAL_ROM_QUERY_LOG2_V1, MAX_PROOF_BYTES, PROVABLE_SOUNDNESS_BITS_V1,
+    ZkAceAirRelationInputsV1, ZkAceStarkError, prove_zk_ace_stark_v1_with_rng,
+    verify_zk_ace_stark_v1,
 };
 #[cfg(test)]
 use iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V1_CIRCUIT_ID;
@@ -137,19 +137,18 @@ pub enum ZkAcePrivacyWitnessValidationErrorV1 {
 }
 /// Transcript family frozen into the dedicated proof implementation.
 pub const ZK_ACE_PRIVACY_TRANSCRIPT_LABEL_V1: &str = "iroha:privacy:zk-ace:transparent-stark:v1";
-/// Whether ZK-ACE is eligible for production proving, verification, or activation.
-///
-/// The commitment relation now exposes six independent lanes per public digest,
-/// but the enclosing STARK has not completed the required qROM migration,
-/// exact rational security calculation, and independent review.
+/// Whether the sole first-release ZK-ACE engine is production-qualified.
 pub const ZK_ACE_FULL_ENGINE_AVAILABLE_V1: bool = false;
-/// Release blocker that must be resolved before enabling the ZK-ACE engine.
-pub const ZK_ACE_REQUIRED_QROM_QUALIFICATION_V1: &[u8] = b"replace-stark-sha256-merkle-fiat-shamir-fri-and-query-transcripts-with-goldilocks-digest384-v1:binary-fri-blowup8:query-count-divisible-by8-and-at-least64:exact-rational-qrom-bound-at-least128-bits:independent-review-required";
+// TODO: Enable the production boundary only after the final qROM Fiat--Shamir
+// reduction, six-lane collision/multi-target accounting, and independent
+// implementation review are registered against this exact profile digest.
+/// Outstanding release evidence required before ZK-ACE can be activated.
+pub const ZK_ACE_QROM_CERTIFICATION_BLOCKER_V1: &[u8] = b"independent-qrom-fiat-shamir-reduction+six-lane-collision-and-multi-target-accounting+implementation-review-not-yet-registered";
 /// Source and relation description frozen into the compiled profile.
-pub const ZK_ACE_SOURCE_PROFILE_V1: &[u8] = b"iroha-native-rust:zk-ace:typed-statement+trusted-genesis:type-name-independent-ordered-length-framed-public-transcript:private-witness:masked-poseidon-x7-execution-trace:goldilocks-digest384-v1:identity-lanes6-independent:replay-lanes6-independent:typed-role-and-phase-domains:activation-disabled-pending-qrom-stark-qualification:fp4-deep-ali:independent-pre-batching-fri-mask:fp4-fri:producer=preflight+rand0.9-trycrypto-fixed64-reservoir-zeroize-poison-error-or-unwind+self-verify:v1";
+pub const ZK_ACE_SOURCE_PROFILE_V1: &[u8] = b"iroha-native-rust:zk-ace:typed-statement+trusted-genesis:type-name-independent-ordered-length-framed-public-transcript:private-witness:masked-poseidon-x7-execution-trace:goldilocks-digest384-v1:identity-lanes6-independent:replay-lanes6-independent:typed-catalog+protocol+profile+tree-role+phase+level+index+lane+counter-domains:fp4-deep-ali:independent-pre-batching-fri-mask:binary-fp4-fri:blowup8:queries136:classical-rom128:qrom-certification-pending:producer=preflight+rand0.9-trycrypto-fixed64-reservoir-zeroize-poison-error-or-unwind+self-verify:v1";
 /// Exact native proof wire description frozen into the compiled profile.
 pub const ZK_ACE_PROOF_WIRE_V1: &[u8] =
-    b"ZKA1:fixed-shape-big-endian:1341142:strict-exact:no-lengths:no-generic-envelope";
+    b"ZKA1:fixed-shape:scalars-big-endian:digest384-six-u64-little-endian:2131222:strict-exact:no-lengths:no-generic-envelope";
 /// Exact low-level AIR relation schema frozen into the compiled profile.
 pub const ZK_ACE_AIR_RELATION_SCHEMA_V1: &[u8] = AIR_PUBLIC_TRANSCRIPT_SCHEMA_V1;
 /// Exact typed authorization projection frozen into the compiled profile.
@@ -168,17 +167,18 @@ pub const ZK_ACE_PRIVACY_MAX_PROOF_BYTES_V1: u32 = MAX_PROOF_BYTES as u32;
 ///
 /// This is not a qROM security claim.
 pub const ZK_ACE_PROVABLE_SOUNDNESS_BITS_V1: u16 = PROVABLE_SOUNDNESS_BITS_V1;
-/// Maximum base-two random-oracle query-work exponent covered by that bound.
-pub const ZK_ACE_MAX_ROM_QUERY_LOG2_V1: u8 = MAX_ROM_QUERY_LOG2_V1;
-/// Frozen digest of every fail-closed verifier-profile field below.
+/// Maximum base-two classical random-oracle query-work exponent covered by that bound.
+pub const ZK_ACE_MAX_CLASSICAL_ROM_QUERY_LOG2_V1: u8 = MAX_CLASSICAL_ROM_QUERY_LOG2_V1;
+/// Frozen SHA-256 self-authentication digest of every verifier-profile field below.
 ///
-/// This digest authenticates the profile for regression testing; it is not
-/// an activation credential while [`ZK_ACE_FULL_ENGINE_AVAILABLE_V1`] is false.
+/// SHA-256 is retained here only as a non-STARK artifact checksum. It is never
+/// used by a Merkle tree, Fiat--Shamir transcript, challenge, FRI phase, or
+/// query sampler.
 pub const ZK_ACE_COMPILED_PROFILE_DIGEST_V1: [u8; 32] = [
-    0x4d, 0x98, 0x1d, 0xcb, 0xe9, 0xd9, 0x26, 0xf5, 0x45, 0xa6, 0xf4, 0x86, 0x96, 0x21, 0x2a, 0xaa,
-    0xa8, 0x3b, 0xb1, 0x94, 0x4f, 0xbf, 0x6e, 0xc7, 0xc8, 0x42, 0xc4, 0x64, 0xba, 0x35, 0x9a, 0x3d,
+    0x8b, 0x59, 0x7e, 0xf6, 0x41, 0xd2, 0xa7, 0xe8, 0x0a, 0x0b, 0xc7, 0x2b, 0x29, 0x74, 0x8b, 0x5b,
+    0x18, 0x71, 0xf4, 0x89, 0x8f, 0x0a, 0x19, 0x99, 0x28, 0xa0, 0xf8, 0x74, 0x00, 0x23, 0x90, 0x60,
 ];
-/// Return the frozen digest of the exact fail-closed verifier profile.
+/// Return the frozen digest of the exact verifier profile.
 #[must_use]
 pub const fn zk_ace_compiled_profile_digest_v1() -> [u8; 32] {
     ZK_ACE_COMPILED_PROFILE_DIGEST_V1
@@ -202,7 +202,7 @@ fn recompute_zk_ace_compiled_profile_digest_v1() -> [u8; 32] {
         ZK_ACE_DIGEST384_PARAMETER_SHA3_256_V1.as_bytes(),
     );
     hash_field(&mut hasher, ZK_ACE_POSEIDON_PROFILE_V1);
-    hash_field(&mut hasher, ZK_ACE_REQUIRED_QROM_QUALIFICATION_V1);
+    hash_field(&mut hasher, ZK_ACE_QROM_CERTIFICATION_BLOCKER_V1);
     hash_field(
         &mut hasher,
         ZK_ACE_PQ_AUTHORIZATION_V1_CIRCUIT_ID.as_bytes(),
@@ -266,12 +266,12 @@ fn validate_privacy_witness_relation(
     }
     Ok(())
 }
-/// Reject production proving while the ZK-ACE engine is unqualified.
+/// Fail closed at the production ZK-ACE proving boundary.
 ///
 /// # Errors
 ///
 /// Returns [`ZkAceNativeErrorV1::EngineUnavailable`] before validation or
-/// entropy use until the enclosing STARK has completed qROM qualification.
+/// entropy use while qROM qualification remains incomplete.
 pub fn prove_zk_ace_privacy_v1_with_rng<R: TryCryptoRng + ?Sized>(
     public_inputs: &ZkAcePrivacyPublicInputsV1,
     witness: &ZkAcePrivacyWitnessV1,
@@ -299,7 +299,7 @@ pub fn prove_zk_ace_privacy_v1_with_rng<R: TryCryptoRng + ?Sized>(
         }
     })
 }
-/// Reject production proving before requesting operating-system entropy.
+/// Fail closed before requesting operating-system entropy.
 ///
 /// # Errors
 ///
@@ -311,11 +311,12 @@ pub fn prove_zk_ace_privacy_v1(
 ) -> Result<Vec<u8>, ZkAceNativeErrorV1> {
     prove_zk_ace_privacy_v1_with_rng(public_inputs, witness, &mut rand::rngs::OsRng)
 }
-/// Reject production verification while the ZK-ACE engine is unqualified.
+/// Fail closed at the production ZK-ACE verification boundary.
 ///
 /// # Errors
 ///
-/// Returns [`ZkAceNativeErrorV1::EngineUnavailable`] before parsing any proof.
+/// Returns [`ZkAceNativeErrorV1::EngineUnavailable`] before proof parsing
+/// while qROM qualification remains incomplete.
 pub fn verify_zk_ace_privacy_v1(
     public_inputs: &ZkAcePrivacyPublicInputsV1,
     proof: &[u8],
@@ -363,8 +364,8 @@ fn validate_privacy_public_inputs(
 /// Native ZK-ACE construction or verification failure.
 #[derive(Debug, PartialEq, Eq, Error)]
 pub enum ZkAceNativeErrorV1 {
-    /// The enclosing proof system has not completed its release qualification.
-    #[error("ZK-ACE native engine is unavailable pending qROM STARK qualification")]
+    /// The qROM reduction and independent review have not been registered.
+    #[error("ZK-ACE native engine is unavailable pending qROM certification")]
     EngineUnavailable,
     /// The public-input wrapper is not the exact first-release schema.
     #[error("ZK-ACE public-input version must be 1, got {actual}")]
@@ -542,11 +543,14 @@ mod tests {
                 .ends_with(ZK_ACE_DIGEST384_PARAMETER_SHA3_256_V1)
         );
         assert!(!ZK_ACE_FULL_ENGINE_AVAILABLE_V1);
-        assert!(
-            core::str::from_utf8(ZK_ACE_REQUIRED_QROM_QUALIFICATION_V1)
-                .expect("qualification blocker is UTF-8")
-                .contains("qrom")
-        );
+        let stark_profile = core::str::from_utf8(zk_ace_stark_profile_descriptor_v1())
+            .expect("STARK profile is UTF-8");
+        assert!(stark_profile.contains("blowup=8"));
+        assert!(stark_profile.contains("queries=136"));
+        assert!(stark_profile.contains("digest384-six-u64-little-endian"));
+        assert!(stark_profile.contains("classical-rom-bcs-work-normalized-bits128"));
+        assert!(stark_profile.contains("qrom-qualification=unavailable"));
+        assert!(stark_profile.contains("activation=unavailable"));
         assert_eq!(
             recompute_zk_ace_compiled_profile_digest_v1(),
             ZK_ACE_COMPILED_PROFILE_DIGEST_V1
@@ -598,7 +602,11 @@ mod tests {
             Err(ZkAceNativeErrorV1::EngineUnavailable)
         );
         assert_eq!(
-            verify_zk_ace_privacy_v1(&public_inputs, &[1], ZK_ACE_PRIVACY_MAX_PROOF_BYTES_V1,),
+            verify_zk_ace_privacy_v1(&public_inputs, &[], ZK_ACE_PRIVACY_MAX_PROOF_BYTES_V1,),
+            Err(ZkAceNativeErrorV1::EngineUnavailable)
+        );
+        assert_eq!(
+            verify_zk_ace_privacy_v1(&public_inputs, &[1], ZK_ACE_PRIVACY_MAX_PROOF_BYTES_V1),
             Err(ZkAceNativeErrorV1::EngineUnavailable)
         );
     }

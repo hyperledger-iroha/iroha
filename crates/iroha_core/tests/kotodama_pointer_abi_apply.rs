@@ -186,7 +186,9 @@ fn kotodama_pointer_abi_asset_ops_end_to_end() {
             .expect("execution should succeed");
     }
     tx.apply();
-    block.commit().expect("commit block");
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit block");
     // Rough balance checks: after sample, net effect:
     // mint 1000 to from, transfer 500 from->to, burn 100 from to
     // from: 1000 - 500 = 500; to: +500 - 100 = 400
@@ -298,7 +300,9 @@ fn kotodama_state_loaded_pointers_drive_transfer_asset() {
     assert_eq!(transfer.destination, authority);
     assert_eq!(transfer.object, Quantity::from(1_u32));
     tx.apply();
-    block.commit().expect("commit block");
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit block");
     let balance = state
         .view()
         .world

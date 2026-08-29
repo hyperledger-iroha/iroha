@@ -638,6 +638,8 @@ fn install_contract_with_interface_and_lifecycle(
         );
     }
     tx.apply();
-    block.commit().expect("commit contract registration block");
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit contract registration block");
     contract_address
 }

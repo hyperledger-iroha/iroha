@@ -50,7 +50,7 @@ fn zk_referendum_auto_close_defers_decision_without_tally() {
         },
     );
     stx1.apply();
-    sblock1.commit().unwrap();
+    sblock1.commit_empty_block_for_testing().unwrap();
     let header2 = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
     let mut sblock2 = state.block(header2);
     let events_at_end = sblock2.world.take_external_events();
@@ -63,7 +63,7 @@ fn zk_referendum_auto_close_defers_decision_without_tally() {
         }),
         "inclusive h_end must remain open for ballots"
     );
-    sblock2.commit().unwrap();
+    sblock2.commit_empty_block_for_testing().unwrap();
     let header3 = BlockHeader::new(NonZeroU64::new(3).unwrap(), None, None, None, 0, 0);
     let mut sblock3 = state.block(header3);
     let events = sblock3.world.take_external_events();

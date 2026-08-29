@@ -58,9 +58,9 @@ use crate::privacy_engines::{
     transparent_stark::{
         GOLDILOCKS_GENERATOR_V1, GoldilocksDigest384V1, GoldilocksFieldV1 as F,
         GoldilocksFp4V1 as E, TransparentStarkErrorV1, TransparentTranscriptV1, append_u16_v1,
-        append_u32_v1, append_u64_v1, goldilocks_digest384_frame_v1,
-        goldilocks_evaluate_coset_v1, goldilocks_ifft_v1, goldilocks_primitive_root_v1,
-        transparent_stark_zk_mask_geometry_v1, verify_grinding_nonce_v1,
+        append_u32_v1, append_u64_v1, goldilocks_digest384_frame_v1, goldilocks_evaluate_coset_v1,
+        goldilocks_ifft_v1, goldilocks_primitive_root_v1, transparent_stark_zk_mask_geometry_v1,
+        verify_grinding_nonce_v1,
     },
 };
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -1934,10 +1934,10 @@ fn ca_schedule_digest_v1(
         0,
         &[&encoding],
     )
-        .map_err(map_transparent_proof_error_v1)
+    .map_err(map_transparent_proof_error_v1)
 }
-pub(crate) fn ca_profile_digest_v1(
-) -> Result<GoldilocksDigest384V1, ZkX509CaAccumulatorProofErrorV1> {
+pub(crate) fn ca_profile_digest_v1()
+-> Result<GoldilocksDigest384V1, ZkX509CaAccumulatorProofErrorV1> {
     let mut parameters = Vec::new();
     parameters.extend_from_slice(&CA_INNER_PROOF_MAGIC_V1);
     append_u16_v1(&mut parameters, ZK_X509_PROOF_VERSION_V1);
@@ -3263,6 +3263,7 @@ mod tests {
             ca_root_from_complete_spkis_v1,
         },
         sha_call_bus_stark::{ZkX509ShaCallBusLaneChallengesV1, ZkX509ShaCallPublicShapeV1},
+        stark::zk_x509_test_digest384_v1,
     };
     use rand::{SeedableRng as _, TryCryptoRng, TryRngCore, rngs::StdRng};
     use std::sync::OnceLock;
@@ -3329,7 +3330,7 @@ mod tests {
             [0x91; 32],
             [0x92; 32],
             core::array::from_fn(|index| {
-                [u8::try_from(0xa0 + index).expect("fixture root byte"); 32]
+                zk_x509_test_digest384_v1(u8::try_from(0xa0 + index).expect("fixture root byte"))
             }),
         )
     }

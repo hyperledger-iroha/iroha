@@ -1,7 +1,6 @@
 //! Column-aware FFT and LDE planner for FASTPQ.
 //!
-//! Stage 1 promotes the domain helpers introduced in Stage 0 into a
-//! multicolumn planner that drives the prover’s polynomial pipeline.  The
+//! The multicolumn planner drives the prover’s polynomial pipeline. The
 //! planner validates catalogue metadata, exposes parallel FFT/IFFT helpers, and evaluates
 //! coefficient columns onto the canonical low-degree extension coset.
 use crate::{
@@ -1161,111 +1160,78 @@ mod tests {
         planner.fft_columns(&mut gpu_columns);
         assert_eq!(cpu_columns, gpu_columns);
     }
-    #[test]
-    fn gpu_fft_matches_cpu_output_for_final_v1_parameters() {
-        let params = CANONICAL_PARAMETER_SETS[0];
-        let planner = Planner::new(&params);
-        let trace_log = params.trace_log_size - 3;
-        let trace_len = 1usize << trace_log;
-        let mut cpu_columns = vec![
-            (0..trace_len)
-                .map(|idx| (idx as u64).wrapping_mul(37).wrapping_add(11) % FIELD_MODULUS)
-                .collect::<Vec<u64>>(),
-        ];
-        let mut gpu_columns = cpu_columns.clone();
-        planner.fft_columns(&mut cpu_columns);
-        #[cfg(feature = "fastpq-gpu")]
-        {
-            match try_cuda_fft(
-                &mut gpu_columns,
-                trace_log,
-                planner.trace_domain(trace_log).generator,
-            ) {
-                Ok(()) => {}
-                Err(reason) => {
-                    eprintln!("skipping CUDA FFT latency-parameter comparison: {reason}");
-                    return;
-                }
-            }
-        }
-        #[cfg(not(feature = "fastpq-gpu"))]
-        planner.fft_columns(&mut gpu_columns);
-        assert_eq!(cpu_columns, gpu_columns);
-    }
     #[cfg(feature = "fastpq-gpu")]
     #[test]
-    fn concurrent_cuda_ffts_match_cpu_output_across_parameter_sets() {
-        let params_balanced = CANONICAL_PARAMETER_SETS[0];
-        let params_latency = CANONICAL_PARAMETER_SETS[0];
-        let planner_balanced = Planner::new(&params_balanced);
-        let planner_latency = Planner::new(&params_latency);
-        let trace_log_balanced = params_balanced.trace_log_size - 2;
-        let trace_len_balanced = 1usize << trace_log_balanced;
-        let balanced_input = vec![
-            (0..trace_len_balanced)
+    fn concurrent_cuda_ffts_match_cpu_output_across_trace_sizes() {
+        let params = CANONICAL_PARAMETER_SETS[0];
+        let planner = Planner::new(&params);
+        let large_trace_log = params.trace_log_size - 2;
+        let large_trace_len = 1usize << large_trace_log;
+        let large_input = vec![
+            (0..large_trace_len)
                 .map(|idx| (idx as u64).wrapping_mul(11).wrapping_add(5) % FIELD_MODULUS)
                 .collect::<Vec<u64>>(),
-            (0..trace_len_balanced)
+            (0..large_trace_len)
                 .map(|idx| (idx as u64).wrapping_mul(19).wrapping_add(3) % FIELD_MODULUS)
                 .collect::<Vec<u64>>(),
         ];
-        let mut cpu_balanced = balanced_input.clone();
-        planner_balanced.fft_columns(&mut cpu_balanced);
-        let gpu_balanced = balanced_input;
-        let trace_log_latency = params_latency.trace_log_size - 3;
-        let trace_len_latency = 1usize << trace_log_latency;
-        let mut cpu_latency = vec![
-            (0..trace_len_latency)
+        let mut cpu_large = large_input.clone();
+        planner.fft_columns(&mut cpu_large);
+        let gpu_large = large_input;
+        let small_trace_log = params.trace_log_size - 3;
+        let small_trace_len = 1usize << small_trace_log;
+        let mut cpu_small = vec![
+            (0..small_trace_len)
                 .map(|idx| (idx as u64).wrapping_mul(37).wrapping_add(11) % FIELD_MODULUS)
                 .collect::<Vec<u64>>(),
         ];
-        planner_latency.fft_columns(&mut cpu_latency);
-        let gpu_latency = vec![
-            (0..trace_len_latency)
+        planner.fft_columns(&mut cpu_small);
+        let gpu_small = vec![
+            (0..small_trace_len)
                 .map(|idx| (idx as u64).wrapping_mul(37).wrapping_add(11) % FIELD_MODULUS)
                 .collect::<Vec<u64>>(),
         ];
         let barrier = Arc::new(Barrier::new(2));
-        let balanced_root = planner_balanced.trace_domain(trace_log_balanced).generator;
-        let latency_root = planner_latency.trace_domain(trace_log_latency).generator;
-        let (balanced_gpu, latency_gpu) = thread::scope(|scope| {
-            let balanced_barrier = Arc::clone(&barrier);
-            let balanced = scope.spawn(move || {
-                let mut columns = gpu_balanced;
-                balanced_barrier.wait();
-                try_cuda_fft(&mut columns, trace_log_balanced, balanced_root).map(|()| columns)
+        let large_root = planner.trace_domain(large_trace_log).generator;
+        let small_root = planner.trace_domain(small_trace_log).generator;
+        let (large_gpu, small_gpu) = thread::scope(|scope| {
+            let large_barrier = Arc::clone(&barrier);
+            let large = scope.spawn(move || {
+                let mut columns = gpu_large;
+                large_barrier.wait();
+                try_cuda_fft(&mut columns, large_trace_log, large_root).map(|()| columns)
             });
-            let latency_barrier = Arc::clone(&barrier);
-            let latency = scope.spawn(move || {
-                let mut columns = gpu_latency;
-                latency_barrier.wait();
-                try_cuda_fft(&mut columns, trace_log_latency, latency_root).map(|()| columns)
+            let small_barrier = Arc::clone(&barrier);
+            let small = scope.spawn(move || {
+                let mut columns = gpu_small;
+                small_barrier.wait();
+                try_cuda_fft(&mut columns, small_trace_log, small_root).map(|()| columns)
             });
             (
-                balanced
+                large
                     .join()
-                    .expect("balanced CUDA FFT thread should not panic"),
-                latency
+                    .expect("large CUDA FFT thread should not panic"),
+                small
                     .join()
-                    .expect("latency CUDA FFT thread should not panic"),
+                    .expect("small CUDA FFT thread should not panic"),
             )
         });
-        let balanced_gpu = match balanced_gpu {
+        let large_gpu = match large_gpu {
             Ok(columns) => columns,
             Err(reason) => {
                 eprintln!("skipping concurrent CUDA FFT comparison: {reason}");
                 return;
             }
         };
-        let latency_gpu = match latency_gpu {
+        let small_gpu = match small_gpu {
             Ok(columns) => columns,
             Err(reason) => {
                 eprintln!("skipping concurrent CUDA FFT comparison: {reason}");
                 return;
             }
         };
-        assert_eq!(cpu_balanced, balanced_gpu);
-        assert_eq!(cpu_latency, latency_gpu);
+        assert_eq!(cpu_large, large_gpu);
+        assert_eq!(cpu_small, small_gpu);
     }
     #[test]
     fn gpu_fft_split_matches_cpu_output_without_gpu() {
@@ -1408,125 +1374,87 @@ mod tests {
         let gpu = planner.lde_columns(&coeff_columns);
         assert_eq!(cpu, gpu);
     }
-    #[test]
-    fn gpu_lde_matches_cpu_output_for_final_v1_parameters() {
-        let params = CANONICAL_PARAMETER_SETS[0];
-        let planner = Planner::new(&params);
-        let trace_log = params.trace_log_size - 3;
-        let trace_len = 1usize << trace_log;
-        let value_columns = vec![
-            (0..trace_len)
-                .map(|idx| (idx as u64).wrapping_mul(41).wrapping_add(7) % FIELD_MODULUS)
-                .collect::<Vec<u64>>(),
-        ];
-        let mut coeff_columns = value_columns.clone();
-        planner.ifft_columns(&mut coeff_columns);
-        let cpu = planner.lde_columns(&coeff_columns);
-        #[cfg(feature = "fastpq-gpu")]
-        let gpu = match try_cuda_lde(
-            &coeff_columns,
-            trace_log,
-            planner.blowup_log(),
-            planner
-                .lde_domain(trace_log + planner.blowup_log())
-                .generator,
-            params.omega_coset,
-        ) {
-            Ok(columns) => columns,
-            Err(reason) => {
-                eprintln!("skipping CUDA LDE latency-parameter comparison: {reason}");
-                return;
-            }
-        };
-        #[cfg(not(feature = "fastpq-gpu"))]
-        let gpu = planner.lde_columns(&coeff_columns);
-        assert_eq!(cpu, gpu);
-    }
     #[cfg(feature = "fastpq-gpu")]
     #[test]
-    fn concurrent_cuda_ldes_match_cpu_output_across_parameter_sets() {
-        let params_balanced = CANONICAL_PARAMETER_SETS[0];
-        let params_latency = CANONICAL_PARAMETER_SETS[0];
-        let planner_balanced = Planner::new(&params_balanced);
-        let planner_latency = Planner::new(&params_latency);
-        let trace_log_balanced = params_balanced.trace_log_size - 1;
-        let trace_len_balanced = 1usize << trace_log_balanced;
-        let value_columns_balanced = vec![
-            (0..trace_len_balanced)
+    fn concurrent_cuda_ldes_match_cpu_output_across_trace_sizes() {
+        let params = CANONICAL_PARAMETER_SETS[0];
+        let planner = Planner::new(&params);
+        let large_trace_log = params.trace_log_size - 1;
+        let large_trace_len = 1usize << large_trace_log;
+        let value_columns_large = vec![
+            (0..large_trace_len)
                 .map(|idx| (idx as u64).wrapping_mul(7).wrapping_add(13) % FIELD_MODULUS)
                 .collect::<Vec<u64>>(),
-            (0..trace_len_balanced)
+            (0..large_trace_len)
                 .map(|idx| (idx as u64).wrapping_mul(23).wrapping_add(29) % FIELD_MODULUS)
                 .collect::<Vec<u64>>(),
         ];
-        let mut coeff_columns_balanced = value_columns_balanced.clone();
-        planner_balanced.ifft_columns(&mut coeff_columns_balanced);
-        let cpu_balanced = planner_balanced.lde_columns(&coeff_columns_balanced);
-        let trace_log_latency = params_latency.trace_log_size - 3;
-        let trace_len_latency = 1usize << trace_log_latency;
-        let value_columns_latency = vec![
-            (0..trace_len_latency)
+        let mut coeff_columns_large = value_columns_large.clone();
+        planner.ifft_columns(&mut coeff_columns_large);
+        let cpu_large = planner.lde_columns(&coeff_columns_large);
+        let small_trace_log = params.trace_log_size - 3;
+        let small_trace_len = 1usize << small_trace_log;
+        let value_columns_small = vec![
+            (0..small_trace_len)
                 .map(|idx| (idx as u64).wrapping_mul(41).wrapping_add(7) % FIELD_MODULUS)
                 .collect::<Vec<u64>>(),
         ];
-        let mut coeff_columns_latency = value_columns_latency.clone();
-        planner_latency.ifft_columns(&mut coeff_columns_latency);
-        let cpu_latency = planner_latency.lde_columns(&coeff_columns_latency);
+        let mut coeff_columns_small = value_columns_small.clone();
+        planner.ifft_columns(&mut coeff_columns_small);
+        let cpu_small = planner.lde_columns(&coeff_columns_small);
         let barrier = Arc::new(Barrier::new(2));
-        let balanced_lde_root = planner_balanced
-            .lde_domain(trace_log_balanced + planner_balanced.blowup_log())
-            .generator;
-        let latency_lde_root = planner_latency
-            .lde_domain(trace_log_latency + planner_latency.blowup_log())
-            .generator;
-        let (balanced_gpu, latency_gpu) = thread::scope(|scope| {
-            let balanced_barrier = Arc::clone(&barrier);
-            let balanced = scope.spawn(move || {
-                balanced_barrier.wait();
+        let blowup_log = planner.blowup_log();
+        let large_lde_root = planner.lde_domain(large_trace_log + blowup_log).generator;
+        let small_lde_root = planner.lde_domain(small_trace_log + blowup_log).generator;
+        let omega_coset = params.omega_coset;
+        let (large_gpu, small_gpu) = thread::scope(|scope| {
+            let large_barrier = Arc::clone(&barrier);
+            let large = scope.spawn(move || {
+                large_barrier.wait();
                 try_cuda_lde(
-                    &coeff_columns_balanced,
-                    trace_log_balanced,
-                    planner_balanced.blowup_log(),
-                    balanced_lde_root,
-                    params_balanced.omega_coset,
+                    &coeff_columns_large,
+                    large_trace_log,
+                    blowup_log,
+                    large_lde_root,
+                    omega_coset,
                 )
             });
-            let latency_barrier = Arc::clone(&barrier);
-            let latency = scope.spawn(move || {
-                latency_barrier.wait();
+            let small_barrier = Arc::clone(&barrier);
+            let small = scope.spawn(move || {
+                small_barrier.wait();
                 try_cuda_lde(
-                    &coeff_columns_latency,
-                    trace_log_latency,
-                    planner_latency.blowup_log(),
-                    latency_lde_root,
-                    params_latency.omega_coset,
+                    &coeff_columns_small,
+                    small_trace_log,
+                    blowup_log,
+                    small_lde_root,
+                    omega_coset,
                 )
             });
             (
-                balanced
+                large
                     .join()
-                    .expect("balanced CUDA LDE thread should not panic"),
-                latency
+                    .expect("large CUDA LDE thread should not panic"),
+                small
                     .join()
-                    .expect("latency CUDA LDE thread should not panic"),
+                    .expect("small CUDA LDE thread should not panic"),
             )
         });
-        let balanced_gpu = match balanced_gpu {
+        let large_gpu = match large_gpu {
             Ok(columns) => columns,
             Err(reason) => {
                 eprintln!("skipping concurrent CUDA LDE comparison: {reason}");
                 return;
             }
         };
-        let latency_gpu = match latency_gpu {
+        let small_gpu = match small_gpu {
             Ok(columns) => columns,
             Err(reason) => {
                 eprintln!("skipping concurrent CUDA LDE comparison: {reason}");
                 return;
             }
         };
-        assert_eq!(cpu_balanced, balanced_gpu);
-        assert_eq!(cpu_latency, latency_gpu);
+        assert_eq!(cpu_large, large_gpu);
+        assert_eq!(cpu_small, small_gpu);
     }
     #[test]
     fn gpu_lde_split_matches_cpu_output_without_gpu() {

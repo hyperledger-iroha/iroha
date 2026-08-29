@@ -29,7 +29,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut wsv = MockWorldStateView::new();
     wsv.grant_permission(&alice, PermissionToken::RegisterDomain);
     // No account index map needed for this sample (we pass pointers via TLVs)
-    let host = WsvHost::new_with_subject(wsv, alice.clone(), HashMap::new());
+    let host = WsvHost::new_with_subject(wsv, alice.clone());
     // 3) Create VM, attach host, load program
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);

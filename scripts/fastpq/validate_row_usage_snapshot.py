@@ -1,18 +1,17 @@
 #!/usr/bin/env python3
 """
-Validate FASTPQ row_usage snapshots for Stage7-3 evidence bundles.
+Validate current V1 FASTPQ row_usage snapshots for release evidence.
 
 Release engineering uses this helper from ci/check_fastpq_rollout.sh to ensure
-that every `row_usage/*.json` file attached to a rollout bundle advertises the
-per-selector row counts and transfer ratio required by the Stage7 telemetry/SLO
-contract before GPU lanes can be mandated.
+that every `row_usage/*.json` file attached to a rollout bundle carries the V1
+selector counts and transfer-ratio invariant before GPU lanes can be mandated.
 """
 from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 import sys
+from pathlib import Path
 from typing import Any, Sequence
 
 
@@ -20,15 +19,12 @@ COUNT_FIELDS = (
     "total_rows",
     "transfer_rows",
     "non_transfer_rows",
-    "mint_rows",
-    "burn_rows",
-    "role_grant_rows",
-    "role_revoke_rows",
     "meta_set_rows",
-    "permission_rows",
 )
 RATIO_FIELD = "transfer_ratio"
 RATIO_EPSILON = 1e-6
+MAX_V1_ROW_COUNT = (1 << 32) - 1
+ROW_USAGE_FIELDS = frozenset(COUNT_FIELDS + (RATIO_FIELD,))
 
 
 class ValidationContext:
@@ -44,14 +40,20 @@ class ValidationContext:
 
 
 class ValidationError(Exception):
-    """Raised when a snapshot violates the Stage7 row_usage contract."""
+    """Raised when a snapshot violates the current V1 row_usage contract."""
 
 
 def _require_int(field: str, value: Any, ctx: ValidationContext) -> int:
     if not isinstance(value, int) or isinstance(value, bool):
         raise ValidationError(f"{ctx.prefix()} row_usage.{field} must be an integer")
     if value < 0:
-        raise ValidationError(f"{ctx.prefix()} row_usage.{field} must be ≥ 0 (got {value})")
+        raise ValidationError(
+            f"{ctx.prefix()} row_usage.{field} must be ≥ 0 (got {value})"
+        )
+    if value > MAX_V1_ROW_COUNT:
+        raise ValidationError(
+            f"{ctx.prefix()} row_usage.{field} must be ≤ {MAX_V1_ROW_COUNT} (got {value})"
+        )
     return value
 
 
@@ -87,6 +89,12 @@ def validate_row_usage_snapshot(payload: Any, path: Path | None = None) -> None:
                 f"{path or '<memory>'} fastpq_batches[{index}] missing row_usage object"
             )
         ctx = ValidationContext(path=path, batch_index=index)
+        unexpected_fields = set(usage) - ROW_USAGE_FIELDS
+        if unexpected_fields:
+            raise ValidationError(
+                f"{ctx.prefix()} row_usage contains non-V1 fields: "
+                + ", ".join(sorted(unexpected_fields))
+            )
         for field in COUNT_FIELDS:
             if field not in usage:
                 raise ValidationError(f"{ctx.prefix()} row_usage.{field} missing")
@@ -109,6 +117,12 @@ def validate_row_usage_snapshot(payload: Any, path: Path | None = None) -> None:
                     f"{ctx.prefix()} transfer_rows + non_transfer_rows "
                     f"({transfer_rows + non_transfer_rows}) must equal total_rows ({total_rows})"
                 )
+        meta_set_rows = _require_int("meta_set_rows", usage["meta_set_rows"], ctx)
+        if meta_set_rows != non_transfer_rows:
+            raise ValidationError(
+                f"{ctx.prefix()} meta_set_rows ({meta_set_rows}) must equal "
+                f"non_transfer_rows ({non_transfer_rows})"
+            )
 
         ratio = _require_ratio(usage[RATIO_FIELD], ctx)
         expected_ratio = 0.0 if total_rows == 0 else transfer_rows / total_rows
@@ -118,13 +132,10 @@ def validate_row_usage_snapshot(payload: Any, path: Path | None = None) -> None:
                 f"transfer_rows / total_rows ({expected_ratio:.6f})"
             )
 
-        for field in COUNT_FIELDS[3:]:
-            _require_int(field, usage[field], ctx)
-
 
 def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Validate FASTPQ row_usage JSON snapshots for Stage7 rollouts."
+        description="Validate FASTPQ row_usage JSON snapshots for V1 release evidence."
     )
     parser.add_argument(
         "snapshots",

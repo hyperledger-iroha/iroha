@@ -165,7 +165,7 @@ mod taira_canary_context_tests {
             .1
             .expect("the matching sealed commitment is admitted at height one");
         commitment_block
-            .commit()
+            .commit_world_overlay_for_testing()
             .expect("commit the pending sealed canary envelope");
 
         let reveal_header = BlockHeader::new(

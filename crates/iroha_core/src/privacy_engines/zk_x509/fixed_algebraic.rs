@@ -19,9 +19,8 @@
 //! `native_size * width` matrix or an LDE table.
 use super::stark::ZK_X509_DIGEST_CONTEXT_V1;
 use crate::privacy_engines::transparent_stark::{
-    GOLDILOCKS_MODULUS_V1, GoldilocksDigest384V1, GoldilocksFieldV1 as F,
-    TransparentStarkErrorV1, goldilocks_batch_invert_v1, goldilocks_digest384_frame_v1,
-    goldilocks_primitive_root_v1,
+    GOLDILOCKS_MODULUS_V1, GoldilocksDigest384V1, GoldilocksFieldV1 as F, TransparentStarkErrorV1,
+    goldilocks_batch_invert_v1, goldilocks_digest384_frame_v1, goldilocks_primitive_root_v1,
 };
 use core::cmp::Ordering;
 use std::vec::Vec;
@@ -2686,8 +2685,7 @@ mod tests {
             width: 1,
             fields: vec![F(13), F(23)],
         };
-        let composite_digest =
-            GoldilocksDigest384V1::new([9_u64; 6]).expect("composite digest");
+        let composite_digest = GoldilocksDigest384V1::new([9_u64; 6]).expect("composite digest");
         let combined = ZkX509FixedAlgebraicOpeningsV1::concatenate_v1(
             composite_digest,
             &[left.clone(), right.clone()],
@@ -2749,15 +2747,13 @@ mod tests {
         );
         let over_profile_width = [
             ZkX509FixedAlgebraicOpeningsV1 {
-                schedule_digest: GoldilocksDigest384V1::new([3_u64; 6])
-                    .expect("first digest"),
+                schedule_digest: GoldilocksDigest384V1::new([3_u64; 6]).expect("first digest"),
                 query_indices: vec![0],
                 width: 300,
                 fields: vec![F::ZERO; 300],
             },
             ZkX509FixedAlgebraicOpeningsV1 {
-                schedule_digest: GoldilocksDigest384V1::new([4_u64; 6])
-                    .expect("second digest"),
+                schedule_digest: GoldilocksDigest384V1::new([4_u64; 6]).expect("second digest"),
                 query_indices: vec![0],
                 width: 173,
                 fields: vec![F::ZERO; 173],
@@ -2768,8 +2764,7 @@ mod tests {
             Err(ZkX509FixedAlgebraicErrorV1::InvalidWidth)
         );
         let maximum_width_part = ZkX509FixedAlgebraicOpeningsV1 {
-            schedule_digest: GoldilocksDigest384V1::new([5_u64; 6])
-                .expect("maximum-width digest"),
+            schedule_digest: GoldilocksDigest384V1::new([5_u64; 6]).expect("maximum-width digest"),
             query_indices: vec![0],
             width: ZK_X509_FIXED_ALGEBRAIC_MAX_WIDTH_V1,
             fields: vec![F::ZERO; usize::from(ZK_X509_FIXED_ALGEBRAIC_MAX_WIDTH_V1)],

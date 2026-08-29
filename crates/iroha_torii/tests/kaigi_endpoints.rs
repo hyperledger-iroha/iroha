@@ -197,7 +197,7 @@ fn build_app() -> (
     .0;
     let operator_key_pair = cfg.common.key_pair.clone();
     let da_receipt_signer = operator_key_pair.clone();
-    let torii = iroha_torii::Torii::new(
+    let torii = iroha_torii::Torii::new_with_handle(
         chain_id,
         network_id,
         kiso,
@@ -209,8 +209,11 @@ fn build_app() -> (
         state,
         da_receipt_signer,
         iroha_torii::OnlinePeersProvider::new(peers_rx),
-        telemetry_handle,
-        true,
+        None,
+        iroha_torii::MaybeTelemetry::from_profile(
+            Some(telemetry_handle),
+            iroha_config::parameters::actual::TelemetryProfile::Operator,
+        ),
     );
     (
         torii.api_router_for_tests(),

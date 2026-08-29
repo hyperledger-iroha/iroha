@@ -278,24 +278,28 @@ version 1, zero supply, and empty mint/burn replay dictionaries, plus route
 storage version 1, zero refund sequence, and empty nonce, replay, and pending
 dictionaries.
 
-The verified TON destination call uses one exact typed 14-cell
+The verified TON destination call uses one exact typed
 `SccpFinalizeFromTaira` body BOC. Its root contains the opcode, query id, V1
 schema, message id, and statement hash and references four linked public-signal
 cells split `3/3/3/2`, one proof root with fixed compressed `A/B/C` cells of
-`48/96/48` bytes, and one payload root with fixed
-`50/100/100/remainder` cells. Canonical transfer payloads are therefore bounded
-to 50 through 374 bytes, and generic snake-cell encodings are not accepted by
-the contract boundary.
+`48/96/48` bytes, one payload root with fixed `50/100/100/remainder` cells, and
+one bundle containing caller-supplied current-state replay witnesses for the
+bridge, Jetton master, and recipient wallet. Each witness uses one fixed header
+cell and a three-siblings-per-cell continuation when needed. Canonical transfer
+payloads are therefore bounded to 50 through 374 bytes, and generic snake-cell
+encodings are not accepted by the contract boundary.
 
 The TRON source route uses the exact
-`transferToTaira(bytes,uint256,uint64 expectedNonce)` ABI. Successful execution
-requires `expectedNonce == transferNonces(caller)`, writes that same value into
-the canonical payload, and increments only the caller's counter. Different
-senders may safely use the same nonce because the canonical payload and message
-id also commit the sender address. Native admission reconstructs the complete
-ABI call from the payload recipient, scaled amount, sender, and nonce, so the
-retired two-argument selector, a stale or future caller nonce, and an exhausted
-per-caller `uint64` nonce all fail closed.
+`transferToTaira(bytes,uint256,uint64 expectedNonce,bytes replayWitness)` ABI.
+Successful execution requires `expectedNonce == transferNonces(caller)`, writes
+that same value into the canonical payload, and increments only the caller's
+counter. Different senders may safely use the same nonce because the canonical
+payload and message id also commit the sender address. Native admission decodes
+the current-state replay witness from the successful call and reconstructs the
+complete canonical ABI call from the payload recipient, scaled amount, nonce,
+and that witness. The retired selectors, a stale or future caller nonce, an
+exhausted per-caller `uint64` nonce, and noncanonical witness encodings all fail
+closed.
 
 Every retained TRON revision in one exact lane must use a distinct source route
 address. Native transaction inclusion authenticates the call address and

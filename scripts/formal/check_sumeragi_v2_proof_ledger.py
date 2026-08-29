@@ -866,7 +866,7 @@ _TOTAL_GATE_CALL_ITEM_SHA256 = {
     # Refresh after atomic-reservation work stops touching v2_runner.rs.
     "successor_retry": "a99d3aec22c01501fabb4e6b90526ae066b6728ab78043301476653432fac5fd",
     "historical_certificate": "9028b1db75d71c3ab5e72573e5c3e7b46d92c0ffe4a1cd1805ebfde379fbdbfa",
-    "historical_body": "a69b056cbd06f0c554055cd153c49fbf41efe92a2826d9794db95f49a225c2a3",
+    "historical_body": "75eedb820154c955d3bcca947465defc336a10af31440eb13516464f924d8591",
     "terminal_application": "18c9adfc440c9e4302dd5e1b78c71beec18927bc30170ad1db8b4953d40df2b2",
 }
 
@@ -1229,9 +1229,10 @@ def _total_gate_call_sites(
                 hashes["historical_body"],
                 token_consumptions=("let _authorized_historical_pipeline = checked_transition.into_projection();",),
                 mutation_boundaries=(
+                    "exact_dequeue.lock(ingress)",
                     "output_guard.begin_fail_stop_operation()",
                     "ready_mutation.persist_exact_staged_successor()",
-                    "exact_dequeue.commit(ingress)",
+                    "exact_dequeue.commit()",
                     "durable_registry.commit_after_exact_dequeue(dequeued)",
                     "ready.commit()",
                     "executor.commit_lifecycle_certified_fetch_completion(executor_prepared, &authenticated)",
@@ -28937,6 +28938,35 @@ if let Some((key, owner_source)) = wire_key.as_ref().and_then(|key| {
     _require_rust_token_sequence(
         core_path,
         push,
+        """
+let is_timeout_vote = fair_v2_ingress_is_timeout_vote(&inbound);
+let action = match fair_v2_ingress_route_action(
+    &prior_evidence.attempts,
+    routes_candidate.as_ref(),
+) {
+    Ok(action) => action,
+    Err(NetworkReplyRouteError::Stale)
+        if is_timeout_vote
+            && routes_candidate
+                .as_ref()
+                .is_some_and(|routes| routes.len() == 1) =>
+    {
+        return Ok(FairV2IngressPushDisposition::Coalesced);
+    }
+    Err(_) => {
+        return Err(FairV2IngressPushError::rejected(
+            inbound,
+            FairV2IngressRejectReason::RouteOwnershipInvalid,
+        ));
+    }
+};
+""",
+        "only an exact one-route stale TimeoutVote retry may stutter without mutating retained route or ownership evidence",
+        errors,
+    )
+    _require_rust_token_sequence(
+        core_path,
+        push,
         _CORE_RUNTIME_TRANSPORT_TOKEN_SEQUENCES["route_atomic_commit"],
         "validated ingress route shadow commits atomically beside its exact ownership evidence",
         errors,
@@ -29486,31 +29516,27 @@ Some(
         "certified-fence reserve must cover direct CommitQC, TC, and CommitQC recovery response",
         errors,
     )
-    certified_fence_test_name = (
+    fair_ingress_tests = {}
+    for test_name, expected_sha256 in _PRODUCTION_FAIR_V2_INGRESS_TEST_ITEM_SHA256.items():
+        test_item = _require_rust_item(core_path, core_source, test_name, errors)
+        fair_ingress_tests[test_name] = test_item
+        _require_rust_item_context(
+            core_path,
+            test_item,
+            (("#", "[", "cfg", "(", "test", ")", "]", "mod", "authoritative_runtime_gate_tests"),),
+            f"authoritative fair-ingress regression {test_name}",
+            errors,
+            expected_attributes=("#[test]",),
+        )
+        _require_rust_item_token_sha256(
+            core_path,
+            test_item,
+            expected_sha256,
+            f"authoritative fair-ingress regression {test_name}",
+            errors,
+        )
+    certified_fence_test = fair_ingress_tests.get(
         "fair_v2_ingress_recommended_context_fits_default_disjoint_byte_partitions"
-    )
-    certified_fence_test = _require_rust_item(
-        core_path,
-        core_source,
-        certified_fence_test_name,
-        errors,
-    )
-    _require_rust_item_context(
-        core_path,
-        certified_fence_test,
-        (("#", "[", "cfg", "(", "test", ")", "]", "mod", "authoritative_runtime_gate_tests"),),
-        "canonical certified-fence byte-ceiling regression",
-        errors,
-        expected_attributes=("#[test]",),
-    )
-    _require_rust_item_token_sha256(
-        core_path,
-        certified_fence_test,
-        _PRODUCTION_FAIR_V2_INGRESS_TEST_ITEM_SHA256[
-            certified_fence_test_name
-        ],
-        "canonical certified-fence byte-ceiling regression",
-        errors,
     )
     _require_rust_token_sequence(
         core_path,
@@ -29535,6 +29561,52 @@ assert!(
 );
 """,
         "default certified partition must contain the protocol maximum",
+        errors,
+    )
+    stale_timeout_retry_test = fair_ingress_tests.get(
+        "fair_v2_ingress_coalesces_stale_timeout_vote_retry_without_regressing_route"
+    )
+    _require_rust_token_sequence(
+        core_path,
+        stale_timeout_retry_test,
+        """
+assert!(matches!(
+    ingress.try_push(inbound(stale_route)),
+    Ok(super::FairV2IngressPushDisposition::Coalesced)
+));
+assert_eq!(evidence.occurrence_count, 1);
+let retained = evidence
+    .current_reply_routes()
+    .expect("the newer reply-route snapshot remains attached");
+assert!(retained.iter().any(|route| route.same_delivery(&retained_route)));
+""",
+        "stale TimeoutVote retry must preserve the newer route and exact single admitted occurrence",
+        errors,
+    )
+    stale_non_timeout_test = fair_ingress_tests.get(
+        "fair_v2_ingress_rejects_stale_non_timeout_vote_route"
+    )
+    _require_rust_token_sequence(
+        core_path,
+        stale_non_timeout_test,
+        """
+let rejection = ingress.try_push(inbound(stale_route));
+assert!(matches!(
+    rejection,
+    Err(super::FairV2IngressPushError::Rejected(
+        super::FairV2IngressRejection {
+            reason: super::FairV2IngressRejectReason::RouteOwnershipInvalid,
+            ..
+        }
+    ))
+));
+let retained = delivered
+    .ingress_ownership()
+    .and_then(|evidence| evidence.current_reply_routes())
+    .expect("the newer reply-route snapshot remains attached");
+assert!(retained.iter().any(|route| route.same_delivery(&retained_route)));
+""",
+        "the stale-route exception must remain closed to response-capable non-TimeoutVote traffic",
         errors,
     )
 

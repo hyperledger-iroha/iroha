@@ -379,6 +379,12 @@ pub struct SccpTonMasterStorageReadbackV1 {
 pub struct SccpTonBreakerObservationRecordV1 {
     /// Exact governed route revision observed.
     pub route_key: SccpRouteKeyV1,
+    /// Exact retained native trust anchor that authenticated this observation.
+    ///
+    /// This nonzero hash is encoded immediately after `route_key` and before
+    /// the authenticated masterchain coordinate. Consequently the whole-record
+    /// compare-and-swap digest cannot be replayed under a different checkpoint.
+    pub authenticated_native_anchor_hash: [u8; 32],
     /// Finalized masterchain block authenticating both account openings.
     pub masterchain: SccpTonFinalizedMasterchainBlockV1,
     /// Route-account state opening.
@@ -426,6 +432,7 @@ impl SccpTonBreakerObservationRecordV1 {
     pub fn is_well_formed(&self) -> bool {
         let effective = self.route_storage.minting_disabled || self.master_storage.minting_disabled;
         self.route_key.is_well_formed()
+            && nonzero(&self.authenticated_native_anchor_hash)
             && self.masterchain.is_well_formed()
             && self
                 .route_account

@@ -72,6 +72,17 @@ def test_committed_lane_block_rejects_nonexact_certificate_cardinality(
         )
 
 
+def test_committed_lane_block_rejects_retired_direct_wsv_status() -> None:
+    with pytest.raises(RuntimeError, match="invalid execution status"):
+        _SumeragiV2StatusParser._committed_blocks(
+            [
+                _committed_lane_block(
+                    execution_status="state_applied_by_direct_execution"
+                )
+            ]
+        )
+
+
 def test_execution_commitment_preserves_exact_lane_finality_manifest() -> None:
     payload = _execution_commitment()
     assert all(

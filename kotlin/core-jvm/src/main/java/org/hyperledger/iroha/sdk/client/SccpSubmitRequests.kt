@@ -63,6 +63,7 @@ class SccpDestinationProofSubmitRequest(
 class SccpNativeMessageSubmitRequest(
     authority: String,
     nativeProofB64: String,
+    replayWitnessB64: String,
     feePayment: FeePaymentIntent,
     signatureB64: String? = null,
     transactionPayloadB64: String? = null,
@@ -85,6 +86,14 @@ class SccpNativeMessageSubmitRequest(
             SCCP_NATIVE_INBOUND_PROOF_SCHEMA_NAME,
         )
     }
+    val replayWitnessB64: String = replayWitnessB64.also {
+        validateCanonicalSccpNoritoBase64(
+            it,
+            "replayWitnessB64",
+            SCCP_MAX_REPLAY_WITNESS_BYTES,
+            SCCP_REPLAY_WITNESS_SCHEMA_NAME,
+        )
+    }
     val creationTimeMs: Long? = creationTimeMs?.also {
         require(it > 0) { "creationTimeMs must be positive" }
     }
@@ -98,6 +107,7 @@ class SccpNativeMessageSubmitRequest(
         "authority" to authority,
         "fee_payment" to feePayment.toJsonMap(),
         "native_proof_b64" to nativeProofB64,
+        "replay_witness_b64" to replayWitnessB64,
     ).also { output ->
         signatureB64?.let { output["signature_b64"] = it }
         transactionPayloadB64?.let { output["transaction_payload_b64"] = it }
@@ -111,13 +121,16 @@ internal const val SCCP_MAX_GROTH16_ARTIFACT_BYTES = 16 * 1024 * 1024 + 64 * 102
 internal const val SCCP_MAX_DESTINATION_ARTIFACT_BYTES =
     SCCP_MAX_GROTH16_ARTIFACT_BYTES + 64 * 1024
 internal const val SCCP_MAX_DESTINATION_ARTIFACT_BASE64_BYTES = 22_544_384
-private const val SCCP_MAX_NATIVE_PROOF_BYTES = 16 * 1024 * 1024
+internal const val SCCP_MAX_NATIVE_PROOF_BYTES = 16 * 1024 * 1024
+internal const val SCCP_MAX_REPLAY_WITNESS_BYTES = 16 * 1024
 internal const val SCCP_MAX_TRANSACTION_PAYLOAD_BYTES = 16 * 1024 * 1024
 private const val SCCP_MAX_DETACHED_SIGNATURE_BYTES = 16 * 1024
 internal const val SCCP_DESTINATION_ARTIFACT_SCHEMA_NAME =
     "iroha_data_model::bridge::BridgeSccpDestinationProofV1"
 internal const val SCCP_NATIVE_INBOUND_PROOF_SCHEMA_NAME =
     "iroha_sccp::native_admission::SccpNativeInboundMessageProofV1"
+internal const val SCCP_REPLAY_WITNESS_SCHEMA_NAME =
+    "iroha_data_model::bridge::sccp_replay::SccpSparseMerkleWitnessV1"
 internal val SCCP_PROOF_REQUEST_SCHEMA_NAMES = setOf(
     "iroha_sccp::SccpGroth16Bn254ProofRequestV1",
     "iroha_sccp::SccpTonGroth16Bls12381ProofRequestV1",

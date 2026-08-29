@@ -3,7 +3,7 @@ use crate::{
     gadgets::transfer::decode_transcripts,
     proof::{
         Proof, Prover, VerifyLimits, enforce_default_verify_batch_limits,
-        enforce_default_verify_limits, verify_with_semantics,
+        enforce_default_verify_limits, verify_with_default_limits_prechecked_and_semantics,
     },
     validate_batch_semantics,
 };
@@ -14,8 +14,8 @@ use iroha_data_model::{
     account::AccountId,
     asset::id::AssetDefinitionId,
     fastpq::{
-        FastpqOperationKind, FastpqPublicInputs, FastpqRolePermissionDelta, FastpqStateTransition,
-        FastpqTransitionBatch, TRANSFER_TRANSCRIPTS_METADATA_KEY,
+        FastpqOperationKind, FastpqPublicInputs, FastpqStateTransition, FastpqTransitionBatch,
+        TRANSFER_TRANSCRIPTS_METADATA_KEY,
     },
     nexus::{
         AxtEffectBinding, AxtFastpqBinding, AxtProofEnvelope, AxtRemoteSpendClaimV1, ProofBlob,
@@ -59,7 +59,11 @@ pub const AXT_FASTPQ_BATCH_SEAL_METADATA_KEY: &str = "axt_fastpq_batch_seal_v1";
 /// this relation because its descriptor binding is not recoverable.
 pub const AXT_FASTPQ_REMOTE_SPEND_CLAIMS_METADATA_KEY: &str = "axt_fastpq_remote_spend_claims_v1";
 /// Canonical FASTPQ parameter name used by maintained AXT flows.
-pub const DEFAULT_PARAMETER: &str = "fastpq-state-transition-stark-v1";
+pub const DEFAULT_PARAMETER: &str = fastpq_isi::FASTPQ_FINAL_V1_ID;
+/// Nominal first-release schema identity for the outer AXT proof payload.
+#[cfg(test)]
+const AXT_FASTPQ_PROOF_PAYLOAD_SCHEMA_NAME: &str =
+    "fastpq_prover::axt_binding::AxtFastpqProofPayloadV1";
 /// Maximum encoded AXT `FastPQ` batch/proof payload accepted before decoding.
 const DEFAULT_MAX_AXT_FASTPQ_PAYLOAD_BYTES: usize = 1024 * 1024;
 const AXT_STATEMENT_DOMAIN: &[u8] = b"fastpq:axt:statement:v1";
@@ -67,7 +71,7 @@ const AXT_BATCH_SEAL_DOMAIN: &[u8] = b"fastpq:axt:batch-seal:v1";
 const ENTRY_HASH_METADATA_KEY: &str = "entry_hash";
 /// `FastPQ` payload carried inside an [`AxtProofEnvelope`] proof field.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
-#[repr(C)]
+#[norito(schema_name = "fastpq_prover::axt_binding::AxtFastpqProofPayloadV1")]
 pub struct AxtFastpqProofPayload {
     /// Canonical transition batch proven by the embedded `FastPQ` proof.
     pub batch: FastpqTransitionBatch,
@@ -213,7 +217,7 @@ impl Prover {
     ) -> Result<Proof> {
         enforce_default_verify_batch_limits(batch)?;
         let canonical = require_canonical_binding(binding)?;
-        verify_batch_matches_binding(batch, &canonical)?;
+        verify_batch_matches_canonical_binding(batch, &canonical)?;
         let proof = self.prove_with_semantics(batch, axt_proof_semantics(&canonical)?)?;
         enforce_default_verify_limits(batch, &proof)?;
         Ok(proof)
@@ -263,8 +267,12 @@ pub fn verify_axt_bound_batch(
 ) -> Result<()> {
     enforce_default_verify_limits(batch, proof)?;
     let canonical = require_canonical_binding(binding)?;
-    verify_batch_matches_binding(batch, &canonical)?;
-    verify_with_semantics(batch, proof, axt_proof_semantics(&canonical)?)
+    verify_batch_matches_canonical_binding(batch, &canonical)?;
+    verify_with_default_limits_prechecked_and_semantics(
+        batch,
+        proof,
+        axt_proof_semantics(&canonical)?,
+    )
 }
 /// Decode the canonical AXT binding already embedded in a `FastPQ` batch.
 ///
@@ -278,7 +286,7 @@ pub fn verify_axt_bound_batch(
 pub fn embedded_axt_binding(batch: &TransitionBatch) -> Result<AxtFastpqBinding> {
     let encoded = required_metadata(batch, AXT_FASTPQ_BINDING_METADATA_KEY)?;
     let binding = decode_canonical_binding(encoded)?;
-    verify_batch_matches_binding(batch, &binding)?;
+    verify_batch_matches_canonical_binding(batch, &binding)?;
     Ok(binding)
 }
 /// Build an AXT proof envelope from an already AXT-bound batch and proof.
@@ -313,7 +321,12 @@ pub fn axt_proof_envelope_from_bound_batch(
                 .into(),
         });
     }
-    verify_axt_bound_batch(batch, &proof, &binding)?;
+    enforce_default_verify_limits(batch, &proof)?;
+    verify_with_default_limits_prechecked_and_semantics(
+        batch,
+        &proof,
+        axt_proof_semantics(&binding)?,
+    )?;
     let encoded_proof = encode_axt_fastpq_payload(batch, proof)?;
     enforce_axt_fastpq_payload_limit(&encoded_proof)?;
     Ok(AxtProofEnvelope {
@@ -511,8 +524,8 @@ pub fn verify_axt_proof_envelope(envelope: &AxtProofEnvelope) -> Result<AxtVerif
             details: "AXT proof envelope is missing fastpq_binding".into(),
         })?;
     enforce_axt_fastpq_payload_limit(&envelope.proof)?;
-    require_canonical_binding(binding)?;
-    if binding.source_dsid != envelope.dsid.as_u64() {
+    let canonical_binding = require_canonical_binding(binding)?;
+    if canonical_binding.source_dsid != envelope.dsid.as_u64() {
         return Err(Error::InvalidAxtBinding {
             details: "AXT proof envelope source_dsid does not match dsid".into(),
         });
@@ -541,7 +554,7 @@ pub fn verify_axt_proof_envelope(envelope: &AxtProofEnvelope) -> Result<AxtVerif
         proof,
     };
     require_canonical_axt_fastpq_payload(&envelope.proof, &payload)?;
-    verify_batch_matches_binding(&batch, binding)?;
+    verify_batch_matches_canonical_binding(&batch, &canonical_binding)?;
     let proof_bound_amount = proof_bound_committed_amount(&batch)?;
     let proof_bound_expiry = proof_bound_expiry_slot(&batch)?;
     if envelope.manifest_root != proof_bound_manifest_root(&batch)? {
@@ -563,9 +576,13 @@ pub fn verify_axt_proof_envelope(envelope: &AxtProofEnvelope) -> Result<AxtVerif
                     .into(),
         });
     }
-    verify_axt_bound_batch(&batch, &payload.proof, binding)?;
+    verify_with_default_limits_prechecked_and_semantics(
+        &batch,
+        &payload.proof,
+        axt_proof_semantics(&canonical_binding)?,
+    )?;
     Ok(AxtVerifiedProof {
-        statement_digest: axt_statement_digest(envelope, binding, &payload.batch)?,
+        statement_digest: axt_statement_digest(envelope, &canonical_binding, &payload.batch)?,
         proof_digest: Hash::new(&envelope.proof),
         old_root: batch.public_inputs.old_root,
         new_root: batch.public_inputs.new_root,
@@ -725,62 +742,18 @@ fn transition_batch_from_model_owned(dto: FastpqTransitionBatch) -> TransitionBa
 fn operation_to_model(operation: &OperationKind) -> FastpqOperationKind {
     match operation {
         OperationKind::Transfer => FastpqOperationKind::Transfer,
-        OperationKind::Mint => FastpqOperationKind::Mint,
-        OperationKind::Burn => FastpqOperationKind::Burn,
-        OperationKind::RoleGrant {
-            role_id,
-            permission_id,
-            epoch,
-        } => FastpqOperationKind::RoleGrant(FastpqRolePermissionDelta {
-            role_id: role_id.clone(),
-            permission_id: permission_id.clone(),
-            epoch: *epoch,
-        }),
-        OperationKind::RoleRevoke {
-            role_id,
-            permission_id,
-            epoch,
-        } => FastpqOperationKind::RoleRevoke(FastpqRolePermissionDelta {
-            role_id: role_id.clone(),
-            permission_id: permission_id.clone(),
-            epoch: *epoch,
-        }),
         OperationKind::MetaSet => FastpqOperationKind::MetaSet,
     }
 }
 fn operation_from_model(operation: &FastpqOperationKind) -> OperationKind {
     match operation {
         FastpqOperationKind::Transfer => OperationKind::Transfer,
-        FastpqOperationKind::Mint => OperationKind::Mint,
-        FastpqOperationKind::Burn => OperationKind::Burn,
-        FastpqOperationKind::RoleGrant(delta) => OperationKind::RoleGrant {
-            role_id: delta.role_id.clone(),
-            permission_id: delta.permission_id.clone(),
-            epoch: delta.epoch,
-        },
-        FastpqOperationKind::RoleRevoke(delta) => OperationKind::RoleRevoke {
-            role_id: delta.role_id.clone(),
-            permission_id: delta.permission_id.clone(),
-            epoch: delta.epoch,
-        },
         FastpqOperationKind::MetaSet => OperationKind::MetaSet,
     }
 }
 fn operation_from_model_owned(operation: FastpqOperationKind) -> OperationKind {
     match operation {
         FastpqOperationKind::Transfer => OperationKind::Transfer,
-        FastpqOperationKind::Mint => OperationKind::Mint,
-        FastpqOperationKind::Burn => OperationKind::Burn,
-        FastpqOperationKind::RoleGrant(delta) => OperationKind::RoleGrant {
-            role_id: delta.role_id,
-            permission_id: delta.permission_id,
-            epoch: delta.epoch,
-        },
-        FastpqOperationKind::RoleRevoke(delta) => OperationKind::RoleRevoke {
-            role_id: delta.role_id,
-            permission_id: delta.permission_id,
-            epoch: delta.epoch,
-        },
         FastpqOperationKind::MetaSet => OperationKind::MetaSet,
     }
 }
@@ -810,24 +783,26 @@ impl<'a> BindingContext<'a> {
         })
     }
 }
-fn verify_batch_matches_binding(batch: &TransitionBatch, binding: &AxtFastpqBinding) -> Result<()> {
-    let canonical = require_canonical_binding(binding)?;
-    let context = BindingContext::from_binding(&canonical)?;
-    if batch.parameter != canonical.parameter {
+fn verify_batch_matches_canonical_binding(
+    batch: &TransitionBatch,
+    canonical_binding: &AxtFastpqBinding,
+) -> Result<()> {
+    let context = BindingContext::from_binding(canonical_binding)?;
+    if batch.parameter != canonical_binding.parameter {
         return Err(Error::InvalidAxtBinding {
             details: "FastPQ batch parameter does not match AXT binding".into(),
         });
     }
-    if batch.public_inputs.dsid != dsid_bytes(canonical.source_dsid) {
+    if batch.public_inputs.dsid != dsid_bytes(canonical_binding.source_dsid) {
         return Err(Error::InvalidAxtBinding {
             details: "FastPQ batch public dsid does not match AXT binding".into(),
         });
     }
     require_concrete_execution_batch(batch, &context)?;
-    validate_batch_semantics(batch, axt_proof_semantics(&canonical)?)?;
+    validate_batch_semantics(batch, axt_proof_semantics(canonical_binding)?)?;
     let encoded = required_metadata(batch, AXT_FASTPQ_BINDING_METADATA_KEY)?;
     let decoded = decode_canonical_binding(encoded)?;
-    if decoded != canonical {
+    if &decoded != canonical_binding {
         return Err(Error::InvalidAxtBinding {
             details: "FastPQ batch metadata binding does not match AXT binding".into(),
         });
@@ -839,29 +814,29 @@ fn verify_batch_matches_binding(batch: &TransitionBatch, binding: &AxtFastpqBind
     require_metadata_eq(
         batch,
         "source_receipt_id",
-        canonical.source_receipt_id.as_bytes(),
+        canonical_binding.source_receipt_id.as_bytes(),
     )?;
     require_metadata_eq(
         batch,
         "target_dsids",
-        &encode_target_dsids(&canonical.target_dsids),
+        &encode_target_dsids(&canonical_binding.target_dsids),
     )?;
     require_metadata_eq(
         batch,
         "verified_effect_type",
         context.effect_type.as_bytes(),
     )?;
-    if !canonical.corridor.is_empty() {
-        require_metadata_eq(batch, "corridor", canonical.corridor.as_bytes())?;
+    if !canonical_binding.corridor.is_empty() {
+        require_metadata_eq(batch, "corridor", canonical_binding.corridor.as_bytes())?;
     }
     let _ = proof_bound_committed_amount(batch)?;
     let _ = proof_bound_expiry_slot(batch)?;
     let _ = proof_bound_manifest_root(batch)?;
     let _ = proof_bound_da_commitment(batch)?;
-    let seal = axt_batch_seal(batch, &canonical)?;
+    let seal = axt_batch_seal(batch, canonical_binding)?;
     require_metadata_eq(batch, AXT_FASTPQ_BATCH_SEAL_METADATA_KEY, &seal)?;
-    require_transfer_claim_witnesses(batch, &context, canonical.claim_type.as_str())?;
-    require_remote_spend_transcript_linkage(batch, &canonical)?;
+    require_transfer_claim_witnesses(batch, &context, canonical_binding.claim_type.as_str())?;
+    require_remote_spend_transcript_linkage(batch, canonical_binding)?;
     Ok(())
 }
 
@@ -1196,7 +1171,7 @@ fn axt_statement_digest(
     if let Some(da_commitment) = envelope.da_commitment {
         payload.extend_from_slice(&da_commitment);
     }
-    payload.extend_from_slice(&encode_canonical_norito(&canonicalize_binding(binding)?)?);
+    payload.extend_from_slice(&encode_canonical_norito(binding)?);
     payload.extend_from_slice(&encode_canonical_norito(batch)?);
     Ok(Hash::new(payload).into())
 }
@@ -1942,38 +1917,6 @@ mod tests {
             OperationKind::Transfer,
         ));
         batch.push(StateTransition::new(
-            b"asset/xor/alice".to_vec(),
-            0_u64.to_le_bytes().to_vec(),
-            1_u64.to_le_bytes().to_vec(),
-            OperationKind::Mint,
-        ));
-        batch.push(StateTransition::new(
-            b"asset/xor/bob".to_vec(),
-            2_u64.to_le_bytes().to_vec(),
-            1_u64.to_le_bytes().to_vec(),
-            OperationKind::Burn,
-        ));
-        batch.push(StateTransition::new(
-            b"role/grant".to_vec(),
-            vec![0],
-            vec![1],
-            OperationKind::RoleGrant {
-                role_id: vec![0xCC; 32],
-                permission_id: vec![0xDD; 32],
-                epoch: 8,
-            },
-        ));
-        batch.push(StateTransition::new(
-            b"role/revoke".to_vec(),
-            vec![1],
-            vec![0],
-            OperationKind::RoleRevoke {
-                role_id: vec![0xAA; 32],
-                permission_id: vec![0xBB; 32],
-                epoch: 9,
-            },
-        ));
-        batch.push(StateTransition::new(
             b"account/meta".to_vec(),
             b"old".to_vec(),
             b"new".to_vec(),
@@ -2114,22 +2057,18 @@ mod tests {
         );
     }
     #[test]
-    fn bind_axt_batch_rejects_role_row_in_opaque_authorization_claim() {
+    fn bind_axt_batch_rejects_transfer_row_in_opaque_authorization_claim() {
         let binding = sample_binding();
         let mut batch = unbound_axt_batch(&binding);
         batch.push(StateTransition::new(
-            b"role/attacker/unrelated-permission".to_vec(),
-            vec![0],
-            vec![1],
-            OperationKind::RoleGrant {
-                role_id: vec![0x11; 32],
-                permission_id: vec![0x22; 32],
-                epoch: 7,
-            },
+            b"asset/rose/mallory".to_vec(),
+            1_u64.to_le_bytes().to_vec(),
+            2_u64.to_le_bytes().to_vec(),
+            OperationKind::Transfer,
         ));
 
         let error = bind_axt_batch(&mut batch, &binding, [0x42; 32], Some([0x24; 32]))
-            .expect_err("opaque authorization must not prove an unrelated permission row");
+            .expect_err("opaque authorization must not prove a transfer row");
         assert!(matches!(
             error,
             Error::InvalidProofSemantics {
@@ -2139,7 +2078,7 @@ mod tests {
         ));
     }
     #[test]
-    fn bind_axt_batch_rejects_inflationary_burn_appended_to_transfer_claim() {
+    fn bind_axt_batch_rejects_metadata_appended_to_transfer_claim() {
         let mut binding = sample_binding();
         binding.claim_type = "value_conservation".to_owned();
         let mut batch = unbound_axt_batch(&binding);
@@ -2150,14 +2089,14 @@ mod tests {
             OperationKind::Transfer,
         ));
         batch.push(StateTransition::new(
-            b"asset/rose/mallory".to_vec(),
-            1_u64.to_le_bytes().to_vec(),
-            100_u64.to_le_bytes().to_vec(),
-            OperationKind::Burn,
+            b"metadata/attacker".to_vec(),
+            b"old".to_vec(),
+            b"new".to_vec(),
+            OperationKind::MetaSet,
         ));
 
         let error = bind_axt_batch(&mut batch, &binding, [0x42; 32], Some([0x24; 32]))
-            .expect_err("transfer claim must reject an appended inflationary burn");
+            .expect_err("transfer claim must reject an appended metadata row");
         assert!(matches!(
             error,
             Error::InvalidProofSemantics {
@@ -2197,52 +2136,15 @@ mod tests {
         ));
     }
     #[test]
-    fn verifier_rejects_fresh_raw_proof_with_role_row_in_opaque_axt_claim() {
-        let binding = sample_binding();
-        let mut batch = real_authorization_batch(&binding);
-        batch.push(StateTransition::new(
-            b"role/attacker/unrelated-permission".to_vec(),
-            vec![0],
-            vec![1],
-            OperationKind::RoleGrant {
-                role_id: vec![0x11; 32],
-                permission_id: vec![0x22; 32],
-                epoch: 7,
-            },
-        ));
-        batch.sort();
-        batch.metadata.remove(AXT_FASTPQ_BATCH_SEAL_METADATA_KEY);
-        let seal = axt_batch_seal(&batch, &binding).expect("reseal attacker batch");
-        batch
-            .metadata
-            .insert(AXT_FASTPQ_BATCH_SEAL_METADATA_KEY.into(), seal.to_vec());
-        let proof = Prover::canonical(DEFAULT_PARAMETER)
-            .expect("prover")
-            .prove_raw_statement(&batch)
-            .expect("fresh cryptographic proof for attacker-selected rows");
-        let payload = encode_axt_fastpq_payload(&batch, proof).expect("attacker payload");
-        let envelope = envelope_with_payload(binding, payload);
-
-        let error = verify_axt_proof_envelope(&envelope)
-            .expect_err("opaque AXT verifier must reject an unrelated role row");
-        assert!(matches!(
-            error,
-            Error::InvalidProofSemantics {
-                profile: "axt_opaque_effect",
-                ..
-            }
-        ));
-    }
-    #[test]
-    fn verifier_rejects_fresh_raw_proof_with_burn_appended_to_transfer_claim() {
+    fn verifier_rejects_fresh_raw_proof_with_metadata_appended_to_transfer_claim() {
         let mut binding = sample_binding();
         binding.claim_type = "value_conservation".to_owned();
         let mut batch = real_transfer_claim_batch(&binding);
         batch.push(StateTransition::new(
-            b"asset/rose/mallory".to_vec(),
-            10_u64.to_le_bytes().to_vec(),
-            9_u64.to_le_bytes().to_vec(),
-            OperationKind::Burn,
+            b"metadata/attacker".to_vec(),
+            b"old".to_vec(),
+            b"new".to_vec(),
+            OperationKind::MetaSet,
         ));
         batch.sort();
         batch.metadata.remove(AXT_FASTPQ_BATCH_SEAL_METADATA_KEY);
@@ -2258,7 +2160,7 @@ mod tests {
         let envelope = envelope_with_payload(binding, payload);
 
         let error = verify_axt_proof_envelope(&envelope)
-            .expect_err("transfer AXT verifier must reject an appended burn");
+            .expect_err("transfer AXT verifier must reject appended metadata");
         assert!(matches!(
             error,
             Error::InvalidProofSemantics {
@@ -2633,7 +2535,7 @@ mod tests {
                 batch
                     .transitions
                     .iter()
-                    .any(|transition| matches!(transition.operation, OperationKind::Transfer)),
+                    .any(|transition| matches!(&transition.operation, OperationKind::Transfer)),
                 "transfer claim fixture must carry transfer rows"
             );
             let proof = Prover::canonical(DEFAULT_PARAMETER)
@@ -3068,6 +2970,20 @@ mod tests {
         };
         let canonical =
             encode_axt_fastpq_payload(&batch, proof.clone()).expect("canonical payload");
+        let release_schema =
+            norito::core::schema_hash_for_name(AXT_FASTPQ_PROOF_PAYLOAD_SCHEMA_NAME);
+        assert_eq!(
+            <AxtFastpqProofPayload as NoritoSerialize>::schema_hash(),
+            release_schema
+        );
+        let mut pre_release = canonical.clone();
+        let pre_release_schema =
+            norito::core::schema_hash_for_name("fastpq_prover::axt_binding::AxtFastpqProofPayload");
+        pre_release[6..22].copy_from_slice(&pre_release_schema);
+        assert!(
+            decode_from_bytes::<AxtFastpqProofPayload>(&pre_release).is_err(),
+            "the pre-release AXT payload schema must not decode as release V1"
+        );
         let alternate = alternate_norito_bytes(&payload);
         assert_ne!(alternate, canonical);
         assert_eq!(
@@ -3561,7 +3477,7 @@ mod tests {
         let payload = encode_axt_fastpq_payload(&batch, proof).expect("payload");
         let envelope = envelope_with_payload(binding, payload);
         let err = verify_axt_proof_envelope(&envelope).expect_err("mismatched proof must fail");
-        assert!(matches!(err, Error::CommitmentMismatch));
+        assert!(matches!(err, Error::OrderingHashMismatch));
     }
     #[test]
     fn verify_axt_envelope_rejects_raw_fastpq_proof_without_batch() {

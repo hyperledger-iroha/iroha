@@ -96,7 +96,7 @@ fn asset_totals_track_multi_account_mint_and_burn() {
     .execute(&ALICE_ID, &mut stx)
     .expect("burn to zero");
     stx.apply();
-    state_block.commit().unwrap();
+    state_block.commit_world_overlay_for_testing().unwrap();
     let view = state.view();
     let definition = FindAssetsDefinitions::new()
         .execute(CompoundPredicate::PASS, &view)
@@ -157,7 +157,9 @@ fn asset_totals_drop_when_unregistering_account() {
         .execute(&ALICE_ID, &mut stx_1)
         .expect("mint holder balance");
     stx_1.apply();
-    block_1.commit().expect("commit block 1");
+    block_1
+        .commit_world_overlay_for_testing()
+        .expect("commit block 1");
     let header_2 = iroha_data_model::block::BlockHeader::new(
         NonZeroU64::new(2).expect("non-zero"),
         None,
@@ -172,7 +174,9 @@ fn asset_totals_drop_when_unregistering_account() {
         .execute(&ALICE_ID, &mut stx_2)
         .expect("unregister account");
     stx_2.apply();
-    block_2.commit().expect("commit block 2");
+    block_2
+        .commit_world_overlay_for_testing()
+        .expect("commit block 2");
     let view = state.view();
     let definition = FindAssetsDefinitions::new()
         .execute(CompoundPredicate::PASS, &view)
@@ -247,7 +251,9 @@ fn asset_totals_preserve_when_unregistering_domain_with_foreign_holders() {
     .execute(&ALICE_ID, &mut stx_1)
     .expect("mint foreign holder");
     stx_1.apply();
-    block_1.commit().expect("commit block 1");
+    block_1
+        .commit_world_overlay_for_testing()
+        .expect("commit block 1");
     let header_2 = iroha_data_model::block::BlockHeader::new(
         NonZeroU64::new(2).expect("non-zero"),
         None,
@@ -262,7 +268,9 @@ fn asset_totals_preserve_when_unregistering_domain_with_foreign_holders() {
         .execute(&ALICE_ID, &mut stx_2)
         .expect("unregister foreign domain");
     stx_2.apply();
-    block_2.commit().expect("commit block 2");
+    block_2
+        .commit_world_overlay_for_testing()
+        .expect("commit block 2");
     let view = state.view();
     let definition = FindAssetsDefinitions::new()
         .execute(CompoundPredicate::PASS, &view)
@@ -344,7 +352,9 @@ fn unregistering_definition_domain_cleans_foreign_assets() {
     .execute(&ALICE_ID, &mut stx_1)
     .expect("mint foreign holder");
     stx_1.apply();
-    block_1.commit().expect("commit block 1");
+    block_1
+        .commit_world_overlay_for_testing()
+        .expect("commit block 1");
     let header_2 = iroha_data_model::block::BlockHeader::new(
         NonZeroU64::new(2).expect("non-zero"),
         None,
@@ -359,7 +369,9 @@ fn unregistering_definition_domain_cleans_foreign_assets() {
         .execute(&ALICE_ID, &mut stx_2)
         .expect("unregister source domain");
     stx_2.apply();
-    block_2.commit().expect("commit block 2");
+    block_2
+        .commit_world_overlay_for_testing()
+        .expect("commit block 2");
     let view = state.view();
     assert!(
         FindAssetsDefinitions::new()

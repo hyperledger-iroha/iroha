@@ -9,8 +9,7 @@
 //! The transcript challenges must be sampled only after both endpoint and
 //! address-sorted traces have been committed.
 use crate::privacy_engines::transparent_stark::{
-    GoldilocksDigest384V1, GoldilocksFieldV1 as F, TransparentStarkErrorV1,
-    TransparentTranscriptV1,
+    GoldilocksDigest384V1, GoldilocksFieldV1 as F, TransparentStarkErrorV1, TransparentTranscriptV1,
 };
 use thiserror::Error;
 /// Manifest descriptor for cross-segment byte-channel binding.

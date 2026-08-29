@@ -1,5 +1,4 @@
 //! Canonical FASTPQ STARK parameter definitions.
-
 use core::cmp::Ordering;
 
 /// Sole FASTPQ parameter identifier accepted by the first-release prover and verifier.
@@ -77,10 +76,6 @@ pub struct StarkParameterSet {
     pub lde_log_size: u32,
     /// Primitive `2^lde_log_size` root of unity for the evaluation domain.
     pub lde_root: u64,
-    /// Width of the permutation-product domain.
-    pub permutation_size: u32,
-    /// Log₂ size of the lookup evaluation domain.
-    pub lookup_log_size: u32,
     /// Coset offset applied to the evaluation domain.
     pub omega_coset: u64,
     /// Base and extension-field descriptor.
@@ -348,8 +343,6 @@ pub const FASTPQ_FINAL_V1: StarkParameterSet = StarkParameterSet {
     trace_root: 0xbe5b_4f4b_47ee_4647,
     lde_log_size: 19,
     lde_root: 0xa9c4_68a3_57df_6e13,
-    permutation_size: 65_536,
-    lookup_log_size: 19,
     omega_coset: 0xfd0e_69f9_a98e_e946,
     field: GOLDILOCKS_FP4_V1,
     hash: POSEIDON_X7_GOLDILOCKS_DIGEST384_V1,
@@ -360,7 +353,6 @@ pub const FASTPQ_FINAL_V1: StarkParameterSet = StarkParameterSet {
         queries: FASTPQ_QUERY_COUNT_V1,
     },
 };
-
 /// Ordered singleton slice of canonical parameter sets.
 pub const CANONICAL_PARAMETER_SETS: [StarkParameterSet; 1] = [FASTPQ_FINAL_V1];
 

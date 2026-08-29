@@ -210,7 +210,10 @@ abstract contract TairaXorExactEvmSccpBridge {
         require(_profileDomain(configuredNetworkProfile) == configuredExternalDomain,
             "SC_DEPLOY");
         require(configuredRouteRevision != 0, "SC_DEPLOY");
-        require(configuredMaxWrappedSupply != 0, "SC_DEPLOY");
+        require(
+            configuredMaxWrappedSupply != 0 && configuredMaxWrappedSupply <= MAX_U128,
+            "SC_DEPLOY"
+        );
         require(
             configuredVerifierPolicy.semanticProofProfileHash != bytes32(0),
             "SC_DEPLOY"

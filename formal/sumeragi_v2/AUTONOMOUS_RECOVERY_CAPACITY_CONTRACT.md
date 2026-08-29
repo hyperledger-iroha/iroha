@@ -11,9 +11,10 @@ cuts:
    identity when route/snapshot progress reaches N+1, unless exact terminal or
    receipt evidence discharges it.
 2. A READY-bearing autonomous successor accepts its predecessor only from the
-   exact per-incarnation WSV frontier or a MergeExecution receipt revalidated
-   against its merge log and canonical carrier. Hash-only ownership is not an
-   application proof.
+   exact per-incarnation WSV frontier, a MergeExecution receipt revalidated
+   against its merge log and canonical carrier, or a `Current` receipt
+   revalidated against the exact canonical block and results. Hash-only
+   ownership is not an application proof.
 3. Startup performs no capacity-consuming repair before carrier envelopes are
    reconstructed.
 4. A certified frontier durably creates both pair and bundle capacity
@@ -41,9 +42,13 @@ The positive config is
 
 The predecessor cut is source-bound to the READY/ordinary role dispatcher,
 the ordinary-receipt repair filter that rejects READY-bearing certificates,
-the autonomous exact-frontier gate, and both current/predecessor Kura
-MergeExecution receipt revalidators. Their binding rejects use of hash-only
-snapshot helpers in the autonomous gate.
+the autonomous exact-frontier gate, both current/predecessor Kura
+MergeExecution receipt revalidators, and
+`Kura::canonical_lane_block_predecessor_receipt_revalidates_without_sidecar_repair`.
+The canonical receipt path holds the prune fence, admits only `Current`, and
+revalidates the exact canonical block/results bytes; its paired regressions
+prove that malformed replicated frontier bytes fail closed. These bindings
+also reject use of hash-only snapshot helpers in the autonomous gate.
 
 Exact incomplete-carrier recovery is source-bound through
 `MergeLedgerLog::execution_entries_for_bounded_identities` and

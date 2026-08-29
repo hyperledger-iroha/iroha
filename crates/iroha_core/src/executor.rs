@@ -5948,6 +5948,7 @@ impl Executor {
         ivm_cache: &mut IvmCache,
     ) -> Result<(), ValidationFail> {
         state_transaction.bind_privacy_transaction_intent_v1(None);
+        state_transaction.bind_private_settlement_carrier_v1(None);
         state_transaction.kagemusha_taira_canary_wire_identity = None;
         state_transaction.kagemusha_release_lifecycle_entrypoint = None;
         if transaction.authority() != authority {
@@ -5959,6 +5960,11 @@ impl Executor {
         let privacy_intent_binding =
             crate::privacy::signed_privacy_transaction_intent_binding_v1(&transaction)?;
         state_transaction.bind_privacy_transaction_intent_v1(privacy_intent_binding);
+        let private_settlement_carrier_binding =
+            crate::private_settlement::carrier::signed_private_settlement_carrier_binding_v1(
+                &transaction,
+            )?;
+        state_transaction.bind_private_settlement_carrier_v1(private_settlement_carrier_binding);
         if state_transaction.kagemusha_taira_canary_external_entrypoint {
             state_transaction.kagemusha_taira_canary_wire_identity =
                 signed_kagemusha_taira_canary_wire_identity_v1(&transaction)?;
@@ -9262,7 +9268,9 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
     ) {
         return true;
     }
-    // CBDC account control, native multisig/consensus-key rotation, and alias lifecycle.
+    // CBDC account control, native multisig/consensus-key lifecycle, and alias lifecycle.
+    // Threshold-key lifecycle certificates carry their own exact-roster quorum
+    // authorization, which Core verifies before changing either key family.
     if is_any!(
         iroha_data_model::isi::AddSignatory,
         iroha_data_model::isi::RemoveSignatory,
@@ -9282,6 +9290,7 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
         iroha_data_model::isi::consensus_keys::RegisterConsensusKey,
         iroha_data_model::isi::consensus_keys::RotateConsensusKey,
         iroha_data_model::isi::consensus_keys::DisableConsensusKey,
+        iroha_data_model::isi::consensus_keys::ApplyThresholdKeyLifecycleCertificateV1,
     ) {
         return true;
     }
@@ -9371,6 +9380,9 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
     // `zk::SubmitBallot` vendor instruction remains IVM-latch-only below.
     if is_any!(
         iroha_data_model::isi::settlement::SettlementInstructionBox,
+        iroha_data_model::isi::private_settlement::ActivatePrivateSettlementPoolV1,
+        iroha_data_model::isi::private_settlement::AbortAtomicPrivateSettlementV1,
+        iroha_data_model::isi::private_settlement::FinalizeAtomicPrivateSettlementV1,
         iroha_data_model::isi::bridge::SubmitBridgeProof,
         iroha_data_model::isi::bridge::RecordBridgeReceipt,
         iroha_data_model::isi::bridge::ApplySccpRouteGovernance,
@@ -11022,7 +11034,7 @@ mod tests {
         );
         state
             .block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0))
-            .commit()
+            .commit_empty_block_for_testing()
             .expect("commit bootstrap block");
         state
     }
@@ -11696,6 +11708,49 @@ mod tests {
                 instruction.id()
             );
         }
+    }
+    #[test]
+    fn initial_executor_routes_threshold_key_lifecycle_to_core_qc_authentication() {
+        use iroha_data_model::isi::consensus_keys::{
+            ApplyThresholdKeyLifecycleCertificateV1, ThresholdKeyLifecycleActionV1,
+            ThresholdKeyLifecycleCertificateV1,
+        };
+
+        let authority = checked_account_id();
+        let world = World::with([], [Account::new(authority.clone()).build(&authority)], []);
+        let state = state_after_genesis(world);
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 1, 0));
+        let mut state_transaction = block.transaction();
+        let instruction: InstructionBox = ApplyThresholdKeyLifecycleCertificateV1 {
+            certificate: ThresholdKeyLifecycleCertificateV1 {
+                version: crate::state::THRESHOLD_KEY_LIFECYCLE_CERTIFICATE_VERSION_V1,
+                action: ThresholdKeyLifecycleActionV1::RetireGlobalBeaconKey,
+                expected_active_session_id: Some([0x31; 32]),
+                effective_height: 2,
+                network_id: executor_test_network_id(b"initial threshold lifecycle admission"),
+                roster_hash: [0x32; 32],
+                committee_size: 4,
+                quorum: 3,
+                session_id: [0x31; 32],
+                transcript_hash: [0x33; 32],
+                public_state: Vec::new(),
+                signatures: Vec::new(),
+            },
+        }
+        .into();
+        assert!(
+            initial_native_instruction_is_explicitly_admitted(&instruction),
+            "the proof-carrying lifecycle instruction must reach Core"
+        );
+
+        let error = super::Executor::Initial
+            .execute_instruction(&mut state_transaction, &authority, instruction)
+            .expect_err("an empty validator QC must fail in Core");
+        assert!(
+            format!("{error:?}")
+                .contains("threshold-key lifecycle certificate authentication failed"),
+            "the Initial executor must route the instruction to exact Core QC verification: {error:?}"
+        );
     }
     #[test]
     fn initial_executor_keeps_the_complete_vpn_lifecycle_allowlisted() {
@@ -15789,7 +15844,7 @@ mod tests {
             3,
             *Hash::new(b"relay-allocation-manifest").as_ref(),
             iroha_data_model::nexus::AxtFastpqBinding {
-                parameter: "fastpq-lane-balanced".to_owned(),
+                parameter: "fastpq-state-transition-stark-v1".to_owned(),
                 source_dsid: source_dataspace_id.as_u64(),
                 source_dataspace: format!("dataspace-{}", source_dataspace_id.as_u64()),
                 source_receipt_id: "relay-allocation-receipt".to_owned(),
@@ -16757,7 +16812,7 @@ mod tests {
         let state = State::new(world, kura, query_handle);
         state
             .block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0))
-            .commit()
+            .commit_empty_block_for_testing()
             .expect("commit bootstrap block");
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -16940,7 +16995,7 @@ mod tests {
         let state = State::new(world, kura, query_handle);
         state
             .block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0))
-            .commit()
+            .commit_empty_block_for_testing()
             .expect("commit bootstrap block");
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
         let mut block = state.block(header);

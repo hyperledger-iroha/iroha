@@ -4,18 +4,6 @@ evaluation_interval: 1m
 tests:
   - interval: 1m
     input_series:
-      - series: 'torii_sorafs_hedging_feed_lag_seconds{cluster="local",source="primary"}'
-        values: '1000 1000 1000 1000 1000 1000 1000 1000 1000 1000 1000 1000 1000 1000 1000 1000 1000 1000'
-      - series: 'torii_sorafs_hedging_feed_divergence_bps{cluster="local",source="primary"}'
-        values: '600 600 600 600 600 600 600 600 600 600 600 600 600 600 600 600 600 600'
-      - series: 'torii_sorafs_hedging_exposure_drift_bps{cluster="local",asset="xor"}'
-        values: '1200 1200 1200 1200 1200 1200 1200 1200 1200 1200 1200 1200 1200 1200 1200 1200 1200 1200'
-      - series: 'torii_sorafs_billing_statement_failure_total{cluster="local",account_type="provider"}'
-        values: '0 0 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1'
-      - series: 'torii_sorafs_billing_statement_ack_backlog{cluster="local"}'
-        values: '150 150 150 150 150 150 150 150 150 150 150 150 150 150 150 150 150 150 150 150 150 150 150 150 150 150 150 150 150 150 150 150 150 150 150 150'
-      - series: 'torii_sorafs_billing_escrow_runway_seconds{cluster="local",account_type="provider"}'
-        values: '3600 3600 3600 3600 3600 3600 3600 3600 3600 3600 3600 3600 3600 3600 3600 3600 3600 3600'
       - series: 'sorafs_hedging_billing_last_tick_fresh'
         values: '0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0'
       - series: 'sorafs_hedging_billing_finalized_projection_ready'
@@ -25,85 +13,6 @@ tests:
       - series: 'sorafs_hedging_billing_finalized_lag_blocks'
         values: '3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3'
     alert_rule_test:
-      - alertname: SoraFSHedgingPrimaryFeedStale
-        eval_time: 5m
-        exp_alerts: []
-      - alertname: SoraFSHedgingPrimaryFeedStale
-        eval_time: 12m
-        exp_alerts:
-          - exp_labels:
-              cluster: local
-              source: primary
-              severity: warning
-            exp_annotations:
-              summary: "SoraFS primary hedging feed is stale"
-              description: |
-                Primary XOR/USD feed primary in cluster local
-                has stayed more than 15 minutes behind. Pause statement finalization
-                and verify the feed collector before publishing billing cycles.
-      - alertname: SoraFSHedgingFeedDivergenceHigh
-        eval_time: 7m
-        exp_alerts:
-          - exp_labels:
-              cluster: local
-              severity: critical
-            exp_annotations:
-              summary: "SoraFS hedging feed divergence is high"
-              description: |
-                XOR/USD feed divergence in cluster local exceeded
-                500 bps. Keep automated hedge execution disabled and require
-                governance review before accepting the reference price.
-      - alertname: SoraFSHedgingExposureDriftHigh
-        eval_time: 17m
-        exp_alerts:
-          - exp_labels:
-              asset: xor
-              cluster: local
-              severity: warning
-            exp_annotations:
-              summary: "SoraFS hedging exposure drift is high"
-              description: |
-                Hedging exposure for xor in cluster local
-                has drifted more than 1000 bps from the governed target. Reconcile
-                inventory and freeze new hedge execution until limits are reviewed.
-      - alertname: SoraFSBillingStatementFailures
-        eval_time: 5m
-        exp_alerts:
-          - exp_labels:
-              account_type: provider
-              cluster: local
-              severity: critical
-            exp_annotations:
-              summary: "SoraFS billing statement generation failed"
-              description: |
-                Billing statement generation failed for account type provider
-                in cluster local. Check source ledger ingestion,
-                reference-price binding, and statement publisher health.
-      - alertname: SoraFSBillingAcknowledgementBacklogHigh
-        eval_time: 32m
-        exp_alerts:
-          - exp_labels:
-              cluster: local
-              severity: warning
-            exp_annotations:
-              summary: "SoraFS billing acknowledgement backlog is high"
-              description: |
-                Billing acknowledgement backlog in cluster local
-                has exceeded 100 statements for 30 minutes. Verify notification
-                delivery and client acknowledgement workers before rollout.
-      - alertname: SoraFSBillingEscrowRunwayLow
-        eval_time: 17m
-        exp_alerts:
-          - exp_labels:
-              account_type: provider
-              cluster: local
-              severity: critical
-            exp_annotations:
-              summary: "SoraFS billing escrow runway below one day"
-              description: |
-                provider escrow runway in cluster local
-                is below one day. Trigger top-up or billing throttles before
-                statement settlement can no longer clear.
       - alertname: SoraFSHedgingBillingLastTickStale
         eval_time: 3m
         exp_alerts: []
@@ -142,18 +51,6 @@ tests:
                 publication and repair finalized-event ingestion before promotion.
   - interval: 1m
     input_series:
-      - series: 'torii_sorafs_hedging_feed_lag_seconds{cluster="local",source="primary"}'
-        values: '300 300 300 300 300 300 300 300 300 300 300 300 300 300 300 300 300 300'
-      - series: 'torii_sorafs_hedging_feed_divergence_bps{cluster="local",source="primary"}'
-        values: '50 50 50 50 50 50 50 50 50 50 50 50 50 50 50 50 50 50'
-      - series: 'torii_sorafs_hedging_exposure_drift_bps{cluster="local",asset="xor"}'
-        values: '100 100 100 100 100 100 100 100 100 100 100 100 100 100 100 100 100 100'
-      - series: 'torii_sorafs_billing_statement_failure_total{cluster="local",account_type="provider"}'
-        values: '0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0'
-      - series: 'torii_sorafs_billing_statement_ack_backlog{cluster="local"}'
-        values: '5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5'
-      - series: 'torii_sorafs_billing_escrow_runway_seconds{cluster="local",account_type="provider"}'
-        values: '172800 172800 172800 172800 172800 172800 172800 172800 172800 172800 172800 172800 172800 172800 172800 172800 172800 172800'
       - series: 'sorafs_hedging_billing_last_tick_fresh'
         values: '1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1'
       - series: 'sorafs_hedging_billing_finalized_projection_ready'
@@ -163,24 +60,6 @@ tests:
       - series: 'sorafs_hedging_billing_finalized_lag_blocks'
         values: '2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2'
     alert_rule_test:
-      - alertname: SoraFSHedgingPrimaryFeedStale
-        eval_time: 17m
-        exp_alerts: []
-      - alertname: SoraFSHedgingFeedDivergenceHigh
-        eval_time: 17m
-        exp_alerts: []
-      - alertname: SoraFSHedgingExposureDriftHigh
-        eval_time: 17m
-        exp_alerts: []
-      - alertname: SoraFSBillingStatementFailures
-        eval_time: 17m
-        exp_alerts: []
-      - alertname: SoraFSBillingAcknowledgementBacklogHigh
-        eval_time: 17m
-        exp_alerts: []
-      - alertname: SoraFSBillingEscrowRunwayLow
-        eval_time: 17m
-        exp_alerts: []
       - alertname: SoraFSHedgingBillingLastTickStale
         eval_time: 17m
         exp_alerts: []

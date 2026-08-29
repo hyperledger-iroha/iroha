@@ -60,7 +60,7 @@ fn proof_blob_for(dsid: DataSpaceId, manifest_root: [u8; 32], proof_seed: &[u8])
         da_commitment: None,
         proof: proof_digest.as_ref().to_vec(),
         fastpq_binding: Some(AxtFastpqBinding {
-            parameter: "fastpq-lane-balanced".to_string(),
+            parameter: "fastpq-state-transition-stark-v1".to_string(),
             source_dsid: dsid.as_u64(),
             source_dataspace: "ivm-host-test-dataspace".to_string(),
             source_receipt_id: format!("receipt-{}", hex::encode(source_tx_commitment.as_ref())),

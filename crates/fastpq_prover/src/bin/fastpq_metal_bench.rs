@@ -1,7 +1,7 @@
 //! FASTPQ Metal benchmark harness.
 //!
 //! Measures CPU vs GPU planner operations when the Metal backend is enabled and emits JSON suitable
-//! for dashboards or release artefacts. See `specs/fastpq_plan.md` (Stage 5) for expected usage.
+//! for dashboards or release artefacts. See `specs/fastpq_plan.md` for expected usage.
 #![allow(
     clippy::assigning_clones,
     clippy::case_sensitive_file_extension_comparisons,
@@ -705,16 +705,15 @@ mod harness {
         AdaptiveScheduleSnapshot, BatchHeuristicSnapshot, Bn254PoseidonBatchSlice,
         ColumnStagingPhaseStats, ColumnStagingSample, ColumnStagingStats, CommandLimitSnapshot,
         ExecutionMode, FftTuning, KernelKind, KernelStatsSample, LdeHostStats, Planner,
-        PoseidonPipelineStats, PostTileSample, QueueDepthStats, TwiddleCacheStats,
-        adaptive_schedule_snapshot, clear_execution_mode_observer, enable_kernel_stats,
-        enable_lde_host_stats, enable_poseidon_pipeline_stats, enable_post_tile_stats,
-        enable_queue_depth_stats, enable_twiddle_cache_stats, fft_tuning_snapshot,
+        PoseidonColumnBatch, PoseidonPipelineStats, PostTileSample, QueueDepthStats,
+        TwiddleCacheStats, adaptive_schedule_snapshot, clear_execution_mode_observer,
+        enable_kernel_stats, enable_lde_host_stats, enable_poseidon_pipeline_stats,
+        enable_post_tile_stats, enable_queue_depth_stats, enable_twiddle_cache_stats,
+        fft_tuning_snapshot, hash_columns_gpu_batch, hash_columns_gpu_with_first_level,
         poseidon_tuning_snapshot, set_execution_mode_observer, snapshot_queue_depth_stats,
         take_column_staging_stats, take_kernel_stats, take_lde_host_stats,
         take_poseidon_pipeline_stats, take_post_tile_stats, take_queue_depth_stats,
-        take_twiddle_cache_stats,
-        trace::{PoseidonColumnBatch, hash_columns_gpu_batch, hash_columns_gpu_fused},
-        try_hash_bn254_poseidon_word_batches,
+        take_twiddle_cache_stats, try_hash_bn254_poseidon_word_batches,
     };
     use iroha_crypto::Hash;
     #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
@@ -751,7 +750,6 @@ mod harness {
     const POSEIDON_MICRO_WARMUPS: usize = 1;
     const POSEIDON_MICRO_ITERATIONS: usize = 5;
     const POSEIDON_MICRO_SCALAR_LANES: &str = "32";
-    const POSEIDON_MICRO_SCALAR_BATCH: &str = "1";
     const TRACE_NODE_DOMAIN: &[u8] = b"fastpq:v1:trace:node";
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub(crate) enum PoseidonMicroMode {
@@ -1601,11 +1599,9 @@ mod harness {
     fn hash_columns_gpu(domains: &[String], columns: &[Vec<u64>]) -> PoseidonGpuOutcome {
         let domain_refs: Vec<&str> = domains.iter().map(|domain| domain.as_str()).collect();
         if let Some(batch) = PoseidonColumnBatch::from_domains_and_columns(&domain_refs, columns) {
-            if let Some(fused) = hash_columns_gpu_fused(&batch, ExecutionMode::Gpu) {
-                return PoseidonGpuOutcome::Gpu(fused.leaves);
-            }
-            if let Some(result) = hash_columns_gpu_batch(&batch) {
-                return PoseidonGpuOutcome::Gpu(result);
+            if let Some(accelerated) = hash_columns_gpu_with_first_level(&batch, ExecutionMode::Gpu)
+            {
+                return PoseidonGpuOutcome::Gpu(accelerated.into_leaves());
             }
         }
         PoseidonGpuOutcome::CpuFallback(hash_columns_cpu(domains, columns))
@@ -2260,12 +2256,8 @@ mod harness {
         let mut map = json::Map::new();
         map.insert("enabled".into(), Value::Bool(stats.enabled));
         map.insert(
-            "chunk_columns".into(),
-            json::to_value(&stats.chunk_columns).expect("serialize chunk columns"),
-        );
-        map.insert(
-            "pipe_depth".into(),
-            json::to_value(&stats.pipe_depth).expect("serialize pipe depth"),
+            "columns".into(),
+            json::to_value(&stats.columns).expect("serialize column count"),
         );
         map.insert(
             "batches".into(),
@@ -2609,8 +2601,9 @@ mod harness {
         }
         let config = Config::parse()?;
         ensure_trace_environment(&config)?;
-        let params = find_by_name("fastpq-state-transition-stark-v1")
-            .ok_or_else(|| "canonical parameter set 'fastpq-state-transition-stark-v1' missing".to_owned())?;
+        let params = find_by_name("fastpq-state-transition-stark-v1").ok_or_else(|| {
+            "canonical parameter set 'fastpq-state-transition-stark-v1' missing".to_owned()
+        })?;
         let planner = Planner::new(params);
         let padded = config
             .rows
@@ -2936,10 +2929,8 @@ mod harness {
         command.env(POSEIDON_MICRO_ENV, mode.as_str());
         command.env("FASTPQ_GPU", "gpu");
         command.env_remove("FASTPQ_METAL_POSEIDON_LANES");
-        command.env_remove("FASTPQ_METAL_POSEIDON_BATCH");
         if mode == PoseidonMicroMode::Scalar {
             command.env("FASTPQ_METAL_POSEIDON_LANES", POSEIDON_MICRO_SCALAR_LANES);
-            command.env("FASTPQ_METAL_POSEIDON_BATCH", POSEIDON_MICRO_SCALAR_BATCH);
         }
         command.stdout(Stdio::piped());
         let output = command

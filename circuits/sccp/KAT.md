@@ -46,6 +46,16 @@ digest. These source-level counts are not substitutes for the R1CS/PK/VK and
 fixed-verifier artifact hashes produced and signed by the circuit-specific
 ceremonies.
 
+The composable retained-anchor authorization adds exactly 97 constraints to
+each of the four epoch-anchor-update profiles. Their positive public KAT bytes
+are unchanged because the same one-step statements remain valid, but this does
+not make the earlier R1CS compatible. The constraint manifest records the
+canonical gnark `ConstraintSystem.WriteTo` byte length and SHA-256 identity for
+each repaired epoch R1CS, and explicitly invalidates every earlier epoch
+Phase-2 transcript, proving key, verifying key, fixed verifier, and destination
+deployment. Fresh circuit-specific ceremonies and all three independent audits
+remain mandatory before release.
+
 `TestEightProfileKATsAndPublicMutationNegatives` solves each positive circuit
 assignment and requires every single public-signal mutation to fail. The
 epoch suite additionally composes one emitted successor anchor into a second

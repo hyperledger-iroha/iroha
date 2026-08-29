@@ -11,10 +11,6 @@ The [`Config`](src/lib.rs) structure controls logger behaviour:
 - `format` – output formatting style.
 - `terminal_colors` – whether to emit ANSI colors to the terminal.
 
-## Features
-
-- `log-obfuscation` – redact telemetry fields that match sensitive keywords before emitting them
-  (enabled by default).
-
-Telemetry redaction policy (strict vs allow-list vs disabled) is configured via
-`iroha_config.telemetry_redaction`.
+Telemetry fields matching the repository's sensitive-key taxonomy are always
+redacted before emission. This first-release safety rule has no feature gate,
+runtime bypass, or allow-list.

@@ -2698,6 +2698,33 @@ fn goldilocks_digest384_wire_is_six_canonical_little_endian_words() {
 }
 
 #[test]
+fn goldilocks_digest384_slice_decode_consumes_one_fixed_width_prefix() {
+    let digest =
+        GoldilocksDigest384V1::new([1, 2, 3, 4, 5, 6]).expect("fixture digest words are canonical");
+    let mut bytes = digest.to_le_bytes().to_vec();
+    bytes.extend_from_slice(&[0xAA, 0xBB, 0xCC]);
+
+    let (decoded, consumed) =
+        <GoldilocksDigest384V1 as norito::core::DecodeFromSlice>::decode_from_slice(&bytes)
+            .expect("decode fixed-width digest prefix");
+    assert_eq!(decoded, digest);
+    assert_eq!(consumed, GoldilocksDigest384V1::BYTES);
+
+    let short = &bytes[..GoldilocksDigest384V1::BYTES - 1];
+    assert!(
+        <GoldilocksDigest384V1 as norito::core::DecodeFromSlice>::decode_from_slice(short).is_err()
+    );
+
+    let mut noncanonical = digest.to_le_bytes().to_vec();
+    noncanonical[..8].copy_from_slice(&fastpq_isi::poseidon::FIELD_MODULUS.to_le_bytes());
+    noncanonical.push(0xAA);
+    assert!(
+        <GoldilocksDigest384V1 as norito::core::DecodeFromSlice>::decode_from_slice(&noncanonical)
+            .is_err()
+    );
+}
+
+#[test]
 fn zk_ace_digest384_wrappers_reject_noncanonical_field_elements() {
     let identity = PrivacyZkAceIdentityCommitmentV1::new([1, 2, 3, 4, 5, 6])
         .expect("canonical identity words");

@@ -231,6 +231,19 @@ class HttpClientTransport(
         .defaultHeaders(config.defaultHeaders())
         .observers(config.observers())
         .build()
+    /**
+     * Create the exact-route private-settlement client without inheriting request observers.
+     *
+     * Restricted proof and encrypted-capsule bodies must not enter generic SDK telemetry.
+     */
+    fun newAtomicPrivateSettlementToriiClientV1(): AtomicPrivateSettlementToriiClientV1 =
+        AtomicPrivateSettlementToriiClientV1.builder()
+            .executor(executor)
+            .baseUri(config.baseUri())
+            .localSigningContext(config.requireLocalSigningContext())
+            .timeout(config.requestTimeout())
+            .defaultHeaders(config.defaultHeaders())
+            .build()
     fun sorafsGatewayClient(): SorafsGatewayClient = sorafsGatewayClient
     fun sorafsGatewayFetch(request: GatewayFetchRequest): CompletableFuture<ClientResponse> = sorafsGatewayClient.fetch(request)
     fun sorafsGatewayFetchSummary(request: GatewayFetchRequest): CompletableFuture<GatewayFetchSummary> = sorafsGatewayClient.fetchSummary(request)
@@ -3488,6 +3501,16 @@ class HttpClientTransport(
                     SCCP_NATIVE_INBOUND_PROOF_SCHEMA_NAME
                 },
             )
+            if (path == "/v1/bridge/messages") {
+                val replayWitness = optionalSccpArtifact(fields, "replay_witness_b64")
+                    ?: throw IllegalArgumentException("replay_witness_b64 is required")
+                validateCanonicalSccpNoritoBase64(
+                    replayWitness,
+                    "replay_witness_b64",
+                    SCCP_MAX_REPLAY_WITNESS_BYTES,
+                    SCCP_REPLAY_WITNESS_SCHEMA_NAME,
+                )
+            }
         }
         @JvmStatic internal fun normalizeHex16(value: String, field: String): String { val normalized = normalizeEvenLengthHex(value, field); require(normalized.length == 32) { "$field must contain 32 hex characters" }; return normalized }
         @JvmStatic internal fun normalizeHex32(value: String, field: String): String { val normalized = normalizeEvenLengthHex(value, field); require(normalized.length == 64) { "$field must contain 64 hex characters" }; return normalized }
@@ -3639,9 +3662,8 @@ class HttpClientTransport(
         )
         private val SCCP_MESSAGE_SUBMIT_FIELDS = setOf(
             "authority", "fee_payment", "signature_b64", "transaction_payload_b64",
-            "native_proof_b64", "creation_time_ms",
+            "native_proof_b64", "replay_witness_b64", "creation_time_ms",
         )
-        private const val SCCP_MAX_NATIVE_PROOF_BYTES = 16 * 1024 * 1024
 
         private fun optionalSccpArtifact(fields: Map<*, *>, field: String): String? =
             when (val value = fields[field]) {

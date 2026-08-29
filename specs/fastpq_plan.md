@@ -1,15 +1,17 @@
 # FASTPQ Prover Work Breakdown
 
-This document captures the staged plan for FASTPQ-ISI and the narrower V1 surface
-that is safe to expose today. Only sections labelled **Implemented release
-boundary** describe accepted proof semantics; the wider KV, permission, supply,
-and non-membership design remains future work.
+This document captures the FASTPQ-ISI V1 implementation and its release
+boundary. V1 deliberately exposes only witnessed transfers and opaque metadata
+carriers; unsupported supply, permission, and non-membership variants are not
+retained in the wire or trace schema.
 
-Cryptographic qualification note (2026-08-23): the implemented boundary is
-useful for deterministic correctness and integration testing, but is not a
-128-bit ledger-grade proof system. Canonical packs declare a 32-bit target, the
-one-field commitment is the binding ceiling, and Appendix A lists the remaining
-release blockers.
+Cryptographic qualification note (2026-08-29): the sole canonical parameter
+record targets 128-bit aggregate qROM security with six independently generated
+Goldilocks digest lanes, degree-four FRI challenges, binary folds, and 136
+queries. The exact arithmetic calculator meets that target, but arithmetic is
+not a production qualification claim: the protocol-specific qROM reduction and
+the final-artifact multi-target digest review remain mandatory. Appendix A
+records the calculation and blockers.
 
 ## Implemented release boundary
 
@@ -18,87 +20,92 @@ release blockers.
   only Transfer rows backed by canonical transfer transcripts and complete
   touched-balance-tree update witnesses. An empty batch is accepted only when
   `old_root == new_root`.
-- Numeric Transfer/Mint/Burn trace rows use exactly eight little-endian bytes for
-  both values and exactly `asset/<asset-id>/<account>` keys with three non-empty
-  slash-free components. Mint must increase and Burn must decrease, but public
-  state proofs reject both operations until generic supply witnesses exist.
+- Transfer rows use exactly eight little-endian bytes for both values and exact
+  `asset/<asset-id>/<account>` keys with three non-empty slash-free components.
 - Transfer witness validation binds each 32-bit Merkle direction vector to the
   key-derived path, authenticates every sibling/root update, enforces debit and
   credit amounts, and chains the witnessed roots to `PublicIO.old_root` and
   `PublicIO.new_root`.
 - The sampled AIR composition is not the complete transfer semantic boundary.
   The verifier deterministically rebuilds the caller-carried batch, transcript,
-  SMT witness, full trace, lookup material, and commitments and requires exact
-  equality. Key/asset identities, path nodes, public roots, running counters,
-  and permission fields are therefore enforced by full verifier replay rather
-  than by every trace column appearing in the current residue vector. Removing
+  SMT witness, full trace, LDE material, and commitments and requires exact
+  equality. Key identities, path nodes, and public roots are therefore enforced
+  by full verifier replay rather than by every trace column appearing in the
+  current residue vector. Removing
   that replay would be a protocol break; a future succinct profile must move
   every accepted-state relation into authenticated public input and AIR.
-- Mint, Burn, RoleGrant, RoleRevoke, and state-changing MetaSet batches fail
-  closed in the public state-transition profile. The trace columns retained for
-  those future operations do not imply that their state semantics are proven.
+- MetaSet batches fail closed in the public state-transition profile. The V1
+  operation enum contains only Transfer and MetaSet; old experimental mint,
+  burn, and role encodings are rejected during decoding. The release wire
+  indices are `16` for Transfer and `17` for MetaSet, deliberately disjoint
+  from every pre-release index (`0..=5`) so removal cannot relabel an old
+  operation as a supported one.
 - AXT verification selects `AxtTransferClaim` or `AxtOpaqueEffect` only after a
   canonical outer `AxtFastpqBinding` is authenticated and exactly matched. The
   opaque profile accepts MetaSet carrier rows only; its public roots are
   externally authenticated statement context, not proven state updates.
 - Production CoreHost rejects non-null standalone `AXT_VERIFY_DS_PROOF` before
-  proof recording or cache mutation. The caller-carried witness and roughly
-  32-bit FASTPQ commitment cannot serve as remote authorization without an
-  authoritative finalized source-state anchor.
+  proof recording or cache mutation. A caller-carried witness cannot serve as
+  remote authorization without an authoritative finalized source-state anchor,
+  irrespective of the proof commitment width.
 - Handle-bound transfer proofs carry canonical remote-spend claim preimages.
   Verification reconstructs their commitments and requires an exact one-to-one
   match with real transfer transcripts across handle identity, dataspace,
   asset, accounts, amount, and cardinality. The issuer signature authenticates
   the capability/asset fields, not the intent, proof, or amount, so this
   specialized path remains outside release qualification while those exact
-  facts depend on the current 32-bit binding. Finalized lane-relay and
-  authoritative fee-vault paths retain their separate state anchors.
+  facts are not authenticated. Finalized lane-relay and authoritative fee-vault
+  paths retain their separate state anchors.
 - Test/dev-tools raw-statement helpers check cryptographic transcript and byte
   determinism only. They make no state-validity claim and are absent from normal
   production builds.
 
-## Stage 0 — Hash Placeholder (landed)
-- Deterministic Norito encoding with BLAKE2b commitment.
-- Placeholder backend returning `BackendUnavailable`.
+## Stage 0 — Foundation
+- Deterministic Norito encoding and domain-separated commitments.
 - Canonical parameter table provided by `fastpq_isi`.
+- A single production STARK backend selected by the canonical prover constructors.
 
 ## Stage 1 — Trace Builder Prototype
 
-> **Status (2025-11-09):** `fastpq_prover` now exposes canonical packing
-> helpers (`pack_bytes`, `PackedBytes`) and the deterministic Poseidon
-> ordering commitment over Goldilocks. The dense-MDS constants are pinned by
+> **Status:** `fastpq_prover` exposes canonical packing helpers (`pack_bytes`,
+> `PackedBytes`) and a full-width, domain-separated BLAKE2b-256 ordering
+> commitment. The dense-MDS Poseidon constants used by the STARK are pinned by
 > the repository asset and manifest; this construction is not Poseidon2. The
-> interim BLAKE2 placeholder follow-up is closed. Golden fixtures (`tests/fixtures/packing_roundtrip.json`,
-> `tests/fixtures/ordering_hash.json`) now anchor the regression suite.
+> ordering fixture (`tests/fixtures/ordering_hash.json`) anchors the sorted-row
+> regression, while `tests/trace_commitment.rs` covers canonical commitment
+> encoding, determinism, and fixture separation. The JSON fixture is regenerated
+> only when `FASTPQ_UPDATE_FIXTURES=1` is set explicitly.
 
-### Future target and implemented trace schema
-- The trace builder retains columns planned for the wider KV-update AIR. Each row encodes:
+### Implemented trace schema
+- Each row encodes only the V1 statement surface:
   - `key_limbs[i]`: base-256 limbs (7 bytes, little-endian) of the canonical key path.
   - `value_old_limbs[i]`, `value_new_limbs[i]`: same packing for pre/post values.
-  - Selector columns: `s_active`, `s_transfer`, `s_mint`, `s_burn`, `s_role_grant`, `s_role_revoke`, `s_meta_set`, `s_perm`.
-  - Auxiliary columns: `delta = value_new - value_old`, `running_asset_delta`, `metadata_hash_limb_0` through `metadata_hash_limb_7`, `supply_counter`.
-  - Asset columns: `asset_id_limbs[i]` using 7-byte limbs.
-  - Transfer witness projection columns per level `ℓ`: `path_bit_ℓ`, `sibling_ℓ`, `node_in_ℓ`, `node_out_ℓ`, plus the reserved `neighbour_leaf` column.
+  - Selector columns: `s_active`, `s_transfer`, `s_meta_set`.
+  - Auxiliary columns: `delta = value_new - value_old` on transfer rows and `metadata_hash_limb_0` through `metadata_hash_limb_7`.
+  - Transfer witness projection columns per level `ℓ`: `path_bit_ℓ`, `sibling_ℓ`, `node_in_ℓ`, `node_out_ℓ`. These columns exist only when the batch contains a Transfer row; metadata-only proofs do not allocate or commit 128 zero SMT columns.
   - Metadata columns: `dsid`, `slot`.
-- **Deterministic ordering.** Sort rows lexicographically by `(key_bytes, op_rank, original_index)` using a stable sort. `op_rank` mapping: `transfer=0`, `mint=1`, `burn=2`, `role_grant=3`, `role_revoke=4`, `meta_set=5`. `original_index` is the 0-based index before sorting. Persist the resulting Poseidon ordering hash (domain tag `fastpq:v1:ordering`). Encode the hash preimage as `[domain_len, domain_limbs…, payload_len, payload_limbs…]` where lengths are u64 field elements so trailing zero bytes remain distinguishable.
-- Raw fixture traces can derive `perm_hash = Poseidon(role_id || permission_id || epoch_u64_le)`, but no permission-table membership proof is implemented. Public profiles reject role rows.
-- Implemented base residues enforce selector booleanity/relations, numeric row deltas, active-prefix shape, and metadata/dsid/slot stability. Per-asset conservation, supply, permission membership, generic Merkle hashing, and boundary totals are explicit TODOs and are not accepted through the public state profile.
+- **Deterministic ordering.** Stable-sort rows lexicographically by
+  `(key_bytes, op_rank)`; rows with an equal key and operation retain their
+  supplied order without carrying a redundant ordinal in the wire type.
+  `op_rank` mapping: `transfer=0`, `meta_set=1`. Persist the full BLAKE2b-256 hash of
+  `fastpq:v1:ordering || canonical_norito(sorted_transitions)`. Canonical
+  Norito length framing keeps trailing zero bytes distinct.
+- Implemented base residues enforce selector booleanity/relations, transfer row deltas, active-prefix shape, and metadata/dsid/slot stability. Generic Merkle hashing and boundary totals are enforced by deterministic witness replay rather than a succinct AIR relation.
 - `N_trace = 2^k` (`pow2_ceiling` of row count); `N_eval = N_trace * 2^b` where `b` is the blowup exponent.
 - Provide fixtures and property tests:
-  - Packing round-trips (`fastpq_prover/tests/packing.rs`, `tests/fixtures/packing_roundtrip.json`).
+  - Packing limb coverage in `fastpq_prover/src/packing.rs` unit tests.
   - Ordering stability hash (`tests/fixtures/ordering_hash.json`).
-  - Batch fixtures (`trace_transfer.json`, `trace_mint.json`, `trace_duplicate_update.json`).
+  - Trace-commitment canonical/determinism coverage (`tests/trace_commitment.rs`).
+  - Canonical V1 raw-transcript fixture (`v1_raw_transcript_64.bin`).
 
 ### AIR Column Schema
 | Column Group      | Names                                                                                  | Description                                                                                                           |
 | ----------------- | -------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
 | Activity          | `s_active`                                                                               | 1 for real rows, 0 for padding.                                                                                       |
 | Main              | `key_limbs[i]`, `value_old_limbs[i]`, `value_new_limbs[i]`                               | Packed Goldilocks elements (little-endian, 7-byte limbs).                                                             |
-| Asset             | `asset_id_limbs[i]`                                                                      | Packed canonical asset identifier (little-endian, 7-byte limbs).                                                      |
-| Selectors         | `s_transfer`, `s_mint`, `s_burn`, `s_role_grant`, `s_role_revoke`, `s_meta_set`, `s_perm` | 0/1. `s_active` equals the six operation selectors; `s_perm = s_role_grant + s_role_revoke`.                         |
-| Auxiliary         | `delta`, `running_asset_delta`, `metadata_hash_limb_0..7`, `supply_counter`              | `delta` and stable metadata are constrained; running/supply columns are reserved for future constraints.              |
-| SMT               | `path_bit_ℓ`, `sibling_ℓ`, `node_in_ℓ`, `node_out_ℓ`, `neighbour_leaf`                   | Projection of validated Transfer witnesses; generic AIR hashing/non-membership is not implemented.                    |
-| Lookup            | `perm_hash`                                                                              | Reserved role hash column; external permission-table membership is not implemented.                                   |
+| Selectors         | `s_transfer`, `s_meta_set`                                                                | 0/1. `s_active` equals their sum.                                                                                      |
+| Auxiliary         | `delta`, `metadata_hash_limb_0..7`                                                       | Transfer delta and stable metadata are constrained.                                                                   |
+| SMT               | `path_bit_ℓ`, `sibling_ℓ`, `node_in_ℓ`, `node_out_ℓ`                                    | Transfer-batch-only projection of validated witnesses; generic AIR hashing/non-membership is not implemented.         |
 | Metadata          | `dsid`, `slot`                                                                           | Constant across rows.                                                                                                 |
 
 The metadata map is canonically Norito-encoded and committed with raw
@@ -113,32 +120,33 @@ proofs and binary/golden proof artifacts produced with the single
 
 ### Implemented math and deferred constraints
 - **Field packing:** bytes are chunked into 7-byte limbs (little-endian). Each limb `limb_j = Σ_{k=0}^{6} byte_{7j+k} * 256^k`; reject limbs ≥ Goldilocks modulus.
-- **Numeric delta:** the base trace reconstructs the complete fixed-width u64
+- **Transfer delta:** the base trace reconstructs the complete fixed-width u64
   pre/post values and constrains `delta = value_new - value_old` in Goldilocks.
-  **TODO:** constrain `running_asset_delta`, asset grouping, mint/burn supply, and
-  final conservation before enabling those operations in public state proofs.
 - **Padding:** introduce `s_active`. Multiply all row constraints by `s_active` and enforce a contiguous prefix: `s_active[i] ≥ s_active[i+1]`. Padding rows (`s_active=0`) must keep constant values but are otherwise unconstrained.
-- **Ordering hash:** Poseidon hash (domain `fastpq:v1:ordering`) over row encodings; stored in Public IO for auditability.
+- **Ordering hash:** full-width BLAKE2b-256 (domain `fastpq:v1:ordering`) over the
+  canonical Norito transition encoding; stored in Public IO for auditability.
 
 ## V1 — STARK Prover Core
 
 ### Objectives
-- Build dense-MDS Poseidon Merkle commitments over trace and lookup evaluation vectors. Parameters: Goldilocks `x^7` S-box, rate=2, capacity=1, full rounds=8, partial rounds=57, and the constants pinned by `artifacts/poseidon/constants.ron`.
+- Build dense-MDS Poseidon Merkle commitments over trace and LDE evaluation vectors. Parameters: Goldilocks `x^7` S-box, rate=2, capacity=1, full rounds=8, partial rounds=57, and the constants pinned by `artifacts/poseidon/constants.ron`.
 - Low-degree extension: evaluate each column on the multiplicative coset
   `D = { o · g^i | i = 0 .. N_eval-1 }`, where `N_eval = 2^{k+b}` divides the
   2-adic capacity of Goldilocks, `g` is the pinned root of exact order
   `N_eval`, and `o = omega_coset` is the pinned nonzero offset outside that
-  subgroup. Record the domain parameters in the transcript (tag
-  `fastpq:v1:lde`).
-- Composition commitment: combine the 22 implemented residues with 22
+  subgroup. The sole compiled parameter record fixes this geometry; the
+  parameter identifier is bound into transcript initialization.
+- Composition commitment: combine the 16 implemented residues with 16
   independently sampled coefficients. Proving and verifier-side derivation
   first require every residue to vanish on the canonical base trace; the raw
   LDE composition is then committed for low-degree testing.
-- The transcript still derives `γ` and commits a deterministic trace-side
-  accumulator for protocol compatibility. **TODO:** add a separately committed
-  permission table, membership relation, and boundary equation before enabling
-  RoleGrant/RoleRevoke in a public semantic profile.
-- FRI with arity `r ∈ {8, 16}`: for each layer, absorb the root with tag `fastpq:v1:fri_layer_ℓ`, sample `β_ℓ` (tag `fastpq:v1:beta_ℓ`), and fold an opened coset using the domain elements for that coset. Verifiers must bind every opened value to its Merkle path and evaluation point; an x-free linear combination of sibling values is not a valid low-degree check.
+- FRI with the sole V1 binary arity `r = 2`: for each layer, absorb the
+  six-lane 384-bit root with tag `fastpq:v1:fri_layer:<round>`, sample a
+  `GoldilocksFp4V1` challenge `β_ℓ` (tag `fastpq:v1:beta:<round>`), and fold
+  an opened multiplicative coset using the domain elements for that coset.
+  Verifiers must bind every opened value to its Merkle path and evaluation
+  point; an x-free linear combination of sibling values is not a valid
+  low-degree check.
   The implemented prover/verifier now uses strided multiplicative cosets,
   inverse-subgroup decomposition, the round domain point, and adaptive final
   arity without repeat-last padding. It stops while the complete terminal domain
@@ -146,7 +154,7 @@ proofs and binary/golden proof artifacts produced with the single
   inverse-interpolates it to reject coefficients at or above the verifier-owned
   reduced bound. The initial exclusive composition bound is conservatively
   `2 * N_trace`, matching the maximum quadratic degree of the V1 residue ledger.
-- V1 verification deterministically rebuilds the canonical trace, LDE, lookup, and
+- V1 verification deterministically rebuilds the canonical trace, LDE, and
   AIR commitments from the supplied batch before authenticating sampled LDE
   query chunks and per-round FRI openings. The FRI base layer is the AIR
   composition evaluation vector, so sampled constraints are also recomputed
@@ -155,17 +163,17 @@ proofs and binary/golden proof artifacts produced with the single
   ```
   Proof {
       protocol_version: u16,
-      params_version: u16,
-      parameter_set: String,
+      parameter: String,
+      trace_commitment: GoldilocksDigest384V1,
       public_io: PublicIO,
-      trace_root: [u8; 32],
-      air_trace_root: [u8; 32],
-      air_composition_root: [u8; 32],
-      lookup_root: [u8; 32],
+      trace_root: GoldilocksDigest384V1,
+      air_trace_root: GoldilocksDigest384V1,
+      air_composition_root: GoldilocksDigest384V1,
+      lde_root: GoldilocksDigest384V1,
       lde_domain_size: u32,
-      fri_layers: Vec<[u8; 32]>,
-      alphas: Vec<Field>,
-      betas: Vec<Field>,
+      alphas: Vec<u64>,
+      betas: Vec<GoldilocksFp4V1>,
+      fri_layers: Vec<GoldilocksDigest384V1>,
       queries: Vec<QueryOpening>,
       air_openings: Vec<AirConstraintOpening>,
       fri_queries: Vec<FriQueryOpening>,
@@ -173,51 +181,63 @@ proofs and binary/golden proof artifacts produced with the single
 
   QueryOpening {
       index: u32,
-      value: Field,
-      chunk_values: Vec<Field>,
-      merkle_path: Vec<Field>,
+      value: u64,
+      chunk_values: Vec<u64>,
+      merkle_path: Vec<GoldilocksDigest384V1>,
+  }
+
+  FriRoundOpening {
+      round: u32,
+      index: u32,
+      values: Vec<GoldilocksFp4V1>,
+      folded_value: GoldilocksFp4V1,
+      merkle_path: Vec<GoldilocksDigest384V1>,
   }
 
   FriQueryOpening {
       initial_index: u32,
       rounds: Vec<FriRoundOpening>,
       final_index: u32,
-      final_values: Vec<Field>,
-      final_merkle_path: Vec<Field>,
+      final_values: Vec<GoldilocksFp4V1>,
+      final_merkle_path: Vec<GoldilocksDigest384V1>,
   }
 
   AirConstraintOpening {
       index: u32,
-      current_row: Vec<Field>,
-      next_row: Vec<Field>,
-      current_row_path: Vec<Field>,
-      next_row_path: Vec<Field>,
-      composition_value: Field,
-      composition_path: Vec<Field>,
+      current_row: Vec<u64>,
+      next_row: Vec<u64>,
+      current_row_path: Vec<GoldilocksDigest384V1>,
+      next_row_path: Vec<GoldilocksDigest384V1>,
+      composition_value: u64,
+      composition_path: Vec<GoldilocksDigest384V1>,
   }
   ```
 - Node-facing V1 verification deterministically rebuilds the canonical trace and
-  its LDE, lookup, AIR-trace, and AIR-composition commitments from the supplied
-  batch before accepting proof-carried roots or accumulators. `VerifyLimits`
+  its LDE, AIR-trace, and AIR-composition commitments from the supplied batch
+  before accepting proof-carried roots or openings. `VerifyLimits`
   caps proof material, query counts, path depth, transition count, and payload
-  size before that work begins; large 1k/5k/20k-row traces remain in prover and
-  benchmark regression suites.
+  size before that work begins; the 1k-row CPU/GPU parity case and 20k-row
+  benchmark workloads remain outside the serialized fixture set.
+- The release batch, proof, and public-I/O carriers have explicit
+  `TransitionBatchV1`, `ProofV1`, and `PublicIOV1` Norito schema identities.
+  Pre-release schema headers are rejected, so removed ordinals and
+  lookup/version fields cannot shift an old payload into the smaller release
+  layouts.
 
 ### Implemented residue accounting
 
 | Residues | Count | Implemented check |
 |----------|------:|-------------------|
-| Selector booleanity | 8 | Every selector is 0 or 1. |
-| Selector relations | 2 | Active equals the operation-selector sum; `s_perm` equals the role-selector sum. |
+| Selector booleanity | 3 | Every V1 selector is 0 or 1. |
+| Selector relations | 1 | Active equals the Transfer-plus-MetaSet selector sum. |
 | Active prefix | 1 | An inactive row cannot be followed by an active row. |
-| Numeric delta | 1 | Full fixed-width post-minus-pre value on Transfer/Mint/Burn fixture rows. |
+| Transfer delta | 1 | Full fixed-width post-minus-pre value on Transfer rows. |
 | Stable statement data | 10 | Eight metadata commitment limbs, `dsid`, and `slot` remain stable. |
 
-The 22 residues above are the complete implemented AIR composition schema.
-They do not constrain running supply/conservation, permission-table membership,
-generic SMT node hashing/non-membership, or old/new-root boundary totals. Those
-features stay disabled in public semantics until their independent constraints
-and adversarial tests land.
+The 16 residues above are the complete implemented AIR composition schema.
+They do not constrain generic SMT node hashing/non-membership or old/new-root
+boundary totals; V1 transfer verification deterministically replays those
+witness checks from the caller-carried batch.
 
 Padding rows are handled through `s_active`; dummy rows extend the trace to `N_trace` without violating constraints.
 Before interpolation, both proving and verifier-side derivation evaluate every
@@ -226,50 +246,54 @@ non-zero residue. The composition polynomial over the extended domain is a
 low-degree commitment and is not required to vanish at every LDE point.
 
 ## Encoding & Transcript (Global)
-- **Byte packing:** base-256 (7-byte limbs, little-endian). Tests in `fastpq_prover/tests/packing.rs`.
+- **Byte packing:** base-256 (7-byte limbs, little-endian). Unit tests live beside
+  `fastpq_prover/src/packing.rs`.
 - **Field encoding:** canonical Goldilocks (little-endian 64-bit limb, reject ≥ p).
-  Proof-carried Poseidon field commitments use the repository's canonical
-  32-byte field container; transfer touched-balance roots are canonical
-  `iroha_crypto::Hash` bytes, not Poseidon fields. After proof-size limits and
-  before transcript verification, the verifier walks every proof-carried field
-  scalar/container and rejects alternate representatives; opaque public hashes
-  are intentionally excluded from this field preflight.
+  `GoldilocksFp4V1` values encode four canonical limbs in 32 bytes; native-STARK
+  commitments and Merkle siblings use `GoldilocksDigest384V1`, which encodes six
+  canonical lanes in 48 bytes and rejects alternate representatives during
+  construction and decoding.
+  Transfer touched-balance roots remain 32-byte `iroha_crypto::Hash` values, not
+  Poseidon field elements. After proof-size limits and before transcript
+  verification, the verifier walks every remaining proof-carried scalar and
+  extension value and rejects alternate representatives; digest carriers have
+  already enforced canonicality, and opaque public hashes are intentionally
+  excluded from this field preflight.
 - **Transcript (Fiat–Shamir):**
-  1. BLAKE2b absorb `protocol_version`, `params_version`, `parameter_set`, `public_io`, and the Poseidon commitment tag (`fastpq:v1:init`).
-  2. Absorb `trace_root`, `lookup_root` (`fastpq:v1:roots`).
-  3. Derive lookup challenge `γ` (`fastpq:v1:gamma`).
-  4. Derive exactly 22 V1 composition challenges `α_j`
-     (`fastpq:v1:alpha_j`), one for each current constraint residue. Coefficients
+  1. Initialize the six-lane Poseidon transcript from the canonical Norito
+     encoding of `protocol_version`, `parameter`, and `public_io` under
+     `fastpq:v1:init`.
+  2. Absorb `trace_root` under `fastpq:v1:trace_root`, then derive one
+     `fastpq:v1:column_mix:<i>` base-field challenge per trace column.
+  3. Absorb `lde_root`, `trace_root` (`fastpq:v1:roots`).
+  4. Derive exactly 16 V1 composition challenges `α_j`
+     (`fastpq:v1:alpha:<j>`), one for each current constraint residue. Coefficients
      are never reused across residues.
   5. Absorb `air_trace_root`, `air_composition_root` (`fastpq:v1:air_roots`).
-  6. Absorb the lookup grand product (`fastpq:v1:lookup:product`).
-  7. For each FRI layer root, absorb with `fastpq:v1:fri_layer_ℓ`, derive `β_ℓ` (`fastpq:v1:beta_ℓ`).
-  8. Derive query indices (`fastpq:v1:query_index`).
+  6. For each nonterminal FRI layer root, absorb
+     `fastpq:v1:fri_layer:<round>` and derive the corresponding Fp4 challenge
+     `fastpq:v1:beta:<round>`; absorb the terminal root under
+     `fastpq:v1:fri:final`.
+  7. Derive deduplicated query indices with rejection sampling under
+     `fastpq:v1:query_index:<counter>`.
 
   Tags are lowercase ASCII; verifiers reject mismatches before sampling challenges. The
-  `v1_balanced_{1k,5k}.bin` and `stage4_balanced_preview.bin` proof fixtures pin the resulting
-  transcript bytes.
-- **Versioning:** `protocol_version = 1`; the corrected `x^7` catalogue with
-  coherent trace/LDE roots uses `params_version = 5` for
-  `fastpq-lane-balanced` and `6` for `fastpq-lane-latency`. Versions 1 and 2
-  identify the retired non-bijective `x^5` permutation. Versions 3 and 4 used
-  independently generated roots that did not make the advertised blowup
-  stride advance to the next trace point. Versions 1--4 are rejected.
-  Version lookup compares the complete parameter record, not only its stable
-  name, so a same-name mutation cannot inherit a canonical version.
-  This first-release hard cut invalidates proofs and golden proof fixtures made
-  with the former two-alpha composition or without verifier-recomputed
-  LDE/lookup/AIR binding, as well as fixture rows using short numeric values or
-  multi-segment account suffixes; regenerate them with the current prover.
+  `v1_raw_transcript_64.bin` fixture pins the resulting transcript bytes within
+  the public verifier's admitted geometry. Larger-scale performance evidence is
+  captured separately by the release benchmarks.
+- **Versioning:** `protocol_version = 1` is the only release protocol. The
+  `parameter` name selects one exact record from the compiled canonical
+  catalogue, which the prover and verifier use directly. There is no secondary
+  catalogue-version compatibility layer. Changes to the proof schema,
+  transcript, or canonical parameters are first-release hard cuts and require
+  regenerating the proof fixture.
 
-## Permission lookup status
+## Permission commitment status
 
-Role fixture rows can be encoded and hashed for deterministic raw-proof tests,
-but V1 has no independently committed permission table or membership boundary
-equation. `perm_root` is authenticated statement context only. Public state and
-AXT profiles therefore reject RoleGrant and RoleRevoke. **TODO:** implement the
-table commitment, lookup relation, root binding, and adversarial non-membership
-tests before enabling permission mutations.
+`perm_root` is authenticated statement context only. V1 has no role operation,
+permission witness column, lookup product, or permission-mutation proof type.
+Adding one requires a new explicitly constrained first-release schema rather
+than reviving the removed experimental lookup scaffolding.
 
 ## Transfer touched-balance tree
 
@@ -286,8 +310,7 @@ sender/receiver update it:
 
 The verifier deterministically repeats this validation from the supplied batch.
 Trace Merkle columns mirror the validated witness but are not a generic SMT AIR;
-`neighbour_leaf`, arbitrary inserts/deletes, and non-membership remain TODOs and
-cannot be used through the public semantic profile.
+arbitrary inserts/deletes and non-membership are not part of V1.
 
 ## Soundness Parameters & SLOs
 
@@ -295,15 +318,15 @@ These estimates describe the cryptographic low-degree/query layer only. They do
 not compensate for an absent semantic constraint; the explicit profile gate
 above is what prevents unsupported operations from reaching production proof
 acceptance.
-| N_trace | blowup | FRI arity | layers | queries | est bits | Proof size (≤) | RAM (≤) | P95 latency (≤) |
-| ------- | ------ | --------- | ------ | ------- | -------- | --------------- | ------- | ---------------- |
-| 2^15    | 8      | 8         | 5      | 52      | ~190     | 300 KB          | 1.5 GB  | 0.40 s (A100)    |
-| 2^16    | 8      | 8         | 6      | 58      | ~132     | 420 KB          | 2.5 GB  | 0.75 s (A100)    |
-| 2^17    | 16     | 16        | 5      | 64      | ~142     | 550 KB          | 3.5 GB  | 1.20 s (A100)    |
+| N_trace | blowup | FRI arity | layers | queries | aggregate arithmetic target | Proof size (≤) | RAM (≤) | P95 latency (≤) |
+| ------- | ------ | --------- | ------ | ------- | --------------------------- | --------------- | ------- | ---------------- |
+| 2^16    | 8      | 2         | ≤18    | 136     | 128 bits met; qualification blocked pending review | measured by release fixture | measured by release run | measured by release run |
 
-Derivations follow Appendix A. Deterministic verifier-negative tests cover malformed proofs, and
-the canonical parameter catalogue enforces its configured security floor. The empirical
-Monte Carlo soundness harness remains the explicit Appendix A TODO.
+Derivations follow Appendix A. Deterministic verifier-negative tests cover
+malformed proofs, and the sole V1 parameter record fixes the domain geometry,
+six-lane commitment construction, degree-four challenge field, 128-bit target,
+and query count. Independent protocol-specific soundness qualification remains
+required before the arithmetic result can be treated as release evidence.
 
 ## Public IO Schema
 | Field            | Bytes | Encoding                              | Notes                               |
@@ -314,9 +337,9 @@ Monte Carlo soundness harness remains the explicit Appendix A TODO.
 | `new_root`       | 32    | canonical hash bytes                  | Transfer touched-balance post-root; external context for opaque AXT. |
 | `perm_root`      | 32    | opaque commitment bytes               | Authenticated context only; permission membership is not proven in V1. |
 | `tx_set_hash`    | 32    | BLAKE2b                               | Sorted instruction identifiers.     |
-| `parameter`      | var   | UTF-8 (e.g., `fastpq-lane-balanced`)  | Parameter set name.                 |
-| `protocol_version`, `params_version` | 2 each | little-endian u16 | Version values.                      |
-| `ordering_hash`  | 32    | Poseidon (little-endian)              | Stable hash of sorted rows.         |
+| `parameter`      | var   | UTF-8 (`fastpq-state-transition-stark-v1`) | Sole V1 parameter set name.         |
+| `protocol_version` | 2   | little-endian u16                     | The sole V1 protocol discriminator. |
+| `ordering_hash`  | 32    | domain-separated BLAKE2b-256          | Stable hash of sorted rows.         |
 
 Generic deletion and absent-key/non-membership proofs are not implemented in
 the release profile.
@@ -327,22 +350,26 @@ binding mirrors, transfer transcripts, remote-spend claim preimages,
 amount/expiry/manifest/DA mirrors, and the batch seal. Metadata never selects a
 proof semantics profile.
 
-## Encoding Hashes
-- Ordering hash: Poseidon (tag `fastpq:v1:ordering`).
-- Batch artifact hash: BLAKE2b over `PublicIO || proof.commitments` (tag `fastpq:v1:artifact`).
+## Commitment encodings
+- Ordering hash: full-width BLAKE2b-256 (tag `fastpq:v1:ordering`).
+- Preprocessing trace commitment: six-lane Poseidon-x7 Goldilocks digest over
+  typed column leaves, binary nodes, parameter identity, and exact trace shape.
 
 ## Stage Definitions of Done (DoD)
 - **Stage 1 DoD**
-  - Packing round-trip tests and fixtures merged.
-  - AIR spec (`specs/fastpq_air.md`) includes `s_active`, asset/SMT columns, selector definitions (including `s_perm`), and symbolic constraints.
+  - Canonical packing unit vectors merged.
+  - This implementation-coupled plan records the exact V1 columns and symbolic constraints.
   - Ordering hash recorded in PublicIO and verified via fixtures.
   - Transfer touched-balance witness generation and key-derived path binding implemented.
-  - **TODO:** generic membership/non-membership, permission lookup, supply, and mixed-operation conservation.
+  - Non-membership, permission mutation, and supply operations are outside V1.
 - **V1 Prover DoD**
-  - Transcript spec implemented; tag/order unit tests and the binary V1 proof fixtures pin the transcript.
+  - Transcript spec implemented; tag/order unit tests and the binary V1 proof fixture pin the transcript.
   - Dense-MDS Poseidon constants and the Goldilocks `x^7` S-box are pinned in prover and verifier with endianness and former-collision tests across architectures.
-  - Canonical parameter security checks are active; proof size/RAM/latency SLOs are recorded.
-    **TODO:** land the empirical 22-residue Monte Carlo CI guard described in Appendix A.
+  - Canonical parameter geometry checks are active; the sole record declares
+    the 128-bit aggregate arithmetic target, while production qualification
+    remains unavailable until independent review is registered. Proof
+    size/RAM/latency must be measured from release runs.
+    **TODO:** land the empirical 16-residue Monte Carlo characterization described in Appendix A.
 - **Stage 3 DoD**
   - Scheduler API (`SubmitProofRequest`, `ProofResult`) documented with idempotency keys.
   - Proof artifacts stored content-addressably with retry/backoff.
@@ -352,15 +379,22 @@ proof semantics profile.
 - Target kernels: LDE (NTT), Poseidon hashing, Merkle tree construction, FRI folding.
 - Determinism: disable fast-math, ensure bit-identical outputs across CPU, CUDA, Metal. CI must compare proof roots across devices.
 - Benchmark suite comparing CPU vs GPU on reference hardware (e.g., Nvidia A100, AMD MI210).
+- CUDA command/event waits are bounded at 120 seconds. Any non-success status from asynchronous
+  event or stream completion handling—including, but not limited to, a timeout—quarantines the
+  backend for the process lifetime and deliberately abandons resources whose ownership is
+  uncertain. Subsequent operations therefore cannot accumulate or free device buffers that may
+  still be in flight. Direct CUDA calls return an error; the proof hashing layer records the
+  dispatch failure and uses its deterministic CPU fallback. Mandatory-GPU startup preflight
+  remains a separate fail-closed gate.【crates/fastpq_prover/cuda/fastpq_cuda.cu:22】【crates/fastpq_prover/cuda/fastpq_cuda.cu:42】【crates/fastpq_prover/src/trace.rs:1252】
 - Metal backend (Apple Silicon):
-  - Build script compiles the kernel suite (`metal/kernels/ntt_stage.metal`, `metal/kernels/poseidon2.metal`, `metal/kernels/bn254.metal`) into `fastpq.metallib` via `xcrun metal`/`xcrun metallib`; install and select full Xcode (standalone Command Line Tools are insufficient), after which the build automatically runs `xcodebuild -downloadComponent MetalToolchain` if either Metal compiler tool is unavailable.【crates/fastpq_prover/build.rs:105】【crates/fastpq_prover/build.rs:191】
+  - Build script compiles the kernel suite (`metal/kernels/ntt_stage.metal`, `metal/kernels/poseidon.metal`, `metal/kernels/bn254.metal`) into `fastpq.metallib` via `xcrun metal`/`xcrun metallib`; install and select full Xcode (standalone Command Line Tools are insufficient). The build probes the optional MetalToolchain but never installs components or clears system caches; missing tools warn and select runtime source compilation.【crates/fastpq_prover/build.rs:30】【crates/fastpq_prover/build.rs:107】
   - Manual rebuild (mirrors `build.rs`) for CI warm-ups or deterministic packaging:
     ```bash
     export OUT_DIR=$PWD/target/metal && mkdir -p "$OUT_DIR"
     xcrun metal -std=macos-metal2.4 -O3 -c -I crates/fastpq_prover/metal/include -I crates/fastpq_prover/metal/kernels crates/fastpq_prover/metal/kernels/ntt_stage.metal -o "$OUT_DIR/ntt_stage.air"
-    xcrun metal -std=macos-metal2.4 -O3 -c -I crates/fastpq_prover/metal/include -I crates/fastpq_prover/metal/kernels crates/fastpq_prover/metal/kernels/poseidon2.metal -o "$OUT_DIR/poseidon2.air"
+    xcrun metal -std=macos-metal2.4 -O3 -c -I crates/fastpq_prover/metal/include -I crates/fastpq_prover/metal/kernels crates/fastpq_prover/metal/kernels/poseidon.metal -o "$OUT_DIR/poseidon.air"
     xcrun metal -std=macos-metal2.4 -O3 -c -I crates/fastpq_prover/metal/include -I crates/fastpq_prover/metal/kernels crates/fastpq_prover/metal/kernels/bn254.metal -o "$OUT_DIR/bn254.air"
-    xcrun metallib "$OUT_DIR/ntt_stage.air" "$OUT_DIR/poseidon2.air" "$OUT_DIR/bn254.air" -o "$OUT_DIR/fastpq.metallib"
+    xcrun metallib "$OUT_DIR/ntt_stage.air" "$OUT_DIR/poseidon.air" "$OUT_DIR/bn254.air" -o "$OUT_DIR/fastpq.metallib"
     ```
     Release builds let `build.rs` generate the library and embed its Cargo `OUT_DIR` path; packaged binaries whose path is stale use embedded source compilation. `FASTPQ_METAL_LIB` remains a debug/dev-only override rather than production configuration.【crates/fastpq_prover/build.rs:210】【crates/fastpq_prover/src/metal.rs:2475】
   - The LDE kernel now assumes the evaluation buffer is zero-initialised on the host. Keep the existing `vec![0; ..]` allocation path or explicitly zero buffers when reusing them.【crates/fastpq_prover/src/metal.rs:233】【crates/fastpq_prover/metal/kernels/ntt_stage.metal:141】
@@ -372,28 +406,27 @@ proof semantics profile.
 - Multi-queue dispatch is now automatic on discrete Macs: the host inspects `is_low_power`, `is_headless`, and the device location to decide whether to spin up two Metal command queues, only fans out when the workload carries at least 16 columns (scaled by the resolved fan-out), and round-robins the column batches so long traces keep both GPU lanes busy without sacrificing determinism. The command-buffer semaphore now enforces a “two in flight per queue” floor, and queue telemetry records the aggregate measurement window (`window_ms`) plus normalized busy ratios (`busy_ratio`) for the global semaphore and every queue entry so release artefacts can prove both queues stayed ≥50 % busy over the same time span. Override the defaults with `FASTPQ_METAL_QUEUE_FANOUT` (1–4 lanes) and `FASTPQ_METAL_COLUMN_THRESHOLD` (minimum total columns before fan-out); the Metal parity tests force the overrides so multi-GPU Macs stay covered, and the resolved policy is logged alongside the queue-depth telemetry and the new `metal_dispatch_queue.queues[*]` block.【crates/fastpq_prover/src/metal.rs:620】【crates/fastpq_prover/src/metal.rs:900】【crates/fastpq_prover/src/metal.rs:2254】【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:871】
 - Metal detection now probes `MTLCreateSystemDefaultDevice`/`MTLCopyAllDevices` directly, and `FASTPQ_DEBUG_METAL_ENUM` prints the enumerated devices when set so headless CI runs can explain why `FASTPQ_GPU=gpu` still downgraded to the CPU path. Detection reflects usable `MTLDevice` hardware and no longer equates a missing offline metallib with a missing GPU. When the override is set to `gpu` but no accelerator is detected, `fastpq_metal_bench` errors immediately with a pointer to the debug knob instead of silently continuing on the CPU. This narrows the “silent CPU fallback” class called out in WP2‑E and gives operators a knob to capture enumeration logs inside wrapped benchmarks.【crates/fastpq_prover/src/backend.rs:716】【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:1965】
   - Poseidon GPU timings now refuse to treat CPU fallbacks as “GPU” data. `hash_columns_gpu` reports whether the accelerator actually ran, `measure_poseidon_gpu` drops samples (and logs a warning) whenever the pipeline falls back, and the Poseidon microbench child exits with an error if GPU hashing is unavailable. As a result, `gpu_recorded=false` whenever Metal execution falls back, the queue summary still records the failed dispatch window, and dashboard summaries immediately flag the regression. The wrapper (`scripts/fastpq/wrap_benchmark.py`) now fails when `metal_dispatch_queue.poseidon.dispatch_count == 0` so Stage 7 bundles can’t be signed without real GPU Poseidon dispatch evidence.【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:1123】【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:2200】【scripts/fastpq/wrap_benchmark.py:912】
-- Poseidon hashing now mirrors that staging contract. `PoseidonColumnBatch` produces flattened payload buffers plus offset/length descriptors, the host rebases those descriptors per batch and runs a `COLUMN_STAGING_PIPE_DEPTH` double buffer so payload + descriptor uploads overlap with GPU work, and both Metal/CUDA kernels consume the descriptors directly so each dispatch absorbs all padded rate blocks on-device before emitting the column digests. `hash_columns_from_coefficients` now streams those batches through a GPU worker thread, keeping 64+ columns in flight by default on discrete GPUs (tunable via `FASTPQ_POSEIDON_PIPE_COLUMNS` / `FASTPQ_POSEIDON_PIPE_DEPTH`). The Metal bench records the resolved pipeline settings + batch counts under `metal_dispatch_queue.poseidon_pipeline`, and `kernel_profiles.poseidon.bytes` includes the descriptor traffic so Stage 7 captures prove the new ABI end-to-end.【crates/fastpq_prover/src/trace.rs:604】【crates/fastpq_prover/src/trace.rs:809】【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:1963】【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:2675】【crates/fastpq_prover/src/metal.rs:2290】【crates/fastpq_prover/cuda/fastpq_cuda.cu:351】
-- Stage7-P2 fused Poseidon hashing now lands in both GPU backends. The streaming worker feeds contiguous `PoseidonColumnBatch::column_window()` slices into `hash_columns_gpu_fused`, which pipes them to `poseidon_hash_columns_fused` so each dispatch writes `leaf_digests || parent_digests` with the canonical `(⌈columns / 2⌉)` parent mapping. `ColumnDigests` keeps both slices, and `merkle_root_with_first_level` consumes the parent layer immediately, so the CPU never recomputes depth‑1 nodes and Stage7 telemetry can assert that GPU captures report zero “fallback” parents whenever the fused kernel succeeds.【crates/fastpq_prover/src/trace.rs:1070】【crates/fastpq_prover/src/gpu.rs:365】【crates/fastpq_prover/src/metal.rs:2422】【crates/fastpq_prover/cuda/fastpq_cuda.cu:631】
+- Poseidon column hashing has one accelerator path in V1. `PoseidonColumnBatch` builds one flattened payload plus checked offset/length descriptors. CUDA submits that batch directly; Metal divides it into adaptive column ranges and overlaps its completion-backed command slots internally. The trace layer then hashes the canonical `(⌈columns / 2⌉)` depth-1 layer through the shared Merkle-pair helper. `ColumnDigests` carries that optional first level and `merkle_root_with_first_level` consumes it immediately.【crates/fastpq_prover/src/trace.rs:970】【crates/fastpq_prover/src/gpu.rs:478】【crates/fastpq_prover/src/metal.rs:3658】【crates/fastpq_prover/cuda/fastpq_cuda.cu:2636】
 - `fastpq_metal_bench` now emits a `device_profile` block with the Metal device name, registry id, `low_power`/`headless` flags, location (built-in, slot, external), discrete indicator, `hw.model`, and the derived Apple SoC label (for example, “M3 Max”). Stage 7 dashboards consume this field to bucket captures by M4/M3 vs discrete GPUs without parsing hostnames, and the JSON ships next to the queue/heuristic evidence so every release artefact proves which fleet class produced the run.【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:2536】
   - FFT host/device overlap now uses a double-buffered staging window: while batch *n* finishes inside `fastpq_fft_post_tiling`, the host flattens batch *n + 1* into the second staging buffer and only pauses when a buffer must be recycled. The backend records how many batches were flattened plus the time spent flattening versus waiting for GPU completion, and `fastpq_metal_bench` surfaces the aggregated `column_staging.{batches,flatten_ms,wait_ms,wait_ratio}` block so release artefacts can prove the overlap instead of silent host stalls. The JSON report now also breaks the totals down per phase under `column_staging.phases.{fft,lde,poseidon}`, letting Stage 7 captures prove whether FFT/LDE/Poseidon staging is host-bound or waiting on GPU completion. Poseidon permutations reuse the same pooled staging buffers, so `--operation poseidon_hash_columns` captures now emit the Poseidon-specific `column_staging` deltas alongside the queue-depth evidence without bespoke instrumentation. The new `column_staging.samples.{fft,lde,poseidon}` arrays record the per-batch `batch/flatten_ms/wait_ms/wait_ratio` tuples, making it trivial to prove that the `COLUMN_STAGING_PIPE_DEPTH` overlap is holding (or to spot when the host starts waiting for GPU completions).【crates/fastpq_prover/src/metal.rs:319】【crates/fastpq_prover/src/metal.rs:330】【crates/fastpq_prover/src/metal.rs:1813】【crates/fastpq_prover/src/metal.rs:2488】【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:1189】【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:1216】
-- Poseidon acceleration caches round constants and MDS rows in threadgroup memory and keeps the full/partial rounds unrolled. Production Goldilocks paths deliberately assign one independent state per lane and size every grid from the actual workload, avoiding the old artificial 4,096-thread floor while preserving CPU/GPU parity. Lane-width tuning remains available for profiling, but effective telemetry reports `states_per_lane = 1`; BN254 Poseidon retains its separately bounded multi-state geometry. Pipeline telemetry (`chunk_columns`, `pipe_depth`, `batches`, `fallbacks`) continues to prove the overlap window on GPU traces.【crates/fastpq_prover/metal/kernels/poseidon2.metal:1】【crates/fastpq_prover/src/metal.rs:3115】【crates/fastpq_prover/src/trace.rs:299】
+- Poseidon acceleration caches round constants and MDS rows in threadgroup memory and keeps the full/partial rounds unrolled. Production Goldilocks paths deliberately assign one independent state per lane and size every grid from the actual workload, avoiding the old artificial 4,096-thread floor while preserving CPU/GPU parity. Lane-width tuning remains available for profiling, but effective telemetry reports `states_per_lane = 1`; BN254 Poseidon retains its separately bounded multi-state geometry. Column-batch telemetry reports the submitted `columns`, successful `batches`, and `fallbacks`; actual Metal command overlap remains in queue, staging, and kernel-profile telemetry rather than a synthetic pipeline-depth field.【crates/fastpq_prover/metal/kernels/poseidon.metal:1】【crates/fastpq_prover/src/metal.rs:3115】【crates/fastpq_prover/src/trace.rs:400】
   - LDE tile staging mirrors the FFT contract: the 256-word tile executes no more than eight radix-2 stages, and the post-tiling kernel handles every wider butterfly. Override with `FASTPQ_METAL_LDE_TILE_STAGES` (1–8) whenever you need a deterministic depth; the host only launches the post-tiling dispatch when the heuristic stops early so queue-depth and kernel telemetry stay deterministic.【crates/fastpq_prover/src/metal.rs:827】
-  - Kernel micro-optimisation: the shared-memory FFT/LDE tiles now reuse per-lane twiddle and coset strides instead of re-evaluating `pow_mod*` for every butterfly. Each lane precomputes `w_seed`, `w_stride`, and (when required) the coset stride once per block, then streams through the offsets, slashing the scalar multiplications inside `apply_stage_tile`/`apply_stage_global` and bringing the 20 k-row LDE mean down to ~1.55 s with the latest heuristics (still above the 950 ms goal, but a further ~50 ms improvement over the batching-only tweak).【crates/fastpq_prover/metal/kernels/ntt_stage.metal:164】【fastpq_metal_bench_run11.json:1】
+  - Kernel micro-optimisation: the shared-memory FFT/LDE tiles reuse per-lane twiddle and coset strides instead of re-evaluating `pow_mod*` for every butterfly. Each lane precomputes `w_seed`, `w_stride`, and (when required) the coset stride once per block, then streams through the offsets to reduce inner-loop multiplications in `apply_stage_tile`/`apply_stage_global`. Quantify the result with a fresh 20 k-row capture; no reference report is checked in.【crates/fastpq_prover/metal/kernels/ntt_stage.metal:164】
   - The kernel suite now has a dedicated reference (`specs/fastpq_metal_kernels.md`) that documents each entry point, the threadgroup/tile limits enforced in `fastpq.metallib`, and the reproduction steps for compiling the metallib manually.【specs/fastpq_metal_kernels.md:1】
   - The benchmark report now emits a `post_tile_dispatches` object that records how many FFT/IFFT/LDE batches ran in the dedicated post-tiling kernel (per-kind dispatch counts plus the stage/log₂ boundaries). `scripts/fastpq/wrap_benchmark.py` copies the block into `benchmarks.post_tile_dispatches`/`benchmarks.post_tile_summary`, and the manifest gate refuses GPU captures that omit the evidence so every 20 k-row artefact proves the multi-pass kernel ran on-device.【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:1048】【scripts/fastpq/wrap_benchmark.py:255】【xtask/src/fastpq.rs:280】
   - Set `FASTPQ_METAL_TRACE=1` to emit per-dispatch debug logs (pipeline label, threadgroup width, launch groups, elapsed time) for Instruments/Metal trace correlation.【crates/fastpq_prover/src/metal.rs:346】
 - The dispatch queue is now instrumented: `FASTPQ_METAL_MAX_IN_FLIGHT` caps concurrent Metal command buffers (auto default derived from the detected GPU core count via `system_profiler`, clamped to at least the queue fan-out floor with a host-parallelism fallback when macOS refuses to report the device). The bench enables queue-depth sampling so the exported JSON carries a `metal_dispatch_queue` object with `limit`, `dispatch_count`, `max_in_flight`, `busy_ms`, and `overlap_ms` fields for release evidence, adds a nested `metal_dispatch_queue.poseidon` block whenever a Poseidon-only capture (`--operation poseidon_hash_columns`) runs, and emits a `metal_heuristics` block describing the resolved command-buffer limit plus the FFT/LDE batch columns (including whether overrides forced the values) so reviewers can audit the scheduling decisions alongside the telemetry. Poseidon kernels also feed a dedicated `poseidon_profiles` block distilled from the kernel samples so bytes/thread, occupancy, and dispatch geometry are tracked across artefacts. If the primary run can’t collect queue depth or the LDE zero-fill stats (for example, when a GPU dispatch silently falls back to the CPU), the harness automatically fires a single probe dispatch to gather the missing telemetry and now synthesizes host zero-fill timings when the GPU refuses to report them, so published evidence always includes the `zero_fill` block.【crates/fastpq_prover/src/metal.rs:2056】【crates/fastpq_prover/src/metal.rs:247】【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:1524】【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:2078】
-  - Set `FASTPQ_SKIP_GPU_BUILD=1` to opt out of MetalToolchain auto-download and offline shader compilation; the warning records the skip, while visible macOS Metal hardware remains usable through embedded runtime source compilation.【crates/fastpq_prover/build.rs:28】【crates/fastpq_prover/src/metal.rs:2348】
-  - Runtime detection uses the Metal API to confirm a usable device independently of shader-library location. The build prefers `fastpq.metallib`, automatically downloads a missing compiler component unless opted out, and compiles embedded self-contained MSL 2.4 source when the offline library is absent. Pipeline/preflight failures remain fail-closed; explicit `FASTPQ_METAL_LIB` overrides are limited to debug/dev builds.【crates/fastpq_prover/build.rs:103】【crates/fastpq_prover/src/backend.rs:745】【crates/fastpq_prover/src/metal.rs:2334】
+  - Set `FASTPQ_SKIP_GPU_BUILD=1` to skip offline shader compilation; the warning records the skip, while visible macOS Metal hardware remains usable through embedded runtime source compilation.【crates/fastpq_prover/build.rs:32】【crates/fastpq_prover/src/metal.rs:2348】
+  - Runtime detection uses the Metal API to confirm a usable device independently of shader-library location. The build prefers `fastpq.metallib`, warns with an explicit manual install command when the offline compiler is missing, and compiles embedded self-contained MSL 2.4 source when the offline library is absent. Pipeline/preflight failures remain fail-closed; explicit `FASTPQ_METAL_LIB` overrides are limited to debug/dev builds.【crates/fastpq_prover/build.rs:107】【crates/fastpq_prover/src/backend.rs:745】【crates/fastpq_prover/src/metal.rs:2334】
   - Operator checklist (Metal hosts):
     1. Prefer the build-generated `.metallib` for release evidence, but record when the packaged binary's embedded Cargo path is absent or stale and the runtime-source path is intentionally under test.【crates/fastpq_prover/build.rs:210】【crates/fastpq_prover/src/metal.rs:2475】
     2. Run parity tests with GPU lanes enabled: `FASTPQ_GPU=gpu cargo test -p fastpq_prover --features fastpq-gpu --release`. This exercises the Metal kernels and falls back automatically if detection fails.【crates/fastpq_prover/src/backend.rs:114】【crates/fastpq_prover/src/metal.rs:418】
     3. Capture a benchmark sample for dashboards using the release build's embedded library path (or runtime-source fallback):
       `cargo run -p fastpq_prover --features fastpq-gpu,dev-tools --bin fastpq_metal_bench --release -- --rows 20000 --iterations 5 --output fastpq_metal_bench.json --trace-dir traces`.
-       The canonical `fastpq-lane-balanced` set now pads every capture to 32,768 rows, so the
+       The canonical `fastpq-state-transition-stark-v1` set now pads every capture to 32,768 rows, so the
        JSON reflects both the requested 20 k rows and the padded domain that drives the GPU
-       kernels. Upload the JSON/log to your evidence store; the nightly macOS workflow mirrors
-      this run and archives the artefacts for reference. The report records
+       kernels. Upload the JSON/log to the release evidence store; this repository does not ship a
+       nightly FastPQ Metal workflow or a reference capture. The report records
      `fft_tuning.{threadgroup_lanes,tile_stage_limit}` alongside each operation’s `speedup`, the
      LDE section adds `zero_fill.{bytes,ms,queue_delta}` so release artefacts prove determinism,
      host zero-fill overhead, and the incremental GPU queue usage (limit, dispatch count,
@@ -405,26 +438,27 @@ proof semantics profile.
    adoption. Fetch a witness from Torii
   (`iroha_cli audit witness --binary --out exec.witness`) and decode it with
   `iroha_cli audit witness --decode exec.witness` (optionally add
-  `--fastpq-parameter fastpq-lane-balanced` to assert the expected parameter set; FASTPQ batches
+  `--fastpq-parameter fastpq-state-transition-stark-v1` to assert the expected parameter set; FASTPQ batches
   emit by default; pass `--no-fastpq-batches` only if you need to trim the output).
    Every batch entry now emits a `row_usage` object (`total_rows`, `transfer_rows`,
-   `non_transfer_rows`, per-selector counts, and `transfer_ratio`). Archive that JSON snippet
+   `non_transfer_rows`, `meta_set_rows`, and `transfer_ratio`). Archive that JSON snippet to avoid
    reprocessing raw transcripts.【crates/iroha_cli/src/audit.rs:209】 Compare the new capture against
    the previous baseline with `scripts/fastpq/check_row_usage.py` so CI fails if transfer ratios or
    total rows regress:
 
    ```bash
    python3 scripts/fastpq/check_row_usage.py \
-     --baseline artifacts/fastpq_benchmarks/fastpq_row_usage_2025-02-01.json \
-     --candidate fastpq_row_usage_2025-05-12.json \
+     --baseline artifacts/fastpq_benchmarks/fastpq_row_usage_<baseline-date>.json \
+     --candidate fastpq_row_usage_<candidate-date>.json \
      --max-transfer-ratio-increase 0.005 \
      --max-total-rows-increase 0
    ```
 
-   Sample JSON blobs for smoke tests live in `scripts/fastpq/examples/`. Locally you can run `make check-fastpq-row-usage`
-   (wraps `ci/check_fastpq_row_usage.sh`), and CI runs the same script via `.github/workflows/fastpq-row-usage.yml` to compare the committed
-   `artifacts/fastpq_benchmarks/fastpq_row_usage_*.json` snapshots so the evidence bundle fails fast whenever
-   transfer rows creep back up. Pass `--summary-out <path>` if you want a machine-readable diff (the CI job uploads `fastpq_row_usage_summary.json`).
+   Sample JSON blobs for smoke tests live in `scripts/fastpq/examples/`. The comparison helper and
+   `ci/check_fastpq_row_usage.sh` produce `fastpq_row_usage_summary.json`, but the repository does
+   not contain a dedicated workflow or checked-in execution captures under
+   `artifacts/fastpq_benchmarks/`. Generate the baseline and candidate from real witnesses before
+   invoking the shell gate, or call `check_row_usage.py` directly with explicit paths.
    Row-usage regression inputs must come from execution-captured V1 batches with
    real transfer SMT witnesses. The old standalone synthetic row generator has
    been removed because it could not validate the sender/receiver root chain.
@@ -442,7 +476,7 @@ proof semantics profile.
       `--trace-seconds`. The resulting JSON advertises `metal_trace_{template,seconds,output}` so
       artefact bundles always identify the captured trace.【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:177】
       Wrap each capture with
-      `python3 scripts/fastpq/wrap_benchmark.py --require-lde-mean-ms 950 --require-poseidon-mean-ms 1000 --row-usage artifacts/fastpq_benchmarks/fastpq_row_usage_2025-05-12.json fastpq_metal_bench.json artifacts/fastpq_benchmarks/fastpq_metal_bench_<date>_macos14_arm64.json --sign-output`
+      `python3 scripts/fastpq/wrap_benchmark.py --require-lde-mean-ms 950 --require-poseidon-mean-ms 1000 --row-usage artifacts/fastpq_benchmarks/fastpq_row_usage_<date>.json fastpq_metal_bench.json artifacts/fastpq_benchmarks/fastpq_metal_bench_<date>_macos14_arm64.json --sign-output`
        (add `--gpg-key <fingerprint>` if you need to pin a signing identity) so the bundle fails
        fast whenever the GPU LDE mean breaches the 950 ms target, Poseidon exceeds 1 s, or the
        Poseidon telemetry blocks are missing, embeds a `row_usage_snapshot`
@@ -456,7 +490,7 @@ proof semantics profile.
      `metadata.row_usage_snapshot` block when `--row-usage <decoded witness>` is supplied, and flattens the
      per-kernel counters into `benchmarks.kernel_summary` so padding bottlenecks, Metal queue
      utilisation, kernel occupancy, and bandwidth regressions are visible at a glance without
-     spelunking the raw report.【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:521】【scripts/fastpq/wrap_benchmark.py:1】【artifacts/fastpq_benchmarks/fastpq_metal_bench_2025-11-07T123018Z_macos14_arm64.json:1】
+     spelunking the raw report.【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:521】【scripts/fastpq/wrap_benchmark.py:1】
      Because the row-usage snapshot now travels with the wrapped artefact, rollout tickets simply
      reference the bundle instead of attaching a second JSON snippet, and CI can diff the embedded
     counts directly when validating Stage 7 submissions. To archive the microbench data on its own,
@@ -487,14 +521,14 @@ proof semantics profile.
 
     | Step | Goal | Command / Evidence |
     | ---- | ---- | ------------------ |
-    | Build metallib | Ensure `xcrun metal`/`xcrun metallib` are available and emit the deterministic `.metallib` for this commit | Compile `metal/kernels/ntt_stage.metal`, `metal/kernels/poseidon2.metal`, and `metal/kernels/bn254.metal` into their `.air` files; run `xcrun metallib "$OUT_DIR/ntt_stage.air" "$OUT_DIR/poseidon2.air" "$OUT_DIR/bn254.air" -o "$OUT_DIR/fastpq.metallib"`. Release builds generate and embed their own Cargo `OUT_DIR` path.【crates/fastpq_prover/build.rs:144】【crates/fastpq_prover/build.rs:210】
+    | Build metallib | Ensure `xcrun metal`/`xcrun metallib` are available and emit the deterministic `.metallib` for this commit | Compile `metal/kernels/ntt_stage.metal`, `metal/kernels/poseidon.metal`, and `metal/kernels/bn254.metal` into their `.air` files; run `xcrun metallib "$OUT_DIR/ntt_stage.air" "$OUT_DIR/poseidon.air" "$OUT_DIR/bn254.air" -o "$OUT_DIR/fastpq.metallib"`. Release builds generate and embed their own Cargo `OUT_DIR` path.【crates/fastpq_prover/build.rs:144】【crates/fastpq_prover/build.rs:210】
     | Verify library path | Record whether the build-time library or embedded source path is in use | Archive the relevant `build.rs` output and note whether the packaged binary retained its embedded Cargo `OUT_DIR` library. An absent or stale path selects embedded runtime source compilation and does not disable visible Metal hardware.【crates/fastpq_prover/build.rs:29】【crates/fastpq_prover/src/metal.rs:2475】
     | GPU parity suite | Prove kernels execute before shipping production `gpu` mode | `FASTPQ_GPU=gpu cargo test -p fastpq_prover --features fastpq-gpu --release` and store the resulting log snippet that shows `backend="metal"` or an unavailable-backend warning that blocks GPU rollout.【crates/fastpq_prover/src/backend.rs:114】【crates/fastpq_prover/src/backend.rs:195】
     | Benchmark sample | Capture the JSON/log pair that records `speedup.*` and FFT tuning so dashboards can ingest accelerator evidence | `cargo run -p fastpq_prover --features fastpq-gpu,dev-tools --bin fastpq_metal_bench --release -- --rows 20000 --iterations 5 --output fastpq_metal_bench.json --trace-dir traces`; archive the JSON, the timestamped `.trace`, and stdout alongside release notes so the Grafana board picks up the Metal run (the report records the requested 20 k rows plus the padded 32,768-row domain so reviewers can confirm the `<1 s` LDE target).【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:697】
     | Wrap & sign report | Fail the release if the GPU LDE mean breaches 950 ms, Poseidon exceeds 1 s, or Poseidon telemetry blocks are missing, and produce a signed artefact bundle | `python3 scripts/fastpq/wrap_benchmark.py --require-lde-mean-ms 950 --require-poseidon-mean-ms 1000 fastpq_metal_bench.json artifacts/fastpq_benchmarks/fastpq_metal_bench_<date>_macos14_arm64.json --sign-output [--gpg-key <fingerprint>]`; ship both the wrapped JSON and the generated `.json.asc` signature so auditors can verify the sub-second metrics without rerunning the workload.【scripts/fastpq/wrap_benchmark.py:714】【scripts/fastpq/wrap_benchmark.py:732】 |
-    | Signed bench manifest | Enforce `<1 s` LDE evidence across Metal/CUDA bundles and capture signed digests for release approval | `cargo xtask fastpq-bench-manifest --bench metal=artifacts/fastpq_benchmarks/fastpq_metal_bench_<date>_macos14_arm64.json --bench cuda=artifacts/fastpq_benchmarks/fastpq_cuda_bench_<date>_sm80.json --matrix artifacts/fastpq_benchmarks/matrix/matrix_manifest.json --signing-key secrets/fastpq_bench.ed25519 --out artifacts/fastpq_bench_manifest.json`; attach the manifest + signature to the release ticket so downstream automation can validate the sub-second proof metrics.【xtask/src/fastpq.rs:1】【artifacts/fastpq_benchmarks/README.md:65】
-| CUDA bundle | Keep the SM80 CUDA capture in lock-step with the Metal evidence so manifests cover both GPU classes. | `FASTPQ_GPU=gpu cargo run -p fastpq_prover --features dev-tools --bin fastpq_cuda_bench --release -- --rows 20000 --iterations 5 --column-count 16 --device 0 --row-usage artifacts/fastpq_benchmarks/fastpq_row_usage_2025-05-12.json` on the Xeon + RTX host → `python3 scripts/fastpq/wrap_benchmark.py --require-lde-mean-ms 950 --require-poseidon-mean-ms 1000 fastpq_cuda_bench.json artifacts/fastpq_benchmarks/fastpq_cuda_bench_<date>_sm80.json --label device_class=xeon-rtx-sm80 --sign-output`; append the wrapped path to `artifacts/fastpq_benchmarks/matrix/devices/xeon-rtx-sm80.txt`, keep the `.json`/`.asc` pair next to the Metal bundle, and cite the seeded `fastpq_cuda_bench_2025-11-12T090501Z_ubuntu24_x86_64.json` when auditors need a reference layout.【scripts/fastpq/wrap_benchmark.py:714】【artifacts/fastpq_benchmarks/matrix/devices/xeon-rtx-sm80.txt:1】
-| Telemetry check | Validate Prometheus/OTEL surfaces reflect `device_class="<matrix>", backend="metal"` or explicit CPU mode | `curl -s http://<host>:8180/metrics | rg 'fastpq_execution_mode_total{device_class'` and copy the `telemetry::fastpq.execution_mode` log emitted at startup.【crates/iroha_telemetry/src/metrics.rs:8887】【crates/fastpq_prover/src/backend.rs:174】
+    | Signed bench manifest | Enforce `<1 s` LDE evidence across Metal/CUDA bundles and capture signed digests for release approval | `cargo xtask fastpq-bench-manifest --bench metal=artifacts/fastpq_benchmarks/fastpq_metal_bench_<date>_macos14_arm64.json --bench cuda=artifacts/fastpq_benchmarks/fastpq_cuda_bench_<date>_sm80.json --matrix artifacts/fastpq_benchmarks/matrix/matrix_manifest.json --signing-key secrets/fastpq_bench.ed25519 --out artifacts/fastpq_bench_manifest.json`; attach the generated manifest + signature to the release ticket so downstream automation can validate the sub-second proof metrics.【xtask/src/fastpq.rs:1】
+| CUDA bundle | Keep the SM80 CUDA capture in lock-step with the Metal evidence so manifests cover both GPU classes. | `FASTPQ_GPU=gpu cargo run -p fastpq_prover --features dev-tools --bin fastpq_cuda_bench --release -- --rows 20000 --iterations 5 --column-count 16 --device 0 --row-usage artifacts/fastpq_benchmarks/fastpq_row_usage_<date>.json` on the Xeon + RTX host → `python3 scripts/fastpq/wrap_benchmark.py --require-lde-mean-ms 950 --require-poseidon-mean-ms 1000 fastpq_cuda_bench.json artifacts/fastpq_benchmarks/fastpq_cuda_bench_<date>_sm80.json --label device_class=xeon-rtx-sm80 --sign-output`; append the generated wrapped path to `artifacts/fastpq_benchmarks/matrix/devices/xeon-rtx-sm80.txt` and keep the `.json`/`.asc` pair next to the Metal bundle. No seeded CUDA reference bundle is checked in.【scripts/fastpq/wrap_benchmark.py:1】
+| Telemetry check | Validate the Prometheus surface reflects `device_class="<matrix>", backend="metal"` or explicit CPU mode | `curl -s http://<host>:8180/metrics | rg 'fastpq_execution_mode_total{device_class'` and copy the `telemetry::fastpq.execution_mode` log emitted at startup.【crates/iroha_telemetry/src/metrics.rs:8887】【crates/fastpq_prover/src/backend.rs:174】
     | Explicit CPU drill | Document the deterministic CPU path for SRE playbooks | Run a short workload with `zk.fastpq.execution_mode = "cpu"` and capture the startup log so operators can rehearse the rollback procedure.【crates/iroha_config/src/parameters/user.rs:3964】
     | Trace capture (optional) | When profiling, capture dispatch traces so kernel lane/tile overrides are reviewable later | Rerun one parity test with `FASTPQ_METAL_TRACE=1 FASTPQ_GPU=gpu …` and attach the produced trace log to your release artefacts.【crates/fastpq_prover/src/metal.rs:346】【crates/fastpq_prover/src/backend.rs:208】
 
@@ -518,16 +552,16 @@ complete and attached as signed artefacts.
 3. **Evidence attachments** — Store the raw benchmark JSON, stdout log (or Instruments trace, when
    captured), and the manifest/signature pair with the release ticket. The checklist is only
    considered green when the ticket links to those artefacts and the on-call reviewer confirms the
-   digest recorded in `fastpq_bench_manifest.json` matches the uploaded files.【artifacts/fastpq_benchmarks/README.md:1】
+   digest recorded in `fastpq_bench_manifest.json` matches the uploaded files.
 
-## Stage 6 — Hardening & Documentation
-- Placeholder backend retired; production pipeline ships by default with no feature toggles.
+## V1 release hardening and documentation
+- The production pipeline ships by default with no backend compatibility path.
 - Reproducible builds (pin toolchains, container images).
-- **TODO:** extend fuzzing beyond the implemented transfer trace/tree boundary
-  when generic SMT and permission lookup constraints land.
+- **TODO:** extend fuzzing across larger witnessed-transfer batches and malformed
+  generic SMT paths without expanding the V1 operation enum.
 - Prover-level smoke tests prove witnessed remittance transfers and assert that
-  governance ballot grants, alone or mixed with transfers, fail closed until
-  permission witnesses are implemented.【crates/fastpq_prover/tests/realistic_flows.rs:1】
+  opaque governance metadata, alone or mixed with transfers, fails closed under
+  the generic transfer-state profile.【crates/fastpq_prover/tests/realistic_flows.rs:1】
 - Runbooks with alert thresholds, remediation procedures, capacity planning guidelines.
 - Cross-architecture proof replay (x86_64, ARM64) in CI.
 
@@ -548,8 +582,7 @@ cargo xtask fastpq-bench-manifest \
 The command validates the wrapped bundles, enforces latency/speedup thresholds,
 emits BLAKE3 + SHA-256 digests, and (optionally) signs the manifest with an
 Ed25519 key so release tooling can verify provenance. See
-`xtask/src/fastpq.rs`/`xtask/src/main.rs` for the implementation and
-`artifacts/fastpq_benchmarks/README.md` for operational guidance.
+`xtask/src/fastpq.rs`/`xtask/src/main.rs` for the implementation.
 
 > **Note:** Metal bundles that omit `benchmarks.poseidon_microbench` now cause
 > the manifest generation to fail. Re-run `scripts/fastpq/wrap_benchmark.py`
@@ -568,29 +601,19 @@ Refresh the matrix by appending wrapped benchmark paths to the
 `artifacts/fastpq_benchmarks/matrix/devices/<label>.txt` lists and running
 `scripts/fastpq/capture_matrix.sh`. The script snapshots the per-device medians,
 emits the consolidated `matrix_manifest.json`, and prints the relative path that
-`cargo xtask fastpq-bench-manifest` will consume. The Apple M4, Xeon + RTX, and
-Neoverse + MI300 capture lists (`devices/apple-m4-metal.txt`,
-`devices/xeon-rtx-sm80.txt`, `devices/neoverse-mi300.txt`) plus their wrapped
-benchmark bundles
-(`fastpq_metal_bench_2025-11-07T123018Z_macos14_arm64.json`,
-`fastpq_cuda_bench_2025-11-12T090501Z_ubuntu24_x86_64.json`,
-`fastpq_opencl_bench_2025-11-18T074455Z_ubuntu24_aarch64.json`) are now checked
-in, so every release enforces the same cross-device medians before the manifest
-is signed. The matrix manifest now also records the `operation_filters` seen
-for each device label, so a device backed only by focused FFT/LDE/Poseidon CUDA
-captures cannot be mistaken for a full `all`-operations evidence set when the
-same manifest is fed back into release gating or dashboards. Signed bench
-manifests produced by `cargo xtask fastpq-bench-manifest` now carry those
-matrix-derived filter lists per bench as `matrix_operation_filters`, so
-downstream release review can tell whether a device label was gated from full
-captures or only from focused reruns without reopening the matrix JSON. The
-release pipeline now turns that same manifest into
+`cargo xtask fastpq-bench-manifest` will consume. These capture lists, wrapped
+GPU bundles, and the generated matrix are release evidence; none is checked into
+this repository, so each release must supply fresh lab captures. The matrix
+records the `operation_filters` seen for each device label, and signed bench
+manifests carry those lists as `matrix_operation_filters`, preventing a focused
+FFT/LDE/Poseidon run from being mistaken for an `all`-operations capture.
+The release pipeline turns that manifest into
 `fastpq_rollout_summary.{json,md}` whenever it archives a rollout bundle, so
 release tickets can attach a compact reviewer view of each archived Metal/CUDA
 lane without losing the underlying manifest as the source of truth. That same
 archive step now also records the copied rollout bundle roots and summary paths
 under `release_manifest.json.evidence.fastpq`, closing the machine-readable
-link from the release manifest back to the Stage 7 rollout evidence.【artifacts/fastpq_benchmarks/matrix/devices/apple-m4-metal.txt:1】【artifacts/fastpq_benchmarks/matrix/devices/xeon-rtx-sm80.txt:1】【artifacts/fastpq_benchmarks/matrix/devices/neoverse-mi300.txt:1】【artifacts/fastpq_benchmarks/fastpq_metal_bench_2025-11-07T123018Z_macos14_arm64.json:1】【artifacts/fastpq_benchmarks/fastpq_cuda_bench_2025-11-12T090501Z_ubuntu24_x86_64.json:1】【artifacts/fastpq_benchmarks/fastpq_opencl_bench_2025-11-18T074455Z_ubuntu24_aarch64.json:1】
+link from the release manifest back to the Stage 7 rollout evidence.【scripts/fastpq/capture_matrix.sh:1】【xtask/src/fastpq.rs:1】【scripts/run_release_pipeline.py:1】
 
 ---
 
@@ -605,7 +628,7 @@ can be mandated deterministically.
 
 - **Stage7-1 — Fleet telemetry ingestion & SLOs.** Production dashboards
   (`dashboards/grafana/fastpq_acceleration.json`) must be wired to live
-  Prometheus/OTel feeds with Alertmanager coverage for queue-depth stalls,
+  Prometheus feeds with Alertmanager coverage for queue-depth stalls,
   zero-fill regressions, and silent CPU fallbacks. The alert pack stays under
   `dashboards/alerts/fastpq_acceleration_rules.yml` and feeds the same evidence
   bundle required in Stage 6.【dashboards/grafana/fastpq_acceleration.json:1】【dashboards/alerts/fastpq_acceleration_rules.yml:1】
@@ -637,15 +660,14 @@ can be mandated deterministically.
   warns whenever GPU work is still being scheduled but a queue fails to keep the
   required occupancy. This keeps the live telemetry contract aligned with the
   benchmark evidence before GPU lanes are mandated.【dashboards/alerts/fastpq_acceleration_rules.yml:1】【dashboards/alerts/tests/fastpq_acceleration_rules.test.yml:1】
-- **Stage7-2 — Cross-device capture matrix.** The new
+- **Stage7-2 — Cross-device capture matrix.**
   `scripts/fastpq/capture_matrix.sh` builds
   `artifacts/fastpq_benchmarks/matrix/matrix_manifest.json` from the per-device
-  capture lists under `artifacts/fastpq_benchmarks/matrix/devices/`. Apple M4,
-  Xeon + RTX, and Neoverse + MI300 medians now live in-repo alongside their
-  wrapped bundles, so `cargo xtask fastpq-bench-manifest` loads the manifest
-  automatically, enforces the 20 000-row floor, and applies per-device
-  latency/speedup limits without bespoke CLI flags before a release bundle is
-  approved.【scripts/fastpq/capture_matrix.sh:1】【artifacts/fastpq_benchmarks/matrix/matrix_manifest.json:1】【artifacts/fastpq_benchmarks/matrix/devices/apple-m4-metal.txt:1】【artifacts/fastpq_benchmarks/matrix/devices/xeon-rtx-sm80.txt:1】【artifacts/fastpq_benchmarks/matrix/devices/neoverse-mi300.txt:1】【xtask/src/fastpq.rs:1】
+  capture lists under `artifacts/fastpq_benchmarks/matrix/devices/`. The lists,
+  wrapped bundles, and matrix are generated release outputs rather than
+  repository fixtures. When supplied, `cargo xtask fastpq-bench-manifest` loads
+  the matrix, enforces the 20 000-row floor, and applies its per-device
+  latency/speedup limits before a release bundle is approved.【scripts/fastpq/capture_matrix.sh:1】【xtask/src/fastpq.rs:1】
 Aggregated instability reasons now ship alongside the matrix: pass
 `--reason-summary-out` to `scripts/fastpq/geometry_matrix.py` to emit a
 JSON histogram of failure/warning causes keyed by host label and source
@@ -669,14 +691,13 @@ per-host tables.【scripts/fastpq/stage7_bundle.py:1】【scripts/fastpq/validat
   (`fastpq_bench_manifest.json`, wrapped Metal/CUDA captures, Grafana export,
   Alertmanager snapshot, rollback logs) that must accompany every rollout ticket
   plus the staged (pilot → ramp → default) timeline and forced fallback drills.
-  `ci/check_fastpq_rollout.sh` validates these bundles so CI enforces the Stage 7
-  gate before releases move forward. The release pipeline can now pull the same
+  `ci/check_fastpq_rollout.sh` validates a supplied bundle locally or from release
+  automation. The release pipeline can pull the same
   bundles into `artifacts/releases/<version>/fastpq_rollouts/…` via
   `scripts/run_release_pipeline.py --fastpq-rollout-bundle <path>`, ensuring the
-  signed manifests and rollout evidence stay together. A reference bundle lives
-  under `artifacts/fastpq_rollouts/20250215T101500Z/fleet-alpha/canary/` to keep
-  the GitHub workflow (`.github/workflows/fastpq-rollout.yml`) green while real
-  rollout submissions are reviewed.
+  signed manifests and rollout evidence stay together. No reference rollout
+  bundle or dedicated FastPQ rollout workflow is checked in; release automation
+  must pass the generated bundle path explicitly.
 
 ### Stage7 FFT queue fan-out
 
@@ -755,7 +776,7 @@ gates. The table below summarises the signals and enforcement points:
 | ------ | ------ | ---------------- | ----------- |
 | GPU adoption ratio | Prometheus `fastpq_execution_mode_total{requested="gpu", device_class="…", chip_family="…", gpu_kind="…", backend="metal"}` | ≥95 % of per-(device_class, chip_family, gpu_kind) explicit GPU resolutions must land on `resolved="gpu", backend="metal"`; page when any triplet drops below 50 % over 15 m | `FastpqMetalDowngrade` alert (page)【dashboards/alerts/fastpq_acceleration_rules.yml:1】 |
 | Backend gap | Prometheus `fastpq_execution_mode_total{backend="none", device_class="…", chip_family="…", gpu_kind="…"}` | Must remain at 0 for every triplet; warn after any sustained (>10 m) bursts | `FastpqBackendNoneBurst` alert (warning)【dashboards/alerts/fastpq_acceleration_rules.yml:21】 |
-| GPU fail-closed gap | Prometheus `fastpq_execution_mode_total{requested="gpu", backend!="metal", device_class="…", chip_family="…", gpu_kind="…"}` | Must remain at 0 for production GPU cohorts; page when explicit GPU startup cannot resolve to a GPU backend for ≥10 m | `FastpqCpuFallbackBurst` alert (page, retained for dashboard compatibility)【dashboards/alerts/fastpq_acceleration_rules.yml:32】 |
+| GPU fail-closed gap | Prometheus `fastpq_execution_mode_total{requested="gpu", backend!="metal", device_class="…", chip_family="…", gpu_kind="…"}` | Must remain at 0 for production GPU cohorts; page when explicit GPU startup cannot resolve to a GPU backend for ≥10 m | `FastpqCpuFallbackBurst` alert (page)【dashboards/alerts/fastpq_acceleration_rules.yml:32】 |
 | Metal queue duty cycle | Prometheus `fastpq_metal_queue_ratio{metric="busy", device_class="…", chip_family="…", gpu_kind="…"}` | Rolling 15 m average must stay ≥50 % whenever GPU jobs are queued; warn when utilisation drops below target while GPU requests persist | `FastpqQueueDutyCycleDrop` alert (warning)【dashboards/alerts/fastpq_acceleration_rules.yml:98】 |
 | Queue depth & zero-fill budget | Wrapped benchmark `metal_dispatch_queue` and `zero_fill_hotspots` blocks | `max_in_flight` must stay at least one slot below `limit` and LDE zero-fill mean must stay ≤0.4 ms (≈80 GB/s) for the canonical 20 000-row trace; any regression blocks the rollout bundle | Reviewed via `scripts/fastpq/wrap_benchmark.py` output and attached to the Stage 7 evidence bundle (`specs/fastpq_rollout_playbook.md`). |
 | Runtime queue headroom | Prometheus `fastpq_metal_queue_depth{metric="limit|max_in_flight", device_class="…", chip_family="…", gpu_kind="…"}` | `limit - max_in_flight ≥ 1` for every triplet; warn after 10 m without headroom | `FastpqQueueHeadroomLow` alert (warning)【dashboards/alerts/fastpq_acceleration_rules.yml:41】 |
@@ -855,7 +876,7 @@ and Alertmanager rules mirror the same evidence captured during release prep:
    The first command proves the semaphore sampler is emitting the `busy`,
    `overlap`, `limit`, and `max_in_flight` series and the second shows whether
    each device class is resolving to `backend="metal"` or falling back to
-   `backend="cpu"`. Wire the scrape target through Prometheus/OTel before
+   `backend="cpu"`. Wire the scrape target through Prometheus before
    importing the dashboard so Grafana can plot the fleet view immediately.
 3. **Install the dashboard + alert pack.** Import
    `dashboards/grafana/fastpq_acceleration.json` into Grafana (retain the
@@ -918,15 +939,12 @@ right now:
 > **Queue/staging evidence helper (2026-05-09):** `scripts/fastpq/profile_queue.py` now
 > ingests one or more `fastpq_metal_bench` JSON captures and emits both a Markdown table and
 > a machine-readable summary (`--markdown-out/--json-out`) so queue depth, overlap ratios, and
-> host-side staging telemetry can ride alongside every WP2-E artefact. Running
-> `python3 scripts/fastpq/profile_queue.py fastpq_metal_bench_poseidon.json fastpq_metal_bench_20k_new.json --json-out artifacts/fastpq_benchmarks/fastpq_queue_profile_20260509.json` produced the table below and flagged that the archived Metal captures still report
-> `dispatch_count = 0` and `column_staging.batches = 0`—WP2-E.1 remains open until the Metal
-> instrumentation is rebuilt with telemetry enabled. The generated JSON/Markdown artefacts live
-> under `artifacts/fastpq_benchmarks/fastpq_queue_profile_20260509.{json,md}` for auditing.
-> The helper now (2026-05-19) also surfaces the Poseidon pipeline telemetry (`pipe_depth`,
-> `batches`, `chunk_columns`, and `fallbacks`) inside both the Markdown table and the JSON summary,
-> so WP2-E.4/6 reviewers can prove whether the GPU stayed on the pipelined path and whether any
-> fallbacks occurred without opening the raw capture.【scripts/fastpq/profile_queue.py:1】
+> host-side staging telemetry can ride alongside every WP2-E artefact. Run, for example,
+> `python3 scripts/fastpq/profile_queue.py <poseidon-capture.json> <full-capture.json> --json-out <evidence-dir>/queue.json --markdown-out <evidence-dir>/queue.md` and attach both generated files to the release ticket. No queue-profile capture is checked in.
+> The helper also surfaces the Poseidon column-batch telemetry (`columns`, `batches`, and
+> `fallbacks`) inside both the Markdown table and the JSON summary. Reviewers use the separate
+> queue, staging, and kernel-profile blocks for actual command overlap and use this summary to spot
+> top-level batch fallback without opening the raw capture.【scripts/fastpq/profile_queue.py:1】
 
 > **Stage profile summariser (2026-05-30):** `scripts/fastpq/stage_profile_report.py` consumes
 > the `stage_profile_summary.json` bundle emitted by `cargo xtask fastpq-stage-profile` and
@@ -955,9 +973,9 @@ right now:
 > capped at the eight radix-2 stages that fit the 256-word threadgroup tile.
 > The applied multiplier and tile limit are included in the `metal_heuristics` block of
 > `fastpq_metal_bench` outputs and rendered by `scripts/fastpq/metal_capture_summary.py`, so WP2-E
-> bundles record the exact pipeline knobs used in each capture without digging through raw JSON.【crates/fastpq_prover/src/metal_config.rs:1】【crates/fastpq_prover/src/metal.rs:2833】【scripts/fastpq/metal_capture_summary.py:1】
+> bundles record the exact internal batch geometry used in each capture without digging through raw JSON.【crates/fastpq_prover/src/metal_config.rs:304】【crates/fastpq_prover/src/metal.rs:824】【scripts/fastpq/metal_capture_summary.py:1】
 
-| Label | Dispatch | Busy | Overlap | Max Depth | FFT flatten | FFT wait | FFT wait % | LDE flatten | LDE wait | LDE wait % | Poseidon flatten | Poseidon wait | Poseidon wait % | Pipe depth | Pipe batches | Pipe fallbacks |
+| Label | Dispatch | Busy | Overlap | Max Depth | FFT flatten | FFT wait | FFT wait % | LDE flatten | LDE wait | LDE wait % | Poseidon flatten | Poseidon wait | Poseidon wait % | Batch columns | Column batches | Batch fallbacks |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | fastpq_metal_bench_poseidon | 0 | 0.0% | 0.0% | 0 | – | – | – | – | – | – | – | – | – | – | – | – |
 | fastpq_metal_bench_20k_new | 0 | 0.0% | 0.0% | 0 | – | – | – | – | – | – | – | – | – | – | – | – |
@@ -977,7 +995,7 @@ Key observations:
 
 1. The GPU total is 5.379 s, which is **4.48 s over** the 900 ms goal. Poseidon
    hashing still dominates the runtime (≈66 %) with the LDE kernel in second
-   place (≈29 %), so WP2-E needs to attack both the Poseidon pipeline depth and
+   place (≈29 %), so WP2-E needs to improve the Poseidon dispatch geometry and
    the LDE memory residency/tiling plan before CPU fallbacks disappear.
 2. FFT remains a regression (0.86×) even though IFFT is >1.22× over the scalar
    path. We need a launch-geometry sweep
@@ -1068,85 +1086,69 @@ so Stage 7 telemetry has real GPU data.
 
 ### High-Priority Action Items
 1. Implement packing/order fixtures and update AIR spec.
-2. Finalise the generic state/permission witness design before publishing it as a supported profile.
-3. Keep worked lookup/SMT examples explicitly marked future until their constraints land.
+2. Design any future state or permission witness as a new fully constrained schema.
+3. Keep generic SMT/non-membership examples outside the V1 trace contract.
 4. Add Appendix A documenting soundness derivation and CI rejection methodology.
 
 ### Resolved Design Decisions
 - ZK disabled (correctness-only) in P1; revisit in future stage.
 - Permission-table membership, absent-key proofs, and generic delete semantics
-  remain unresolved future work. V1 fails closed rather than treating their
-  reserved columns as proof constraints.
+  are outside V1; no reserved columns or compatibility variants remain.
 
 Use this document as the canonical reference; update it alongside source code, fixtures, and appendices to avoid drift.
 
 ## Appendix A — Soundness Derivation
 
-This appendix records the design calculation behind the “Soundness & SLOs”
-table. It is not a security claim for the current implementation.
+This appendix records the exact aggregate arithmetic implemented by
+`fastpq_isi`. It is a deterministic parameter-selection calculation, not by
+itself a security or production-qualification claim.
 
-Implementation qualification gap (2026-08-23): proof values, FRI challenges,
-Merkle nodes, and roots occupy one Goldilocks base-field element. The catalogue
-therefore records `extension_degree = 1`, no implemented grinding, and the
-one-field commitment's roughly 32-bit generic collision ceiling. A
-Fiat--Shamir challenge offers at most 64 bits before query/union losses. The FRI
-fold and terminal degree check are now domain-aware, but the current
-one-field commitments remain the lower security ceiling. Canonical profiles
-remain below the intended 128-bit release target and must not use the
-calculations below as release evidence.
+Implementation qualification gap (2026-08-29): native-STARK commitments and
+Fiat--Shamir state use six independently domain-separated Goldilocks lanes, for
+a canonical 384-bit encoding. FRI challenges, opened values, and folds use
+`GoldilocksFp4V1 = Goldilocks[X]/(X^4 - 7)`. The frozen arithmetic inputs meet
+the declared 128-bit target, but the result remains
+`Unavailable(MissingProtocolSpecificQromReduction)`. An independently reviewed
+reduction connecting this accounting to the complete FASTPQ adversary and a
+multi-target review tied to final artifact digests are still required.
 
 ### Notation
 - `N_trace = 2^k` — trace length after sorting and padding to a power of two.
-- `b` — blowup factor (`N_eval = N_trace × b`).
-- `r` — FRI arity (8 or 16 for the canonical sets).
-- `ℓ` — number of FRI reductions (`layers` column).
-- `q` — verifier queries per proof (`queries` column).
-- `ρ` — effective code rate reported by the column planner: `ρ = max_i(degree_i / domain_i)` over the constraints that survive the first FRI round.
+- `b = 8` — blowup factor (`N_eval = N_trace × b`).
+- `r = 2` — sole V1 FRI folding arity.
+- `ℓ ≤ 18` — maximum number of binary FRI reductions.
+- `q = 136` — deduplicated verifier queries selected by the calculator.
+- `T = 54` — portable release proof targets included in the union bound.
+- `Q ≤ 2^32` — declared quantum random-oracle query bound.
+- `n = 384` — combined width of the six independent digest lanes.
 
-The Goldilocks base field has `|F| = 2^64 - 2^32 + 1`, so a base-field
-Fiat--Shamir term is on the order of `q / |F|` (about `2^-58` for the canonical
-query counts). Security failure terms combine additively; this term is a cap,
-not extra margin above a larger FRI estimate. The catalogue records `g = 0`
-for both profiles because the current protocol performs no grinding.
+The current protocol declares zero grinding bits. That fact is explicit in the
+sole parameter record and contributes no hidden margin to the calculation.
 
 ### Analytic bound
 
-With constant-rate DEEP-FRI the statistical failure probability satisfies
+For a candidate query count, the implemented exact dyadic upper bound is
 
 ```
-p_fri ≤ Σ_{j=0}^{ℓ-1} ρ^{q} = ℓ · ρ^{q}
+p_sampling  = T × Q^2 / 2^(q × log2(b) / 2)
+p_collision = T^2 × Q^3 / 2^n
+p_total     = p_sampling + p_collision
 ```
 
-because each layer is intended to reduce polynomial degree and domain width by
-the same factor `r`, keeping `rho` constant. The table's `est bits` column
-reports only `floor(-log2(p_fri))`. A complete bound must add Fiat--Shamir,
-commitment-collision, grinding, and other failure terms and then take the
-resulting minimum security level.
-
-### Planner output and worked computation
-
-Running the Stage 1 column planner on representative batches yields:
-
-| Parameter set | `N_trace` | `b` | `N_eval` | `ρ` (planner) | Effective degree (`ρ × N_eval`) | `ℓ` | `q` | `-log₂(ℓ · ρ^{q})` |
-| ------------- | --------- | --- | -------- | ------------- | -------------------------------- | --- | --- | ------------------ |
-| Balanced 20 k batch | `2^15` | 8  | 262 144  | 0.077026 | 20 192  | 5 | 52 | 190 bits |
-| Throughput 65 k batch | `2^16` | 8 | 524 288 | 0.200208 | 104 967 | 6 | 58 | 132 bits |
-| Latency 131 k batch | `2^17` | 16 | 2 097 152 | 0.209492 | 439 337 | 5 | 64 | 142 bits |
-
-Example (balanced 20 k batch):
-1. `N_trace = 2^15`, so `N_eval = 2^15 × 8 = 2^18`.
-2. Planner instrumentation reports `ρ = 0.077026`, so `p_fri = 5 × ρ^{52} ≈ 6.4 × 10^{-58}`.
-3. `-log₂ p_fri = 190 bits`, matching the table entry.
-4. The base-field Fiat--Shamir term is roughly `2^-58.3`, so even with the
-   theoretical `190`-bit FRI term the combined statistical bound is near 58
-   bits. The current one-field commitment lowers generic collision security to
-   about 32 bits; the catalogue counts no grinding factor.
+The calculator requires `p_total < 2^-128` using integer arithmetic only. For
+the frozen inputs and `q = 136`, the sampling denominator exponent is `204`,
+its numerator is `54 × 2^64`, and the collision term is
+`54^2 × 2^96 / 2^384`. Query count 136 is the least admitted multiple of eight
+that passes; 128 queries fail the same exact comparison. This calculation is
+necessary parameter evidence, but it does not discharge the independent
+protocol-specific reduction or digest review.
 
 ### Rejection-sampling follow-up
 
-**TODO:** add the planned Monte Carlo harness for the implemented 22-residue
-composition and fail CI if its measured cryptographic bound drops below 128
-bits. Semantic adversarial coverage is deterministic instead: unsupported
+**TODO:** add the planned Monte Carlo harness for the implemented 16-residue
+composition and report its measured behavior as diagnostic evidence. It does
+not replace the exact aggregate calculator or independent qualification.
+Semantic adversarial coverage is deterministic instead: unsupported
 operations/profile confusion, foreign batch-derived roots, challenge
 cancellation, noncanonical numeric/key encodings, and alternate transfer paths
 must each be rejected by dedicated regression tests.
@@ -1161,40 +1163,58 @@ Stage 0 pins the trace and evaluation generators to Poseidon-derived constants
 3. **Trace generator.** Derive `trace_root = lde_root^blowup_factor`. Verify its exact `2^trace_log_size` order and this equality so an LDE index advance by `blowup_factor` is exactly multiplication by the trace generator.
 4. **Coset selection.** Derive a deterministic nonzero `omega_coset` from the
    domain-root seed and reject candidates inside the LDE subgroup. Pin the
-   accepted offset with the parameter pack; the balanced and latency packs use
-   distinct offsets.
-5. **Permutation size.** Persist `permutation_size` explicitly so schedulers never infer padding rules from implicit powers of two.
-
+   accepted offset with the sole V1 parameter set.
 ### Reproduction and validation
 - Tooling: `cargo run --manifest-path scripts/fastpq/Cargo.toml --bin poseidon_gen -- domain-roots` emits either Rust snippets or a Markdown table (see `--format table`, `--seed`, `--filter`).【scripts/fastpq/src/bin/poseidon_gen.rs:1】
-- Tests: `canonical_sets_declare_target_and_shape` and
-  `regenerated_domain_roots_are_coherent_and_cosets_are_outside_lde_subgroups` keep
-  the canonical parameter sets aligned with the published constants, exact
-  subgroup orders, the trace/LDE blowup relation, outside-subgroup cosets,
-  blowup/arity pairing, and permutation sizing, so `cargo test -p fastpq_isi`
+- Tests: `sole_profile_has_final_binary_fp4_shape` and
+  `domain_roots_are_coherent_and_coset_is_outside_lde_subgroup` keep
+  the canonical parameter set aligned with the published constants, exact
+  subgroup orders, the trace/LDE blowup relation, outside-subgroup coset,
+  binary FRI arity, and degree-four challenge field, so `cargo test -p fastpq_isi`
   catches drift immediately.
-  【crates/fastpq_isi/src/params.rs:138】
-- Source of truth: update the Stage 0 table and `fastpq_isi/src/params.rs` together whenever new parameter packs are introduced.
+  【crates/fastpq_isi/src/params.rs:337】
+- Source of truth: update this table, `fastpq_isi/src/params.rs`, and the V1
+  fixtures together if the first-release constants change.
 
 ## Appendix C — Commitment pipeline details
 
-### Streaming Poseidon commitment flow
-Stage 2 defines the deterministic trace commitment shared by the prover and verifier:
-1. **Normalise transitions.** `trace::build_trace` sorts each batch, pads it to `N_trace = 2^{⌈log₂ rows⌉}`, and emits column vectors in the order below.【crates/fastpq_prover/src/trace.rs:123】
-2. **Hash columns.** `trace::column_hashes` streams the columns through dedicated Poseidon sponges tagged `fastpq:v1:trace:column:<name>`. When the `fastpq-prover-preview` feature is active the same traversal recycles the IFFT/LDE coefficients required by the backend, so no extra matrix copies are allocated.【crates/fastpq_prover/src/trace.rs:474】
-3. **Lift into a Merkle tree.** `trace::merkle_root` folds the column digests with Poseidon nodes tagged `fastpq:v1:trace:node`, duplicating the last leaf whenever a level has odd fan-out to avoid special cases.【crates/fastpq_prover/src/trace.rs:656】
-4. **Finalize the digest.** `digest::trace_commitment` length-prefixes the
-   domain tag (`fastpq:v1:trace_commitment`), parameter name, exact Poseidon
-   profile digest, padded dimensions, column digests, and Merkle root, then
-   hashes the payload with Iroha's `Hash::new` (Blake2b-256) before embedding it
-   in `Proof::trace_commitment`.【crates/fastpq_prover/src/digest.rs:25】
+### Native-STARK commitment flow
+V1 uses the same deterministic preparation pipeline in prover and verifier:
+1. **Normalise transitions.** `trace::build_trace` consumes the already
+   canonicalized batch, pads it to `N_trace = 2^{⌈log₂ rows⌉}`, and emits the
+   fixed-order column vectors.【crates/fastpq_prover/src/trace.rs:612】
+2. **Commit the preprocessing trace.**
+   `digest::trace_commitment_from_trace` hashes each named base-trace column
+   into a six-lane digest, folds a typed binary Merkle tree, then binds the
+   parameter identity and exact row/padding/column shape into the final typed
+   `GoldilocksDigest384V1` stored in `Proof::trace_commitment`.
+   【crates/fastpq_prover/src/digest.rs:81】
+3. **Prepare polynomial data once.** `trace::derive_polynomial_data`
+   interpolates every column and materializes its deterministic CPU LDE. The
+   backend reuses these coefficients and evaluations instead of performing a
+   second transform for commitment hashing.【crates/fastpq_prover/src/trace.rs:1701】
+4. **Commit coefficient columns.** The backend hashes each named coefficient
+   vector into a six-lane leaf and folds those leaves under the typed `Trace`
+   Merkle role to produce `trace_root`. Optional GPU Merkle dispatch must match
+   the scalar result and uses the deterministic CPU fallback after an allowed
+   runtime dispatch failure.【crates/fastpq_prover/src/backend.rs:2534】
+5. **Bind and commit LDE/AIR material.** After absorbing `trace_root`, the
+   transcript derives one base-field column-mix coefficient per LDE column. The
+   backend combines those columns row-wise, commits `lde_root`, commits the
+   row-major AIR trace and composition vectors, and binds all four 384-bit roots
+   before FRI challenges are sampled.【crates/fastpq_prover/src/backend.rs:2595】
 
-The verifier recomputes the same digest before sampling Fiat–Shamir challenges, so mismatches abort proofs before any openings.
+The verifier recomputes the same commitments before accepting openings, so
+mismatches abort the proof. The
+`tests/fixtures/ordering_hash.json` regression pins the sorted-row input, while
+`tests/trace_commitment.rs` independently checks canonical encoding,
+determinism, and separation of the resulting commitments. The JSON fixture
+changes only under an explicit `FASTPQ_UPDATE_FIXTURES=1` regeneration.
 
 ### Poseidon fallback controls
 
 - The prover now exposes a dedicated Poseidon pipeline override (`zk.fastpq.poseidon_mode`, env `FASTPQ_POSEIDON_MODE`, CLI `--fastpq-poseidon-mode`) so operators can mix GPU FFT/LDE with CPU Poseidon hashing on devices that fail to reach the Stage 7 <900 ms target. Supported values mirror the execution-mode knob (`auto`, `cpu`, `gpu`), defaulting to the global mode when unspecified. The runtime threads this value through the lane config (`FastpqPoseidonMode`) and propagates it into the prover (`Prover::canonical_with_modes`) so overrides are deterministic and auditable in config dumps.【crates/iroha_config/src/parameters/user.rs:1488】【crates/fastpq_prover/src/proof.rs:138】【crates/iroha_core/src/fastpq/lane.rs:123】
-- Telemetry exports the resolved pipeline mode via the new `fastpq_poseidon_pipeline_total{requested,resolved,path,device_class,chip_family,gpu_kind}` counter (and OTLP twin `fastpq.poseidon_pipeline_resolutions_total`). `sorafs`/operator dashboards can therefore confirm when a rollout is running GPU fused/pipelined hashing versus the forced CPU fallback (`path="cpu_forced"`) or runtime downgrades (`path="cpu_fallback"`). The CLI probe installs automatically in `irohad`, so release bundles and live telemetry share the same evidence stream.【crates/iroha_telemetry/src/metrics.rs:4780】【crates/irohad/src/main.rs:2504】
+- Telemetry exports the resolved pipeline mode via the `fastpq_poseidon_pipeline_total{requested,resolved,path,device_class,chip_family,gpu_kind}` counter. `sorafs`/operator dashboards can therefore confirm when a rollout is running the batched GPU path (`path="gpu"`) versus forced CPU execution (`path="cpu_forced"`) or a runtime downgrade (`path="cpu_fallback"`). The CLI probe installs automatically in `irohad`, so release bundles and live telemetry share the same evidence stream.【crates/iroha_telemetry/src/metrics.rs:4780】【crates/irohad/src/main.rs:2504】
 - Mixed-mode evidence is also stamped into every scoreboard via the existing adoption gate: the prover emits the resolved mode + path label for each batch, and the `fastpq_poseidon_pipeline_total` counter increments alongside the execution-mode counter whenever a proof lands. This satisfies WP2-E.6 by making brownouts visible and by providing a clean switch for deterministic downgrades while optimisation continues.【crates/fastpq_prover/src/trace.rs:1684】【specs/sorafs_orchestrator_rollout.md:139】
 - `scripts/fastpq/wrap_benchmark.py --poseidon-metrics metrics_poseidon.prom` now parses Prometheus scrapes (Metal or CUDA) and embeds a `poseidon_metrics` summary inside every wrapped bundle. The helper filters the counter rows by `metadata.labels.device_class`, captures the matching `fastpq_execution_mode_total` samples, and fails the wrap when `fastpq_poseidon_pipeline_total` entries are missing so WP2-E.6 bundles always ship reproducible CUDA/Metal evidence instead of ad-hoc notes.【scripts/fastpq/wrap_benchmark.py:1】【scripts/fastpq/tests/test_wrap_benchmark.py:1】
 
@@ -1223,26 +1243,27 @@ The Stage 7 capture tooling already handles CUDA: wrap every `fastpq_cuda_benc
 
 ### Column order
 The hashing pipeline consumes columns in this deterministic order:
-1. Selector flags: `s_active`, `s_transfer`, `s_mint`, `s_burn`, `s_role_grant`, `s_role_revoke`, `s_meta_set`, `s_perm`.
-2. Packed limb columns (each zero-padded to the trace length): `key_limb_{i}`, `value_old_limb_{i}`, `value_new_limb_{i}`, `asset_id_limb_{i}`.
-3. Auxiliary scalars: `delta`, `running_asset_delta`, `metadata_hash_limb_0` through `metadata_hash_limb_7`, `supply_counter`, `perm_hash`, `neighbour_leaf`, `dsid`, `slot`.
-4. Sparse Merkle witnesses for every level `ℓ ∈ [0, SMT_HEIGHT)`: `path_bit_ℓ`, `sibling_ℓ`, `node_in_ℓ`, `node_out_ℓ`.
+1. Selector flags: `s_active`, `s_transfer`, `s_meta_set`.
+2. Packed limb columns (each zero-padded to the trace length): `key_limb_{i}`, `value_old_limb_{i}`, `value_new_limb_{i}`.
+3. Auxiliary scalars: `delta`, `metadata_hash_limb_0` through `metadata_hash_limb_7`, `dsid`, `slot`.
+4. For batches containing Transfer rows, sparse Merkle witnesses for every level `ℓ ∈ [0, SMT_HEIGHT)`: `path_bit_ℓ`, `sibling_ℓ`, `node_in_ℓ`, `node_out_ℓ`. This group is absent for metadata-only batches.
 
 `trace::column_hashes` walks the columns in exactly this order. Any schema or
 order change is a proof/fixture hard cut and must regenerate the binary proof
-fixtures.【crates/fastpq_prover/src/trace.rs:474】
+fixture.【crates/fastpq_prover/src/trace.rs:474】
 
 ### Transcript domain tags
-Stage 2 fixes the Fiat–Shamir catalog below to keep challenge generation deterministic:
+V1 fixes the Fiat–Shamir catalog below to keep challenge generation deterministic:
 
 | Tag | Purpose |
 | --- | ------- |
-| `fastpq:v1:init` | Absorb protocol version, parameter set, and `PublicIO`. |
-| `fastpq:v1:roots` | Commit the trace and lookup Merkle roots. |
-| `fastpq:v1:gamma` | Sample the lookup grand-product challenge. |
-| `fastpq:v1:alpha:<i>` | Sample one composition-polynomial challenge for each of the 22 residues (`i = 0..21`). |
-| `fastpq:v1:lookup:product` | Absorb the evaluated lookup grand product. |
+| `fastpq:v1:init` | Initialize from protocol version, parameter set, and `PublicIO`. |
+| `fastpq:v1:trace_root` | Commit the trace Merkle root before column-mix challenges. |
+| `fastpq:v1:column_mix:<i>` | Sample one base-field LDE column-mix coefficient per trace column. |
+| `fastpq:v1:roots` | Commit the LDE and trace Merkle roots, in that order. |
+| `fastpq:v1:alpha:<i>` | Sample one composition-polynomial challenge for each of the 16 residues (`i = 0..15`). |
+| `fastpq:v1:air_roots` | Commit the AIR-trace and AIR-composition roots, in that order. |
 | `fastpq:v1:beta:<round>` | Sample the folding challenge for each FRI round. |
 | `fastpq:v1:fri_layer:<round>` | Commit the Merkle root for each FRI layer. |
 | `fastpq:v1:fri:final` | Record the final FRI layer before opening queries. |
-| `fastpq:v1:query_index:0` | Deterministically derive verifier query indices. |
+| `fastpq:v1:query_index:<counter>` | Derive deduplicated verifier query indices with rejection sampling. |

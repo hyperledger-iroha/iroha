@@ -4193,7 +4193,10 @@ seiyaku DynamicAccessCounter {
     fn submit_native_sccp_proof_access_uses_exact_lane_and_message_id() {
         let (proof, lane, message_id, expected_key) = native_sccp_bridge_proof_fixture();
         let instruction = InstructionBox::from(
-            iroha_data_model::isi::bridge::SubmitBridgeProof::new(proof.clone()),
+            iroha_data_model::isi::bridge::SubmitBridgeProof::new(proof.clone())
+                .with_replay_witness(
+                    iroha_data_model::bridge::SccpSparseMerkleWitnessV1::empty_shard(),
+                ),
         );
         let mut visited_triggers = BTreeSet::new();
         let set = derive_from_instruction(
@@ -4233,7 +4236,10 @@ seiyaku DynamicAccessCounter {
         };
 
         let (native_proof, _, _, native_message_key) = native_sccp_bridge_proof_fixture();
-        let native = InstructionBox::from(SubmitBridgeProof::new(native_proof));
+        let native =
+            InstructionBox::from(SubmitBridgeProof::new(native_proof).with_replay_witness(
+                iroha_data_model::bridge::SccpSparseMerkleWitnessV1::empty_shard(),
+            ));
         let ton_route = SccpRouteKeyV1::new(
             SccpLaneIdV1 {
                 source: SccpNetworkV1::TonMainnet,
@@ -4283,8 +4289,11 @@ seiyaku DynamicAccessCounter {
         alternate.range.start_height = alternate.range.start_height.saturating_add(1);
         alternate.range.end_height = alternate.range.end_height.saturating_add(1);
         for proof in [proof, alternate] {
-            let instruction =
-                InstructionBox::from(iroha_data_model::isi::bridge::SubmitBridgeProof::new(proof));
+            let instruction = InstructionBox::from(
+                iroha_data_model::isi::bridge::SubmitBridgeProof::new(proof).with_replay_witness(
+                    iroha_data_model::bridge::SccpSparseMerkleWitnessV1::empty_shard(),
+                ),
+            );
             let mut visited_triggers = BTreeSet::new();
             let set = derive_from_instruction(
                 &instruction,
@@ -4311,8 +4320,11 @@ seiyaku DynamicAccessCounter {
             panic!("native fixture payload")
         };
         native.encoded_envelope.push(0x00);
-        let instruction =
-            InstructionBox::from(iroha_data_model::isi::bridge::SubmitBridgeProof::new(proof));
+        let instruction = InstructionBox::from(
+            iroha_data_model::isi::bridge::SubmitBridgeProof::new(proof).with_replay_witness(
+                iroha_data_model::bridge::SccpSparseMerkleWitnessV1::empty_shard(),
+            ),
+        );
         let mut visited_triggers = BTreeSet::new();
         let set = derive_from_instruction(
             &instruction,
@@ -5045,7 +5057,7 @@ seiyaku DynamicAccessCounter {
             .contract_manifests
             .insert(code_hash, manifest.clone());
         stx.apply();
-        let _ = st_block.commit();
+        let _ = st_block.commit_world_overlay_for_testing();
         // Build a tx carrying this program; add manifest copy into metadata as well (optional)
         let mut md = iroha_data_model::metadata::Metadata::default();
         md.insert(MANIFEST_METADATA_KEY.parse().unwrap(), Json::new(manifest));
@@ -5170,7 +5182,7 @@ seiyaku DynamicAccessCounter {
         let mut stx = st_block.transaction();
         stx.world.contract_manifests.insert(code_hash, manifest_a);
         stx.apply();
-        let _ = st_block.commit();
+        let _ = st_block.commit_world_overlay_for_testing();
         let tx = TransactionBuilder::new(
             test_network_id(),
             alice.clone(),
@@ -5207,7 +5219,7 @@ seiyaku DynamicAccessCounter {
         let mut stx = st_block.transaction();
         stx.world.contract_manifests.insert(code_hash, manifest_b);
         stx.apply();
-        let _ = st_block.commit();
+        let _ = st_block.commit_world_overlay_for_testing();
         let set_b = derive_for_transaction(&tx, Some(&state.view()), IvmStrategy::Conservative);
         assert!(set_b.read_keys.contains("state:beta"));
         assert!(!set_b.read_keys.contains("state:alpha"));
@@ -5254,7 +5266,7 @@ seiyaku DynamicAccessCounter {
         let mut stx = st_block.transaction();
         stx.world.contract_manifests.insert(code_hash, manifest);
         stx.apply();
-        let _ = st_block.commit();
+        let _ = st_block.commit_world_overlay_for_testing();
         let tx = TransactionBuilder::new(
             test_network_id(),
             alice.clone(),
@@ -5352,7 +5364,7 @@ seiyaku DynamicAccessCounter {
             .contract_manifests
             .insert(code_hash, manifest.clone());
         stx.apply();
-        let _ = st_block.commit();
+        let _ = st_block.commit_world_overlay_for_testing();
         let tx = TransactionBuilder::new(
             test_network_id(),
             alice.clone(),
@@ -5435,7 +5447,7 @@ seiyaku DynamicAccessCounter {
             .contract_manifests
             .insert(code_hash, manifest.clone());
         stx.apply();
-        let _ = st_block.commit();
+        let _ = st_block.commit_world_overlay_for_testing();
         let tx = TransactionBuilder::new(
             test_network_id(),
             alice.clone(),
@@ -5520,7 +5532,7 @@ seiyaku DynamicAccessCounter {
             .contract_manifests
             .insert(code_hash, manifest.clone());
         stx.apply();
-        let _ = st_block.commit();
+        let _ = st_block.commit_world_overlay_for_testing();
         let tx = TransactionBuilder::new(
             test_network_id(),
             alice.clone(),
@@ -5670,7 +5682,7 @@ seiyaku DynamicAccessCounter {
                 .unwrap();
             stx.apply();
         }
-        st_block.commit().unwrap();
+        st_block.commit_world_overlay_for_testing().unwrap();
         let tx = TransactionBuilder::new(
             test_network_id(),
             alice.clone(),
@@ -5739,7 +5751,7 @@ seiyaku DynamicAccessCounter {
                 .unwrap();
             stx.apply();
         }
-        st_block.commit().unwrap();
+        st_block.commit_world_overlay_for_testing().unwrap();
         let tx = TransactionBuilder::new(
             test_network_id(),
             alice.clone(),
@@ -5821,7 +5833,7 @@ seiyaku DynamicAccessCounter {
             stx.apply();
             (code_hash, trigger_id, hints)
         };
-        st_block.commit().unwrap();
+        st_block.commit_world_overlay_for_testing().unwrap();
         let tx = TransactionBuilder::new(
             test_network_id(),
             alice.clone(),
@@ -5936,7 +5948,7 @@ seiyaku DynamicAccessCounter {
             stx.apply();
             (code_hash, trigger_id, hints)
         };
-        st_block.commit().unwrap();
+        st_block.commit_world_overlay_for_testing().unwrap();
         let tx = TransactionBuilder::new(
             test_network_id(),
             alice.clone(),

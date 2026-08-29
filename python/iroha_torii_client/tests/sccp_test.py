@@ -70,6 +70,9 @@ DESTINATION_ARTIFACT_NORITO_TYPE = (
 NATIVE_INBOUND_PROOF_NORITO_TYPE = (
     "iroha_sccp::native_admission::SccpNativeInboundMessageProofV1"
 )
+REPLAY_WITNESS_NORITO_TYPE = (
+    "iroha_data_model::bridge::sccp_replay::SccpSparseMerkleWitnessV1"
+)
 
 
 def _b64(value: bytes) -> str:
@@ -125,6 +128,10 @@ def _destination_artifact_b64(*, padding: int = 0) -> str:
 
 def _native_inbound_proof_b64(*, padding: int = 0) -> str:
     return _b64(_sccp_norito_frame(NATIVE_INBOUND_PROOF_NORITO_TYPE, padding=padding))
+
+
+def _replay_witness_b64(*, padding: int = 0) -> str:
+    return _b64(_sccp_norito_frame(REPLAY_WITNESS_NORITO_TYPE, padding=padding))
 
 
 def _network(profile: str) -> Dict[str, Any]:
@@ -315,6 +322,7 @@ def _capabilities() -> Dict[str, Any]:
         "message_bundle_path": "/v1/sccp/proofs/message/{message_id}",
         "proof_request_path": "/v1/sccp/proof-requests/{message_id}",
         "recent_messages_path": "/v1/sccp/messages/recent",
+        "sora_outbound_material_path": "/v1/sccp/routes/{source_profile}/{route_id}/{asset_key}/{revision}/sora-outbound-material",
         "registry_limits": {
             "max_governed_lanes": 16,
             "max_live_governed_routes": 64,
@@ -1822,9 +1830,10 @@ def test_submit_dtos_have_no_redundant_public_key_or_caller_selected_route() -> 
                 "authority": AUTHORITY,
                 "fee_payment": _fee_payment(),
                 "native_proof_b64": _native_inbound_proof_b64(),
+                "replay_witness_b64": _replay_witness_b64(),
             }
         )
-    ) == ["authority", "fee_payment", "native_proof_b64"]
+    ) == ["authority", "fee_payment", "native_proof_b64", "replay_witness_b64"]
     native = normalize_bridge_message_submit_payload(
         {
             "authority": AUTHORITY,
@@ -1832,6 +1841,7 @@ def test_submit_dtos_have_no_redundant_public_key_or_caller_selected_route() -> 
             "signature_b64": "AQ==",
             "transaction_payload_b64": transaction_payload_b64,
             "native_proof_b64": _native_inbound_proof_b64(),
+            "replay_witness_b64": _replay_witness_b64(),
             "creation_time_ms": 10,
         }
     )
@@ -1860,6 +1870,7 @@ def test_submit_authorities_require_exact_canonical_i105() -> None:
                 "authority": noncanonical,
                 "fee_payment": _fee_payment(),
                 "native_proof_b64": _native_inbound_proof_b64(),
+                "replay_witness_b64": _replay_witness_b64(),
             }
         )
 
@@ -1915,6 +1926,7 @@ def test_submit_artifacts_require_exact_schema_and_zero_alignment_padding() -> N
             "authority": AUTHORITY,
             "fee_payment": _fee_payment(),
             "native_proof_b64": _native_inbound_proof_b64(),
+            "replay_witness_b64": _replay_witness_b64(),
         }
     )
     with pytest.raises(ValueError, match="schema hash"):
@@ -1943,6 +1955,7 @@ def test_submit_artifacts_require_exact_schema_and_zero_alignment_padding() -> N
                 "authority": AUTHORITY,
                 "fee_payment": _fee_payment(),
                 "native_proof_b64": _destination_artifact_b64(),
+                "replay_witness_b64": _replay_witness_b64(),
             }
         )
     for padding in (1, 8, 64):
@@ -1960,6 +1973,7 @@ def test_submit_artifacts_require_exact_schema_and_zero_alignment_padding() -> N
                     "authority": AUTHORITY,
                     "fee_payment": _fee_payment(),
                     "native_proof_b64": _native_inbound_proof_b64(padding=padding),
+                    "replay_witness_b64": _replay_witness_b64(),
                 }
             )
 
@@ -2050,6 +2064,22 @@ def test_proof_submit_requires_structural_typed_fee_payment(fee_payment: Any) ->
 
 def test_bridge_response_and_strict_json_reject_contradictions_and_duplicates() -> None:
     assert normalize_sccp_bridge_submit_response(_prepared_response()).submitted is False
+    assert (
+        normalize_sccp_bridge_submit_response(
+            _prepared_response(backend="evm-groth16-bn254-v1")
+        ).backend
+        == "evm-groth16-bn254-v1"
+    )
+    assert (
+        normalize_sccp_bridge_submit_response(
+            _prepared_response(
+                backend="ton-groth16-bls12381-v1",
+                counterparty_domain=4,
+                counterparty_chain="ton-mainnet",
+            )
+        ).backend
+        == "ton-groth16-bls12381-v1"
+    )
     submitted = _prepared_response(
         submitted=True,
         tx_hash_hex=HASH(0x55),

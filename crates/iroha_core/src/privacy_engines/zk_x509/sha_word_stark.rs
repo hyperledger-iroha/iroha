@@ -31,8 +31,8 @@ use super::{
     },
 };
 use crate::privacy_engines::transparent_stark::{
-    GOLDILOCKS_MODULUS_V1, GoldilocksDigest384V1, GoldilocksFieldV1 as F,
-    TransparentStarkErrorV1, TransparentTranscriptV1,
+    GOLDILOCKS_MODULUS_V1, GoldilocksDigest384V1, GoldilocksFieldV1 as F, TransparentStarkErrorV1,
+    TransparentTranscriptV1,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
@@ -3831,8 +3831,7 @@ mod tests {
         assert_eq!(challenges, sample(root));
         let mut changed_words = root.words();
         changed_words[0] ^= 1;
-        let changed_root =
-            GoldilocksDigest384V1::new(changed_words).expect("changed base root");
+        let changed_root = GoldilocksDigest384V1::new(changed_words).expect("changed base root");
         assert_ne!(challenges, sample(changed_root));
         assert!(
             challenges

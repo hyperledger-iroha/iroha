@@ -60,7 +60,12 @@ beep = ["ivm/beep"]
 ## Adds optional deps and is disabled by default to keep the daemon lean.
 dag-recovery-verify = ["dep:nonzero_ext"]
 # Support lightweight telemetry, including diagnostics
-telemetry = ["iroha_telemetry", "iroha_core/telemetry", "iroha_torii/telemetry"]
+telemetry = [
+    "iroha_telemetry",
+    "iroha_telemetry/event-exporter",
+    "iroha_core/telemetry",
+    "iroha_torii/telemetry",
+]
 # Enable ISI counters/timing instrumentation in the core crate.
 expensive-telemetry = ["telemetry", "iroha_core/expensive-telemetry"]
 # Support developer-specific telemetry.

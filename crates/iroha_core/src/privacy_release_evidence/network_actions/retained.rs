@@ -148,10 +148,10 @@ pub struct PrivacyReleaseIvmPrivateNoteNetworkActionV1 {
     /// Exact public statement carried by `transaction`.
     pub statement: IrohaIvmPrivateNoteStarkStatementV1,
 }
-/// Candidate governed ZK-ACE transfer shape retained for fail-closed evidence.
+/// Final governed ZK-ACE transfer shape retained for fail-closed evidence.
 ///
-/// Production builders cannot currently return this type because ZK-ACE has
-/// no activatable compiled profile.
+/// Production builders cannot return this type until the independent qROM
+/// reduction and implementation review are registered.
 #[derive(Clone, Debug)]
 pub struct PrivacyReleaseZkAceNetworkActionV1 {
     /// Ordinary signed transaction carrying exactly one ZK-ACE proof.
@@ -271,11 +271,11 @@ fn secret_scalar_v1(
     );
     SecretScalarV1::from_bytes(bytes).map_err(|_| evidence_error())
 }
-/// Reject a governed ZK-ACE candidate before constructing a proof.
+/// Reject a governed ZK-ACE transfer before constructing a proof.
 ///
 /// Otherwise-valid inputs return
-/// [`PrivacyReleaseEvidenceErrorClassV1::ProtocolUnavailable`] while the
-/// compiled ZK-ACE profile is fail-closed.
+/// [`PrivacyReleaseEvidenceErrorClassV1::ProtocolUnavailable`] while qROM
+/// qualification remains incomplete.
 pub fn build_privacy_release_zk_ace_network_action_v1(
     transaction_context: PrivacyReleaseTransactionContextV1,
     source: AccountId,
@@ -1337,7 +1337,7 @@ mod tests {
                 valid.authority.clone(),
                 AccountId::new(
                     KeyPair::try_from_seed(vec![0x23; 32], Algorithm::Ed25519)
-                        .expect("fail-closed destination keypair")
+                        .expect("destination keypair")
                         .public_key()
                         .clone(),
                 ),
@@ -1347,7 +1347,7 @@ mod tests {
                 [0x54; 32],
                 key_pair.private_key(),
             )
-            .expect_err("otherwise valid ZK-ACE builder must remain unavailable"),
+            .expect_err("ZK-ACE must remain unavailable without qROM qualification"),
             PrivacyReleaseEvidenceErrorClassV1::ProtocolUnavailable
         );
         let mut zero_genesis = valid.clone();

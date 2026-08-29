@@ -2695,6 +2695,15 @@ impl ProductionV2Services {
         let outcome = self.drain_completions_inner(executor, 1)?;
         self.require_no_unowned_lifecycle_completion(executor, outcome)
     }
+
+    /// Return whether the inert ordinary Completion test head remains retained.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn has_auxiliary_completion_head_for_test(&self) -> bool {
+        matches!(
+            self.held_io_completion.as_ref(),
+            Some(V2IoCompletion::AuxiliaryNoop)
+        )
+    }
     /// Prepare one ordinary Completion head while a same-address Validate successor waits.
     ///
     /// The waiting successor remains the logical owner. This method only

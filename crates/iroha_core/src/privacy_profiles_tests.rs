@@ -261,7 +261,7 @@ mod tests {
         #[cfg(feature = "zk-stark")]
         assert_eq!(
             ZK_ACE_PARAMETER_SET_LABEL_V1,
-            b"goldilocks-dense-mds-poseidon-x7-transparent-stark-candidate-v1"
+            b"goldilocks-poseidon-x7-digest384-fp4-binary-fri8-q136-zk-ace-v1"
         );
         for stale_geometry in [
             b"mask255".as_slice(),
@@ -286,9 +286,8 @@ mod tests {
                     .any(|window| window == stale_geometry)
             );
         }
-        let private_geometry =
-            proof_managed_note_stark_geometry_digest_v1(PRIVATE_NOTE_DOMAINS_V1)
-                .expect("private-note geometry digest");
+        let private_geometry = proof_managed_note_stark_geometry_digest_v1(PRIVATE_NOTE_DOMAINS_V1)
+            .expect("private-note geometry digest");
         let masp_geometry = proof_managed_note_stark_geometry_digest_v1(PQ_MASP_DOMAINS_V1)
             .expect("PQ-MASP geometry digest");
         assert_ne!(private_geometry, masp_geometry);
@@ -1215,12 +1214,16 @@ mod tests {
         }
     }
     #[test]
-    fn zk_ace_remains_fail_closed_without_a_128_bit_commitment_profile() {
+    #[cfg(feature = "zk-stark")]
+    fn zk_ace_final_digest384_profile_stays_unavailable_without_qrom_certification() {
         let protocol_id = PrivacyProtocolIdV1::ZkAcePqAuthorizationV1;
         assert_eq!(
             compiled_privacy_profile_v1(protocol_id),
             Err(CompiledPrivacyProfileErrorV1::EngineUnavailable { protocol_id })
         );
+        assert!(!ZK_ACE_FULL_ENGINE_AVAILABLE_V1);
+        assert!(!ZK_ACE_QROM_CERTIFICATION_BLOCKER_V1.is_empty());
+        assert_eq!(ZK_ACE_PRIVACY_MAX_PROOF_BYTES_V1, 2_131_222);
     }
     #[test]
     fn zk_ams_profile_is_unavailable_until_every_mkhe_gate_closes() {

@@ -54,6 +54,59 @@ fn adaptive_codec_roundtrips_the_exact_v1_shape() {
 }
 
 #[test]
+fn json_roundtrips_the_named_exact_eight_slot_shape() {
+    let expected = envelope();
+    let json = norito::json::to_json(&expected).expect("encode exact-eight memo JSON");
+    let actual: ConfidentialMemoEnvelopeV1 =
+        norito::json::from_json(&json).expect("decode exact-eight memo JSON");
+    assert_eq!(actual, expected);
+
+    let value = norito::json::to_value(&expected).expect("encode exact-eight memo JSON value");
+    let slots = value
+        .get("slots")
+        .and_then(norito::json::Value::as_object)
+        .expect("memo JSON must contain a named slots object");
+    assert_eq!(slots.len(), CONFIDENTIAL_MEMO_RECIPIENT_SLOTS_V1);
+    for index in 0..CONFIDENTIAL_MEMO_RECIPIENT_SLOTS_V1 {
+        assert!(slots.contains_key(&format!("slot_{index}")));
+    }
+}
+
+#[test]
+fn json_rejects_seven_or_nine_slot_objects() {
+    let expected = envelope();
+    let mut seven = norito::json::to_value(&expected).expect("encode seven-slot rejection fixture");
+    let seven_slots = seven
+        .as_object_mut()
+        .expect("memo JSON object")
+        .get_mut("slots")
+        .and_then(norito::json::Value::as_object_mut)
+        .expect("named memo slots object");
+    assert!(seven_slots.remove("slot_7").is_some());
+    assert!(
+        norito::json::from_value::<ConfidentialMemoEnvelopeV1>(seven).is_err(),
+        "a missing eighth slot must not enter a variable-length compatibility path"
+    );
+
+    let mut nine = norito::json::to_value(&expected).expect("encode nine-slot rejection fixture");
+    let nine_slots = nine
+        .as_object_mut()
+        .expect("memo JSON object")
+        .get_mut("slots")
+        .and_then(norito::json::Value::as_object_mut)
+        .expect("named memo slots object");
+    let extra = nine_slots
+        .get("slot_7")
+        .expect("canonical eighth slot")
+        .clone();
+    assert!(nine_slots.insert("slot_8".to_owned(), extra).is_none());
+    assert!(
+        norito::json::from_value::<ConfidentialMemoEnvelopeV1>(nine).is_err(),
+        "an extra ninth slot must not enter a variable-length compatibility path"
+    );
+}
+
+#[test]
 fn old_single_recipient_wire_is_not_a_v1_candidate() {
     let mut old_wire = vec![1];
     old_wire.extend_from_slice(&[7; 32]);

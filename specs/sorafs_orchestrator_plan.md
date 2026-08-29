@@ -311,10 +311,10 @@ effective brownout flag so downstream collectors can gate rollouts during the SN
 
 Events reuse the same redaction rules as other telemetry targets and attach the randomly generated
 `job_id` so downstream collectors can stitch lifecycle, retry, and error records together. The
-`SorafsFetchOtel` exporter mirrors the metrics above onto the OpenTelemetry pipeline, ensuring both
-Prometheus scrapes and OTLP traces share the same manifest/job identifiers. PQ adoption is tracked
-via the candidate ratio histogram; deficit ratios and brownout counters expose the path build delta
-requested for SNNet-5b (including `no_soranet` inventory gaps).
+Prometheus metrics carry bounded manifest, provider, and region labels, while `job_id` remains in
+the structured events to avoid unbounded metric cardinality. PQ adoption is tracked via the
+candidate ratio histogram; deficit ratios and brownout counters expose the path build delta requested
+for SNNet-5b (including `no_soranet` inventory gaps).
 
 Structured logs (JSON) still include provider ID, chunk index, attempt number, and error category.
 Telemetry MUST distinguish between capability refusals (static) and runtime failures (dynamic) to aid

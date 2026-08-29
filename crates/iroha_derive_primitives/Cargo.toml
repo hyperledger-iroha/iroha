@@ -8,13 +8,17 @@ license.workspace = true
 [lints]
 workspace = true
 
+[features]
+default = []
+repr = ["dep:darling", "dep:strum", "dep:syn"]
+
 [dependencies]
-darling = { workspace = true }
+darling = { workspace = true, optional = true }
 drop_bomb = { workspace = true }
 manyhow = { workspace = true }
 proc-macro2 = { workspace = true }
-syn = { workspace = true, features = ["full"] }
-strum = { workspace = true, features = ["derive"] }
+syn = { workspace = true, features = ["full"], optional = true }
+strum = { workspace = true, features = ["derive"], optional = true }
 
 [dev-dependencies]
 quote = { workspace = true }

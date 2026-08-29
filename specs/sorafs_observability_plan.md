@@ -19,14 +19,14 @@ summary: SF-7 telemetry schema, dashboards, and SLO enforcement for gateways and
 
 | Metric | Type | Labels | Notes |
 |--------|------|--------|-------|
-| `sorafs_gateway_active` | Gauge (UpDownCounter) | `endpoint`, `method`, `variant`, `chunker`, `profile` | Exported by Torii's Prometheus registry and mirrored by `SorafsGatewayOtel`; tracks in-flight HTTP operations per endpoint/method combination. |
+| `sorafs_gateway_active` | Gauge | `endpoint`, `method`, `variant`, `chunker`, `profile` | Exported by Torii's Prometheus registry; tracks in-flight HTTP operations per endpoint/method combination. |
 | `sorafs_gateway_responses_total` | Counter | `endpoint`, `method`, `variant`, `chunker`, `profile`, `result`, `status`, `error_code` | Every completed gateway request increments once; `result` ∈ {`success`,`error`,`dropped`}. |
 | `sorafs_gateway_ttfb_ms_bucket` | Histogram | `endpoint`, `method`, `variant`, `chunker`, `profile`, `result`, `status`, `error_code` | Time-to-first-byte latency for gateway responses; exported as Prometheus `_bucket/_sum/_count`. |
 | `sorafs_gateway_proof_verifications_total` | Counter | `profile_version`, `result`, `error_code` | Proof verification outcomes captured at request time (`result` ∈ {`success`,`failure`}). |
 | `sorafs_gateway_proof_duration_ms_bucket` | Histogram | `profile_version`, `result`, `error_code` | Verification latency distribution for PoR receipts. |
 | `telemetry::sorafs.gateway.request` | Structured event | `endpoint`, `method`, `variant`, `result`, `status`, `error_code`, `duration_ms` | Structured log emitted on every request completion for Loki/Tempo correlation. |
 
-`telemetry::sorafs.gateway.request` events mirror the counters with structured payloads, surfacing `endpoint`, `method`, `variant`, `status`, `error_code`, and `duration_ms` for Loki/Tempo correlation. Dashboards consume the standard Torii Prometheus series; deployments that install the optional OTLP exporter receive the same canonical instruments.
+`telemetry::sorafs.gateway.request` events mirror the counters with structured payloads, surfacing `endpoint`, `method`, `variant`, `status`, `error_code`, and `duration_ms` for log correlation. Dashboards consume the standard Torii Prometheus series.
 
 ### Proof-health telemetry
 
@@ -95,10 +95,6 @@ Example lifecycle payload (redacted fields follow standard `iroha_logger` rules)
 
 | Metric | Type | Labels | Notes |
 |--------|------|--------|-------|
-| `sorafs_node_capacity_utilisation_pct` | Histogram | `provider_id` | OTEL histogram of storage utilisation percentage (exported as `_bucket/_sum/_count`). |
-| `sorafs_node_por_success_total` | Counter | `provider_id` | Monotonic counter for successful PoR samples, derived from scheduler snapshots. |
-| `sorafs_node_por_failure_total` | Counter | `provider_id` | Monotonic counter for failed PoR samples. |
-| `sorafs_node_deal_publish_total` | Counter | `provider_id`, `result` | Tagged with `result=success|failure` every time a settlement artefact is written to (or fails to reach) the governance DAG. |
 | `torii_sorafs_storage_bytes_*`, `torii_sorafs_storage_por_*` | Gauge | `provider` | Existing Prometheus gauges for bytes used, queue depth, PoR inflight counts. |
 | `torii_sorafs_capacity_*`, `torii_sorafs_uptime_bps`, `torii_sorafs_por_bps` | Gauge | `provider` | Provider capacity/uptime success data surfaced in the capacity dashboard. |
 | `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | Gauge | `provider`, `manifest` | Backlog depth plus the cumulative failure counters exported whenever `/v1/sorafs/por/ingestion/{manifest}` is polled, feeding the “PoR Stalls” panel/alert. |
@@ -107,10 +103,6 @@ Example lifecycle payload (redacted fields follow standard `iroha_logger` rules)
 
 | Metric | Type | Labels | Notes |
 |--------|------|--------|-------|
-| `sorafs_gc_runs_total` | Counter | `result` | OTEL counter for GC sweeps, emitted by the embedded node. |
-| `sorafs_gc_evictions_total` | Counter | `reason` | OTEL counter for evicted manifests grouped by reason. |
-| `sorafs_gc_bytes_freed_total` | Counter | `reason` | OTEL counter for bytes freed grouped by reason. |
-| `sorafs_gc_blocked_total` | Counter | `reason` | OTEL counter for evictions blocked by active repairs or policy. |
 | `torii_sorafs_gc_runs_total` | Counter | `result` | Prometheus counter for GC sweeps (success/error). |
 | `torii_sorafs_gc_evictions_total` | Counter | `reason` | Prometheus counter for evicted manifests grouped by reason. |
 | `torii_sorafs_gc_bytes_freed_total` | Counter | `reason` | Prometheus counter for bytes freed grouped by reason. |
@@ -122,24 +114,16 @@ Example lifecycle payload (redacted fields follow standard `iroha_logger` rules)
 
 | Metric | Type | Labels | Notes |
 |--------|------|--------|-------|
-| `sorafs.reconciliation.runs_total` | Counter | `result` | OTEL counter for reconciliation snapshots. |
-| `sorafs.reconciliation.divergence_total` | Counter | — | OTEL counter of divergence counts per run. |
 | `torii_sorafs_reconciliation_runs_total` | Counter | `result` | Prometheus counter for reconciliation runs. |
 | `torii_sorafs_reconciliation_divergence_count` | Gauge | — | Latest divergence count observed in a reconciliation report. |
 
 ### Repair automation
 
-| Metric | Type | Labels | Notes |
-|--------|------|--------|-------|
-| `sorafs.repair.tasks_total` | Counter | `status` | OTEL counter for repair task transitions (`queued`, `in_progress`, `completed`, `failed`, `escalated`). |
-| `sorafs.repair.latency_minutes` | Histogram | `outcome` | OTEL histogram of repair lifecycle latency in minutes. |
-| `sorafs.repair.backlog_oldest_age_seconds` | Histogram | — | OTEL histogram of oldest queued repair age (seconds). |
-| `sorafs.repair.queue_depth` | Histogram | `provider` | OTEL histogram for repair queue depth per provider. |
-| `sorafs.repair.lease_expired_total` | Counter | `outcome` | OTEL counter for repair lease expirations grouped by outcome. |
-| `torii_sorafs_repair_tasks_total` | Counter | `status` | Prometheus counter for repair task transitions. |
-| `torii_sorafs_repair_queue_depth` | Gauge | `provider` | Prometheus gauge for queued repair tickets per provider. |
-| `torii_sorafs_repair_backlog_oldest_age_seconds` | Gauge | — | Age in seconds of the oldest queued repair ticket. |
-| `torii_sorafs_repair_lease_expired_total` | Counter | `outcome` | Prometheus counter for repair lease expirations grouped by outcome. |
+Repair state is observed from the finalized-ledger audit APIs
+`/v1/sorafs/audit/repair/tasks` and `/v1/sorafs/audit/repair/events`, together
+with the native forwarder's structured warnings. There is no separate repair
+metric family: exporting a second mutable projection would duplicate
+the authoritative task, lease, terminal, and slash state.
 
 ### Proof of Timely Retrieval (PoTR) and chunk SLA
 
@@ -160,7 +144,7 @@ Example lifecycle payload (redacted fields follow standard `iroha_logger` rules)
 ## Dashboards
 
 1. **Gateway Observability** (`dashboards/grafana/sorafs_gateway_observability.json`)
-   - Tracks trustless availability, TTFB P95, refusal breakdown, and PoR/PoTR failure rates using the new OTEL metrics.
+   - Tracks trustless availability, TTFB P95, refusal breakdown, and PoR/PoTR failure rates using the canonical Prometheus metrics.
 2. **Orchestrator Health** (`dashboards/grafana/sorafs_fetch_observability.json`)
    - Existing dashboard covering multi-source orchestrator load (active fetches, retries, provider failures).
 3. **SoraNet Privacy Metrics** (`dashboards/grafana/soranet_privacy_metrics.json`)
@@ -196,10 +180,9 @@ Example lifecycle payload (redacted fields follow standard `iroha_logger` rules)
 
 ## Data Pipeline
 
-- Collectors: OpenTelemetry agents on gateways/nodes.
-- Backend: Prometheus + Loki + Tempo (or OTEL exporters to Mimir/Loki).
+- Collectors: Prometheus-compatible scrapers plus the configured structured-log agents.
+- Backend: Prometheus/Mimir for metrics and Loki or another log store for structured events.
 - Optional eBPF (Tetragon) for low-level tracing.
-- OTLP exporters: call `iroha_telemetry::metrics::install_sorafs_gateway_otlp_exporter` for Torii gateways and `install_sorafs_node_otlp_exporter` inside embedded nodes (the orchestrator continues to use `install_sorafs_fetch_otlp_exporter`).
 
 ## Metric Naming / Label Conventions
 
@@ -227,19 +210,17 @@ Example lifecycle payload (redacted fields follow standard `iroha_logger` rules)
 - Work with the Observability team to register the metric catalog in the shared Prometheus naming
   doc and include label cardinality expectations (max providers, manifests).
 
-## Tracing Strategy
+## Correlation Strategy
 
-- Adopt OpenTelemetry end-to-end:
-  - Gateways emit OTLP spans (HTTP) annotated with request IDs, manifest digests, and token hash.
-  - Orchestrator uses `tracing` + `opentelemetry` crates to export spans for fetch attempts.
-  - Sora validators/observers (embedded SoraFS node) export spans for PoR challenges and storage
-    operations. All components share a common trace-id propagated via headers (`x-sorafs-trace`).
-- `SorafsFetchOtel` bridges the orchestrator metrics into OTLP gauges/histograms while the
-  `telemetry::sorafs.fetch.*` events provide lightweight JSON payloads for log/metric backends that
-  prefer structured events over scrapes.
-- Collectors: run OTEL collectors alongside Prometheus/Loki/Tempo. Operators can forward to Tempo
-  (preferred) or Jaeger API backends.
-- For high-cardinality operations, attach sampling rules (10% for success, 100% for failures).
+- Gateways and the orchestrator emit bounded structured events alongside the canonical Prometheus
+  metrics. Request IDs, manifest digests, provider identifiers, and orchestrator job IDs provide the
+  correlation keys without duplicating metric instruments.
+- `telemetry::sorafs.fetch.*` events carry job-level detail for log backends while dashboards and
+  alerts use the scrapeable `sorafs_orchestrator_*` families.
+- Deployments may translate these application-owned surfaces into another observability protocol in
+  their collector layer; the Rust telemetry crate does not install or manage a global OTLP provider.
+- Apply sampling in the external log/trace pipeline for high-cardinality operations (for example,
+  10% for successes and 100% for failures).
 
 ## TLS Telemetry Coordination (SF-5b)
 

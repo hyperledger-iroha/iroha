@@ -206,6 +206,21 @@ fn visit_privacy_protocol_instruction<V: Visit + ?Sized>(
         .downcast_ref::<crate::isi::privacy::RevokePrivacyZkAcePolicyV1>()
     {
         visitor.visit_revoke_privacy_zk_ace_policy_v1(v);
+    } else if let Some(v) =
+        isi.as_any()
+            .downcast_ref::<crate::isi::private_settlement::ActivatePrivateSettlementPoolV1>()
+    {
+        visitor.visit_activate_private_settlement_pool_v1(v);
+    } else if let Some(v) =
+        isi.as_any()
+            .downcast_ref::<crate::isi::private_settlement::AbortAtomicPrivateSettlementV1>()
+    {
+        visitor.visit_abort_atomic_private_settlement_v1(v);
+    } else if let Some(v) =
+        isi.as_any()
+            .downcast_ref::<crate::isi::private_settlement::FinalizeAtomicPrivateSettlementV1>()
+    {
+        visitor.visit_finalize_atomic_private_settlement_v1(v);
     } else {
         return false;
     }
@@ -795,6 +810,15 @@ macro_rules! instruction_visitors {
                 &$crate::isi::privacy::RevokePrivacyZkX509CrlV1
             ),
             visit_submit_privacy_proof_v1(&$crate::isi::privacy::SubmitPrivacyProofV1),
+            visit_activate_private_settlement_pool_v1(
+                &$crate::isi::private_settlement::ActivatePrivateSettlementPoolV1
+            ),
+            visit_abort_atomic_private_settlement_v1(
+                &$crate::isi::private_settlement::AbortAtomicPrivateSettlementV1
+            ),
+            visit_finalize_atomic_private_settlement_v1(
+                &$crate::isi::private_settlement::FinalizeAtomicPrivateSettlementV1
+            ),
             visit_publish_pedersen_params(&PublishPedersenParams),
             visit_set_pedersen_params_lifecycle(&SetPedersenParamsLifecycle),
             visit_publish_poseidon_params(&PublishPoseidonParams),

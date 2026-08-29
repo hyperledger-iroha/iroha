@@ -1198,6 +1198,7 @@ pub struct ValidationFeePolicyV1 {
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::u64_string"))]
     pub policy_version: u64,
     /// Previous policy hash for policy-chain validation.
+    #[norito(required)]
     pub previous_policy_hash: Option<[u8; 32]>,
     /// Concrete fee-asset definition charged by this policy.
     pub ds_asset_id: AssetDefinitionId,
@@ -1217,10 +1218,12 @@ pub struct ValidationFeePolicyV1 {
         feature = "json",
         norito(json = "crate::json_helpers::u64_string::option")
     )]
+    #[norito(required)]
     pub expires_after_height: Option<u64>,
     /// Explicit exemption classes recognized by this policy.
     pub exemption_classes: Vec<String>,
     /// Exact typed contract and six-transfer plan for `TREASURY_PAYOUT`.
+    #[norito(required)]
     pub treasury_payout_binding: Option<ValidationFeeTreasuryPayoutBindingV1>,
 }
 impl ValidationFeePolicyV1 {
@@ -1763,6 +1766,7 @@ mod parliament_tests {
             "previous_policy_hash",
             "expires_after_height",
             "exemption_classes",
+            "treasury_payout_binding",
         ] {
             let mut value =
                 norito::json::to_value(&policy).expect("encode validation-fee policy JSON value");

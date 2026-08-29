@@ -366,7 +366,8 @@ struct EvmDestinationStateV1 {
     route_runtime_code_hex: String,
     replay_verifier_runtime_code_hex: String,
     mint_breaker_runtime_code_hex: String,
-    route_max_wrapped_supply: String,
+    /// Exact `maxWrappedSupply()` value authenticated at the finalized block.
+    route_max_wrapped_supply: u128,
     token_total_supply: String,
     mint_breaker_vote_count: u8,
     mint_breaker_minting_disabled: bool,
@@ -402,7 +403,8 @@ struct TronDestinationStateV1 {
     route_runtime_code_hex: String,
     replay_verifier_runtime_code_hex: String,
     mint_breaker_runtime_code_hex: String,
-    route_max_wrapped_supply: String,
+    /// Exact `maxWrappedSupply()` value authenticated at the solid block.
+    route_max_wrapped_supply: u128,
     token_total_supply: String,
     mint_breaker_vote_count: u8,
     mint_breaker_minting_disabled: bool,
@@ -419,10 +421,11 @@ struct TronDestinationStateV1 {
 /// Pinned TON destination readback signed by the configured release attestor.
 ///
 /// The attestor is the semantic decoder boundary: it supplies the exact data
-/// BOCs and the decoded mutable-field cardinalities from the same finalized
-/// account states. This validator independently binds each BOC root to route
-/// governance and requires every mutable field to be in canonical deployment
-/// zero state before the route may be activated.
+/// BOCs, configuration caps, and decoded mutable-field cardinalities from the
+/// same finalized account states. This validator independently binds each BOC
+/// root to route governance, requires both embedded caps to equal governance,
+/// and requires every mutable field to be in canonical deployment zero state
+/// before the route may be activated.
 #[derive(Debug, Clone, norito::JsonSerialize, norito::JsonDeserialize)]
 struct TonDestinationStateV1 {
     schema: String,
@@ -467,9 +470,9 @@ struct TonDestinationStateV1 {
     /// Jetton-master getter projection of the exact governed guardian keys.
     jetton_master_mint_breaker_guardian_keys: SccpTonMintBreakerGuardianKeysV1,
     /// Route getter projection of the immutable wrapped-supply ceiling.
-    route_max_wrapped_supply: String,
+    route_max_wrapped_supply: u128,
     /// Jetton-master getter projection of the immutable wrapped-supply ceiling.
-    jetton_master_max_wrapped_supply: String,
+    jetton_master_max_wrapped_supply: u128,
     /// Route one-way mint-breaker state.
     route_minting_disabled: bool,
     /// Jetton-master one-way mint-breaker state.
@@ -3051,7 +3054,7 @@ struct EvmDestinationReadback<'a> {
     route_runtime_code_hex: &'a str,
     replay_verifier_runtime_code_hex: &'a str,
     mint_breaker_runtime_code_hex: &'a str,
-    route_max_wrapped_supply: &'a str,
+    route_max_wrapped_supply: u128,
     token_total_supply: &'a str,
     mint_breaker_vote_count: u8,
     mint_breaker_minting_disabled: bool,
@@ -3116,7 +3119,7 @@ fn validate_evm_destination_state(
             route_runtime_code_hex: &state.route_runtime_code_hex,
             replay_verifier_runtime_code_hex: &state.replay_verifier_runtime_code_hex,
             mint_breaker_runtime_code_hex: &state.mint_breaker_runtime_code_hex,
-            route_max_wrapped_supply: &state.route_max_wrapped_supply,
+            route_max_wrapped_supply: state.route_max_wrapped_supply,
             token_total_supply: &state.token_total_supply,
             mint_breaker_vote_count: state.mint_breaker_vote_count,
             mint_breaker_minting_disabled: state.mint_breaker_minting_disabled,
@@ -3176,10 +3179,6 @@ fn validate_destination_readback(
         readback.mint_breaker_runtime_code_hex,
         "mint-breaker runtime code",
     )?);
-    let route_max_wrapped_supply = parse_canonical_u128_decimal(
-        readback.route_max_wrapped_supply,
-        "route maximum wrapped supply",
-    )?;
     let token_total_supply =
         parse_canonical_u128_decimal(readback.token_total_supply, "token total supply")?;
     let source_replay_domain_hash = replay_domain_hash(
@@ -3235,7 +3234,7 @@ fn validate_destination_readback(
         || route_code_hash != readback.deployment.route_code_hash
         || replay_verifier_code_hash != readback.deployment.replay_verifier_code_hash
         || mint_breaker_code_hash != readback.deployment.mint_breaker_code_hash
-        || route_max_wrapped_supply != readback.deployment.max_wrapped_supply
+        || readback.route_max_wrapped_supply != readback.deployment.max_wrapped_supply
         || token_total_supply != 0
         || readback.mint_breaker_vote_count != 0
         || readback.mint_breaker_minting_disabled
@@ -3343,10 +3342,6 @@ fn validate_tron_destination_readback(
         &state.mint_breaker_runtime_code_hex,
         "TRON mint-breaker runtime code",
     )?);
-    let route_max_wrapped_supply = parse_canonical_u128_decimal(
-        &state.route_max_wrapped_supply,
-        "TRON route maximum wrapped supply",
-    )?;
     let token_total_supply =
         parse_canonical_u128_decimal(&state.token_total_supply, "TRON token total supply")?;
     let source_replay_domain_hash = replay_domain_hash(
@@ -3401,7 +3396,7 @@ fn validate_tron_destination_readback(
         || route_code_hash != deployment.route_code_hash
         || replay_verifier_code_hash != deployment.replay_verifier_code_hash
         || mint_breaker_code_hash != deployment.mint_breaker_code_hash
-        || route_max_wrapped_supply != deployment.max_wrapped_supply
+        || state.route_max_wrapped_supply != deployment.max_wrapped_supply
         || token_total_supply != 0
         || state.mint_breaker_vote_count != 0
         || state.mint_breaker_minting_disabled
@@ -3558,14 +3553,6 @@ fn validate_ton_destination_readback(
         &state.jetton_master_total_supply,
         "TON Jetton master total supply",
     )?;
-    let route_max_wrapped_supply = parse_canonical_u128_decimal(
-        &state.route_max_wrapped_supply,
-        "TON route maximum wrapped supply",
-    )?;
-    let jetton_master_max_wrapped_supply = parse_canonical_u128_decimal(
-        &state.jetton_master_max_wrapped_supply,
-        "TON Jetton master maximum wrapped supply",
-    )?;
     if state.jetton_master_storage_version != SCCP_V1_TON_STORAGE_VERSION
         || state.route_storage_version != SCCP_V1_TON_STORAGE_VERSION
         || jetton_master_total_supply != 0
@@ -3583,8 +3570,8 @@ fn validate_ton_destination_readback(
     }
     if deployment.max_wrapped_supply == 0
         || deployment.max_wrapped_supply > SCCP_V1_TON_MAX_COINS
-        || route_max_wrapped_supply != deployment.max_wrapped_supply
-        || jetton_master_max_wrapped_supply != deployment.max_wrapped_supply
+        || state.route_max_wrapped_supply != deployment.max_wrapped_supply
+        || state.jetton_master_max_wrapped_supply != deployment.max_wrapped_supply
     {
         return Err("authenticated TON wrapped-supply ceiling is not canonical".to_owned());
     }
@@ -4557,6 +4544,27 @@ fn writeln_bounded_stderr(error: &str) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "test-fixtures")]
+    fn invalid_u128_field_encodings(canonical_json: &str, field: &str, value: u128) -> [String; 3] {
+        let fragment = format!(",\"{field}\":{value}");
+        let start = canonical_json
+            .rfind(&fragment)
+            .unwrap_or_else(|| panic!("canonical JSON must contain numeric `{field}` readback"));
+        let end = start + fragment.len();
+
+        let mut missing = canonical_json.to_owned();
+        missing.replace_range(start..end, "");
+        let mut overflowing = canonical_json.to_owned();
+        overflowing.replace_range(
+            start..end,
+            &format!(",\"{field}\":340282366920938463463374607431768211456"),
+        );
+        let mut stringified = canonical_json.to_owned();
+        stringified.replace_range(start..end, &format!(",\"{field}\":\"{value}\""));
+        [missing, overflowing, stringified]
+    }
+
     #[test]
     fn validator_identity_is_stable_and_nonzero() {
         let first = validator_identity().unwrap();
@@ -5007,11 +5015,12 @@ mod tests {
         }
     }
     #[cfg(feature = "test-fixtures")]
-    fn exact_evm_destination_readback_route()
-    -> (SccpGovernedRouteV1, SccpEvmDestinationDeploymentV1) {
+    fn exact_evm_destination_readback_route(
+        profile: SccpNetworkV1,
+    ) -> (SccpGovernedRouteV1, SccpEvmDestinationDeploymentV1) {
         use iroha_data_model::bridge::{SccpRouteActivationV1, SccpSourceEmitterV1};
         let mut route = iroha_sccp::sccp_exact_evm_governed_route_test_fixture_v1(
-            SccpNetworkV1::EthereumMainnet,
+            profile,
             SccpRouteActivationV1::Bidirectional,
         );
         let SccpDestinationDeploymentV1::Evm(mut deployment) = route.destination else {
@@ -5053,10 +5062,135 @@ mod tests {
             update_sequence: 0,
         }
     }
+
+    #[cfg(feature = "test-fixtures")]
+    fn exact_evm_destination_state(
+        route: &SccpGovernedRouteV1,
+        deployment: SccpEvmDestinationDeploymentV1,
+    ) -> EvmDestinationStateV1 {
+        let profile = route.lane_id.source;
+        let rpc_chain_id = match profile {
+            SccpNetworkV1::EthereumMainnet => 1,
+            SccpNetworkV1::BscMainnet => 56,
+            _ => panic!("exact EVM state fixture requires an EVM profile"),
+        };
+        let route_configuration_hash = route
+            .destination
+            .route_configuration_hash(
+                route.lane_id,
+                &route.route_id,
+                &route.asset_key,
+                route.revision,
+                route.settlement.payload_amount_scale,
+            )
+            .expect("exact EVM destination route configuration must hash");
+        let source_replay_state = empty_replay_readback(
+            replay_domain_hash(
+                route.lane_id.source,
+                route.lane_id.target,
+                SccpReplayBoundaryV1::EvmSourceBurn,
+                route.revision,
+                route_configuration_hash,
+                SccpReplayActorV1::Evm(deployment.route_address),
+            )
+            .expect("exact EVM source replay domain must hash"),
+        );
+        let destination_replay_state = empty_replay_readback(
+            replay_domain_hash(
+                route.lane_id.target,
+                route.lane_id.source,
+                SccpReplayBoundaryV1::EvmDestinationMint,
+                route.revision,
+                route_configuration_hash,
+                SccpReplayActorV1::Evm(deployment.route_address),
+            )
+            .expect("exact EVM destination replay domain must hash"),
+        );
+        EvmDestinationStateV1 {
+            schema: "sccp-evm-destination-state-v1".to_owned(),
+            profile,
+            observed_at_unix_ms: 1,
+            finalized_block_height: 1,
+            finalized_block_hash: [0x91; 32],
+            rpc_chain_id,
+            network_identity_hash: sccp_network_identity_hash_v1(profile),
+            governed_route: route.clone(),
+            route_revision: route.revision,
+            token_bridge_address: deployment.route_address,
+            route_token_address: deployment.token_address,
+            route_verifier_address: deployment.verifier_address,
+            route_replay_verifier_address: deployment.replay_verifier_address,
+            route_mint_breaker_address: deployment.mint_breaker_address,
+            mint_breaker_route_address: deployment.route_address,
+            token_runtime_code_hex: "6000".to_owned(),
+            verifier_runtime_code_hex: "6001".to_owned(),
+            route_runtime_code_hex: "6002".to_owned(),
+            replay_verifier_runtime_code_hex: "6003".to_owned(),
+            mint_breaker_runtime_code_hex: "6004".to_owned(),
+            route_max_wrapped_supply: deployment.max_wrapped_supply,
+            token_total_supply: "0".to_owned(),
+            mint_breaker_vote_count: 0,
+            mint_breaker_minting_disabled: false,
+            source_replay_state,
+            destination_replay_state,
+            verifier_key_hash: deployment.verifier_key_hash,
+            semantic_proof_profile_hash: deployment
+                .outbound_proof_policy
+                .semantic_profile_hash()
+                .expect("exact EVM semantic profile must hash"),
+            sora_finality_anchor_hash: deployment
+                .outbound_proof_policy
+                .sora_finality_anchor_hash()
+                .expect("exact EVM finality anchor must hash"),
+            verifying_key: deployment.verifying_key,
+            destination_binding_hash: route
+                .destination_binding_hash()
+                .expect("exact EVM destination binding must hash"),
+            route_configuration_hash,
+            governed_route_configuration_hash: route
+                .route_configuration_hash()
+                .expect("exact governed EVM route configuration must hash"),
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "test-fixtures")]
+    fn evm_destination_state_cap_is_required_bounded_and_governed_for_both_profiles() {
+        for profile in [SccpNetworkV1::EthereumMainnet, SccpNetworkV1::BscMainnet] {
+            let (route, deployment) = exact_evm_destination_readback_route(profile);
+            let state = exact_evm_destination_state(&route, deployment);
+            validate_evm_destination_state(profile, &state)
+                .expect("exact EVM cap readback must validate");
+
+            let canonical = norito::json::to_json(&state)
+                .expect("exact EVM destination state must encode canonically");
+            let decoded: EvmDestinationStateV1 = norito::json::from_str(&canonical)
+                .expect("exact EVM u128 cap must roundtrip canonically");
+            assert_eq!(
+                decoded.route_max_wrapped_supply,
+                deployment.max_wrapped_supply
+            );
+            for invalid in invalid_u128_field_encodings(
+                &canonical,
+                "route_max_wrapped_supply",
+                deployment.max_wrapped_supply,
+            ) {
+                assert!(
+                    norito::json::from_str::<EvmDestinationStateV1>(&invalid).is_err(),
+                    "EVM cap readback parser accepted a non-u128 cap"
+                );
+            }
+
+            let mut mismatched = state;
+            mismatched.route_max_wrapped_supply -= 1;
+            assert!(validate_evm_destination_state(profile, &mismatched).is_err());
+        }
+    }
     #[test]
     #[cfg(feature = "test-fixtures")]
     fn evm_destination_readback_rejects_each_outbound_policy_hash_independently() {
-        let (route, deployment) = exact_evm_destination_readback_route();
+        let (route, deployment) =
+            exact_evm_destination_readback_route(SccpNetworkV1::EthereumMainnet);
         let semantic_profile_hash = deployment
             .outbound_proof_policy
             .semantic_profile_hash()
@@ -5081,7 +5215,6 @@ mod tests {
         let governed_route_configuration_hash = route
             .route_configuration_hash()
             .expect("exact governed EVM route configuration must hash");
-        let route_max_wrapped_supply = deployment.max_wrapped_supply.to_string();
         let source_replay_state = empty_replay_readback(
             replay_domain_hash(
                 route.lane_id.source,
@@ -5118,7 +5251,7 @@ mod tests {
                 route_runtime_code_hex: "6002",
                 replay_verifier_runtime_code_hex: "6003",
                 mint_breaker_runtime_code_hex: "6004",
-                route_max_wrapped_supply: &route_max_wrapped_supply,
+                route_max_wrapped_supply: deployment.max_wrapped_supply,
                 token_total_supply: "0",
                 mint_breaker_vote_count: 0,
                 mint_breaker_minting_disabled: false,
@@ -5185,16 +5318,18 @@ mod tests {
         invalid.token_total_supply = "1";
         assert!(validate_destination_readback(&route, &invalid).is_err());
         let mut invalid = baseline;
-        invalid.route_max_wrapped_supply = "01";
+        invalid.route_max_wrapped_supply -= 1;
         assert!(validate_destination_readback(&route, &invalid).is_err());
     }
     #[cfg(feature = "test-fixtures")]
     fn exact_tron_destination_readback_route()
     -> (SccpGovernedRouteV1, SccpTronDestinationDeploymentV1) {
         use iroha_data_model::bridge::{
-            SccpLaneIdV1, SccpSourceEmitterV1, SccpTronSourceEmitterV1,
+            SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER, SccpLaneIdV1, SccpSourceEmitterV1,
+            SccpTronSourceEmitterV1,
         };
-        let (mut route, evm_deployment) = exact_evm_destination_readback_route();
+        let (mut route, evm_deployment) =
+            exact_evm_destination_readback_route(SccpNetworkV1::EthereumMainnet);
         let deployment = SccpTronDestinationDeploymentV1 {
             token_address: evm_deployment.token_address,
             token_code_hash: evm_deployment.token_code_hash,
@@ -5209,8 +5344,12 @@ mod tests {
             replay_verifier_code_hash: evm_deployment.replay_verifier_code_hash,
             mint_breaker_address: evm_deployment.mint_breaker_address,
             mint_breaker_code_hash: evm_deployment.mint_breaker_code_hash,
-            taira_to_token_multiplier: evm_deployment.taira_to_token_multiplier,
-            max_wrapped_supply: evm_deployment.max_wrapped_supply,
+            taira_to_token_multiplier: SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER,
+            max_wrapped_supply: route
+                .settlement
+                .max_outstanding_liability
+                .checked_mul(u128::from(SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER))
+                .expect("exact TRON readback fixture supply cap must fit u128"),
         };
         let lane = SccpLaneIdV1 {
             source: SccpNetworkV1::TronMainnet,
@@ -5307,7 +5446,7 @@ mod tests {
             route_runtime_code_hex: "6002".to_owned(),
             replay_verifier_runtime_code_hex: "6003".to_owned(),
             mint_breaker_runtime_code_hex: "6004".to_owned(),
-            route_max_wrapped_supply: deployment.max_wrapped_supply.to_string(),
+            route_max_wrapped_supply: deployment.max_wrapped_supply,
             token_total_supply: "0".to_owned(),
             mint_breaker_vote_count: 0,
             mint_breaker_minting_disabled: false,
@@ -5328,6 +5467,27 @@ mod tests {
         validate_tron_destination_readback(&state, &route, &deployment)
             .expect("exact TRON destination readback must validate");
         let baseline = state.clone();
+        let canonical = norito::json::to_json(&state)
+            .expect("exact TRON destination state must encode canonically");
+        let decoded: TronDestinationStateV1 = norito::json::from_str(&canonical)
+            .expect("exact TRON u128 cap must roundtrip canonically");
+        assert_eq!(
+            decoded.route_max_wrapped_supply,
+            deployment.max_wrapped_supply
+        );
+        for invalid in invalid_u128_field_encodings(
+            &canonical,
+            "route_max_wrapped_supply",
+            deployment.max_wrapped_supply,
+        ) {
+            assert!(
+                norito::json::from_str::<TronDestinationStateV1>(&invalid).is_err(),
+                "TRON cap readback parser accepted a non-u128 cap"
+            );
+        }
+        let mut mismatched_cap = state.clone();
+        mismatched_cap.route_max_wrapped_supply -= 1;
+        assert!(validate_tron_destination_readback(&mismatched_cap, &route, &deployment).is_err());
         state.semantic_proof_profile_hash[0] ^= 1;
         assert!(validate_tron_destination_readback(&state, &route, &deployment).is_err());
         state.semantic_proof_profile_hash = semantic_proof_profile_hash;
@@ -5403,7 +5563,8 @@ mod tests {
             SCCP_V1_TAIRA_TO_TON_TOKEN_MULTIPLIER, SccpLaneIdV1, SccpOutboundProofPolicyV1,
             SccpSourceEmitterV1, SccpTonSourceEmitterV1,
         };
-        let (mut route, evm_deployment) = exact_evm_destination_readback_route();
+        let (mut route, evm_deployment) =
+            exact_evm_destination_readback_route(SccpNetworkV1::EthereumMainnet);
         let code_hash = |byte| {
             ton_boc_single_ordinary_root_hash_v1(&single_cell_code_boc(byte))
                 .expect("single-cell TON code BOC must hash")
@@ -5457,8 +5618,11 @@ mod tests {
             .into(),
             outbound_proof_policy,
             taira_to_token_multiplier: SCCP_V1_TAIRA_TO_TON_TOKEN_MULTIPLIER,
-            max_wrapped_supply: route.settlement.max_outstanding_liability
-                * SCCP_V1_TAIRA_TO_TON_TOKEN_MULTIPLIER as u128,
+            max_wrapped_supply: route
+                .settlement
+                .max_outstanding_liability
+                .checked_mul(u128::from(SCCP_V1_TAIRA_TO_TON_TOKEN_MULTIPLIER))
+                .expect("exact TON readback fixture supply cap must fit u128"),
         };
         let lane = SccpLaneIdV1 {
             source: SccpNetworkV1::TonMainnet,
@@ -5563,8 +5727,8 @@ mod tests {
             jetton_master_reported_initial_data_hash: deployment.jetton_master_initial_data_hash,
             route_mint_breaker_guardian_keys: deployment.mint_breaker_guardian_keys,
             jetton_master_mint_breaker_guardian_keys: deployment.mint_breaker_guardian_keys,
-            route_max_wrapped_supply: deployment.max_wrapped_supply.to_string(),
-            jetton_master_max_wrapped_supply: deployment.max_wrapped_supply.to_string(),
+            route_max_wrapped_supply: deployment.max_wrapped_supply,
+            jetton_master_max_wrapped_supply: deployment.max_wrapped_supply,
             route_minting_disabled: false,
             jetton_master_minting_disabled: false,
             jetton_master_mintable: true,
@@ -5613,6 +5777,19 @@ mod tests {
         };
         let encoded_state = norito::json::to_json(&state)
             .expect("TON canonical-zero destination state must encode");
+        for field in [
+            "jetton_master_max_wrapped_supply",
+            "route_max_wrapped_supply",
+        ] {
+            for invalid in
+                invalid_u128_field_encodings(&encoded_state, field, deployment.max_wrapped_supply)
+            {
+                assert!(
+                    norito::json::from_str::<TonDestinationStateV1>(&invalid).is_err(),
+                    "TON cap readback parser accepted a non-u128 `{field}`"
+                );
+            }
+        }
         state = norito::json::from_str(&encoded_state)
             .expect("TON canonical-zero destination state must roundtrip");
         let validated = validate_ton_destination_state(SccpNetworkV1::TonMainnet, &state)
@@ -5621,6 +5798,18 @@ mod tests {
         assert_eq!(
             validated.token_runtime_hash,
             deployment.jetton_master_code_hash
+        );
+        let mut mismatched_master_cap = state.clone();
+        mismatched_master_cap.jetton_master_max_wrapped_supply -= 1;
+        assert!(
+            validate_ton_destination_state(SccpNetworkV1::TonMainnet, &mismatched_master_cap)
+                .is_err()
+        );
+        let mut mismatched_route_cap = state.clone();
+        mismatched_route_cap.route_max_wrapped_supply -= 1;
+        assert!(
+            validate_ton_destination_state(SccpNetworkV1::TonMainnet, &mismatched_route_cap)
+                .is_err()
         );
         let mut substituted_route_address = state.clone();
         substituted_route_address.route_address = SccpTonAddressV1 {
@@ -5738,10 +5927,10 @@ mod tests {
         invalid.jetton_master_mint_breaker_guardian_keys.guardian_4[0] ^= 1;
         assert!(validate_ton_destination_state(SccpNetworkV1::TonMainnet, &invalid).is_err());
         let mut invalid = state.clone();
-        invalid.route_max_wrapped_supply = "01".to_owned();
+        invalid.route_max_wrapped_supply -= 1;
         assert!(validate_ton_destination_state(SccpNetworkV1::TonMainnet, &invalid).is_err());
         let mut invalid = state.clone();
-        invalid.jetton_master_max_wrapped_supply = (1_u128 << 120).to_string();
+        invalid.jetton_master_max_wrapped_supply = 1_u128 << 120;
         assert!(validate_ton_destination_state(SccpNetworkV1::TonMainnet, &invalid).is_err());
         let mut invalid = state.clone();
         invalid.jetton_master_route_configuration_hash[0] ^= 1;

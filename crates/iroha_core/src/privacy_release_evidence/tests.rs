@@ -1220,11 +1220,16 @@ fn jindo_release_descriptor_binds_monomial_repetitions_and_fail_closed_qrom_gate
 }
 
 #[test]
-fn zk_ace_release_stages_fail_closed_without_an_activatable_profile() {
+fn zk_ace_release_descriptor_binds_final_geometry_and_unresolved_qrom_gate() {
     let protocol_id = PrivacyProtocolIdV1::ZkAcePqAuthorizationV1;
     let descriptor = privacy_release_protocol_descriptor_v1(protocol_id);
-    assert!(descriptor.contains("activation=disabled"));
-    assert!(descriptor.contains("commitment-binding-ceiling=32-bits"));
+    assert!(descriptor.contains("poseidon-x7-goldilocks-digest384-six-independent-lanes"));
+    assert!(descriptor.contains("fixed-secondary=136 unique verifier queries"));
+    assert!(descriptor.contains("fixed-depth=11 binary Fp4 FRI rounds"));
+    assert!(descriptor.contains("proof-cap=2131222 exact bytes"));
+    assert!(descriptor.contains("classical-rom-security=128"));
+    assert!(descriptor.contains("qrom-qualification=unavailable"));
+    assert!(descriptor.contains("activation=unavailable"));
     for case_kind in PrivacyReleaseCaseKindV1::ALL {
         assert_eq!(
             run_privacy_release_stage_v1(protocol_id, case_kind),

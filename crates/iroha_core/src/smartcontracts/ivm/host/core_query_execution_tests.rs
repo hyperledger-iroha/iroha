@@ -220,7 +220,9 @@ seiyaku DedicatedQueryContract {
         .execute(&authority, &mut tx)
         .expect("bind contract alias");
     tx.apply();
-    block.commit().expect("commit contract alias block");
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit contract alias block");
     let view = state.view();
     let mut host = CoreHostImpl::new(authority.clone());
     host.set_query_state(&view);

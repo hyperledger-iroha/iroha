@@ -84,7 +84,7 @@ class SccpClientExactTest {
 
         val message = messageRequest(authority, nativeArtifact)
         assertEquals(
-            setOf("authority", "fee_payment", "native_proof_b64"),
+            setOf("authority", "fee_payment", "native_proof_b64", "replay_witness_b64"),
             message.toJsonMap().keys,
         )
         HttpClientTransport.preflightSccpBridgeSubmitJson(
@@ -155,7 +155,7 @@ class SccpClientExactTest {
         assertEquals(
             setOf(
                 "authority", "fee_payment", "native_proof_b64", "signature_b64",
-                "transaction_payload_b64", "creation_time_ms",
+                "transaction_payload_b64", "replay_witness_b64", "creation_time_ms",
             ),
             signedMessage.toJsonMap().keys,
         )
@@ -299,6 +299,7 @@ class SccpClientExactTest {
         SccpNativeMessageSubmitRequest(
             authority = authority,
             nativeProofB64 = canonicalNativeArtifact(),
+            replayWitnessB64 = canonicalReplayWitnessArtifact(),
             feePayment = expectedFeePayment,
             signatureB64 = signature,
             transactionPayloadB64 = Base64.getEncoder().encodeToString(encoded),
@@ -892,6 +893,7 @@ class SccpClientExactTest {
     ): SccpNativeMessageSubmitRequest = SccpNativeMessageSubmitRequest(
         authority,
         nativeProofB64,
+        canonicalReplayWitnessArtifact(),
         bridgeFeePayment,
         signatureB64,
         transactionPayloadB64,
@@ -1914,6 +1916,7 @@ class SccpClientExactTest {
         "message_bundle_path" to "/v1/sccp/proofs/message/{message_id}",
         "proof_request_path" to "/v1/sccp/proof-requests/{message_id}",
         "recent_messages_path" to "/v1/sccp/messages/recent",
+        "sora_outbound_material_path" to "/v1/sccp/routes/{source_profile}/{route_id}/{asset_key}/{revision}/sora-outbound-material",
         "registry_limits" to linkedMapOf(
             "max_governed_lanes" to 16,
             "max_live_governed_routes" to 64,
@@ -2719,6 +2722,11 @@ class SccpClientExactTest {
     private fun canonicalNativeArtifact(): String =
         Base64.getEncoder().encodeToString(
             canonicalArtifactBytes(SCCP_NATIVE_INBOUND_PROOF_SCHEMA_NAME),
+        )
+
+    private fun canonicalReplayWitnessArtifact(): String =
+        Base64.getEncoder().encodeToString(
+            canonicalArtifactBytes(SCCP_REPLAY_WITNESS_SCHEMA_NAME),
         )
 
     private fun canonicalArtifactBytes(schemaName: String, padding: Int = 0): ByteArray {

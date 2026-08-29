@@ -25,10 +25,7 @@ mod tests {
         metadata::Metadata,
         sorafs::capacity::ProviderId,
     };
-    use iroha_telemetry::metrics::{
-        Metrics, MicropaymentCreditSnapshot, MicropaymentSampleStatus, MicropaymentTicketCounters,
-        NexusStatus,
-    };
+    use iroha_telemetry::metrics::{Metrics, NexusStatus};
     use std::{
         io::Cursor,
         sync::{Arc, Mutex},
@@ -203,21 +200,6 @@ mod tests {
         status.time_since_last_non_empty_block_ms = 200;
         status.last_rejection_at_ms = Some(1_234);
         status.txs_rejected_recent_5m = 7;
-        status.sorafs_micropayments = vec![MicropaymentSampleStatus {
-            provider_id_hex: "feed".into(),
-            credits: MicropaymentCreditSnapshot {
-                deterministic_charge: 3_u64.into(),
-                credit_generated: 2_u64.into(),
-                credit_applied: 1_u64.into(),
-                credit_carry: 0_u64.into(),
-                outstanding: 7_u64.into(),
-            },
-            tickets: MicropaymentTicketCounters {
-                processed: 4,
-                won: 1,
-                duplicate: 0,
-            },
-        }];
         let peers = status_value_by_path(&status, "peers").unwrap();
         assert_eq!(peers, json_value(&0u64));
         let observed = status_value_by_path(&status, "observed_at_ms").unwrap();
@@ -265,14 +247,7 @@ mod tests {
                 .and_then(norito::json::Value::as_str),
             Some("smartcontract::deploy")
         );
-        let micropayments = status_value_by_path(&status, "sorafs_micropayments").unwrap();
-        assert!(micropayments.is_array());
-        let sample = status_value_by_path(&status, "sorafs_micropayments/feed").unwrap();
-        assert!(sample.is_object());
-        let outstanding =
-            status_value_by_path(&status, "sorafs_micropayments/feed/credits/outstanding").unwrap();
-        assert_eq!(outstanding, json_value(&Quantity::from(7_u64)));
-        assert!(status_value_by_path(&status, "sorafs_micropayments/unknown").is_none());
+        assert!(status_value_by_path(&status, "sorafs_micropayments").is_none());
     }
     #[tokio::test]
     async fn status_response_bounds_unavailable_fresh_block_counter_sync() {
@@ -302,67 +277,19 @@ mod tests {
     }
     #[cfg(feature = "app_api")]
     #[tokio::test]
-    async fn status_tail_returns_micropayment_sample() {
-        use http_body_util::BodyExt;
+    async fn status_tail_rejects_removed_sorafs_micropayments_segment() {
         let telemetry = MaybeTelemetry::for_tests();
-        let provider_hex = "feedcafe";
-        telemetry.with_metrics(|tel| {
-            tel.record_sorafs_micropayment_sample(
-                provider_hex,
-                MicropaymentCreditSnapshot {
-                    deterministic_charge: 11_u64.into(),
-                    credit_generated: 5_u64.into(),
-                    credit_applied: 3_u64.into(),
-                    credit_carry: 2_u64.into(),
-                    outstanding: 6_u64.into(),
-                },
-                MicropaymentTicketCounters {
-                    processed: 9,
-                    won: 2,
-                    duplicate: 1,
-                },
-            );
-        });
-        let path = format!("sorafs_micropayments/{provider_hex}");
-        let response = super::handle_status(
+        let error = super::handle_status(
             &telemetry,
             None,
-            Some(&path),
+            Some("sorafs_micropayments"),
             ActualLaneRoutingPolicy::default(),
             0,
             None,
         )
         .await
-        .expect("status tail succeeds");
-        assert_eq!(response.status(), axum::http::StatusCode::OK);
-        let body = response
-            .into_body()
-            .collect()
-            .await
-            .expect("collect body")
-            .to_bytes();
-        let payload: norito::json::Value =
-            norito::json::from_slice(&body).expect("decode status payload");
-        assert_eq!(
-            payload
-                .get("provider_id_hex")
-                .and_then(norito::json::Value::as_str),
-            Some(provider_hex)
-        );
-        assert_eq!(
-            payload
-                .get("credits")
-                .and_then(|credits| credits.get("outstanding"))
-                .and_then(norito::json::Value::as_u64),
-            Some(6)
-        );
-        assert_eq!(
-            payload
-                .get("tickets")
-                .and_then(|tickets| tickets.get("won"))
-                .and_then(norito::json::Value::as_u64),
-            Some(2)
-        );
+        .expect_err("removed status segment must not resolve");
+        assert!(matches!(error, Error::StatusSegmentNotFound(_)));
     }
     #[cfg(feature = "telemetry")]
     #[tokio::test]

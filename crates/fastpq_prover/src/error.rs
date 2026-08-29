@@ -27,16 +27,6 @@ pub enum Error {
         /// Version advertised by the proof.
         version: u16,
     },
-    /// Parameter catalogue version does not match the canonical table.
-    #[error("parameter `{parameter}` expects version {expected}, proof advertised {actual}")]
-    ParameterVersionMismatch {
-        /// Parameter set name reported by the proof.
-        parameter: String,
-        /// Version derived from the canonical table.
-        expected: u16,
-        /// Version advertised by the proof artifact.
-        actual: u16,
-    },
     /// A claimed `PublicIO` field does not match the batch reconstructed by the verifier.
     #[error("public_io field `{field}` mismatch")]
     PublicIoMismatch {
@@ -46,31 +36,12 @@ pub enum Error {
     /// Ordering hash mismatch detected during verification.
     #[error("ordering hash mismatch")]
     OrderingHashMismatch,
-    /// Permission lookup hashes do not match the reconstructed witness.
-    #[error("permission lookup hashes mismatch")]
-    PermissionHashMismatch,
     /// Trace Merkle root mismatch detected during verification.
     #[error("trace root mismatch")]
     TraceRootMismatch,
-    /// Lookup Merkle root mismatch detected during verification.
-    #[error("lookup root mismatch")]
-    LookupRootMismatch,
-    /// Lookup Fiat–Shamir challenge (`γ`) mismatch.
-    #[error("lookup challenge mismatch")]
-    LookupChallengeMismatch,
-    /// Lookup grand-product does not match the recomputed accumulator.
-    #[error("lookup grand product mismatch")]
-    LookupGrandProductMismatch,
-    /// Lookup selector and witness columns have different lengths.
-    #[error(
-        "lookup selector/witness column length mismatch: selector has {selector_len} values, witness has {witness_len}"
-    )]
-    LookupColumnLengthMismatch {
-        /// Number of selector evaluations supplied by the caller.
-        selector_len: usize,
-        /// Number of witness evaluations supplied by the caller.
-        witness_len: usize,
-    },
+    /// Low-degree extension Merkle root mismatch detected during verification.
+    #[error("LDE root mismatch")]
+    LdeRootMismatch,
     /// AIR trace Merkle root mismatch detected during verification.
     #[error("AIR trace root mismatch")]
     AirTraceRootMismatch,
@@ -92,6 +63,12 @@ pub enum Error {
         expected: usize,
         /// Actual number advertised by the proof.
         actual: usize,
+    },
+    /// A proof-carried AIR composition challenge differs from transcript replay.
+    #[error("AIR challenge mismatch at index {index}")]
+    AirChallengeMismatch {
+        /// Index of the mismatched AIR composition challenge.
+        index: usize,
     },
     /// AIR row or composition opening did not match the sampled statement.
     #[error("AIR opening mismatch at position {index}")]
@@ -118,12 +95,6 @@ pub enum Error {
         expected: usize,
         /// Actual number advertised by the proof.
         actual: usize,
-    },
-    /// Specific FRI layer root mismatch.
-    #[error("FRI layer mismatch at round {round}")]
-    FriLayerMismatch {
-        /// Round exhibiting the mismatch.
-        round: usize,
     },
     /// FRI challenge vector length mismatch.
     #[error("FRI challenge length mismatch: expected {expected}, got {actual}")]
@@ -181,7 +152,7 @@ pub enum Error {
         /// Position of the failing query.
         index: usize,
     },
-    /// Query Merkle authentication path did not resolve to the lookup root.
+    /// Query Merkle authentication path did not resolve to the LDE root.
     #[error("query Merkle path mismatch at position {index}")]
     QueryMerklePathMismatch {
         /// Position of the failing query.
@@ -263,7 +234,7 @@ pub enum Error {
         /// Effective arity required for this reduction.
         arity: usize,
     },
-    /// Value exceeds the supported width for the stage 1 trace encoding.
+    /// Value exceeds the supported width for the V1 trace encoding.
     #[error("value limb width `{length}` exceeds 64-bit limit")]
     ValueWidth {
         /// Number of bytes encountered in the value representation.
@@ -278,24 +249,6 @@ pub enum Error {
     /// A numeric asset operation did not use the canonical state-key shape.
     #[error("invalid asset operation key; expected `asset/<asset-id>/<account>`")]
     InvalidAssetKey,
-    /// A mint or burn did not change the balance in its required direction.
-    #[error("{operation} must change the asset value in the required direction")]
-    InvalidAssetValueChange {
-        /// Stable operation name (`mint` or `burn`).
-        operation: &'static str,
-    },
-    /// Role identifiers must be fixed 32-byte little-endian strings.
-    #[error("invalid role identifier length {length}; expected 32 bytes")]
-    InvalidRoleIdLength {
-        /// Observed number of bytes.
-        length: usize,
-    },
-    /// Permission identifiers must be fixed 32-byte little-endian strings.
-    #[error("invalid permission identifier length {length}; expected 32 bytes")]
-    InvalidPermissionIdLength {
-        /// Observed number of bytes.
-        length: usize,
-    },
     /// Metadata field has an unexpected length.
     #[error("metadata field `{key}` has length {actual}, expected {expected}")]
     MetadataLength {

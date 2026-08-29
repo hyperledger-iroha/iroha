@@ -874,7 +874,7 @@ fn production_capacity_saturation_admits_response_and_reconstructible_fetch() {
             panic!("completion capacity must not depend on saturated Normal/Progress lanes")
         }
         Err(error) => panic!(
-            "the exact A response must publish one Fetch persistence command: {}",
+            "the reservation-bound exact A response must publish one Fetch persistence command, not fail carrier attestation: {}",
             error.reason(),
         ),
     };
@@ -1147,7 +1147,10 @@ fn ungated_certified_fetch_phase_b_restarts_before_ledger_without_mutation() {
         Ok(ProductionIngressTurnPreparation::CapacityWait(_)) => {
             panic!("available exact capacity cannot delay the ungated Phase-A fixture")
         }
-        Err(_) => panic!("real Phase A must persist the selected ungated response"),
+        Err(error) => panic!(
+            "real Phase A must persist the reservation-bound selected ungated response: {}",
+            error.reason(),
+        ),
     };
     assert_eq!(queued.ordinal(), lifecycle_ordinal);
     planner_io.execute_one_certified_fetch(Arc::clone(&fixture.executor.output_guard));

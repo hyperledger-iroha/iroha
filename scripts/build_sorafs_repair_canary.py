@@ -36,7 +36,6 @@ from check_sorafs_repair_rollout_evidence import (  # noqa: E402
     REQUIRED_FAILURE_SOURCES,
     REQUIRED_GOVERNANCE_TARGETS,
     REQUIRED_LIFECYCLE_STATUSES,
-    REQUIRED_METRICS,
     REQUIRED_ROUTE_STATUS_CODES,
     REQUIRED_WORKER_ROUTES,
     ROSTER_BOUND_KINDS,
@@ -410,12 +409,9 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
     elif args.kind == "observability":
         payload.update(
             {
-                "metrics_scrape_success": True,
                 "dashboard_provisioned": True,
                 "alert_rules_installed": True,
                 "critical_alerts_firing": False,
-                "metrics": args.metrics,
-                "metric_count": len(args.metrics),
                 "response_bodies_included": False,
             }
         )
@@ -561,13 +557,6 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
             option="--handoff-target",
             errors=errors,
         )
-    elif args.kind == "observability":
-        args.metrics = validate_name_set(
-            split_csv_values(args.metric),
-            allowed=REQUIRED_METRICS,
-            option="--metric",
-            errors=errors,
-        )
     elif args.kind == "governance_approval":
         require_kind_options(
             args,
@@ -675,7 +664,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--event-route", action="append", default=[])
     parser.add_argument("--lifecycle-status", action="append", default=[])
     parser.add_argument("--handoff-target", action="append", default=[])
-    parser.add_argument("--metric", action="append", default=[])
     parser.add_argument("--auditor", action="append", default=[])
     parser.add_argument("--route-body-blake3-hex")
     parser.add_argument("--route-latency-ms", type=non_negative_int_arg, default=200)

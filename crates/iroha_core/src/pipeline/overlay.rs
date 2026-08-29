@@ -4061,7 +4061,9 @@ mod tests_overlay_manifest {
                 Some(pending),
             );
             transaction.apply();
-            block.commit().expect("commit pending hajimari transition");
+            block
+                .commit_world_overlay_for_testing()
+                .expect("commit pending hajimari transition");
         }
         let tx_metadata = Metadata::default();
         let transaction =
@@ -4090,7 +4092,9 @@ mod tests_overlay_manifest {
             .apply(&mut state_transaction, &authority)
             .expect("live hajimari transition remains valid at apply");
         state_transaction.apply();
-        block.commit().expect("commit hajimari call");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit hajimari call");
         let view = state.view();
         assert!(view.world().smart_contract_state().get(&marker).is_none());
         assert!(
@@ -5920,7 +5924,9 @@ seiyaku GuardedOverlayRebound {
         let mut stx = block.transaction();
         stx.world.contract_code.insert(code_hash, prog.clone());
         stx.apply();
-        block.commit().expect("commit registered contract bytecode");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit registered contract bytecode");
         // Case 2: only the manifest is missing → append exactly its registration.
         let mut registrations = Vec::new();
         append_verified_contract_metadata_registration(
@@ -5948,7 +5954,9 @@ seiyaku GuardedOverlayRebound {
             .contract_manifests
             .insert(code_hash, manifest.clone());
         stx.apply();
-        block.commit().expect("commit registered contract manifest");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit registered contract manifest");
         // Case 3: WSV already has both records → append no registration.
         let mut registrations = Vec::new();
         append_verified_contract_metadata_registration(

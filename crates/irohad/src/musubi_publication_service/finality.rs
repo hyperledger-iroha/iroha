@@ -694,7 +694,9 @@ mod tests {
             .musubi_archives_mut()
             .insert(archive.archive_id, archive.clone());
         transaction.apply();
-        block.commit().expect("commit current archive substitution");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit current archive substitution");
     }
     #[test]
     fn exact_finalized_registration_returns_current_mutable_record() {

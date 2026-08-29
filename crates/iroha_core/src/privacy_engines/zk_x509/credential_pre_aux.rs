@@ -6,6 +6,7 @@
 //! family only after all six MAIN base roots and the compact-CA base root have been committed, then
 //! supplies an opaque phase token to MAIN and a binding that each local subproof absorbs before its
 //! auxiliary commitments.
+use super::stark::ZK_X509_DIGEST_CONTEXT_V1;
 use super::{
     der_stark::{ZkX509DerStarkChallengesV1, derive_zk_x509_der_stark_challenges_v1},
     io_air::{ZkX509IoChallengesV1, derive_zk_x509_io_challenges_v1},
@@ -37,7 +38,6 @@ use crate::privacy_engines::transparent_stark::{
     GoldilocksDigest384V1, GoldilocksFieldV1 as F, TransparentStarkErrorV1,
     TransparentTranscriptV1, append_u16_v1, goldilocks_digest384_frame_v1,
 };
-use super::stark::ZK_X509_DIGEST_CONTEXT_V1;
 use thiserror::Error;
 const CREDENTIAL_PRE_AUX_MAGIC_V1: [u8; 4] = *b"X5B1";
 const CREDENTIAL_PRE_AUX_PROFILE_DOMAIN_V1: &[u8] =
@@ -633,14 +633,14 @@ mod tests {
         let profile_digest =
             pre_aux_profile_digest_v1(main.main_profile_digest_for_test_v1(), test_digest_v1(0x44))
                 .expect("profile digest");
-        let public_digest =
-            pre_aux_public_digest_v1(main.consensus_context_digest_for_test_v1(), test_digest_v1(0x55))
-                .expect("public digest");
-        let roots = encode_pre_aux_roots_v1(
-            main.main_base_roots_for_test_v1(),
-            test_digest_v1(0x66),
+        let public_digest = pre_aux_public_digest_v1(
+            main.consensus_context_digest_for_test_v1(),
+            test_digest_v1(0x55),
         )
-        .expect("seven roots");
+        .expect("public digest");
+        let roots =
+            encode_pre_aux_roots_v1(main.main_base_roots_for_test_v1(), test_digest_v1(0x66))
+                .expect("seven roots");
         let mut transcript = TransparentTranscriptV1::new(
             ZK_X509_DIGEST_CONTEXT_V1,
             ZK_X509_SUITE_V1,
@@ -800,10 +800,7 @@ mod tests {
             main_phase.sha_word().base_folding,
             main_phase.sha_word_base_folding
         );
-        assert_ne!(
-            binding.transcript_state(),
-            GoldilocksDigest384V1::default()
-        );
+        assert_ne!(binding.transcript_state(), GoldilocksDigest384V1::default());
     }
     #[test]
     fn opaque_binding_rejects_every_main_phase_provenance_substitution() {
@@ -827,10 +824,7 @@ mod tests {
         for root in 0..ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1 {
             for byte in 0..48 {
                 let mut changed = canonical_main;
-                mutate_digest_byte_v1(
-                    &mut changed.main_base_roots_mut_for_test_v1()[root],
-                    byte,
-                );
+                mutate_digest_byte_v1(&mut changed.main_base_roots_mut_for_test_v1()[root], byte);
                 assert!(
                     !binding.matches_main_pre_aux_v1(changed),
                     "MAIN root {root} substitution at byte {byte}"
@@ -869,10 +863,7 @@ mod tests {
         )
         .expect("challenge KAT frame");
         assert_ne!(challenge_digest, GoldilocksDigest384V1::default());
-        assert_ne!(
-            binding.transcript_state(),
-            GoldilocksDigest384V1::default()
-        );
+        assert_ne!(binding.transcript_state(), GoldilocksDigest384V1::default());
     }
     #[test]
     fn all_eleven_family_positions_are_order_bound() {
@@ -1022,10 +1013,7 @@ mod tests {
             assert_ne!(derive_v1(changed), canonical, "MAIN profile byte {byte}");
             for root in 0..ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1 {
                 let mut changed = canonical_main;
-                mutate_digest_byte_v1(
-                    &mut changed.main_base_roots_mut_for_test_v1()[root],
-                    byte,
-                );
+                mutate_digest_byte_v1(&mut changed.main_base_roots_mut_for_test_v1()[root], byte);
                 assert_ne!(
                     derive_v1(changed),
                     canonical,
@@ -1104,9 +1092,11 @@ mod tests {
         let profile_digest =
             pre_aux_profile_digest_v1(main.main_profile_digest_for_test_v1(), test_digest_v1(0x44))
                 .expect("profile digest");
-        let public_digest =
-            pre_aux_public_digest_v1(main.consensus_context_digest_for_test_v1(), test_digest_v1(0x55))
-                .expect("public digest");
+        let public_digest = pre_aux_public_digest_v1(
+            main.consensus_context_digest_for_test_v1(),
+            test_digest_v1(0x55),
+        )
+        .expect("public digest");
         let mut before_roots = TransparentTranscriptV1::new(
             ZK_X509_DIGEST_CONTEXT_V1,
             ZK_X509_SUITE_V1,

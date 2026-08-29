@@ -10,11 +10,17 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = { version = "0.4.10", features = ["arbitrary-derive"] }
 arbitrary = { version = "1.4.2", features = ["derive"] }
-fastpq_prover = { path = ".." }
+fastpq_prover = { path = "..", features = ["dev-tools"] }
 fastpq_isi = { path = "../../fastpq_isi" }
 
 [workspace]
 members = ["."]
+
+# This nested workspace does not inherit the repository root's patches. Keep
+# FastPQ fuzzing on the same reviewed Halo2 sources as normal workspace builds.
+[patch.crates-io]
+halo2-axiom = { path = "../../../vendor/halo2-axiom" }
+halo2curves-axiom = { path = "../../../vendor/halo2curves-axiom" }
 
 [[bin]]
 name = "trace_builder"
@@ -26,13 +32,6 @@ bench = false
 [[bin]]
 name = "merkle_paths"
 path = "fuzz_targets/merkle_paths.rs"
-test = false
-doc = false
-bench = false
-
-[[bin]]
-name = "lookup_grand_product"
-path = "fuzz_targets/lookup_grand_product.rs"
 test = false
 doc = false
 bench = false

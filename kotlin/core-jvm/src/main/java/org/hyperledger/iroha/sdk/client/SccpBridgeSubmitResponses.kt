@@ -174,14 +174,17 @@ object SccpBridgeSubmitResponseParser {
     private val CLOSED_BACKENDS = setOf(
         "evm-groth16-bn254-v1",
         "tron-groth16-bn254-v1",
+        "ton-groth16-bls12381-v1",
         "bridge/sccp/native/ethereum-beacon-v1",
         "bridge/sccp/native/bsc-parlia-v1",
         "bridge/sccp/native/tron-dpos-v1",
+        "bridge/sccp/native/ton-masterchain-v1",
     )
 
     private fun backendsForDomain(domain: Int): Set<String> = when (domain) {
         1 -> setOf("evm-groth16-bn254-v1", "bridge/sccp/native/ethereum-beacon-v1")
         2 -> setOf("evm-groth16-bn254-v1", "bridge/sccp/native/bsc-parlia-v1")
+        4 -> setOf("ton-groth16-bls12381-v1", "bridge/sccp/native/ton-masterchain-v1")
         5 -> setOf("tron-groth16-bn254-v1", "bridge/sccp/native/tron-dpos-v1")
         else -> emptySet()
     }

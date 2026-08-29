@@ -258,28 +258,6 @@ impl WitnessArgs {
     fn operation_json(operation: &OperationKind) -> Result<norito::json::Value> {
         match operation {
             OperationKind::Transfer => json_object(vec![("kind", json_value("Transfer")?)]),
-            OperationKind::Mint => json_object(vec![("kind", json_value("Mint")?)]),
-            OperationKind::Burn => json_object(vec![("kind", json_value("Burn")?)]),
-            OperationKind::RoleGrant {
-                role_id,
-                permission_id,
-                epoch,
-            } => json_object(vec![
-                ("kind", json_value("RoleGrant")?),
-                ("role_id_hex", json_value(&Self::hex(role_id))?),
-                ("permission_id_hex", json_value(&Self::hex(permission_id))?),
-                ("epoch", json_value(epoch)?),
-            ]),
-            OperationKind::RoleRevoke {
-                role_id,
-                permission_id,
-                epoch,
-            } => json_object(vec![
-                ("kind", json_value("RoleRevoke")?),
-                ("role_id_hex", json_value(&Self::hex(role_id))?),
-                ("permission_id_hex", json_value(&Self::hex(permission_id))?),
-                ("epoch", json_value(epoch)?),
-            ]),
             OperationKind::MetaSet => json_object(vec![("kind", json_value("MetaSet")?)]),
         }
     }
@@ -487,9 +465,6 @@ fn glob_match(pattern: &str, text: &str) -> bool {
     pi == pat.len()
 }
 fn row_usage_json(usage: RowUsage) -> Result<norito::json::Value> {
-    fn round3(value: f64) -> f64 {
-        (value * 1_000.0).round() / 1_000.0
-    }
     #[allow(clippy::cast_precision_loss)]
     let ratio = if usage.total_rows == 0 {
         0.0
@@ -500,19 +475,29 @@ fn row_usage_json(usage: RowUsage) -> Result<norito::json::Value> {
         ("total_rows", json_value(&usage.total_rows)?),
         ("transfer_rows", json_value(&usage.transfer_rows)?),
         ("non_transfer_rows", json_value(&usage.non_transfer_rows())?),
-        ("mint_rows", json_value(&usage.mint_rows)?),
-        ("burn_rows", json_value(&usage.burn_rows)?),
-        ("role_grant_rows", json_value(&usage.role_grant_rows)?),
-        ("role_revoke_rows", json_value(&usage.role_revoke_rows)?),
         ("meta_set_rows", json_value(&usage.meta_set_rows)?),
-        ("permission_rows", json_value(&usage.permission_rows)?),
-        ("transfer_ratio", json_value(&round3(ratio))?),
+        ("transfer_ratio", json_value(&ratio)?),
     ])
 }
 #[cfg(test)]
 mod tests {
     use super::*;
     use clap::Parser;
+
+    #[test]
+    fn row_usage_json_preserves_the_exact_v1_ratio() {
+        let value = row_usage_json(RowUsage {
+            total_rows: 3,
+            transfer_rows: 1,
+            meta_set_rows: 2,
+        })
+        .expect("serialize row usage");
+        assert_eq!(
+            value["transfer_ratio"].as_f64(),
+            Some(1.0 / 3.0),
+            "release evidence must not round away the count-derived ratio"
+        );
+    }
     #[derive(Parser, Debug)]
     #[command(no_binary_name = true)]
     struct Wrapper {

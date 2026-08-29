@@ -1,13 +1,7 @@
 //! Byte packing helpers for the FASTPQ trace builder.
 //!
 //! The FASTPQ AIR packs variable-length keys and values into Goldilocks field elements using 7-byte
-//! limbs (little-endian). This module provides helper functions for packing/unpacking the
-//! representation so higher-level builders can operate on typed structures instead of manual loops.
-//! The helpers are intentionally simple and deterministic so the eventual trace builder can be
-//! audited easily.
-use core::cmp::min;
-/// Goldilocks modulus (2^64 - 2^32 + 1) used by the FASTPQ AIR.
-const GOLDILOCKS_MODULUS: u64 = 0xffff_ffff_0000_0001;
+//! limbs (little-endian). Seven bytes always fit in a canonical Goldilocks element.
 /// Number of bytes stored per packed limb (little-endian).
 pub const LIMB_BYTES: usize = 7;
 /// Packed representation of an arbitrary byte slice.
@@ -18,53 +12,19 @@ pub struct PackedBytes {
     /// Original uncompressed length in bytes.
     pub length: usize,
 }
-impl PackedBytes {
-    /// Reconstruct the original byte vector using the stored length to trim
-    /// padding introduced during packing.
-    #[must_use]
-    pub fn to_bytes(&self) -> Vec<u8> {
-        let mut out = Vec::with_capacity(self.limbs.len() * LIMB_BYTES);
-        for limb in &self.limbs {
-            let chunk = limb.to_le_bytes();
-            out.extend_from_slice(&chunk[..LIMB_BYTES]);
-        }
-        out.truncate(self.length);
-        out
-    }
-}
 /// Pack an arbitrary byte slice into 7-byte little-endian limbs.
 #[must_use]
 pub fn pack_bytes(bytes: &[u8]) -> PackedBytes {
-    if bytes.is_empty() {
-        return PackedBytes {
-            limbs: Vec::new(),
-            length: 0,
-        };
-    }
     let mut limbs = Vec::with_capacity(bytes.len().div_ceil(LIMB_BYTES));
-    let mut offset = 0;
-    while offset < bytes.len() {
-        let remaining = bytes.len() - offset;
-        let take = min(remaining, LIMB_BYTES);
+    for bytes in bytes.chunks(LIMB_BYTES) {
         let mut chunk = [0u8; 8];
-        chunk[..take].copy_from_slice(&bytes[offset..offset + take]);
-        let limb = u64::from_le_bytes(chunk);
-        assert!(
-            limb < GOLDILOCKS_MODULUS,
-            "packed limb {limb:#x} exceeds Goldilocks modulus {GOLDILOCKS_MODULUS:#x}"
-        );
-        limbs.push(limb);
-        offset += take;
+        chunk[..bytes.len()].copy_from_slice(bytes);
+        limbs.push(u64::from_le_bytes(chunk));
     }
     PackedBytes {
         limbs,
         length: bytes.len(),
     }
-}
-/// Unpack a previously packed limb representation into raw bytes.
-#[must_use]
-pub fn unpack_bytes(packed: &PackedBytes) -> Vec<u8> {
-    packed.to_bytes()
 }
 #[cfg(test)]
 mod tests {
@@ -75,7 +35,6 @@ mod tests {
         let packed = pack_bytes(&[]);
         assert!(packed.limbs.is_empty());
         assert_eq!(packed.length, 0);
-        assert_eq!(unpack_bytes(&packed), Vec::<u8>::new());
     }
     #[test]
     fn roundtrip_various_lengths() {
@@ -85,7 +44,15 @@ mod tests {
                 .collect();
             let packed = pack_bytes(&data);
             assert_eq!(packed.length, len);
-            assert_eq!(unpack_bytes(&packed), data);
+            let expected_limbs = data
+                .chunks(LIMB_BYTES)
+                .map(|chunk| {
+                    let mut bytes = [0_u8; 8];
+                    bytes[..chunk.len()].copy_from_slice(chunk);
+                    u64::from_le_bytes(bytes)
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(packed.limbs, expected_limbs);
         }
     }
     #[test]
@@ -93,7 +60,7 @@ mod tests {
         let data = vec![0xAA, 0xBB, 0xCC, 0xDD];
         let packed = pack_bytes(&data);
         assert_eq!(packed.limbs.len(), 1);
-        assert_eq!(unpack_bytes(&packed), data);
+        assert_eq!(packed.limbs, vec![0xDDCC_BBAA]);
     }
     #[test]
     fn limbs_always_canonical() {
@@ -106,7 +73,7 @@ mod tests {
                 })
                 .collect();
             let packed = pack_bytes(&data);
-            assert!(packed.limbs.iter().all(|&limb| limb < GOLDILOCKS_MODULUS));
+            assert!(packed.limbs.iter().all(|&limb| limb < crate::FIELD_MODULUS));
         }
     }
 }

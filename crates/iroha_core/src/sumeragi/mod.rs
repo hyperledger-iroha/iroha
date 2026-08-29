@@ -5256,6 +5256,22 @@ impl FairV2Ingress {
                 routes_candidate.as_ref(),
             ) {
                 Ok(action) => action,
+                // TimeoutVote is a one-way authenticated control carrier. A
+                // retained transport retry can arrive after a newer delivery
+                // of the exact same wire bytes has already acquired this
+                // queue owner, but its reply route grants no authority that
+                // consensus will consume. Coalesce only that single-route
+                // stale retry and leave the newer route and ownership evidence
+                // unchanged. Response-capable families and every other route
+                // error remain fail-closed below.
+                Err(NetworkReplyRouteError::Stale)
+                    if is_timeout_vote
+                        && routes_candidate
+                            .as_ref()
+                            .is_some_and(|routes| routes.len() == 1) =>
+                {
+                    return Ok(FairV2IngressPushDisposition::Coalesced);
+                }
                 Err(_) => {
                     return Err(FairV2IngressPushError::rejected(
                         inbound,
@@ -7665,6 +7681,135 @@ mod authoritative_runtime_gate_tests {
             ingress.len(),
             1,
             "coalescing is queue-scoped and ends when the consumer takes ownership"
+        );
+    }
+    #[test]
+    fn fair_v2_ingress_coalesces_stale_timeout_vote_retry_without_regressing_route() {
+        let (_handle, ingress, _relay_receiver) = test_sumeragi_handle(12);
+        let validator = validator_peers(1).pop().expect("validator fixture");
+        let mut routes = NetworkReplyRouteTestFixture::new(validator.clone());
+        let stale_route = routes.mint(validator.clone());
+        let retained_route = routes
+            .redeliver(&stale_route)
+            .expect("same-source later delivery capability");
+        assert_eq!(
+            stale_route.source_update_from(&retained_route),
+            Err(NetworkReplyRouteError::Stale),
+            "the delayed retry must be strictly older than the retained delivery"
+        );
+        ingress.close();
+        ingress
+            .configure_roster([validator.clone()])
+            .expect("one authenticated validator lane fits");
+        ingress.open().expect("open configured roster");
+        let timeout_vote = v2_timeout_vote();
+        let inbound = |route: NetworkReplyRoute| {
+            InboundBlockMessage::try_from_transport_with_reply_route(
+                timeout_vote.clone(),
+                validator.clone(),
+                validator.clone(),
+                route,
+            )
+            .expect("live route binds the TimeoutVote origin and authenticated source")
+        };
+        assert!(matches!(
+            ingress.try_push(inbound(retained_route.clone())),
+            Ok(super::FairV2IngressPushDisposition::Enqueued)
+        ));
+        assert!(matches!(
+            ingress.try_push(inbound(stale_route)),
+            Ok(super::FairV2IngressPushDisposition::Coalesced)
+        ));
+        assert_eq!(
+            ingress.len(),
+            1,
+            "the exact TimeoutVote remains queued once"
+        );
+        let delivered = ingress
+            .try_recv()
+            .expect("deliver the retained TimeoutVote");
+        let evidence = delivered
+            .ingress_ownership()
+            .expect("queued TimeoutVote retains exact ingress ownership");
+        assert!(evidence.validate_exact());
+        assert_eq!(
+            evidence.occurrence_count, 1,
+            "a stale retry does not enter the admitted ownership history"
+        );
+        assert_eq!(
+            evidence.latest_action(),
+            super::FairV2IngressOwnershipAction::New
+        );
+        let retained = evidence
+            .current_reply_routes()
+            .expect("the newer reply-route snapshot remains attached");
+        assert_eq!(retained.len(), 1);
+        assert!(
+            retained
+                .iter()
+                .any(|route| route.same_delivery(&retained_route)),
+            "coalescing an older retry must not regress the retained route"
+        );
+    }
+    #[test]
+    fn fair_v2_ingress_rejects_stale_non_timeout_vote_route() {
+        let (_handle, ingress, _relay_receiver) = test_sumeragi_handle(12);
+        let validator = validator_peers(1).pop().expect("validator fixture");
+        let mut routes = NetworkReplyRouteTestFixture::new(validator.clone());
+        let stale_route = routes.mint(validator.clone());
+        let retained_route = routes
+            .redeliver(&stale_route)
+            .expect("same-source later delivery capability");
+        assert_eq!(
+            stale_route.source_update_from(&retained_route),
+            Err(NetworkReplyRouteError::Stale),
+            "the negative control must exercise the same stale-route relation"
+        );
+        ingress.close();
+        ingress
+            .configure_roster([validator.clone()])
+            .expect("one authenticated validator lane fits");
+        ingress.open().expect("open configured roster");
+        let prepare = v2_auxiliary_prepare(0);
+        let inbound = |route: NetworkReplyRoute| {
+            InboundBlockMessage::try_from_transport_with_reply_route(
+                prepare.clone(),
+                validator.clone(),
+                validator.clone(),
+                route,
+            )
+            .expect("live route binds the Vote origin and authenticated source")
+        };
+        assert!(matches!(
+            ingress.try_push(inbound(retained_route.clone())),
+            Ok(super::FairV2IngressPushDisposition::Enqueued)
+        ));
+        let rejection = ingress.try_push(inbound(stale_route));
+        assert!(matches!(
+            rejection,
+            Err(super::FairV2IngressPushError::Rejected(
+                super::FairV2IngressRejection {
+                    reason: super::FairV2IngressRejectReason::RouteOwnershipInvalid,
+                    ..
+                }
+            ))
+        ));
+        assert_eq!(
+            ingress.len(),
+            1,
+            "rejection preserves the queued Vote owner"
+        );
+        let delivered = ingress.try_recv().expect("deliver the retained Vote");
+        let retained = delivered
+            .ingress_ownership()
+            .and_then(|evidence| evidence.current_reply_routes())
+            .expect("the newer reply-route snapshot remains attached");
+        assert_eq!(retained.len(), 1);
+        assert!(
+            retained
+                .iter()
+                .any(|route| route.same_delivery(&retained_route)),
+            "rejecting a stale Vote route must not regress the retained route"
         );
     }
     #[test]

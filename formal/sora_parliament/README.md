@@ -13,7 +13,11 @@ The model covers these consensus bindings:
   known. That objective failure records `NoRoster`; a retry supersedes the
   complete failed initial generation, freezes a fresh snapshot, uses the exact
   next sequence no earlier than the failure height, and the final permitted
-  sequence rejects the governance attempt;
+  sequence rejects the governance attempt. For a hidden body, an empty or
+  singleton live electorate instead records typed `NoRoster` capacity evidence
+  at the request height without revealing or consuming a pulse. A capacity
+  retry must use the exact next generation in a later block, and exhaustion of
+  that same bounded sequence rejects the attempt;
 - active timed-OVN ballots reserve both heavy-work windows in one global
   checked set. Admission rejects a duplicate, an intersecting reservation, or
   the first entry beyond the exact capacity without changing the committed
@@ -60,6 +64,14 @@ The model covers these consensus bindings:
   and consumes a fresh TLE session no earlier than its predecessor failure;
   failure of the final permitted ballot sequence rejects the governance
   attempt instead of leaving an unretryable active attempt;
+- a narrow approved Policy tally with zero or one fresh candidate outside the
+  sealed Policy Jury becomes terminal `NoResult` in the same transition: the
+  Policy binding, Confirmation requirement, and Confirmation request all
+  remain uncommitted. With at least two fresh candidates, the same transition
+  commits the Policy binding and Confirmation requirement together with the
+  sequence-zero Confirmation request, whose request height equals the Policy
+  result height and whose pulse is strictly future. The finite model uses the
+  value `2` as the equivalence class for “two or more” candidates;
 - Core automatically constructs a certificate only from an approved aggregate
   result and fixes `enact_at_height = certified_at_height +
   min_enactment_delay` in the native execution boundary; and
@@ -104,9 +116,11 @@ capacity of two. It is
 intentionally large enough to explore self-absence, early impossible-root
 rejection, conflicting and quorum-matching endorsements, post-deadline
 non-response rejection, successful and unavailable sortition pulses, fresh
-sortition retries, exhausted sortition rejection, private deadline/release
-failure, exhausted ballot retry rejection, stale-head supersession, and
-rollback-isolated effect-failure paths.
+sortition retries, empty and singleton hidden-electorate capacity failures,
+exhausted sortition rejection, both terminal and successful atomic
+Policy-to-Confirmation capacity branches, private deadline/release failure,
+exhausted ballot retry rejection, stale-head supersession, and rollback-isolated
+effect-failure paths.
 Run it with a compatible TLA2Tools installation:
 
 ```text
@@ -137,13 +151,21 @@ python3 scripts/formal/check_sora_parliament_source_contract.py
 The source contract is deliberately structural. It detects accidental removal
 of the code-side guards represented by the model and separately pins the
 authority-bound registration/dropout and reducer-derived registration/survivor
-boundaries, authority-bound absence and public-finding endorsements. It also
+boundaries, authority-bound absence and public-finding endorsements. The model
+contract also fails if empty/singleton hidden-electorate evidence starts
+consuming a pulse, or if a narrow Policy result can commit only part of its
+Confirmation handoff. It also
 structurally pins the opaque Core release authorization, independently verified
 runtime partial, canonical combiner, authenticated bodyless local-partial route,
 non-enumerable multi-session software custody seam, and bounded public broker
 projection whose independently validated form cannot mint Core authorization.
-The projection is not evidence of committed-state origin. Those operating
-seams are outside the TLA state machine and the check is not a refinement proof.
+It now also pins the immutable session-to-ordered-roster store, startup's
+active-plus-deadline-retained session projection, exact local-seat capability
+lookup, and the authenticated broker operation's independent
+key-session/transcript/seat checks. The projection is not evidence of
+committed-state origin, and the capability reply is only a point-in-time lookup
+rather than proof of future liveness. Those operating seams are outside the TLA
+state machine and the check is not a refinement proof.
 Release still requires a settled source revision, focused Rust tests, qualified
 live finalized-pulse production, consensus-enforced TLE key rotation, a genuine
 authenticated broker/HSM share provider, four-peer timed-release/restart/retry

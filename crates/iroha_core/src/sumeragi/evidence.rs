@@ -1213,7 +1213,9 @@ mod tests {
         )
         .expect("valid exact v2 admission applies");
         transaction.apply();
-        state_block.commit().expect("test admission block commits");
+        state_block
+            .commit_world_overlay_for_testing()
+            .expect("test admission block commits");
     }
     fn add_v2_penalty_validator(state: &State, peer: &PeerId) {
         let validator = iroha_data_model::account::AccountId::new(peer.public_key().clone());

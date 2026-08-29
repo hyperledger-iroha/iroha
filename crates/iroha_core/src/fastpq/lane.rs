@@ -512,7 +512,6 @@ fn metal_overrides_from_config(cfg: &Fastpq) -> MetalOverrides {
         threadgroup_size: cfg.metal_threadgroup_width,
         dispatch_trace: cfg.metal_trace,
         debug_enum: cfg.metal_debug_enum,
-        debug_fused: cfg.metal_debug_fused,
     }
 }
 fn map_execution_mode(mode: FastpqExecutionMode) -> ProverExecutionMode {
@@ -749,7 +748,6 @@ mod tests {
             metal_threadgroup_width: None,
             metal_trace: iroha_config::parameters::defaults::zk::fastpq::METAL_TRACE,
             metal_debug_enum: iroha_config::parameters::defaults::zk::fastpq::METAL_DEBUG_ENUM,
-            metal_debug_fused: iroha_config::parameters::defaults::zk::fastpq::METAL_DEBUG_FUSED,
         }
     }
     #[tokio::test]
@@ -778,7 +776,6 @@ mod tests {
             metal_threadgroup_width: None,
             metal_trace: iroha_config::parameters::defaults::zk::fastpq::METAL_TRACE,
             metal_debug_enum: iroha_config::parameters::defaults::zk::fastpq::METAL_DEBUG_ENUM,
-            metal_debug_fused: iroha_config::parameters::defaults::zk::fastpq::METAL_DEBUG_FUSED,
         };
         let (handle, task) = {
             let _digest_lock = super::super::DIGEST_ACCELERATION_TEST_LOCK
@@ -1232,7 +1229,6 @@ mod tests {
             metal_threadgroup_width: None,
             metal_trace: iroha_config::parameters::defaults::zk::fastpq::METAL_TRACE,
             metal_debug_enum: iroha_config::parameters::defaults::zk::fastpq::METAL_DEBUG_ENUM,
-            metal_debug_fused: iroha_config::parameters::defaults::zk::fastpq::METAL_DEBUG_FUSED,
         };
         let digest_preflight_calls = std::cell::Cell::new(0usize);
         let preflight = preflight_prover_modes_with_preflights(
@@ -1464,14 +1460,12 @@ mod tests {
             metal_threadgroup_width: Some(256),
             metal_trace: true,
             metal_debug_enum: true,
-            metal_debug_fused: true,
         };
         let overrides = metal_overrides_from_config(&cfg);
         assert_eq!(overrides.max_in_flight, Some(8));
         assert_eq!(overrides.threadgroup_size, Some(256));
         assert!(overrides.dispatch_trace);
         assert!(overrides.debug_enum);
-        assert!(overrides.debug_fused);
     }
 }
 fn batches_for_job(job: &FastpqWitnessJob) -> Result<Vec<TransitionBatch>, TranscriptBatchError> {

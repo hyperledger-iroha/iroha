@@ -9,19 +9,19 @@ use super::{
     relation::{
         ACCUMULATOR_LEAF_DOMAIN_V1, ACCUMULATOR_NODE_DOMAIN_V1, HASH_FRAME_DOMAIN_V1,
         IvmPrivateNoteWitnessV1, NOTE_AUTHORITY_DOMAIN_V1, NOTE_COMMITMENT_DOMAIN_V1,
-        NOTE_NULLIFIER_DOMAIN_V1, PRIVATE_NOTE_MAX_INPUTS_V1, PRIVATE_NOTE_MAX_OUTPUTS_V1,
-        PRIVATE_NOTE_TREE_DEPTH_V1, PRIVATE_PROGRAM_INSTRUCTION_COUNT_V1, PROGRAM_ID_DOMAIN_V1,
-        PrivateInstructionV1, PrivateOpcodeV1, Sha256InvocationRoleV1, Sha256InvocationV1,
-        namespace_v1, public_balance_sides, validate_private_note_relation_v1,
-        validate_statement_v1,
+        NOTE_NULLIFIER_DOMAIN_V1, PRIVATE_NOTE_THREE_OUTPUT_COUNT_V1, PRIVATE_NOTE_TREE_DEPTH_V1,
+        PRIVATE_PROGRAM_INSTRUCTION_COUNT_V1, PROGRAM_ID_DOMAIN_V1, PrivateInstructionV1,
+        PrivateNoteRelationProfileV1, PrivateOpcodeV1, Sha256InvocationRoleV1, Sha256InvocationV1,
+        namespace_v1, public_balance_sides, validate_private_note_relation_with_profile_v1,
+        validate_statement_with_profile_v1,
     },
 };
 use crate::privacy_engines::transparent_stark::{GOLDILOCKS_MODULUS_V1, GoldilocksFieldV1 as F};
 use iroha_data_model::privacy::IrohaIvmPrivateNoteStarkStatementV1;
 use std::collections::BTreeMap;
 use thiserror::Error;
-pub(super) const PRIVATE_NOTE_TRACE_LOG2_V1: u8 = 14;
-pub(super) const PRIVATE_NOTE_TRACE_SIZE_V1: usize = 1 << PRIVATE_NOTE_TRACE_LOG2_V1;
+pub(crate) const PRIVATE_NOTE_TRACE_LOG2_V1: u8 = 14;
+pub(crate) const PRIVATE_NOTE_TRACE_SIZE_V1: usize = 1 << PRIVATE_NOTE_TRACE_LOG2_V1;
 pub(super) const PRIVATE_NOTE_COPY_WIDTH_V1: usize = 8;
 pub(super) const PRIVATE_NOTE_SHA_SCHEDULE_WORDS_V1: usize = 64;
 pub(super) const PRIVATE_NOTE_SHA_STATE_WORDS_V1: usize = 8;
@@ -42,7 +42,7 @@ pub(super) const SHA_CARRY_OFFSET: usize = SHA_T2_OFFSET + 1;
 pub(super) const SHA_CARRY_WIDTH: usize = 18;
 pub(super) const SCRATCH_OFFSET: usize = SHA_CARRY_OFFSET + SHA_CARRY_WIDTH;
 pub(super) const SCRATCH_WIDTH: usize = 96;
-pub(super) const PRIVATE_NOTE_BASE_WIDTH_V1: usize = SCRATCH_OFFSET + SCRATCH_WIDTH;
+pub(crate) const PRIVATE_NOTE_BASE_WIDTH_V1: usize = SCRATCH_OFFSET + SCRATCH_WIDTH;
 pub(super) const SCRATCH_NONZERO_BYTE_SELECT_OFFSET: usize = SCRATCH_OFFSET;
 pub(super) const SCRATCH_NONZERO_BIT_SELECT_OFFSET: usize =
     SCRATCH_NONZERO_BYTE_SELECT_OFFSET + PRIVATE_NOTE_COPY_WIDTH_V1;
@@ -310,10 +310,12 @@ impl<'a> TraceBuilderV1<'a> {
     fn new(
         statement: &'a IrohaIvmPrivateNoteStarkStatementV1,
         witness: Option<&'a IvmPrivateNoteWitnessV1>,
+        profile: PrivateNoteRelationProfileV1,
     ) -> Result<Self, IvmPrivateNoteAirErrorV1> {
         let (invocation_oracle, expected_final_registers) = if let Some(witness) = witness {
-            let relation = validate_private_note_relation_v1(statement, witness)
-                .map_err(|_| IvmPrivateNoteAirErrorV1::Relation)?;
+            let relation =
+                validate_private_note_relation_with_profile_v1(statement, witness, profile)
+                    .map_err(|_| IvmPrivateNoteAirErrorV1::Relation)?;
             (relation.invocations, Some(relation.final_registers))
         } else {
             (Vec::new(), None)
@@ -831,6 +833,43 @@ impl<'a> TraceBuilderV1<'a> {
         }
         Ok(sum_variables)
     }
+    fn assigned_u128(
+        &self,
+        variables: &[ByteVariableV1; 16],
+    ) -> Result<u128, IvmPrivateNoteAirErrorV1> {
+        let bytes = core::array::from_fn(|index| {
+            self.assignment
+                .get(variables[index].0)
+                .copied()
+                .unwrap_or_default()
+        });
+        if variables
+            .iter()
+            .any(|variable| self.assignment.get(variable.0).is_none())
+        {
+            return Err(IvmPrivateNoteAirErrorV1::Assignment);
+        }
+        Ok(u128::from_be_bytes(bytes))
+    }
+    fn push_sum_up_to_three(
+        &mut self,
+        side: SumSideV1,
+        operands: &[[ByteVariableV1; 16]],
+        sum: u128,
+    ) -> Result<[ByteVariableV1; 16], IvmPrivateNoteAirErrorV1> {
+        match operands.len() {
+            1 | 2 => self.push_sum(side, operands, sum),
+            PRIVATE_NOTE_THREE_OUTPUT_COUNT_V1 => {
+                let prefix_sum = self
+                    .assigned_u128(&operands[0])?
+                    .checked_add(self.assigned_u128(&operands[1])?)
+                    .ok_or(IvmPrivateNoteAirErrorV1::Assignment)?;
+                let prefix = self.push_sum(side, &operands[..2], prefix_sum)?;
+                self.push_sum(side, &[prefix, operands[2]], sum)
+            }
+            _ => Err(IvmPrivateNoteAirErrorV1::Topology),
+        }
+    }
     fn push_conservation(
         &mut self,
         input_sum: [ByteVariableV1; 16],
@@ -1222,13 +1261,19 @@ fn frame_expressions_v1(
     }
     Ok(message)
 }
-fn note_commitment_fields(note: &NoteVariablesV1) -> Vec<Vec<ByteExpressionV1>> {
+fn note_commitment_fields(
+    note: &NoteVariablesV1,
+    fixed_memo_digest: Option<[u8; 32]>,
+) -> Vec<Vec<ByteExpressionV1>> {
     vec![
         variables_as_expressions(&note.value),
         variables_as_expressions(&note.authority),
         variables_as_expressions(&note.rho),
         variables_as_expressions(&note.blinding),
-        variables_as_expressions(&note.memo),
+        fixed_memo_digest.map_or_else(
+            || variables_as_expressions(&note.memo),
+            |memo| constants_as_expressions(&memo),
+        ),
     ]
 }
 fn sha256_padding_v1(
@@ -1353,16 +1398,11 @@ fn dummy_path() -> [[u8; 32]; PRIVATE_NOTE_TREE_DEPTH_V1] {
 fn build_private_note_trace_v1(
     statement: &IrohaIvmPrivateNoteStarkStatementV1,
     witness: Option<&IvmPrivateNoteWitnessV1>,
+    profile: PrivateNoteRelationProfileV1,
 ) -> Result<PrivateNoteBaseTraceV1, IvmPrivateNoteAirErrorV1> {
-    validate_statement_v1(statement).map_err(|_| IvmPrivateNoteAirErrorV1::Relation)?;
-    if statement.nullifiers.is_empty()
-        || statement.nullifiers.len() > PRIVATE_NOTE_MAX_INPUTS_V1
-        || statement.output_commitments.is_empty()
-        || statement.output_commitments.len() > PRIVATE_NOTE_MAX_OUTPUTS_V1
-    {
-        return Err(IvmPrivateNoteAirErrorV1::Topology);
-    }
-    let mut builder = TraceBuilderV1::new(statement, witness)?;
+    validate_statement_with_profile_v1(statement, profile)
+        .map_err(|_| IvmPrivateNoteAirErrorV1::Relation)?;
+    let mut builder = TraceBuilderV1::new(statement, witness, profile)?;
     let program_bytes = witness
         .map(|witness| encode_private_program_v1(&witness.program))
         .transpose()
@@ -1426,7 +1466,7 @@ fn build_private_note_trace_v1(
         let commitment_variables = builder.allocate_bytes(commitment_digest);
         let commitment_message = frame_expressions_v1(
             NOTE_COMMITMENT_DOMAIN_V1,
-            &note_commitment_fields(&input.note),
+            &note_commitment_fields(&input.note, None),
         )?;
         builder.push_hash(
             Sha256InvocationRoleV1::InputCommitment { input: input_index },
@@ -1501,7 +1541,9 @@ fn build_private_note_trace_v1(
             )?;
             current = next;
         }
-        nonzero_components.push(input.note.value.to_vec());
+        if !profile.allows_zero_input_values() {
+            nonzero_components.push(input.note.value.to_vec());
+        }
         nonzero_components.push(input.note.authority.to_vec());
         nonzero_components.push(input.note.rho.to_vec());
         nonzero_components.push(input.note.blinding.to_vec());
@@ -1516,7 +1558,7 @@ fn build_private_note_trace_v1(
             builder.allocate_bytes(*statement.output_commitments[index].as_bytes());
         let commitment_message = frame_expressions_v1(
             NOTE_COMMITMENT_DOMAIN_V1,
-            &note_commitment_fields(&output.note),
+            &note_commitment_fields(&output.note, profile.fixed_output_memo(index)),
         )?;
         builder.push_hash(
             Sha256InvocationRoleV1::OutputCommitment {
@@ -1527,7 +1569,9 @@ fn build_private_note_trace_v1(
             Some(*statement.output_commitments[index].as_bytes()),
         )?;
         output.commitment = Some(commitment_variables);
-        nonzero_components.push(output.note.value.to_vec());
+        if !profile.allows_zero_output_values() {
+            nonzero_components.push(output.note.value.to_vec());
+        }
         nonzero_components.push(output.note.authority.to_vec());
         nonzero_components.push(output.note.rho.to_vec());
         nonzero_components.push(output.note.blinding.to_vec());
@@ -1565,14 +1609,19 @@ fn build_private_note_trace_v1(
                 .ok_or(IvmPrivateNoteAirErrorV1::Resource)?;
         }
     }
-    if output_variables.len() == 2 {
-        let left_commitment = output_variables[0]
-            .commitment
-            .ok_or(IvmPrivateNoteAirErrorV1::Topology)?;
-        let right_commitment = output_variables[1]
-            .commitment
-            .ok_or(IvmPrivateNoteAirErrorV1::Topology)?;
-        builder.push_distinct(comparison, &left_commitment, &right_commitment)?;
+    for left in 0..output_variables.len() {
+        for right in left + 1..output_variables.len() {
+            let left_commitment = output_variables[left]
+                .commitment
+                .ok_or(IvmPrivateNoteAirErrorV1::Topology)?;
+            let right_commitment = output_variables[right]
+                .commitment
+                .ok_or(IvmPrivateNoteAirErrorV1::Topology)?;
+            builder.push_distinct(comparison, &left_commitment, &right_commitment)?;
+            comparison = comparison
+                .checked_add(1)
+                .ok_or(IvmPrivateNoteAirErrorV1::Resource)?;
+        }
     }
     for (component, variables) in nonzero_components.iter().enumerate() {
         builder.push_nonzero(
@@ -1601,7 +1650,8 @@ fn build_private_note_trace_v1(
         })
     })?;
     let input_sum_variables = builder.push_sum(SumSideV1::Inputs, &input_values, input_sum)?;
-    let output_sum_variables = builder.push_sum(SumSideV1::Outputs, &output_values, output_sum)?;
+    let output_sum_variables =
+        builder.push_sum_up_to_three(SumSideV1::Outputs, &output_values, output_sum)?;
     builder.push_conservation(input_sum_variables, output_sum_variables)?;
     builder.push_vm(
         &program_variables,
@@ -1634,21 +1684,59 @@ fn build_private_note_trace_v1(
     })
 }
 /// Compile the complete prover trace after checking the native differential oracle.
+#[cfg(test)]
 pub(super) fn build_private_note_base_trace_v1(
     statement: &IrohaIvmPrivateNoteStarkStatementV1,
     witness: &IvmPrivateNoteWitnessV1,
 ) -> Result<PrivateNoteBaseTraceV1, IvmPrivateNoteAirErrorV1> {
-    build_private_note_trace_v1(statement, Some(witness))
+    build_private_note_trace_v1(
+        statement,
+        Some(witness),
+        PrivateNoteRelationProfileV1::IVM_PRIVATE_NOTE,
+    )
+}
+/// Compile a prover trace under one crate-private relation profile.
+pub(super) fn build_private_note_base_trace_with_profile_v1(
+    statement: &IrohaIvmPrivateNoteStarkStatementV1,
+    witness: &IvmPrivateNoteWitnessV1,
+    profile: PrivateNoteRelationProfileV1,
+) -> Result<PrivateNoteBaseTraceV1, IvmPrivateNoteAirErrorV1> {
+    build_private_note_trace_v1(statement, Some(witness), profile)
 }
 /// Compile verifier-fixed topology without requiring wallet material.
+#[cfg(test)]
 pub(super) fn build_private_note_fixed_trace_v1(
     statement: &IrohaIvmPrivateNoteStarkStatementV1,
 ) -> Result<PrivateNoteFixedTraceV1, IvmPrivateNoteAirErrorV1> {
-    Ok(build_private_note_trace_v1(statement, None)?.fixed)
+    build_private_note_fixed_trace_with_profile_v1(
+        statement,
+        PrivateNoteRelationProfileV1::IVM_PRIVATE_NOTE,
+    )
+}
+/// Compile verifier-fixed topology under one crate-private relation profile.
+pub(super) fn build_private_note_fixed_trace_with_profile_v1(
+    statement: &IrohaIvmPrivateNoteStarkStatementV1,
+    profile: PrivateNoteRelationProfileV1,
+) -> Result<PrivateNoteFixedTraceV1, IvmPrivateNoteAirErrorV1> {
+    Ok(build_private_note_trace_v1(statement, None, profile)?.fixed)
 }
 /// Compile witness-allocation identities into the shared copy-chip policy.
+#[cfg(test)]
 pub(super) fn build_private_note_copy_schedule_v1(
     statement: &IrohaIvmPrivateNoteStarkStatementV1,
+) -> Result<
+    crate::privacy_engines::proof_managed_note_stark::NoteCopyScheduleV1,
+    IvmPrivateNoteAirErrorV1,
+> {
+    build_private_note_copy_schedule_with_profile_v1(
+        statement,
+        PrivateNoteRelationProfileV1::IVM_PRIVATE_NOTE,
+    )
+}
+/// Compile the copy schedule under one crate-private relation profile.
+pub(super) fn build_private_note_copy_schedule_with_profile_v1(
+    statement: &IrohaIvmPrivateNoteStarkStatementV1,
+    profile: PrivateNoteRelationProfileV1,
 ) -> Result<
     crate::privacy_engines::proof_managed_note_stark::NoteCopyScheduleV1,
     IvmPrivateNoteAirErrorV1,
@@ -1656,7 +1744,7 @@ pub(super) fn build_private_note_copy_schedule_v1(
     use crate::privacy_engines::proof_managed_note_stark::{
         NoteCopyCellPolicyV1, NoteCopyScheduleV1,
     };
-    let fixed = build_private_note_fixed_trace_v1(statement)?;
+    let fixed = build_private_note_fixed_trace_with_profile_v1(statement, profile)?;
     let policies = fixed
         .copy_cells
         .iter()
@@ -2919,11 +3007,24 @@ fn validate_vm_next_v1(
 /// Evaluate every native private-note AIR constraint against one complete canonical base trace.
 /// This is deliberately proof-format neutral; the shared aggregate SHA-256/Goldilocks engine
 /// consumes the same fixed and base columns.
+#[cfg(test)]
 pub(super) fn validate_private_note_base_trace_v1(
     statement: &IrohaIvmPrivateNoteStarkStatementV1,
     trace: &PrivateNoteBaseTraceV1,
 ) -> Result<(), IvmPrivateNoteAirErrorV1> {
-    validate_statement_v1(statement).map_err(|_| IvmPrivateNoteAirErrorV1::Relation)?;
+    validate_private_note_base_trace_with_profile_v1(
+        statement,
+        trace,
+        PrivateNoteRelationProfileV1::IVM_PRIVATE_NOTE,
+    )
+}
+pub(super) fn validate_private_note_base_trace_with_profile_v1(
+    statement: &IrohaIvmPrivateNoteStarkStatementV1,
+    trace: &PrivateNoteBaseTraceV1,
+    profile: PrivateNoteRelationProfileV1,
+) -> Result<(), IvmPrivateNoteAirErrorV1> {
+    validate_statement_with_profile_v1(statement, profile)
+        .map_err(|_| IvmPrivateNoteAirErrorV1::Relation)?;
     if trace.rows.len() != PRIVATE_NOTE_TRACE_SIZE_V1
         || trace.fixed.rows.len() != PRIVATE_NOTE_TRACE_SIZE_V1
         || trace.fixed.copy_cells.len() != PRIVATE_NOTE_TRACE_SIZE_V1
@@ -2934,7 +3035,7 @@ pub(super) fn validate_private_note_base_trace_v1(
     for row in &trace.rows {
         ensure_canonical_row(row)?;
     }
-    let expected_fixed = build_private_note_fixed_trace_v1(statement)?;
+    let expected_fixed = build_private_note_fixed_trace_with_profile_v1(statement, profile)?;
     if trace.fixed != expected_fixed {
         return Err(IvmPrivateNoteAirErrorV1::Topology);
     }
@@ -3009,7 +3110,7 @@ mod tests {
             IvmPrivateNoteInputWitnessV1, IvmPrivateNoteOutputWitnessV1, PrivateNotePlaintextV1,
             accumulator_leaf_invocation_v1, accumulator_node_invocation_v1,
         },
-        tests::fixture,
+        tests::{fixture, three_output_fixture},
     };
     use iroha_data_model::privacy::{PrivacyActionDigestV1, PrivacyRootV1};
     use rand_08::{SeedableRng as _, rngs::StdRng};
@@ -3098,6 +3199,85 @@ mod tests {
                 }
             )
         }));
+    }
+    #[test]
+    fn canonical_trace_helpers_select_the_ivm_private_note_profile() {
+        let value = fixture();
+        let canonical = build_private_note_base_trace_v1(&value.statement, &value.witness)
+            .expect("canonical base trace");
+        let profiled = build_private_note_base_trace_with_profile_v1(
+            &value.statement,
+            &value.witness,
+            PrivateNoteRelationProfileV1::IVM_PRIVATE_NOTE,
+        )
+        .expect("explicit IVM private-note base trace");
+        assert_eq!(canonical, profiled);
+        assert_eq!(
+            build_private_note_fixed_trace_v1(&value.statement).expect("canonical fixed trace"),
+            build_private_note_fixed_trace_with_profile_v1(
+                &value.statement,
+                PrivateNoteRelationProfileV1::IVM_PRIVATE_NOTE,
+            )
+            .expect("explicit IVM private-note fixed trace")
+        );
+        assert_eq!(
+            build_private_note_copy_schedule_v1(&value.statement).expect("canonical copy schedule"),
+            build_private_note_copy_schedule_with_profile_v1(
+                &value.statement,
+                PrivateNoteRelationProfileV1::IVM_PRIVATE_NOTE,
+            )
+            .expect("explicit IVM private-note copy schedule")
+        );
+    }
+    #[test]
+    fn exact_three_output_trace_has_fixed_geometry_and_all_distinct_pairs() {
+        let value = three_output_fixture();
+        let trace = build_private_note_base_trace_with_profile_v1(
+            &value.statement,
+            &value.witness,
+            value.profile,
+        )
+        .expect("three-output base trace");
+        validate_private_note_base_trace_with_profile_v1(&value.statement, &trace, value.profile)
+            .expect("three-output native AIR evaluator");
+        assert_eq!(trace.rows.len(), PRIVATE_NOTE_TRACE_SIZE_V1);
+        assert_eq!(
+            trace.fixed,
+            build_private_note_fixed_trace_with_profile_v1(&value.statement, value.profile)
+                .expect("three-output fixed trace")
+        );
+        let comparison_ids = trace
+            .fixed
+            .rows
+            .iter()
+            .filter_map(|row| match row {
+                PrivateNoteFixedRowV1::Distinct { comparison, .. } => Some(*comparison),
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            comparison_ids.len(),
+            11,
+            "two input comparisons, six input/output pairs, and all three output/output pairs"
+        );
+        let output_sum_rows = trace
+            .fixed
+            .rows
+            .iter()
+            .filter(|row| {
+                matches!(
+                    row,
+                    PrivateNoteFixedRowV1::Sum {
+                        side: SumSideV1::Outputs,
+                        ..
+                    }
+                )
+            })
+            .count();
+        assert_eq!(
+            output_sum_rows, 32,
+            "three outputs must use two chained 16-byte checked sums"
+        );
     }
     #[test]
     fn mutations_across_every_constraint_family_fail_closed() {

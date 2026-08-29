@@ -25,7 +25,7 @@ fn fee_sponsor_activation_lease(
         1,
         *Hash::new(b"fee-sponsor-activation-manifest").as_ref(),
         AxtFastpqBinding {
-            parameter: "fastpq-lane-balanced".to_owned(),
+            parameter: "fastpq-state-transition-stark-v1".to_owned(),
             source_dsid: DataSpaceId::UNIVERSAL.as_u64(),
             source_dataspace: "universal".to_owned(),
             source_receipt_id: "fee-sponsor-activation".to_owned(),
@@ -154,7 +154,9 @@ fn fee_sponsor_revision_activation_materializes_at_scheduled_block_height() {
             .insert(program_id.clone(), program);
         transaction.apply();
     }
-    first_block.commit().expect("commit scheduled program");
+    first_block
+        .commit_empty_block_for_testing()
+        .expect("commit scheduled program");
     let second_header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
     let second_block = state.block(second_header);
     let activated = second_block
@@ -214,7 +216,9 @@ fn fee_sponsor_revision_activation_waits_for_old_lease_to_drain() {
         );
         transaction.apply();
     }
-    first_block.commit().expect("commit scheduled program");
+    first_block
+        .commit_empty_block_for_testing()
+        .expect("commit scheduled program");
     let second_header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
     let second_block = state.block(second_header);
     let deferred = second_block
@@ -230,11 +234,13 @@ fn fee_sponsor_revision_activation_waits_for_old_lease_to_drain() {
             activate_at_height: 4,
         })
     );
-    second_block.commit().expect("commit deferred activation");
+    second_block
+        .commit_empty_block_for_testing()
+        .expect("commit deferred activation");
     let third_header = BlockHeader::new(NonZeroU64::new(3).unwrap(), None, None, None, 0, 0);
     state
         .block(third_header)
-        .commit()
+        .commit_empty_block_for_testing()
         .expect("commit final lease height");
     let fourth_header = BlockHeader::new(NonZeroU64::new(4).unwrap(), None, None, None, 0, 0);
     let fourth_block = state.block(fourth_header);

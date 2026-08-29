@@ -1593,7 +1593,9 @@ pub(crate) struct AutonomousLaneReplicaQueueDispositionAuthorization<'queue> {
 #[must_use = "replica Queue disposition must remain live through Kura terminalization"]
 pub(crate) enum AutonomousLaneReplicaQueueDisposition<'queue> {
     /// Every exact entrypoint remains byte-identically owned by ordinary FIFO,
-    /// with no reservation, release, Commit, selection, or removal owner.
+    /// with no reservation, release, Commit, or removal owner. A pre-existing
+    /// process-local global-selection lease may coexist because it does not
+    /// remove or mutate that durable FIFO owner.
     ExactOrdinaryFifo(AutonomousLaneReplicaQueueDispositionFence<'queue>),
     /// Every exact entrypoint is exhaustively absent from all Queue owner
     /// indexes.
@@ -4469,6 +4471,11 @@ struct ExpiredQueueTransaction {
     routing: RoutingDecision,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CommittedHashCleanupMode {
+    Ordinary,
+    PreserveGloballyBoundOwners,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PoppedGlobalAdmissionDisposition {
     Ordinary,
     Exact,
@@ -6577,7 +6584,9 @@ impl Queue {
     /// order it then admits exactly one complete physical disposition:
     ///
     /// - every key is byte-identically owned by ordinary FIFO and by no lane,
-    ///   Commit, release, selection, transition, or removed owner; or
+    ///   Commit, release, foreign transition, or removed owner; a pre-existing
+    ///   process-local global-selection overlay may coexist because it does not
+    ///   mutate the durable FIFO owner; or
     /// - every key is exhaustively absent from all Queue ownership indexes.
     ///
     /// A partial group, a mixture of FIFO and absent members, or any foreign or
@@ -6747,17 +6756,12 @@ impl Queue {
                         .to_owned(),
                 ));
             }
-            if fee_admission_reservations
-                .live_by_entrypoint
-                .contains_key(&hash)
-            {
-                return Err(LaneQueueReservationError::Conflict { hash });
-            }
             let observed = if self.preflight_committed_replica_owner_locked(
                 &store,
                 key,
                 &ownership,
                 &fifo_ordinal_owners,
+                true,
                 true,
             )? {
                 journal_preflight.replica_keys.push(*key);
@@ -7901,6 +7905,7 @@ impl Queue {
                         ownership,
                         fifo_ordinal_owners,
                         false,
+                        false,
                     )?
                 {
                     journal.replica_keys.push(*key);
@@ -8088,6 +8093,7 @@ impl Queue {
         ownership: &LaneQueueCarrierCleanupOwnerSnapshot<'_>,
         fifo_ordinal_owners: &BTreeMap<u64, EntrypointHash>,
         allow_active_durability_transition: bool,
+        allow_global_selection_overlay: bool,
     ) -> Result<bool, LaneQueueReservationError> {
         let hash = key.entrypoint_hash;
         let Some(tx) = self.txs.get(&hash).map(|entry| Arc::clone(entry.value())) else {
@@ -8098,7 +8104,8 @@ impl Queue {
                 .plan_tombstoned
                 .iter()
                 .any(|marked| marked.entrypoint_hash == hash)
-            || ownership.global_selection_owners.contains_key(&hash)
+            || (!allow_global_selection_overlay
+                && ownership.global_selection_owners.contains_key(&hash))
             || (!allow_active_durability_transition
                 && ownership.active_durability_transitions.contains(&hash))
             || !ownership.fifo_hashes.contains(&hash)
@@ -8272,6 +8279,7 @@ impl Queue {
                 &ownership,
                 &fifo_ordinal_owners,
                 true,
+                false,
             )? {
                 return Err(LaneQueueReservationError::Conflict {
                     hash: key.entrypoint_hash,
@@ -10991,6 +10999,10 @@ impl Queue {
             let has_materialized_owner = self.txs.contains_key(&hash);
             let has_durable_reservation_owner = reservation_owner.is_present();
             let state_committed = state_view.transactions.get(&hash).is_some();
+            // A release terminal outcome can become Complete only after Queue
+            // durably forgets its release owner. The post-Complete crash image
+            // therefore reaches this branch with the QueuePlan record as its
+            // sole owner and is tombstoned before replay publication.
             if state_committed && !has_durable_reservation_owner {
                 if has_materialized_owner {
                     return Err(invalid(format!(
@@ -13225,6 +13237,18 @@ impl Queue {
             .get(&hash)
             .is_some_and(|claim| claim.global_admission_identity.is_some())
     }
+    /// Return the exact requested hashes which currently retain global admission custody.
+    pub(crate) fn globally_bound_durable_claim_hashes(
+        &self,
+        hashes: impl IntoIterator<Item = EntrypointHash>,
+    ) -> Vec<EntrypointHash> {
+        hashes
+            .into_iter()
+            .filter(|hash| self.has_globally_bound_durable_claim(*hash))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    }
     fn pending_status(
         &self,
         tx: &CheckedTransaction<'static>,
@@ -13959,7 +13983,12 @@ impl Queue {
                     // owner. Removing it here races that cleanup and leaves a
                     // raw FIFO tombstone which looks like conflicting live
                     // ownership on lagging validators.
-                    self.remove_committed_hashes_inner([hash], backpressure_telemetry, true);
+                    self.remove_committed_hashes_inner(
+                        [hash],
+                        backpressure_telemetry,
+                        CommittedHashCleanupMode::PreserveGloballyBoundOwners,
+                        &BTreeMap::new(),
+                    );
                 }
                 GossipEntryState::Other => {}
             }
@@ -19626,14 +19655,129 @@ impl Queue {
         hashes: impl IntoIterator<Item = EntrypointHash>,
         telemetry: Option<&StateTelemetry>,
     ) -> usize {
-        self.remove_committed_hashes_inner(hashes, telemetry, false)
+        self.remove_committed_hashes_inner(
+            hashes,
+            telemetry,
+            CommittedHashCleanupMode::Ordinary,
+            &BTreeMap::new(),
+        )
+    }
+    /// Remove committed ordinary owners while retaining globally bound QueuePlan custody.
+    ///
+    /// A globally bound owner can still be the Queue half of an autonomous
+    /// lifecycle attempt when the same transaction commits through an ordinary
+    /// canonical carrier. Its exact State/Kura terminalization must consume or
+    /// release that owner before ordinary committed cleanup may remove it.
+    #[cfg(test)]
+    pub(crate) fn remove_committed_hashes_preserving_globally_bound_owners(
+        &self,
+        hashes: impl IntoIterator<Item = EntrypointHash>,
+        telemetry: Option<&StateTelemetry>,
+    ) -> usize {
+        self.remove_committed_hashes_inner(
+            hashes,
+            telemetry,
+            CommittedHashCleanupMode::PreserveGloballyBoundOwners,
+            &BTreeMap::new(),
+        )
+    }
+    /// Remove committed owners authorized by exact durable Kura terminal evidence.
+    ///
+    /// Kura reconstructs every authorization from its hash-addressed terminal
+    /// claim and retained Complete source after restart. Queue independently
+    /// rechecks the complete reservation group, current QueuePlan binding, and
+    /// absence of any newer reservation owner under its mutation lock.
+    pub(crate) fn remove_committed_hashes_with_kura_terminal_authorizations(
+        &self,
+        hashes: impl IntoIterator<Item = EntrypointHash>,
+        authorizations: Vec<crate::kura::AutonomousLifecycleCommittedQueueCleanupAuthorization>,
+        telemetry: Option<&StateTelemetry>,
+    ) -> Result<usize, LaneQueueReservationError> {
+        let hashes = hashes.into_iter().collect::<Vec<_>>();
+        let requested = hashes.iter().copied().collect::<BTreeSet<_>>();
+        let mut terminalized = BTreeMap::new();
+        for authorization in authorizations {
+            let (
+                target_entrypoint_hash,
+                retirement_hash,
+                terminal_outcome_hash,
+                reservation_group,
+                ordered_keys,
+            ) = authorization.into_parts();
+            let recomputed =
+                lane_queue_reservation_group_binding_from_ordered_keys(ordered_keys.iter())
+                    .map_err(|reason| {
+                        LaneQueueReservationError::InvalidIdentity(reason.to_owned())
+                    })?;
+            let mut matching_keys = ordered_keys
+                .iter()
+                .filter(|key| Hash::from(key.entrypoint_hash) == target_entrypoint_hash);
+            let target_key = matching_keys.next().copied().ok_or_else(|| {
+                LaneQueueReservationError::InvalidIdentity(
+                    "Kura terminal cleanup authorization omits its target entrypoint".to_owned(),
+                )
+            })?;
+            if matching_keys.next().is_some()
+                || recomputed != reservation_group
+                || hash_is_zero(retirement_hash)
+                || hash_is_zero(terminal_outcome_hash)
+                || !requested.contains(&target_key.entrypoint_hash)
+                || terminalized
+                    .insert(target_key.entrypoint_hash, target_key)
+                    .is_some()
+            {
+                return Err(LaneQueueReservationError::InvalidIdentity(
+                    "Kura terminal cleanup authorization is malformed, duplicated, or unrequested"
+                        .to_owned(),
+                ));
+            }
+        }
+        Ok(self.remove_committed_hashes_inner(
+            hashes,
+            telemetry,
+            CommittedHashCleanupMode::PreserveGloballyBoundOwners,
+            &terminalized,
+        ))
+    }
+    /// Apply Kura terminal authority only to members already present in State.
+    pub(crate) fn remove_state_committed_hashes_with_kura_terminal_authorizations(
+        &self,
+        state: &State,
+        authorizations: Vec<crate::kura::AutonomousLifecycleCommittedQueueCleanupAuthorization>,
+    ) -> Result<usize, LaneQueueReservationError> {
+        let committed_authorizations = {
+            let view = state.view();
+            authorizations
+                .into_iter()
+                .filter(|authorization| {
+                    let target = authorization.target_entrypoint_hash();
+                    view.has_entrypoint(HashOf::<TransactionEntrypoint>::from_untyped_unchecked(
+                        target,
+                    ))
+                })
+                .collect::<Vec<_>>()
+        };
+        let committed = committed_authorizations
+            .iter()
+            .map(|authorization| {
+                HashOf::<TransactionEntrypoint>::from_untyped_unchecked(
+                    authorization.target_entrypoint_hash(),
+                )
+            })
+            .collect::<Vec<_>>();
+        self.remove_committed_hashes_with_kura_terminal_authorizations(
+            committed,
+            committed_authorizations,
+            None,
+        )
     }
     #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
     fn remove_committed_hashes_inner(
         &self,
         hashes: impl IntoIterator<Item = EntrypointHash>,
         telemetry: Option<&StateTelemetry>,
-        preserve_globally_bound_owners: bool,
+        mode: CommittedHashCleanupMode,
+        terminalized: &BTreeMap<EntrypointHash, LaneQueueReservationKeyV1>,
     ) -> usize {
         let hashes = hashes.into_iter().collect::<Vec<_>>();
         // A hash being made durable is not yet selectable or externally acknowledged. If a
@@ -19655,13 +19799,31 @@ impl Queue {
             }
             let mut removed_inner = 0usize;
             let mut removals = Vec::new();
+            let mut terminalized_fifo_hashes = HashSet::new();
+            let reservation_owned_hashes = self.lane_reservations.lock().live_hashes();
             for hash in hashes {
+                let terminalized = terminalized.get(&hash).is_some_and(|reservation_key| {
+                    !reservation_owned_hashes.contains(&hash)
+                        && self.durable_plan_claims.get(&hash).is_some_and(|claim| {
+                            claim.global_admission_binding().is_ok_and(|binding| {
+                                binding
+                                    .validate_for_lane_reservation_commit(reservation_key)
+                                    .is_ok()
+                            })
+                        })
+                });
                 // Strict QueuePlan publication and this check share the queue
                 // mutation lock. A gossip tick therefore cannot observe an
                 // unbound owner and delete it after a concurrent global claim
                 // becomes durable.
-                if preserve_globally_bound_owners && self.has_globally_bound_durable_claim(hash) {
+                if mode == CommittedHashCleanupMode::PreserveGloballyBoundOwners
+                    && self.has_globally_bound_durable_claim(hash)
+                    && !terminalized
+                {
                     continue;
+                }
+                if terminalized {
+                    terminalized_fifo_hashes.insert(hash);
                 }
                 let stale_fifo_hash_remains = self.queued_tx_enqueued_at_ms.contains_key(&hash);
                 let journal_removal = self
@@ -19686,7 +19848,7 @@ impl Queue {
                     // Tombstones exist solely to skip hashes still resident in `tx_hashes`.
                     // Lane reservations and popped guards already removed their FIFO hash; adding
                     // a marker for them would create a permanent, unreachable tombstone.
-                    if stale_fifo_hash_remains {
+                    if stale_fifo_hash_remains && !terminalized {
                         self.removed_hashes.insert(hash, ());
                     }
                     if let Some(authority) = tx_arc.as_ref().as_ref().authority_opt() {
@@ -19697,6 +19859,15 @@ impl Queue {
                     removed_inner = removed_inner.saturating_add(1);
                 }
             }
+            let removed_fifo = if terminalized_fifo_hashes.is_empty() {
+                0
+            } else {
+                let removed_fifo = self.remove_hashes_from_fifo_locked(&terminalized_fifo_hashes);
+                for hash in &terminalized_fifo_hashes {
+                    self.removed_hashes.remove(hash);
+                }
+                removed_fifo
+            };
             {
                 let mut store = self.lane_reservations.lock();
                 self.reconcile_missing_reservation_payloads_locked(&mut store);
@@ -19704,7 +19875,7 @@ impl Queue {
             journal_removals = removals;
             // Keep removed markers until the consumer drains stale hashes or a push triggers
             // compaction, so committed removals stay observable to in-flight guards.
-            publish_backpressure = removed_inner > 0;
+            publish_backpressure = removed_inner > 0 || removed_fifo > 0;
             removed = removed_inner;
         }
         let journal_flush = self.record_plan_journal_removes_deferred(journal_removals);
@@ -20456,7 +20627,10 @@ pub mod tests {
     };
     use iroha_config::{
         base::WithOrigin,
-        parameters::actual::{Kura as KuraConfig, LaneRoutingMatcher, LaneRoutingRule},
+        parameters::{
+            actual::{Kura as KuraConfig, LaneRoutingMatcher, LaneRoutingRule},
+            defaults::kura as kura_defaults,
+        },
     };
     use iroha_crypto::{
         Algorithm, Hash, KeyPair, MerkleProof,

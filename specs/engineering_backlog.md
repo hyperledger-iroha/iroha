@@ -7153,12 +7153,9 @@ redistributable schemas, and official trust/revocation bundles.
   with the certified proposal, ownership artifact, canonical block height/hash,
   accepted entrypoint indices/hashes, and committed `TransactionResult`s,
   advancing those sessions to `state_applied_by_canonical_block` only for
-  canonical receipts. The committed-session queue now also applies clean
-  current-tip direct preflights into world state with durable idempotence
-  markers, persists direct execution receipts after state commit, reports those
-  sessions as `state_applied_by_direct_execution`, repairs missing receipts
-  from committed markers, and replays durable direct receipts into state on
-  restart.
+  canonical receipts. Clean current-tip preflights are readiness evidence only;
+  WSV publication and durable application receipts use the canonical global or
+  merge execution corridors.
 - Add a multi-peer integration corridor proving two active lanes can advance at
   different heights, produce lane-domain QCs, upgrade FastPQ relay proofs, and
   merge without waiting for an idle configured lane. Unit-level restart/replay
@@ -7220,26 +7217,9 @@ redistributable schemas, and official trust/revocation bundles.
   remains visible as suspicious evidence instead of overwriting the original
   certified status. That separates independent lane-height planning evidence from
   standalone lane-block QC evidence instead of treating operator status-row
-  fanout as the safety proof. Kura now
-  centralizes the direct-applier readiness predicate:
-  a recovered input is exposed only after predecessor application is receipted
-  without a preflight conflict, the current local state tip has a clean matching
-  preflight, no receipt or preflight conflict exists, and the lane block has not
-  already been applied.
-  Direct application markers are part of normal and tiered WSV snapshots, and
-  lane lifecycle reset paths now prune markers for retired, replaced, migrated,
-  or autoscale-retired lanes, so cold-tier snapshots preserve
-  direct-application idempotence across restarts without leaking markers across
-  lane incarnations. Direct receipt repair/replay also rejects inactive
-  lane/dataspace routing evidence before mutating Kura or WSV state. Recovered
-  direct execution inputs reject duplicate entrypoints, signed transactions, and
-  sealed commitments before any state execution is staged. Direct application
-  records accepted transaction hashes in a non-canonical membership index so
-  duplicate admission checks see direct WSV effects without advancing canonical
-  transaction height; marker repair and receipt replay backfill that index when
-  durable direct-application evidence already exists. Partial direct-membership
-  repair now inserts only missing hashes, preserving existing direct membership
-  heights when another hash in the same receipt still needs backfill.
+  fanout as the safety proof. Recovered inputs and clean preflights remain
+  bounded staging evidence; canonical block or merge receipts are the only WSV
+  application proof.
   Nexus-active lane-block queueing also prunes in-memory lane-block
   proposal/QC sessions and committed-lane execution queue entries against the
   current active `(LaneId, DataSpaceId)` routes plus lane reset watermarks
@@ -7316,36 +7296,18 @@ redistributable schemas, and official trust/revocation bundles.
   proposal tips, restart execution queues, or autoscale unapplied-progress
   checks, while fresh post-reset sidecars remain visible. Sumeragi startup
   preloads the persisted DA reset journal before certified sidecar recovery.
-  Direct application marker scale-in guards now apply the same reset-watermark
-  boundary per queried lane, so stale key or marker evidence reintroduced
-  after lifecycle cleanup cannot block fresh-lane scale-in, while fresh
-  post-reset unrepaired markers and malformed key/payload rows still block
-  destruction. Autoscale commit also re-prunes lane-scoped block-local cleanup
-  state immediately before publishing the world block, covering AXT replay
-  rows, DA pin indexes, direct application markers, public-lane
-  validators/economics, and verified relay contract storage, then repeats
-  durable cleanup in committed storage so late inserts after lifecycle staging
-  cannot survive scale-in for retired lanes.
-  Autoscale scale-in now also refuses to retire lanes with committed direct
-  application markers that lack matching durable direct-execution receipts,
-  both when selecting deterministic retire candidates and when revalidating a
-  staged lifecycle at commit. Malformed marker storage keys are treated as
-  unrepaired even when the marker payload has a durable direct receipt, so
-  scale-in cannot prune retained-lane idempotence evidence through a forged key.
-  Direct receipt repair now also treats the marker storage key as committed
-  evidence and refuses malformed key/payload rows instead of promoting them
-  into durable Kura receipts or direct transaction membership. Existing direct
-  markers also cannot let durable receipts for inactive lane/dataspace routes
-  backfill non-canonical transaction membership after lane retirement.
-  Autoscale localnet cycle outcomes and soak artifacts now also preserve
-  direct-applied committed lane-block peer counts separately from generic
-  committed progress, so rollout review can distinguish direct WSV application
-  from canonical application and other expansion signals. The rollout parser
+  Autoscale commit re-prunes lane-scoped block-local cleanup state immediately
+  before publishing the world block, covering AXT replay rows, DA pin indexes,
+  public-lane validators/economics, and verified relay contract storage, then
+  repeats durable cleanup in committed storage so late inserts after lifecycle
+  staging cannot survive scale-in for retired lanes. Autoscale localnet cycle
+  outcomes and soak artifacts preserve canonically applied committed lane-block
+  peer counts separately from generic committed progress. The rollout parser
   now also rejects conflicting latest committed-lane status rows for the same
   lane height/view instead of choosing one by dataspace id, while preserving
   exact duplicate rows as idempotent evidence. It also counts only
   default-dataspace committed-lane rows as autoscale
-  expansion/direct-application/destruction evidence and treats ambiguous or
+  expansion/application/destruction evidence and treats ambiguous or
   certified elastic-lane committed-block evidence as non-idle for scale-in.
   Default-dataspace committed-lane rows also have to carry canonical quorum
   metadata before they can prove rollout progress: `min_quorum` must match the
@@ -7426,26 +7388,21 @@ redistributable schemas, and official trust/revocation bundles.
   rollout telemetry accurate across that recovery transition. Startup status
   also merges the latest durable application-receipted certified sidecar per
   active lane with the in-memory pending queue, so restarted peers keep
-  publishing applied committed-lane evidence for both canonical block receipts
-  and direct execution receipts even when already receipted sessions are
-  skipped by execution hydration. The broader multi-peer independent-lane
-  corridor is now narrowed to full rollout evidence beyond the observable
-  ownership-planning and embedded committed-QC gates.
-  Kura now has a direct-execution lane application receipt format for clean
-  direct preflight evidence tied to a committed state hash, so direct
-  lane-state application can persist durable evidence without reusing the
-  canonical global-block receipt semantics.
-  Queue-generated direct preflights are now bound to the canonical committed WSV
-  snapshot hash rather than only the block tip, preventing stale preflight
-  evidence from surviving a direct WSV mutation that does not advance the
-  canonical block journal.
+  publishing applied committed-lane evidence for canonical block and merge
+  receipts even when already receipted sessions are skipped by execution
+  hydration. The broader multi-peer independent-lane corridor is now narrowed
+  to full rollout evidence beyond the observable ownership-planning and
+  embedded committed-QC gates. Queue-generated execution preflights are bound
+  to the canonical committed WSV snapshot hash rather than only the block tip,
+  preventing stale preflight evidence from surviving an intervening state
+  transition.
   The committed-session queue is now receipt-backed rather than purely sticky:
   it releases capacity only after Kura validates a durable application receipt,
   and restart hydration skips already application-receipted certified sidecars
   so stale applied work cannot crowd out unapplied committed lane blocks. Kura
   now also revalidates recovered execution-input sidecars against the current
   canonical lane payload artifact and proposal block before exposing them to
-  standalone direct application, rejecting stale recovered inputs after
+  canonical application, rejecting stale recovered inputs after
   canonical artifact drift.
 
 ## Cross-dataspace AMX follow-ups
@@ -9008,14 +8965,10 @@ redistributable schemas, and official trust/revocation bundles.
 
 ## FASTPQ GPU acceleration follow-ups
 
-- Evaluate whether to promote the low-level Poseidon fused column+parent kernel
-  from parity-only coverage to the production hot path. CUDA and Metal parity
-  evidence for the current high-level column + Merkle-pair GPU path is now
-  recorded in `status.md`; acceptance for a low-level hot-path promotion still
-  requires a fresh Izanami gate/profile showing a real throughput improvement
-  over that high-level path, with scalar CPU remaining the authoritative
-  fallback for every mismatch or dispatch error. No CUDA-specific FASTPQ proof,
-  parity, benchmark, or release-comparison task remains open here.
+- Profile the sole batched Poseidon column plus Merkle-pair path on the release
+  CUDA and Metal matrix. Optimize that shared path only when fresh Izanami
+  evidence shows a real throughput improvement, with scalar CPU remaining the
+  authoritative fallback for every mismatch or dispatch error.
 
 ## Sumeragi vNext consensus replacement
 

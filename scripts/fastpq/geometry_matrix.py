@@ -24,9 +24,7 @@ ENV_COLUMNS: Sequence[tuple[str, str]] = (
     ("FASTPQ_METAL_FFT_COLUMNS", "FFT"),
     ("FASTPQ_METAL_LDE_COLUMNS", "LDE"),
     ("FASTPQ_METAL_QUEUE_FANOUT", "Fanout"),
-    ("FASTPQ_POSEIDON_PIPE_COLUMNS", "Pipe"),
     ("FASTPQ_METAL_POSEIDON_LANES", "Lanes"),
-    ("FASTPQ_METAL_POSEIDON_BATCH", "Batch"),
 )
 
 REQUIRED_OPERATIONS = ("fft", "lde", "poseidon_hash_columns")

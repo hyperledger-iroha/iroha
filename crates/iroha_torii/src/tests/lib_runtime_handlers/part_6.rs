@@ -1911,7 +1911,7 @@ fn seed_hosted_http_public_lane_validator(
         );
     tx.apply();
     block
-        .commit()
+        .commit_world_overlay_for_testing()
         .expect("commit hosted-http public-lane validator fixture");
 }
 fn hosted_http_lease_volume_states(

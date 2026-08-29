@@ -752,14 +752,16 @@ impl<'de> norito::core::NoritoDeserialize<'de> for GoldilocksDigest384V1 {
 
 impl<'de> norito::core::DecodeFromSlice<'de> for GoldilocksDigest384V1 {
     fn decode_from_slice(bytes: &'de [u8]) -> Result<(Self, usize), norito::core::Error> {
-        let (encoded, used) = <[u8; fastpq_isi::GOLDILOCKS_DIGEST384_BYTES_V1] as norito::core::DecodeFromSlice>::decode_from_slice(bytes)?;
-        Self::from_le_bytes(encoded)
-            .map(|digest| (digest, used))
-            .ok_or_else(|| {
-                norito::core::Error::Message(
-                    "non-canonical GoldilocksDigest384V1 field element".into(),
-                )
-            })
+        let prefix = bytes
+            .get(..Self::BYTES)
+            .ok_or(norito::core::Error::LengthMismatch)?;
+        let mut encoded = [0_u8; Self::BYTES];
+        encoded.copy_from_slice(prefix);
+        let digest = Self::from_le_bytes(encoded).ok_or_else(|| {
+            norito::core::Error::Message("non-canonical GoldilocksDigest384V1 field element".into())
+        })?;
+        norito::core::note_payload_access(bytes, Self::BYTES);
+        Ok((digest, Self::BYTES))
     }
 }
 

@@ -2130,75 +2130,6 @@ async fn mcp_jsonrpc_tools_call_projected_node_operational_endpoints_dispatch() 
         );
     }
 }
-#[cfg(feature = "telemetry")]
-#[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_sumeragi_pacemaker_dispatches() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-    cfg.torii.mcp.profile = iroha_config::parameters::actual::ToriiMcpProfile::Operator;
-    cfg.torii.mcp.expose_operator_routes = true;
-    let network_id = test_utils::signed_query_network_id();
-    let uri: iroha_torii::Uri = "/v1/sumeragi/pacemaker".parse().expect("pacemaker URI");
-    let signed_headers = iroha_torii::operator_signed_request_headers(
-        &cfg.common.key_pair,
-        &network_id,
-        &iroha_torii::Method::GET,
-        &uri,
-        &[],
-    )
-    .expect("operator headers");
-    let signed_header = |name: &'static str| {
-        signed_headers
-            .get(name)
-            .and_then(|value| value.to_str().ok())
-            .expect("ASCII signed header")
-            .to_owned()
-    };
-    let arguments = norito::json!({
-        "headers": {
-            "X-Iroha-Operator-Public-Key": (signed_header("x-iroha-operator-public-key")),
-            "X-Iroha-Operator-Timestamp-Ms": (signed_header("x-iroha-operator-timestamp-ms")),
-            "X-Iroha-Operator-Nonce": (signed_header("x-iroha-operator-nonce")),
-            "X-Iroha-Operator-Signature": (signed_header("x-iroha-operator-signature"))
-        }
-    });
-    let app = build_router(cfg);
-    for (id, tool_name, arguments) in [(1042, "iroha.sumeragi.pacemaker", arguments)] {
-        let (status, call) = post_mcp(
-            &app,
-            norito::json!({
-                "jsonrpc": "2.0",
-                "id": id,
-                "method": "tools/call",
-                "params": {
-                    "name": tool_name,
-                    "arguments": arguments
-                }
-            }),
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK);
-        let structured = structured_content(&call);
-        let http_status = structured.get("status").and_then(Value::as_u64);
-        assert!(
-            http_status.is_some(),
-            "sumeragi alias `{tool_name}` should return an HTTP status"
-        );
-        if tool_is_error(&call) {
-            assert!(
-                http_status.is_some_and(|status| status >= 400),
-                "error path for `{tool_name}` should reflect HTTP error status"
-            );
-        } else {
-            assert_eq!(
-                http_status,
-                Some(200),
-                "successful path for `{tool_name}` should return HTTP 200"
-            );
-        }
-    }
-}
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_da_read_endpoints_dispatch() {
     let _data_dir = test_utils::TestDataDirGuard::new();
@@ -3054,12 +2985,8 @@ async fn mcp_tools_list_exposes_account_and_transaction_interfaces() {
             .any(|name| name == "iroha.runtime.upgrades.cancel"),
         "expected agent-friendly runtime upgrades-cancel MCP tool"
     );
-    assert_eq!(
-        names.iter().any(|name| name == "iroha.sumeragi.pacemaker"),
-        cfg!(feature = "telemetry"),
-        "pacemaker MCP visibility must match its telemetry feature gate"
-    );
     for retired_name in [
+        "iroha.sumeragi.pacemaker",
         "iroha.sumeragi.commit_certificates",
         "iroha.sumeragi.validator_sets.list",
         "iroha.sumeragi.validator_sets.get",

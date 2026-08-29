@@ -33,6 +33,10 @@ use iroha_data_model::{
             SetMusubiRegistryPolicyV1, SetMusubiReleaseYankV1,
         },
         offline::{RedeemKagemushaRecursiveV4, TopUpKagemushaRecursiveV4},
+        private_settlement::{
+            AbortAtomicPrivateSettlementV1, ActivatePrivateSettlementPoolV1,
+            FinalizeAtomicPrivateSettlementV1,
+        },
         settlement::{
             DvpIsi, FundFxCorridorEscrow, FxCorridorPolicy, FxCorridorPolicyRegistry, PvpIsi,
             RefundFxCorridorEscrow, SetFxCorridorPolicy, SettleFxCorridor,
@@ -1765,6 +1769,18 @@ fn instruction_settlement_dataspace_target_with_stack(
             stack,
         );
     }
+    if let Some(activation) = any.downcast_ref::<ActivatePrivateSettlementPoolV1>() {
+        return Ok(Some(activation.route.dataspace_id));
+    }
+    if any
+        .downcast_ref::<AbortAtomicPrivateSettlementV1>()
+        .is_some()
+        || any
+            .downcast_ref::<FinalizeAtomicPrivateSettlementV1>()
+            .is_some()
+    {
+        return Ok(Some(DataSpaceId::UNIVERSAL));
+    }
     if let Some(dvp) = any.downcast_ref::<DvpIsi>() {
         return Ok(settlement_pair_dataspace_target(
             asset_balance_definition_dataspace_target(
@@ -1959,6 +1975,18 @@ fn instruction_settlement_dataspace_target_with_world_and_stack<W: WorldReadOnly
             &mut nested_fx_overlay,
             stack,
         );
+    }
+    if let Some(activation) = any.downcast_ref::<ActivatePrivateSettlementPoolV1>() {
+        return Ok(Some(activation.route.dataspace_id));
+    }
+    if any
+        .downcast_ref::<AbortAtomicPrivateSettlementV1>()
+        .is_some()
+        || any
+            .downcast_ref::<FinalizeAtomicPrivateSettlementV1>()
+            .is_some()
+    {
+        return Ok(Some(DataSpaceId::UNIVERSAL));
     }
     if let Some(dvp) = any.downcast_ref::<DvpIsi>() {
         return Ok(settlement_pair_dataspace_target(
@@ -5494,6 +5522,15 @@ fn instruction_transaction_target_requires_universal_coordinator(
     if musubi_instruction_requires_universal_coordinator(any) {
         return Ok(true);
     }
+    if any
+        .downcast_ref::<AbortAtomicPrivateSettlementV1>()
+        .is_some()
+        || any
+            .downcast_ref::<FinalizeAtomicPrivateSettlementV1>()
+            .is_some()
+    {
+        return Ok(true);
+    }
     if let Some(multisig) = multisig_instruction(instruction) {
         // Concrete-target collection below is cycle-guarded and completes before the recursive
         // coordinator scan, preventing a cyclic payload from reaching that scan.
@@ -5630,6 +5667,15 @@ fn instruction_transaction_target_requires_universal_coordinator_with_world<W: W
 ) -> Result<bool, RoutingResolveError> {
     let any = instruction.as_any();
     if musubi_instruction_requires_universal_coordinator(any) {
+        return Ok(true);
+    }
+    if any
+        .downcast_ref::<AbortAtomicPrivateSettlementV1>()
+        .is_some()
+        || any
+            .downcast_ref::<FinalizeAtomicPrivateSettlementV1>()
+            .is_some()
+    {
         return Ok(true);
     }
     if let Some(multisig) = multisig_instruction(instruction) {
@@ -8781,6 +8827,10 @@ mod tests {
         isi::{
             alias_setup::CompareAndSetPrimaryAccountAlias,
             prelude::{Mint, Register, Transfer},
+            private_settlement::{
+                AbortAtomicPrivateSettlementV1, ActivatePrivateSettlementPoolV1,
+                FinalizeAtomicPrivateSettlementV1,
+            },
             settlement::{
                 DvpIsi, FundFxCorridorEscrow, FxCorridorOracleEvidence, FxCorridorPolicy,
                 FxCorridorPolicyRegistry, PvpIsi, RefundFxCorridorEscrow, SetFxCorridorPolicy,
@@ -8796,8 +8846,10 @@ mod tests {
         metadata::Metadata,
         nexus::{
             AUTOSCALE_META_COMMITTEE, AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_DRAIN_STATE,
-            AUTOSCALE_META_MANAGED, AssetPermissionManifest, LaneConfig, LaneVisibility,
-            ManifestVersion, UniversalAccountId,
+            AUTOSCALE_META_MANAGED, AssetPermissionManifest, AtomicPrivateSettlementV1, LaneConfig,
+            LaneId, LaneVisibility, ManifestVersion, PrivateSettlementAbortReasonV1,
+            PrivateSettlementCommitBundleV1, PrivateSettlementPoolGovernanceLifecycleV1,
+            PrivateSettlementRouteV1, UniversalAccountId,
         },
         oracle::{FeedConfigVersion, FeedEvent, FeedEventOutcome, FeedSuccess, ObservationValue},
         peer::PeerId,
@@ -8828,6 +8880,136 @@ mod tests {
         instructions: Vec<InstructionBox>,
     ) -> AcceptedTransaction<'static> {
         sample_transaction_with_metadata(authority, signer, instructions, Metadata::default())
+    }
+
+    #[test]
+    fn private_settlement_carrier_routes_to_universal_without_state_lookup() {
+        let (sponsor, _) = gen_account_in("settlement");
+        let instruction = InstructionBox::from(FinalizeAtomicPrivateSettlementV1::new(
+            PrivateSettlementCommitBundleV1 {
+                version: AtomicPrivateSettlementV1::VERSION,
+                manifest: AtomicPrivateSettlementV1 {
+                    version: AtomicPrivateSettlementV1::VERSION,
+                    network_id: super::super::queue_test_network_id(),
+                    bundle_id: Hash::new(b"router-private-settlement-bundle"),
+                    authority_context_height: 10,
+                    expiry_height: 20,
+                    sponsor,
+                    public_fee_intent: iroha_data_model::transaction::FeePaymentIntent::authority(
+                        Vec::new(),
+                        None,
+                    ),
+                    fee_intent_digest: Hash::new(b"router-private-settlement-fee"),
+                    reimbursement_terms_commitment: Hash::new(
+                        b"router-private-settlement-reimbursement",
+                    ),
+                    reimbursement_leg_ordinal: 0,
+                    legs: Vec::new(),
+                },
+                authority_catalog: Vec::new(),
+                legs: Vec::new(),
+            },
+        ));
+
+        assert_eq!(
+            instruction_settlement_dataspace_target(&*instruction, None, None),
+            Ok(Some(DataSpaceId::UNIVERSAL))
+        );
+        assert_eq!(
+            instruction_transaction_target_requires_universal_coordinator(
+                &*instruction,
+                None,
+                None,
+            ),
+            Ok(true)
+        );
+        assert!(!instruction_transaction_dataspace_target_needs_state(
+            &*instruction
+        ));
+    }
+
+    #[test]
+    fn private_settlement_abort_routes_to_universal_without_state_lookup() {
+        let (sponsor, _) = gen_account_in("settlement-abort");
+        let instruction = InstructionBox::from(AbortAtomicPrivateSettlementV1::new(
+            AtomicPrivateSettlementV1 {
+                version: AtomicPrivateSettlementV1::VERSION,
+                network_id: super::super::queue_test_network_id(),
+                bundle_id: Hash::new(b"router-private-settlement-abort"),
+                authority_context_height: 10,
+                expiry_height: 20,
+                sponsor,
+                public_fee_intent: iroha_data_model::transaction::FeePaymentIntent::authority(
+                    Vec::new(),
+                    None,
+                ),
+                fee_intent_digest: Hash::new(b"router-private-settlement-abort-fee"),
+                reimbursement_terms_commitment: Hash::new(
+                    b"router-private-settlement-abort-reimbursement",
+                ),
+                reimbursement_leg_ordinal: 0,
+                legs: Vec::new(),
+            },
+            PrivateSettlementAbortReasonV1::ParticipantRejected,
+        ));
+
+        assert_eq!(
+            instruction_settlement_dataspace_target(&*instruction, None, None),
+            Ok(Some(DataSpaceId::UNIVERSAL))
+        );
+        assert_eq!(
+            instruction_transaction_target_requires_universal_coordinator(
+                &*instruction,
+                None,
+                None,
+            ),
+            Ok(true)
+        );
+        assert!(!instruction_transaction_dataspace_target_needs_state(
+            &*instruction
+        ));
+    }
+
+    #[test]
+    fn private_settlement_pool_activation_routes_to_its_dataspace_without_state_lookup() {
+        let dataspace_id = DataSpaceId::new(73);
+        let instruction = InstructionBox::from(ActivatePrivateSettlementPoolV1 {
+            version: AtomicPrivateSettlementV1::VERSION,
+            route: PrivateSettlementRouteV1 {
+                dataspace_id,
+                lane_id: LaneId::new(11),
+                lane_incarnation: Hash::new(b"router-private-settlement-incarnation"),
+            },
+            pool_id: iroha_data_model::privacy::PrivacyPoolIdV1::new([0x81; 32]),
+            asset_binding_commitment: Hash::new(b"router-private-settlement-asset-binding"),
+            audit_policy_digest: Hash::new(b"router-private-settlement-audit-policy"),
+            audit_key_epoch: 1,
+            lifecycle: PrivateSettlementPoolGovernanceLifecycleV1 {
+                governance_revision: 1,
+                activation_height: 10,
+                retirement_height: None,
+            },
+            governance_digest: Hash::new(b"router-private-settlement-governance"),
+            initial_commitments: vec![iroha_data_model::privacy::PrivacyCommitmentV1::new(
+                [0x91; 32],
+            )],
+        });
+
+        assert_eq!(
+            instruction_settlement_dataspace_target(&*instruction, None, None),
+            Ok(Some(dataspace_id))
+        );
+        assert_eq!(
+            instruction_transaction_target_requires_universal_coordinator(
+                &*instruction,
+                None,
+                None,
+            ),
+            Ok(false)
+        );
+        assert!(!instruction_transaction_dataspace_target_needs_state(
+            &*instruction
+        ));
     }
     fn resolved_account_alias(alias: &str, dataspace_id: DataSpaceId) -> ResolvedAccountAliasV1 {
         ResolvedAccountAliasV1::new(

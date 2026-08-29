@@ -18,6 +18,8 @@ pub mod offline_api;
 pub mod parliament_api;
 /// Stable cross-SDK signing transcript for exact prepared transactions.
 pub mod prepared_transaction;
+/// Public and restricted DTOs for atomic private cross-dataspace settlement.
+pub mod private_settlement_api;
 /// Shared QR Code encoder used by Torii and CLI offline flows.
 pub mod qr;
 /// Canonical Torii route metadata and projection helpers.

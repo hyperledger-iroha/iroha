@@ -31,6 +31,7 @@ const CODEC_TEXT = 1;
 const CODEC_EVM20 = 2;
 const CODEC_TRON21 = 5;
 const SCALE = 1_000_000_000n;
+const MAX_U128 = (1n << 128n) - 1n;
 const TEST_MAX_WRAPPED_SUPPLY = 1_000_000n * SCALE;
 const MINT_GUARDIANS = [
   "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC",
@@ -41,6 +42,7 @@ const MINT_GUARDIANS = [
 ];
 const MAX_RUNTIME_BYTES = 24_576;
 const MAX_INITCODE_BYTES = 49_152;
+const ZERO_BOOL_RUNTIME = "0x600060005260206000f3";
 // Stay below the EIP-7825 per-transaction gas cap enforced by the locked
 // Hardhat runtime while retaining ample headroom for the largest constructor.
 const MAX_DEPLOYMENT_GAS = 16_000_000n;
@@ -2572,6 +2574,7 @@ async function main() {
     await tronBridge.replayVerifierCodeHash(),
     tronReplayVerifierCodeHash,
   );
+  assert.equal(await tronBridge.mintBreakerCodeHash(), tronMintBreakerCodeHash);
   assert.equal(await tronBridge.maxWrappedSupply(), TEST_MAX_WRAPPED_SUPPLY);
   assert.equal(await tronMintBreaker.route(), tronBridgeAddress);
   assert.equal(await tronMintBreaker.mintingDisabled(), false);
@@ -2680,6 +2683,17 @@ async function main() {
       ROUTE_REVISION,
       MINT_GUARDIANS,
       0n,
+    ]),
+    rejectedWith("SC_DEPLOY"),
+  );
+  await assert.rejects(
+    deploy(signer, tronBridgeArtifact, [
+      rejectedTronTokenAddress,
+      verifierPolicy(tronVerifierAddress, tronVerifierCodeHash, verifierKeyHash),
+      TRON_MAINNET_PROFILE,
+      ROUTE_REVISION,
+      MINT_GUARDIANS,
+      MAX_U128 + 1n,
     ]),
     rejectedWith("SC_DEPLOY"),
   );
@@ -2895,6 +2909,24 @@ async function main() {
       tronPayloadHex,
     ),
     rejectedWith("Groth16 proof verification failed"),
+  );
+  await provider.send("hardhat_setCode", [
+    secondTronMintBreakerAddress,
+    ZERO_BOOL_RUNTIME,
+  ]);
+  assert.notEqual(
+    ethers.keccak256(await provider.getCode(secondTronMintBreakerAddress)),
+    secondTronMintBreakerCodeHash,
+  );
+  assert.equal(await secondTronBridge.mintBreakerCodeHash(), secondTronMintBreakerCodeHash);
+  await assert.rejects(
+    secondTronBridge.finalizeFromTaira(
+      tronProof,
+      tronPublicInputs,
+      tronStatementHash,
+      tronPayloadHex,
+    ),
+    rejectedWith("SC_BREAKER"),
   );
   await (
     await tronBridge.finalizeFromTaira(
@@ -3127,7 +3159,6 @@ async function main() {
   await (await tronNoopToken.seed(tronBurnAccount, 2n * SCALE)).wait();
   await assert.rejects(
     tronNoopBridge.transferToTaira(CANONICAL_I105_BYTES, SCALE, 0n),
-    rejectedWith("SC_TOKEN"),
   );
   assert.equal(await tronNoopBridge.transferNonces(tronBurnAccount), 0n);
   assert.equal(await tronNoopToken.totalSupply(), 2n * SCALE);
@@ -3179,7 +3210,6 @@ async function main() {
       tronNoopMintStatementHash,
       tronNoopMintPayloadHex,
     ),
-    rejectedWith("SC_TOKEN"),
   );
   assert.equal(
     (await tronNoopBridge.replayForestState(false, 0))[2],
@@ -3207,7 +3237,6 @@ async function main() {
   await (await tronWrongDeltaToken.seed(tronBurnAccount, 2n * SCALE)).wait();
   await assert.rejects(
     tronWrongDeltaBridge.transferToTaira(CANONICAL_I105_BYTES, SCALE, 0n),
-    rejectedWith("SC_TOKEN"),
   );
   assert.equal(await tronWrongDeltaBridge.transferNonces(tronBurnAccount), 0n);
   assert.equal(await tronWrongDeltaToken.totalSupply(), 2n * SCALE);
@@ -3265,7 +3294,6 @@ async function main() {
       tronWrongDeltaMintStatementHash,
       tronWrongDeltaMintPayloadHex,
     ),
-    rejectedWith("SC_TOKEN"),
   );
   assert.equal(
     (await tronWrongDeltaBridge.replayForestState(false, 0))[2],
@@ -3318,6 +3346,7 @@ async function main() {
   );
   assert.equal(await bridge.tokenCodeHash(), tokenCodeHash);
   assert.equal(await bridge.replayVerifierCodeHash(), replayVerifierCodeHash);
+  assert.equal(await bridge.mintBreakerCodeHash(), mintBreakerCodeHash);
   assert.equal(await bridge.maxWrappedSupply(), TEST_MAX_WRAPPED_SUPPLY);
   assert.equal(await mintBreaker.route(), bridgeAddress);
   assert.equal(await mintBreaker.mintingDisabled(), false);
@@ -3494,6 +3523,17 @@ async function main() {
       ROUTE_REVISION,
       MINT_GUARDIANS,
       0n,
+    ]),
+    rejectedWith("SC_DEPLOY"),
+  );
+  await assert.rejects(
+    deploy(signer, bridgeArtifact, [
+      rejectedBscTokenAddress,
+      verifierPolicy(verifierAddress, verifierCodeHash, verifierKeyHash),
+      BSC_MAINNET_PROFILE,
+      ROUTE_REVISION,
+      MINT_GUARDIANS,
+      MAX_U128 + 1n,
     ]),
     rejectedWith("SC_DEPLOY"),
   );
@@ -4273,6 +4313,17 @@ async function main() {
   }
   assert.equal(await token.balanceOf(signerAddress), balanceBeforeInvalidBurns);
   assert.equal(await bridge.transferNonces(signerAddress), nonceBeforeInvalidBurns);
+  await provider.send("hardhat_setCode", [mintBreakerAddress, ZERO_BOOL_RUNTIME]);
+  assert.notEqual(
+    ethers.keccak256(await provider.getCode(mintBreakerAddress)),
+    mintBreakerCodeHash,
+  );
+  assert.equal(await bridge.mintBreakerCodeHash(), mintBreakerCodeHash);
+  assert.equal(await mintBreaker.mintingDisabled(), false);
+  await assert.rejects(
+    bridge.finalizeFromTaira(proof, publicInputs, statementHash, payloadHex),
+    rejectedWith("SC_BREAKER"),
+  );
   const sourceTx = await bridge.transferToTaira(
     CANONICAL_I105_BYTES,
     SCALE,
@@ -4574,8 +4625,11 @@ async function main() {
   const reentrantBridgeAddress = await reentrantBridge.getAddress();
   const reentrantEvents = reentrantReceipt.logs.filter(
     (log) => log.address.toLowerCase() === reentrantBridgeAddress.toLowerCase(),
+  ).map((log) => reentrantBridge.interface.parseLog(log));
+  assert.deepEqual(
+    reentrantEvents.map((event) => event.name),
+    ["SccpReplayDeltaV1", "SccpTransfer"],
   );
-  assert.equal(reentrantEvents.length, 1);
   assert.equal(await reentrantBridge.transferNonces(outsiderAddress), 1n);
   assert.equal(await reentrantToken.totalSupply(), 0n);
   assert.equal(await reentrantToken.balanceOf(outsiderAddress), 0n);
@@ -4655,6 +4709,15 @@ async function main() {
     await ethereumProvider.getCode(ethereumMintBreakerAddress),
   );
   assert.equal(await ethereumBridge.tokenCodeHash(), ethereumTokenCodeHash);
+  assert.equal(
+    await ethereumBridge.replayVerifierCodeHash(),
+    ethereumReplayVerifierCodeHash,
+  );
+  assert.equal(
+    await ethereumBridge.mintBreakerCodeHash(),
+    ethereumMintBreakerCodeHash,
+  );
+  assert.equal(await ethereumBridge.maxWrappedSupply(), TEST_MAX_WRAPPED_SUPPLY);
   assert.equal(
     await ethereumBridge.routeConfigHash(),
     exactEvmRouteConfigHash({
@@ -4794,7 +4857,7 @@ async function main() {
     ethereumBridge.finalizeFromTaira(
       ethereumProof,
       [
-        messageId("sora-taira", "ethereum-mainnet", ethereumInboundPayload),
+        ethers.toBeHex(BigInt(ethereumMessageId) ^ 1n, 32),
         ...ethereumPublicInputs.slice(1),
       ],
       ethereumStatementHash,

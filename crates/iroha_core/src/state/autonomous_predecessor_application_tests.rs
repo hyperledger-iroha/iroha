@@ -77,6 +77,64 @@ fn autonomous_lane_predecessor_rejects_hash_only_absence_and_accepts_exact_wsv_f
     );
 }
 #[test]
+fn autonomous_lane_predecessor_accepts_exact_canonical_receipt_without_merge_frontier() {
+    let (state, kura) = blank_test_state_with_kura();
+    let lane_id = LaneId::SINGLE;
+    let dataspace_id = DataSpaceId::UNIVERSAL;
+    let incarnation = state
+        .lane_incarnation(lane_id)
+        .expect("the default lane has an active incarnation");
+    let (block, predecessor, signer_pops) =
+        lane_artifact_block_and_session_for_state_test(None, lane_id, dataspace_id, incarnation, 1);
+    kura.store_block(Arc::new(block))
+        .expect("store canonical predecessor block");
+    kura.persist_committed_lane_block_session(&predecessor, &signer_pops)
+        .expect("persist canonical predecessor certificate");
+    kura.persist_lane_block_application_receipt(&predecessor.proposal)
+        .expect("persist canonical predecessor receipt");
+
+    let mut successor = predecessor.proposal.clone();
+    successor.descriptor.proposal_height = successor
+        .descriptor
+        .proposal_height
+        .checked_add(1)
+        .expect("successor proposal height");
+    successor.descriptor.previous_lane_block_height = 1;
+    successor.descriptor.previous_lane_block_descriptor_hash =
+        Some(predecessor.proposal.descriptor.descriptor_hash);
+    successor.descriptor.lane_block_height = 2;
+    successor.descriptor.descriptor_hash = successor.descriptor.computed_descriptor_hash();
+    successor.proposal_hash = successor.computed_proposal_hash();
+
+    assert!(
+        kura.canonical_lane_block_predecessor_receipt_revalidates_without_sidecar_repair(
+            &successor,
+        ),
+        "the exact Current receipt must revalidate against its canonical block results",
+    );
+    assert!(
+        state.certified_autonomous_lane_block_predecessor_is_globally_applied_cached(&successor),
+        "ordinary canonical application must authorize the next autonomous lane height even without a merge-frontier marker",
+    );
+
+    let malformed_key = State::merge_lane_frontier_marker_key(lane_id, dataspace_id, incarnation)
+        .expect("derive the replicated merge-frontier key");
+    let mut malformed_world = World::default();
+    malformed_world
+        .smart_contract_state
+        .insert(malformed_key, b"malformed-frontier".to_vec());
+    let malformed = State::new_for_testing(
+        malformed_world,
+        Arc::clone(&kura),
+        LiveQueryStore::start_test(),
+    );
+    assert!(
+        !malformed
+            .certified_autonomous_lane_block_predecessor_is_globally_applied_cached(&successor),
+        "malformed replicated frontier evidence must fail closed even beside an exact local Current receipt",
+    );
+}
+#[test]
 fn autonomous_lane_predecessor_rejects_conflicting_or_malformed_wsv_frontier() {
     let lane_id = LaneId::SINGLE;
     let dataspace_id = DataSpaceId::UNIVERSAL;

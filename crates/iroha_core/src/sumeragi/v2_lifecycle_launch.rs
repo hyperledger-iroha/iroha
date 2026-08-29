@@ -859,13 +859,6 @@ impl LaunchedProductionLifecycleV1 {
     /// Repeated calls retain the existing token and generic completion drains
     /// cannot acknowledge it. The bounded Vote/Timeout completion may enter
     /// the durable Broadcast settlement; other successor shapes remain guarded.
-    #[cfg_attr(
-        test,
-        expect(
-            dead_code,
-            reason = "standalone recovered-Sign retention remains a source-audited cold-start seam"
-        )
-    )]
     pub(in crate::sumeragi) fn retain_recovered_lifecycle_sign_completion(
         &mut self,
     ) -> Result<bool, String> {

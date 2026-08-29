@@ -15,14 +15,14 @@ public sealed class SccpReplayV1Tests
             Repeated(0x44, 32),
             SccpReplayActorV1.Route());
         Assert.Equal(
-            "4ed1f7c9f024bc628c66656b6314a1f45677c68487f78cdfb636eed6c9b51985",
+            "de11cbd183f55063fe715fcf120773d799dfb1185e057f758c126306832fdc3d",
             SccpV1.LowerHex(domainHash));
 
         var key = SccpReplayV1.ReplayKey(domainHash, Repeated(0x11, 32));
         Assert.Equal(
-            "7aff291d1bad14cd1349ba4d73609de9e42f6fe4df4ce509952a2a8352b33582",
+            "139f57881d055a13ecf390d7441dadfc065ded40181c42a7aa3ab0a27469f17b",
             SccpV1.LowerHex(key));
-        Assert.Equal(122, key[0]);
+        Assert.Equal(19, key[0]);
 
         var recordDigest = SccpReplayV1.RecordDigest(
             SccpReplayBoundaryV1.SoraOutboundLock,
@@ -51,7 +51,7 @@ public sealed class SccpReplayV1Tests
         Assert.True(SccpReplayV1.RootFromWitness(key, null, emptyWitness).MatchesExpectedRoot);
 
         var occupiedRoot = SccpV1.DecodeLowerHex(
-            "b19ed784f9998252402594bab82e0256c27fbaa0a50c9fe95c6f6c7457076a77");
+            "7b47c79900f052fd4b73691e2fe2230fdf170225d54e9a248e176f30495ac918");
         var occupiedWitness = new SccpSparseMerkleWitnessV1(
             occupiedRoot,
             recordDigest,

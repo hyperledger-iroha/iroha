@@ -1965,7 +1965,9 @@ mod tests {
         activate_instance(authority, contract_address.clone(), code_hash, &mut stx)
             .expect("activate instance");
         stx.apply();
-        block.commit().expect("commit block");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit block");
         code_hash
     }
     #[tokio::test]

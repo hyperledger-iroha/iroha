@@ -31,18 +31,9 @@ fn deterministic_account(label: &str, domain: &DomainId) -> AccountId {
     AccountId::new(keypair.public_key().clone())
 }
 fn governance_batch() -> TransitionBatch {
-    let mut batch = TransitionBatch::new("fastpq-state-transition-stark-v1", PublicInputs::default());
+    let mut batch =
+        TransitionBatch::new("fastpq-state-transition-stark-v1", PublicInputs::default());
     annotate_inputs(&mut batch, 7);
-    batch.push(StateTransition::new(
-        b"role/council@governance/permission/vote.sora".to_vec(),
-        encode_u64(0),
-        encode_u64(1),
-        OperationKind::RoleGrant {
-            role_id: vec![0xA1; 32],
-            permission_id: vec![0xB2; 32],
-            epoch: 42,
-        },
-    ));
     batch.push(StateTransition::new(
         b"account/governance.ballot@governance/metadata/ballot_2025_02".to_vec(),
         vec![],
@@ -56,7 +47,8 @@ fn remittance_batch() -> TransitionBatch {
     const REMIT_AMOUNT: u64 = 75_000;
     const ALICE_START: u64 = 500_000;
     const BOB_START: u64 = 120_000;
-    let mut batch = TransitionBatch::new("fastpq-state-transition-stark-v1", PublicInputs::default());
+    let mut batch =
+        TransitionBatch::new("fastpq-state-transition-stark-v1", PublicInputs::default());
     annotate_inputs(&mut batch, 23);
     let domain = DomainId::try_new("remit", "universal").expect("domain id");
     let asset_definition = AssetDefinitionId::derive_from_components(
@@ -124,7 +116,7 @@ fn assert_strict_state_profile_rejects(mut batch: TransitionBatch) {
     ));
 }
 #[test]
-fn governance_flow_fails_closed_without_permission_witnesses() {
+fn opaque_governance_flow_fails_closed_under_transfer_semantics() {
     assert_strict_state_profile_rejects(governance_batch());
 }
 #[test]

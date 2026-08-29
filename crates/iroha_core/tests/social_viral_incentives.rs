@@ -609,7 +609,9 @@ fn send_to_twitter_delivers_immediately_and_pays_bonus_once() {
     .execute(&ALICE_ID, &mut tx)
     .expect("second send to twitter should also succeed");
     tx.apply();
-    block.commit().expect("commit block");
+    block
+        .commit_empty_block_for_testing()
+        .expect("commit block");
     let view = state.view();
     let alice_asset_id = AssetId::new(def_id.clone(), ALICE_ID.clone());
     let bob_asset_id = AssetId::new(def_id.clone(), BOB_ID.clone());
@@ -706,7 +708,9 @@ fn viral_reward_enforces_daily_cap_per_uaid() {
     .execute(&ALICE_ID, &mut tx)
     .expect("first claim should succeed");
     tx.apply();
-    block.commit().expect("commit first block");
+    block
+        .commit_empty_block_for_testing()
+        .expect("commit first block");
     // Block 2: second claim for the same UAID should hit the daily cap.
     let mut block = state.block(header(2));
     let mut tx = block.transaction();
@@ -720,7 +724,9 @@ fn viral_reward_enforces_daily_cap_per_uaid() {
         "daily cap must reject additional claims for the UAID"
     );
     tx.apply();
-    block.commit().expect("commit second block");
+    block
+        .commit_empty_block_for_testing()
+        .expect("commit second block");
     let view = state.view();
     let budget = view.world().viral_reward_budget();
     assert_eq!(
@@ -805,7 +811,9 @@ fn viral_reward_enforces_budget_limit() {
         "budget exhaustion should reject the claim"
     );
     tx.apply();
-    block.commit().expect("commit block for budget cap check");
+    block
+        .commit_empty_block_for_testing()
+        .expect("commit block for budget cap check");
     let view = state.view();
     let budget = view.world().viral_reward_budget();
     assert_eq!(budget.spent, Quantity::zero(), "budget must stay untouched");

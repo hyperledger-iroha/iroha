@@ -29,8 +29,8 @@ use super::{
     der_limits::ZK_X509_DER_MAX_DOCUMENT_BYTES_V1,
 };
 use crate::privacy_engines::transparent_stark::{
-    GOLDILOCKS_MODULUS_V1, GoldilocksDigest384V1, GoldilocksFieldV1 as F,
-    TransparentStarkErrorV1, TransparentTranscriptV1,
+    GOLDILOCKS_MODULUS_V1, GoldilocksDigest384V1, GoldilocksFieldV1 as F, TransparentStarkErrorV1,
+    TransparentTranscriptV1,
 };
 use thiserror::Error;
 /// Stable identity of the fixed-capacity strict-DER numeric adapter.

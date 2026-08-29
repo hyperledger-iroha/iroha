@@ -218,7 +218,10 @@ contract TairaXorSccpBridge {
         deployment.maxWrappedSupply = configuredMaxWrappedSupply;
         require(bytes32(_chainId()) == deployment.networkId, "SC_DEPLOY");
         require(configuredRouteRevision != 0, "SC_DEPLOY");
-        require(configuredMaxWrappedSupply != 0, "SC_DEPLOY");
+        require(
+            configuredMaxWrappedSupply != 0 && configuredMaxWrappedSupply <= MAX_U128,
+            "SC_DEPLOY"
+        );
         require(
             configuredVerifierPolicy.semanticProofProfileHash != bytes32(0),
             "SC_DEPLOY"
@@ -618,23 +621,21 @@ contract TairaXorSccpBridge {
         if (minting) {
             require(
                 amount <= maxWrappedSupply
-                    && expectedSupply <= maxWrappedSupply - amount,
-                "SC_TOKEN"
+                    && expectedSupply <= maxWrappedSupply - amount
             );
             require(expectedBalance <= type(uint256).max - amount);
             expectedSupply += amount;
             expectedBalance += amount;
-            require(token.mint(account, amount), "SC_TOKEN");
+            require(token.mint(account, amount));
         } else {
             require(expectedSupply >= amount && expectedBalance >= amount);
             expectedSupply -= amount;
             expectedBalance -= amount;
-            require(token.burnFrom(account, amount), "SC_TOKEN");
+            require(token.burnFrom(account, amount));
         }
-        require(
-            token.totalSupply() == expectedSupply && token.balanceOf(account) == expectedBalance,
-            "SC_TOKEN"
-        );
+        // Solidity 0.7 has no custom errors; keep this hot adapter path terse
+        // enough for the production TVM runtime-size corridor.
+        require(token.totalSupply() == expectedSupply && token.balanceOf(account) == expectedBalance);
     }
 
     /** Return the complete constant-size state needed to build a strict witness. */

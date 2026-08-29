@@ -81,7 +81,6 @@ Defaults used by the integration test:
 
 ### `/v1/sumeragi/status` (diagnostic projection)
 - `view_change_install_total`
-- `pacemaker_backpressure_deferrals_total`
 - `tx_queue_depth`
 - `tx_queue_capacity`
 - `tx_queue_retained_bytes`

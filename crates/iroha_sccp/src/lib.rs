@@ -2,8 +2,7 @@
 //!
 //! SCCP V1 supports Ethereum mainnet, BSC mainnet, TRON mainnet, and TON mainnet as complete
 //! bidirectional route families. No testnet or additional external-network profile is decodable.
-//! SCCP will not support Sub&#115;trate/Pol&#107;adot networks for now; treat that as launch scope, not
-//! pending compatibility work.
+//! No other destination family is part of the first-release protocol.
 //!
 //! The crate targets the Rust standard library unconditionally.
 //! BLS verification for Taira and BSC finality is also unconditional so Cargo
@@ -62,7 +61,7 @@ use iroha_data_model::{
         SccpBn254G1PointV1, SccpBn254G2PointV1, SccpDestinationDeploymentV1, SccpGovernedRouteV1,
         SccpGroth16Bls12381VerifyingKeyV1, SccpGroth16Bn254VerifyingKeyV1,
         SccpOutboundProofPolicyV1, SccpSemanticProofProfileV1, SccpSoraFinalityAnchorV1,
-        SccpTonAddressV1, SccpTonDestinationDeploymentV1,
+        SccpSparseMerkleWitnessV1, SccpTonAddressV1, SccpTonDestinationDeploymentV1,
         canonical_sccp_groth16_bls12381_verifying_key_bytes_v1 as canonical_structural_sccp_groth16_bls12381_verifying_key_bytes_v1,
         canonical_sccp_semantic_proof_profile_bytes_v1,
         canonical_sccp_sora_finality_anchor_bytes_v1,
@@ -211,9 +210,9 @@ pub const SCCP_TAIRA_TON_XOR_ROUTE_ID_V1: &str = "taira_ton_xor";
 pub const SCCP_TAIRA_XOR_ASSET_KEY_V1: &str = "xor";
 /// Exact Solidity/TVM value-moving route entrypoint for Taira finalization.
 pub const SCCP_FINALIZE_FROM_TAIRA_ABI_V1: &str =
-    "finalizeFromTaira(bytes,bytes32[6],bytes32,bytes)";
+    "finalizeFromTaira(bytes,bytes32[6],bytes32,bytes,bytes)";
 /// Keccak-256 selector for [`SCCP_FINALIZE_FROM_TAIRA_ABI_V1`].
-pub const SCCP_FINALIZE_FROM_TAIRA_SELECTOR_V1: [u8; 4] = [0x95, 0xd7, 0x57, 0xc4];
+pub const SCCP_FINALIZE_FROM_TAIRA_SELECTOR_V1: [u8; 4] = [0x7f, 0x4f, 0x9e, 0x5d];
 /// Printable ASCII or an exact canonical I105 account identifier.
 pub const SCCP_CODEC_CANONICAL_TEXT: u8 = 1;
 /// Raw nonzero 20-byte EVM account address.
@@ -948,9 +947,9 @@ pub enum SccpDestinationCallTargetV1 {
     norito::derive::JsonDeserialize,
 )]
 #[norito(deny_unknown_fields)]
-/// State-verified destination call derived from one closed SCCP proof artifact.
-pub struct SccpVerifiedDestinationCallV1 {
-    /// Call schema version. SCCP V1 requires `1`.
+/// State-verified destination settlement material derived from one closed SCCP proof artifact.
+pub struct SccpVerifiedDestinationMaterialV1 {
+    /// Material schema version. SCCP V1 requires `1`.
     pub version: u8,
     /// Closed proof backend selected by the governed destination family.
     pub backend: BridgeSccpDestinationProofBackendV1,
@@ -974,7 +973,7 @@ pub struct SccpVerifiedDestinationCallV1 {
     /// Domain-separated commitment to [`Self::sora_finality_anchor`].
     #[norito(with = "json_utils::hex32")]
     pub sora_finality_anchor_hash: H256,
-    /// Exact governed route contract that must receive [`Self::calldata`].
+    /// Exact governed route contract that must receive the witness-bound call.
     pub target: SccpDestinationCallTargetV1,
     /// Public statement authenticated by the Groth16 proof.
     pub public_inputs: SccpMessagePublicInputsV1,
@@ -990,11 +989,36 @@ pub struct SccpVerifiedDestinationCallV1 {
     /// Exact canonical SCCP transfer payload supplied to the destination route.
     #[norito(with = "json_utils::bytes_hex")]
     pub canonical_payload_bytes: Vec<u8>,
-    /// Exact `finalizeFromTaira` calldata derived after all state checks pass.
-    #[norito(with = "json_utils::bytes_hex")]
-    pub calldata: Vec<u8>,
     /// Original SORA message and finality bundle retained for audit and settlement.
     pub bundle: TairaSccpMessageProofV1,
+}
+/// Build exact EVM/TRON `finalizeFromTaira` calldata from verified proof
+/// material and a caller-supplied current-state replay witness.
+///
+/// TON uses [`encode_sccp_ton_verified_destination_body_boc_v1`] because its
+/// mint path spans three independent replay boundaries.
+#[must_use]
+pub fn encode_sccp_verified_destination_calldata_v1(
+    material: &SccpVerifiedDestinationMaterialV1,
+    replay_witness: &SccpSparseMerkleWitnessV1,
+) -> Option<Vec<u8>> {
+    match (&material.target, material.backend) {
+        (
+            SccpDestinationCallTargetV1::Evm { .. },
+            BridgeSccpDestinationProofBackendV1::EvmGroth16Bn254,
+        )
+        | (
+            SccpDestinationCallTargetV1::Tron { .. },
+            BridgeSccpDestinationProofBackendV1::TronGroth16Bn254,
+        ) => encode_sccp_finalize_from_taira_calldata_v1(
+            &material.proof_bytes,
+            &material.public_inputs,
+            material.statement_hash,
+            &material.canonical_payload_bytes,
+            replay_witness,
+        ),
+        _ => None,
+    }
 }
 /// Exact eleven BN254 public-signal words consumed by a destination verifier.
 #[derive(
@@ -2012,9 +2036,9 @@ pub struct SccpTonGroth16Bls12381ProofArtifactV1 {
     norito::derive::JsonDeserialize,
 )]
 #[norito(deny_unknown_fields)]
-/// Fully verified TON settlement material and exact internal-message body BOC.
-pub struct SccpVerifiedTonDestinationCallV1 {
-    /// Call schema version. SCCP V1 requires `1`.
+/// Fully verified TON settlement material.
+pub struct SccpVerifiedTonDestinationMaterialV1 {
+    /// Material schema version. SCCP V1 requires `1`.
     pub version: u8,
     /// TON BLS12-381 backend tag.
     pub backend: BridgeSccpDestinationProofBackendV1,
@@ -2037,6 +2061,8 @@ pub struct SccpVerifiedTonDestinationCallV1 {
     /// Exact route-configuration commitment.
     #[norito(with = "json_utils::hex32")]
     pub route_configuration_hash: H256,
+    /// Structured base message inputs verified by the pairing equation.
+    pub public_inputs: SccpMessagePublicInputsV1,
     /// Exact public signals verified by the pairing equation.
     pub public_signals: SccpGroth16Bls12381PublicSignalsV1,
     /// Exact statement hash.
@@ -2051,11 +2077,32 @@ pub struct SccpVerifiedTonDestinationCallV1 {
     /// Exact canonical SCCP payload bytes.
     #[norito(with = "json_utils::bytes_hex")]
     pub canonical_payload_bytes: Vec<u8>,
-    /// Canonical BOC containing one `SccpFinalizeFromTaira` message body.
-    #[norito(with = "json_utils::bytes_hex")]
-    pub internal_message_body_boc: Vec<u8>,
     /// Original message/finality bundle retained for audit and settlement.
     pub bundle: TairaSccpMessageProofV1,
+}
+/// Build the exact TON finalization body from verified proof material and
+/// three caller-supplied current-state replay witnesses.
+#[must_use]
+pub fn encode_sccp_ton_verified_destination_body_boc_v1(
+    material: &SccpVerifiedTonDestinationMaterialV1,
+    replay_witnesses: &SccpTonMintReplayWitnessesV1,
+) -> Option<Vec<u8>> {
+    if material.version != 1
+        || material.backend != BridgeSccpDestinationProofBackendV1::TonGroth16Bls12381
+        || material.network != SccpNetworkV1::TonMainnet
+    {
+        return None;
+    }
+    decode_sccp_groth16_bls12381_proof_bytes_v1(&material.proof_bytes)?;
+    encode_sccp_ton_finalize_from_taira_body_boc_after_verification_v1(
+        material.query_id,
+        &material.public_inputs,
+        &material.public_signals,
+        material.statement_hash,
+        &material.proof_bytes,
+        &material.canonical_payload_bytes,
+        replay_witnesses,
+    )
 }
 /// Return whether `domain_id` is a recognized SCCP V1 protocol domain.
 pub fn is_supported_domain(domain_id: u32) -> bool {
@@ -2449,6 +2496,86 @@ fn abi_padded_bytes(value: &[u8]) -> Vec<u8> {
     }
     out
 }
+/// Encode one sparse replay witness exactly as Solidity
+/// `abi.encode(SccpReplayWitness)`.
+///
+/// EVM and TRON route calls carry this byte string as their mandatory final
+/// `bytes` argument. The encoded value is state supplied: callers must obtain
+/// a witness for the destination contract's current shard root.
+#[must_use]
+pub fn encode_sccp_solidity_replay_witness_v1(
+    witness: &SccpSparseMerkleWitnessV1,
+) -> Option<Vec<u8>> {
+    if witness.expected_shard_root == [0; 32] || witness.validate().is_err() {
+        return None;
+    }
+    let sibling_count = witness.siblings.len();
+    let capacity = 6usize.checked_add(sibling_count)?.checked_mul(32)?;
+    let mut out = Vec::with_capacity(capacity);
+    // A single dynamic tuple is represented by one outer offset followed by
+    // its fixed head and dynamic array tail.
+    out.extend_from_slice(&abi_word_u64(32));
+    out.extend_from_slice(&witness.expected_shard_root);
+    out.extend_from_slice(&witness.prior_record_digest);
+    out.extend_from_slice(&witness.sibling_bitmap);
+    out.extend_from_slice(&abi_word_u64(4 * 32));
+    out.extend_from_slice(&abi_word_u64(u64::try_from(sibling_count).ok()?));
+    for sibling in &witness.siblings {
+        out.extend_from_slice(sibling);
+    }
+    debug_assert_eq!(out.len(), capacity);
+    Some(out)
+}
+/// Decode the sole canonical Solidity replay-witness representation.
+#[must_use]
+pub fn decode_sccp_solidity_replay_witness_v1(encoded: &[u8]) -> Option<SccpSparseMerkleWitnessV1> {
+    fn word_usize(word: &[u8]) -> Option<usize> {
+        if word.len() != 32 || word[..24].iter().any(|byte| *byte != 0) {
+            return None;
+        }
+        let mut raw = [0_u8; 8];
+        raw.copy_from_slice(&word[24..]);
+        usize::try_from(u64::from_be_bytes(raw)).ok()
+    }
+    if encoded.len() < 6 * 32
+        || encoded.len() % 32 != 0
+        || word_usize(&encoded[..32])? != 32
+        || word_usize(&encoded[128..160])? != 4 * 32
+    {
+        return None;
+    }
+    let sibling_count = word_usize(&encoded[160..192])?;
+    let expected_len = 6usize.checked_add(sibling_count)?.checked_mul(32)?;
+    if sibling_count > iroha_data_model::bridge::SCCP_REPLAY_SMT_MAX_SIBLINGS_V1
+        || encoded.len() != expected_len
+    {
+        return None;
+    }
+    let mut expected_shard_root = [0_u8; 32];
+    expected_shard_root.copy_from_slice(&encoded[32..64]);
+    let mut prior_record_digest = [0_u8; 32];
+    prior_record_digest.copy_from_slice(&encoded[64..96]);
+    let mut sibling_bitmap = [0_u8; 32];
+    sibling_bitmap.copy_from_slice(&encoded[96..128]);
+    let siblings = encoded[192..]
+        .chunks_exact(32)
+        .map(|chunk| {
+            let mut sibling = [0_u8; 32];
+            sibling.copy_from_slice(chunk);
+            sibling
+        })
+        .collect();
+    let witness = SccpSparseMerkleWitnessV1 {
+        expected_shard_root,
+        prior_record_digest,
+        sibling_bitmap,
+        siblings,
+    };
+    (witness.expected_shard_root != [0; 32]
+        && witness.validate().is_ok()
+        && encode_sccp_solidity_replay_witness_v1(&witness).as_deref() == Some(encoded))
+    .then_some(witness)
+}
 fn sccp_evm_public_input_words(public_inputs: &SccpMessagePublicInputsV1) -> [H256; 6] {
     [
         public_inputs.message_id,
@@ -2464,6 +2591,7 @@ fn encode_sccp_finalize_from_taira_calldata_v1(
     public_inputs: &SccpMessagePublicInputsV1,
     statement_hash: H256,
     canonical_payload_bytes: &[u8],
+    replay_witness: &SccpSparseMerkleWitnessV1,
 ) -> Option<Vec<u8>> {
     if proof_bytes.len() != 32 * 12
         || canonical_payload_bytes.is_empty()
@@ -2471,14 +2599,18 @@ fn encode_sccp_finalize_from_taira_calldata_v1(
     {
         return None;
     }
-    let head_len = 9usize.checked_mul(32)?;
+    let replay_witness_bytes = encode_sccp_solidity_replay_witness_v1(replay_witness)?;
+    let head_len = 10usize.checked_mul(32)?;
     let proof_tail = abi_padded_bytes(proof_bytes);
     let payload_offset = head_len.checked_add(proof_tail.len())?;
     let payload_tail = abi_padded_bytes(canonical_payload_bytes);
+    let witness_offset = payload_offset.checked_add(payload_tail.len())?;
+    let witness_tail = abi_padded_bytes(&replay_witness_bytes);
     let capacity = 4usize
         .checked_add(head_len)?
         .checked_add(proof_tail.len())?
-        .checked_add(payload_tail.len())?;
+        .checked_add(payload_tail.len())?
+        .checked_add(witness_tail.len())?;
     let mut out = Vec::with_capacity(capacity);
     out.extend_from_slice(&SCCP_FINALIZE_FROM_TAIRA_SELECTOR_V1);
     out.extend_from_slice(&abi_word_u64(u64::try_from(head_len).ok()?));
@@ -2487,8 +2619,10 @@ fn encode_sccp_finalize_from_taira_calldata_v1(
     }
     out.extend_from_slice(&statement_hash);
     out.extend_from_slice(&abi_word_u64(u64::try_from(payload_offset).ok()?));
+    out.extend_from_slice(&abi_word_u64(u64::try_from(witness_offset).ok()?));
     out.extend_from_slice(&proof_tail);
     out.extend_from_slice(&payload_tail);
+    out.extend_from_slice(&witness_tail);
     Some(out)
 }
 fn abi_read_u32_word(word: &[u8]) -> Option<u32> {
@@ -3141,7 +3275,7 @@ fn sccp_destination_proof_backend_tag_v1(backend: BridgeSccpDestinationProofBack
     match backend {
         BridgeSccpDestinationProofBackendV1::EvmGroth16Bn254 => 0,
         BridgeSccpDestinationProofBackendV1::TronGroth16Bn254 => 1,
-        BridgeSccpDestinationProofBackendV1::TonGroth16Bls12381 => 3,
+        BridgeSccpDestinationProofBackendV1::TonGroth16Bls12381 => 2,
     }
 }
 fn sccp_destination_proof_backend_supports_network_v1(
@@ -4011,7 +4145,18 @@ pub fn decode_bridge_sccp_ton_destination_proof_v1(
 #[derive(Clone, Debug)]
 struct TonBocCellV1 {
     data: Vec<u8>,
+    bit_len: usize,
     refs: Vec<usize>,
+}
+impl TonBocCellV1 {
+    fn full_bytes(data: Vec<u8>, refs: Vec<usize>) -> Self {
+        let bit_len = data.len() * 8;
+        Self {
+            data,
+            bit_len,
+            refs,
+        }
+    }
 }
 fn ton_boc_uint_width_v1(value: usize) -> Option<usize> {
     match value {
@@ -4042,7 +4187,9 @@ fn encode_ton_boc_cells_v1(cells: &[TonBocCellV1]) -> Option<Vec<u8>> {
     }
     let mut serialized_cells = Vec::new();
     for (cell_index, cell) in cells.iter().enumerate() {
-        if cell.data.len() > 127
+        let encoded_bytes = cell.bit_len.div_ceil(8);
+        if cell.bit_len > 1023
+            || cell.data.len() != encoded_bytes
             || cell.refs.len() > 4
             || cell
                 .refs
@@ -4051,9 +4198,18 @@ fn encode_ton_boc_cells_v1(cells: &[TonBocCellV1]) -> Option<Vec<u8>> {
         {
             return None;
         }
+        let remainder_bits = cell.bit_len % 8;
+        let mut data = cell.data.clone();
+        if remainder_bits != 0 {
+            let unused_mask = (1_u8 << (8 - remainder_bits)) - 1;
+            if data.last().copied()? & unused_mask != 0 {
+                return None;
+            }
+            *data.last_mut()? |= 1_u8 << (7 - remainder_bits);
+        }
         serialized_cells.push(u8::try_from(cell.refs.len()).ok()?);
-        serialized_cells.push(u8::try_from(cell.data.len().checked_mul(2)?).ok()?);
-        serialized_cells.extend_from_slice(&cell.data);
+        serialized_cells.push(u8::try_from(cell.bit_len / 8 + cell.bit_len.div_ceil(8)).ok()?);
+        serialized_cells.extend_from_slice(&data);
         for reference in &cell.refs {
             push_ton_boc_uint_v1(&mut serialized_cells, *reference, size_bytes)?;
         }
@@ -4073,19 +4229,64 @@ fn encode_ton_boc_cells_v1(cells: &[TonBocCellV1]) -> Option<Vec<u8>> {
     out.extend_from_slice(&serialized_cells);
     Some(out)
 }
+/// Current-state witnesses for the three replay boundaries crossed by a TON
+/// destination mint.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SccpTonMintReplayWitnessesV1 {
+    /// Taira-to-TON bridge admission witness.
+    pub bridge: SccpSparseMerkleWitnessV1,
+    /// Jetton-master mint admission witness.
+    pub master: SccpSparseMerkleWitnessV1,
+    /// Recipient-wallet mint-credit witness.
+    pub wallet: SccpSparseMerkleWitnessV1,
+}
+
+fn append_ton_replay_witness_cells_v1(
+    cells: &mut Vec<TonBocCellV1>,
+    witness: &SccpSparseMerkleWitnessV1,
+) -> Option<usize> {
+    if witness.expected_shard_root == [0; 32] || witness.validate().is_err() {
+        return None;
+    }
+    let root_index = cells.len();
+    let sibling_root = (!witness.siblings.is_empty()).then_some(root_index.checked_add(1)?);
+    let mut header = Vec::with_capacity(97);
+    header.extend_from_slice(&witness.expected_shard_root);
+    header.extend_from_slice(&witness.prior_record_digest);
+    header.extend_from_slice(&witness.sibling_bitmap);
+    // `cell?` stores one presence bit followed by a reference when present.
+    header.push(if sibling_root.is_some() { 0x80 } else { 0 });
+    cells.push(TonBocCellV1 {
+        data: header,
+        bit_len: 3 * 256 + 1,
+        refs: sibling_root.into_iter().collect(),
+    });
+    let chunk_count = witness.siblings.len().div_ceil(3);
+    for (chunk_index, chunk) in witness.siblings.chunks(3).enumerate() {
+        let mut data = Vec::with_capacity(chunk.len() * 32);
+        for sibling in chunk {
+            data.extend_from_slice(sibling);
+        }
+        let next = (chunk_index + 1 < chunk_count).then_some(cells.len().checked_add(1)?);
+        cells.push(TonBocCellV1::full_bytes(data, next.into_iter().collect()));
+    }
+    Some(root_index)
+}
 /// Build the canonical Bag-of-Cells representation of one
 /// `SccpFinalizeFromTaira` internal-message body.
 ///
 /// The root stores the opcode, query id, schema version, message id, and
 /// statement hash. Its references use the exact contract TL-B topology:
-/// four linked public-signal cells, a proof root referencing `A/B/C`, and a
-/// payload root referencing the fixed `50/100/100/remainder` segmentation.
+/// four linked public-signal cells, a proof root referencing `A/B/C`, a
+/// payload root referencing the fixed `50/100/100/remainder` segmentation,
+/// and the caller-supplied bridge/master/wallet replay-witness bundle.
 #[must_use]
 pub fn encode_sccp_ton_finalize_from_taira_body_boc_v1(
     query_id: u64,
     request: &SccpTonGroth16Bls12381ProofRequestV1,
     proof: &SccpGroth16Bls12381ProofV1,
     canonical_payload_bytes: &[u8],
+    replay_witnesses: &SccpTonMintReplayWitnessesV1,
 ) -> Option<Vec<u8>> {
     validate_sccp_ton_groth16_bls12381_request_v1(request)?;
     if !verify_sccp_groth16_bls12381_pairing_v1(
@@ -4095,42 +4296,46 @@ pub fn encode_sccp_ton_finalize_from_taira_body_boc_v1(
     ) {
         return None;
     }
+    let proof_bytes = canonical_sccp_groth16_bls12381_proof_bytes_v1(proof)?;
     encode_sccp_ton_finalize_from_taira_body_boc_after_verification_v1(
         query_id,
-        request,
-        proof,
+        &request.public_inputs,
+        &request.public_signals,
+        request.statement_hash,
+        &proof_bytes,
         canonical_payload_bytes,
+        replay_witnesses,
     )
 }
 fn encode_sccp_ton_finalize_from_taira_body_boc_after_verification_v1(
     query_id: u64,
-    request: &SccpTonGroth16Bls12381ProofRequestV1,
-    proof: &SccpGroth16Bls12381ProofV1,
+    public_inputs: &SccpMessagePublicInputsV1,
+    public_signals: &SccpGroth16Bls12381PublicSignalsV1,
+    statement_hash: H256,
+    proof_bytes: &[u8],
     canonical_payload_bytes: &[u8],
+    replay_witnesses: &SccpTonMintReplayWitnessesV1,
 ) -> Option<Vec<u8>> {
     if canonical_payload_bytes.len() < SCCP_TON_CANONICAL_PAYLOAD_HEADER_BYTES_V1
         || canonical_payload_bytes.len() > SCCP_TON_DESTINATION_MAX_PAYLOAD_BYTES_V1
-        || payload_hash(canonical_payload_bytes) != request.public_inputs.payload_hash
+        || payload_hash(canonical_payload_bytes) != public_inputs.payload_hash
+        || proof_bytes.len() != SCCP_TON_GROTH16_BLS12381_PROOF_BYTES_V1
     {
         return None;
     }
-    let proof_bytes = canonical_sccp_groth16_bls12381_proof_bytes_v1(proof)?;
-    let signals = request.public_signals.words();
+    let signals = public_signals.words();
     let mut root_data = Vec::with_capacity(78);
     root_data.extend_from_slice(&SCCP_TON_FINALIZE_FROM_TAIRA_OPCODE_V1.to_be_bytes());
     root_data.extend_from_slice(&query_id.to_be_bytes());
     root_data.extend_from_slice(&1_u16.to_be_bytes());
-    root_data.extend_from_slice(&request.public_inputs.message_id);
-    root_data.extend_from_slice(&request.statement_hash);
+    root_data.extend_from_slice(&public_inputs.message_id);
+    root_data.extend_from_slice(&statement_hash);
     let signal_cell = |range: core::ops::Range<usize>, next: Option<usize>| {
         let mut data = Vec::with_capacity(range.len() * 32);
         for signal in &signals[range] {
             data.extend_from_slice(signal);
         }
-        TonBocCellV1 {
-            data,
-            refs: next.into_iter().collect(),
-        }
+        TonBocCellV1::full_bytes(data, next.into_iter().collect())
     };
     let remainder = &canonical_payload_bytes[SCCP_TON_CANONICAL_PAYLOAD_HEADER_BYTES_V1..];
     let first_end = remainder
@@ -4139,52 +4344,30 @@ fn encode_sccp_ton_finalize_from_taira_body_boc_after_verification_v1(
     let second_end = remainder
         .len()
         .min(2 * SCCP_TON_CANONICAL_PAYLOAD_CHUNK_BYTES_V1);
-    let cells = vec![
-        TonBocCellV1 {
-            data: root_data,
-            refs: vec![1, 5, 9],
-        },
+    let mut cells = vec![
+        TonBocCellV1::full_bytes(root_data, vec![1, 5, 9, 14]),
         signal_cell(0..3, Some(2)),
         signal_cell(3..6, Some(3)),
         signal_cell(6..9, Some(4)),
         signal_cell(9..11, None),
-        TonBocCellV1 {
-            data: Vec::new(),
-            refs: vec![6, 7, 8],
-        },
-        TonBocCellV1 {
-            data: proof_bytes[..48].to_vec(),
-            refs: Vec::new(),
-        },
-        TonBocCellV1 {
-            data: proof_bytes[48..144].to_vec(),
-            refs: Vec::new(),
-        },
-        TonBocCellV1 {
-            data: proof_bytes[144..].to_vec(),
-            refs: Vec::new(),
-        },
-        TonBocCellV1 {
-            data: Vec::new(),
-            refs: vec![10, 11, 12, 13],
-        },
-        TonBocCellV1 {
-            data: canonical_payload_bytes[..SCCP_TON_CANONICAL_PAYLOAD_HEADER_BYTES_V1].to_vec(),
-            refs: Vec::new(),
-        },
-        TonBocCellV1 {
-            data: remainder[..first_end].to_vec(),
-            refs: Vec::new(),
-        },
-        TonBocCellV1 {
-            data: remainder[first_end..second_end].to_vec(),
-            refs: Vec::new(),
-        },
-        TonBocCellV1 {
-            data: remainder[second_end..].to_vec(),
-            refs: Vec::new(),
-        },
+        TonBocCellV1::full_bytes(Vec::new(), vec![6, 7, 8]),
+        TonBocCellV1::full_bytes(proof_bytes[..48].to_vec(), Vec::new()),
+        TonBocCellV1::full_bytes(proof_bytes[48..144].to_vec(), Vec::new()),
+        TonBocCellV1::full_bytes(proof_bytes[144..].to_vec(), Vec::new()),
+        TonBocCellV1::full_bytes(Vec::new(), vec![10, 11, 12, 13]),
+        TonBocCellV1::full_bytes(
+            canonical_payload_bytes[..SCCP_TON_CANONICAL_PAYLOAD_HEADER_BYTES_V1].to_vec(),
+            Vec::new(),
+        ),
+        TonBocCellV1::full_bytes(remainder[..first_end].to_vec(), Vec::new()),
+        TonBocCellV1::full_bytes(remainder[first_end..second_end].to_vec(), Vec::new()),
+        TonBocCellV1::full_bytes(remainder[second_end..].to_vec(), Vec::new()),
+        TonBocCellV1::full_bytes(Vec::new(), Vec::new()),
     ];
+    let bridge = append_ton_replay_witness_cells_v1(&mut cells, &replay_witnesses.bridge)?;
+    let master = append_ton_replay_witness_cells_v1(&mut cells, &replay_witnesses.master)?;
+    let wallet = append_ton_replay_witness_cells_v1(&mut cells, &replay_witnesses.wallet)?;
+    cells[14].refs = vec![bridge, master, wallet];
     encode_ton_boc_cells_v1(&cells)
 }
 fn sccp_ton_payload_amount_to_jetton_base_units_v1(
@@ -4205,7 +4388,7 @@ fn sccp_ton_payload_amount_to_jetton_base_units_v1(
         .then_some(amount)
 }
 /// Verify a closed TON destination proof against exact governed history and
-/// explicitly trusted Taira finality, then derive the canonical internal-message body BOC.
+/// explicitly trusted Taira finality.
 #[must_use]
 pub fn verify_sccp_ton_destination_proof_v1(
     proof: &BridgeSccpDestinationProofV1,
@@ -4213,7 +4396,7 @@ pub fn verify_sccp_ton_destination_proof_v1(
     governed_route: &SccpGovernedRouteV1,
     trusted_finality: &TairaBridgeFinalityProofV1,
     query_id: u64,
-) -> Option<SccpVerifiedTonDestinationCallV1> {
+) -> Option<SccpVerifiedTonDestinationMaterialV1> {
     let embedded_finality = decode_taira_bridge_finality_proof(&bundle.finality_proof)?;
     if embedded_finality != *trusted_finality {
         return None;
@@ -4234,16 +4417,10 @@ pub fn verify_sccp_ton_destination_proof_v1(
     let amount = sccp_ton_payload_amount_to_jetton_base_units_v1(transfer.amount, &deployment)?;
     let canonical_payload_bytes = canonical_sccp_payload_bytes(&bundle.payload).ok()?;
     let proof_bytes = canonical_sccp_groth16_bls12381_proof_bytes_v1(&artifact.result.proof)?;
-    let internal_message_body_boc = encode_sccp_ton_finalize_from_taira_body_boc_v1(
-        query_id,
-        &artifact.request,
-        &artifact.result.proof,
-        &canonical_payload_bytes,
-    )?;
     if !verify_taira_bridge_finality_proof_cryptographic(trusted_finality) {
         return None;
     }
-    Some(SccpVerifiedTonDestinationCallV1 {
+    Some(SccpVerifiedTonDestinationMaterialV1 {
         version: 1,
         backend: BridgeSccpDestinationProofBackendV1::TonGroth16Bls12381,
         network: governed_route.lane_id.source,
@@ -4254,12 +4431,12 @@ pub fn verify_sccp_ton_destination_proof_v1(
         amount,
         destination_binding_hash: artifact.request.destination_binding_hash,
         route_configuration_hash: artifact.request.route_configuration_hash,
+        public_inputs: artifact.request.public_inputs,
         public_signals: artifact.request.public_signals,
         statement_hash: artifact.request.statement_hash,
         request_hash: artifact.request.request_hash,
         proof_bytes,
         canonical_payload_bytes,
-        internal_message_body_boc,
         bundle: bundle.clone(),
     })
 }
@@ -4908,18 +5085,12 @@ pub fn sccp_groth16_bn254_proof_artifact_matches_governed_route_v1(
     };
     expected.as_ref() == Some(artifact)
 }
-fn build_sccp_verified_destination_call_v1(
+fn build_sccp_verified_destination_material_v1(
     bundle: &TairaSccpMessageProofV1,
     artifact: &SccpGroth16Bn254ProofArtifactV1,
     governed_route: &SccpGovernedRouteV1,
     canonical_payload_bytes: Vec<u8>,
-) -> Option<SccpVerifiedDestinationCallV1> {
-    let calldata = encode_sccp_finalize_from_taira_calldata_v1(
-        &artifact.result.proof_bytes,
-        &artifact.request.public_inputs,
-        artifact.request.statement_hash,
-        &canonical_payload_bytes,
-    )?;
+) -> Option<SccpVerifiedDestinationMaterialV1> {
     let target = match governed_route.destination {
         SccpDestinationDeploymentV1::Evm(deployment) => SccpDestinationCallTargetV1::Evm {
             network: governed_route.lane_id.source,
@@ -4934,7 +5105,7 @@ fn build_sccp_verified_destination_call_v1(
         SccpDestinationDeploymentV1::Ton(_) => return None,
     };
     let SccpPayloadV1::Transfer(transfer) = &bundle.payload;
-    Some(SccpVerifiedDestinationCallV1 {
+    Some(SccpVerifiedDestinationMaterialV1 {
         version: 1,
         backend: artifact.request.backend,
         counterparty_domain: artifact.request.target_network.domain_id(),
@@ -4951,7 +5122,6 @@ fn build_sccp_verified_destination_call_v1(
         request_hash: artifact.request.request_hash,
         proof_bytes: artifact.result.proof_bytes.clone(),
         canonical_payload_bytes,
-        calldata,
         bundle: bundle.clone(),
     })
 }
@@ -5136,11 +5306,11 @@ fn build_sccp_groth16_bn254_proof_request_from_parsed_v1(
         outbound_proof_policy,
     })
 }
-fn build_sccp_verified_ton_destination_call_from_parsed_v1(
+fn build_sccp_verified_ton_destination_material_from_parsed_v1(
     parsed: &SccpParsedDestinationProofV1,
     artifact: &SccpTonGroth16Bls12381ProofArtifactV1,
     governed_route: &SccpGovernedRouteV1,
-) -> Option<SccpVerifiedDestinationCallV1> {
+) -> Option<SccpVerifiedDestinationMaterialV1> {
     let expected_request = build_sccp_ton_groth16_bls12381_request_from_bound_finality_v1(
         &parsed.bundle,
         governed_route,
@@ -5161,13 +5331,7 @@ fn build_sccp_verified_ton_destination_call_from_parsed_v1(
     let SccpPayloadV1::Transfer(transfer) = &parsed.bundle.payload;
     decode_sccp_ton_account36_v1(&transfer.recipient)?;
     sccp_ton_payload_amount_to_jetton_base_units_v1(transfer.amount, &deployment)?;
-    let calldata = encode_sccp_ton_finalize_from_taira_body_boc_after_verification_v1(
-        0,
-        &artifact.request,
-        &artifact.result.proof,
-        &parsed.canonical_payload_bytes,
-    )?;
-    Some(SccpVerifiedDestinationCallV1 {
+    Some(SccpVerifiedDestinationMaterialV1 {
         version: 1,
         backend: BridgeSccpDestinationProofBackendV1::TonGroth16Bls12381,
         counterparty_domain: SCCP_DOMAIN_TON,
@@ -5187,26 +5351,25 @@ fn build_sccp_verified_ton_destination_call_from_parsed_v1(
         request_hash: artifact.request.request_hash,
         proof_bytes: canonical_sccp_groth16_bls12381_proof_bytes_v1(&artifact.result.proof)?,
         canonical_payload_bytes: parsed.canonical_payload_bytes.clone(),
-        calldata,
         bundle: parsed.bundle.clone(),
     })
 }
 /// Bind one parsed artifact to the exact historical governed route, evaluate
 /// one Groth16 pairing and the embedded Taira finality certificate, and derive
-/// the destination call without decoding the submitted request again.
+/// destination settlement material without decoding the submitted request again.
 ///
-/// Call material is never exposed by the parse-only phase. `trusted_finality`
+/// Settlement material is never exposed by the parse-only phase. `trusted_finality`
 /// must come from an authoritative local state boundary; exact equality with
 /// the proof-embedded value is mandatory before any pairing is evaluated.
 pub fn verify_parsed_sccp_destination_proof_v1(
     parsed: SccpParsedDestinationProofV1,
     governed_route: &SccpGovernedRouteV1,
     trusted_finality: &TairaBridgeFinalityProofV1,
-) -> Option<SccpVerifiedDestinationCallV1> {
+) -> Option<SccpVerifiedDestinationMaterialV1> {
     if parsed.finality != *trusted_finality {
         return None;
     }
-    let call = match &parsed.material {
+    let material = match &parsed.material {
         SccpParsedDestinationMaterialV1::Bn254 {
             artifact,
             public_signal_words,
@@ -5223,7 +5386,7 @@ pub fn verify_parsed_sccp_destination_proof_v1(
             {
                 return None;
             }
-            build_sccp_verified_destination_call_v1(
+            build_sccp_verified_destination_material_v1(
                 &parsed.bundle,
                 artifact,
                 governed_route,
@@ -5231,24 +5394,24 @@ pub fn verify_parsed_sccp_destination_proof_v1(
             )?
         }
         SccpParsedDestinationMaterialV1::TonBls12381 { artifact } => {
-            build_sccp_verified_ton_destination_call_from_parsed_v1(
+            build_sccp_verified_ton_destination_material_from_parsed_v1(
                 &parsed,
                 artifact,
                 governed_route,
             )?
         }
     };
-    verify_taira_bridge_finality_proof_cryptographic(trusted_finality).then_some(call)
+    verify_taira_bridge_finality_proof_cryptographic(trusted_finality).then_some(material)
 }
 /// Verify one closed bridge SCCP destination proof against the exact bundle,
 /// historical governed route, and explicitly trusted Taira finality, then
-/// derive the canonical destination call.
+/// derive the canonical destination settlement material.
 pub fn verify_sccp_destination_proof_v1(
     proof: &BridgeSccpDestinationProofV1,
     bundle: &TairaSccpMessageProofV1,
     governed_route: &SccpGovernedRouteV1,
     trusted_finality: &TairaBridgeFinalityProofV1,
-) -> Option<SccpVerifiedDestinationCallV1> {
+) -> Option<SccpVerifiedDestinationMaterialV1> {
     let parsed = parse_sccp_destination_proof_v1(proof)?;
     if parsed.bundle() != bundle {
         return None;
@@ -6230,6 +6393,10 @@ mod tests {
         artifact: SccpGroth16Bn254ProofArtifactV1,
         bridge_proof: BridgeSccpDestinationProofV1,
     }
+    const fn test_max_wrapped_supply(multiplier: u64) -> u128 {
+        TEST_MAX_OUTSTANDING_LIABILITY * multiplier as u128
+    }
+
     #[test]
     fn taira_finality_network_id_matches_the_governed_genesis_vector() {
         assert_eq!(
@@ -6409,22 +6576,35 @@ mod tests {
             let descriptor_two = bytes[cursor + 1];
             cursor += 2;
             assert_eq!(descriptor_one & 0xf8, 0, "only ordinary level-zero cells");
-            assert_eq!(
-                descriptor_two & 1,
-                0,
-                "all SCCP body cells are byte-aligned"
-            );
             let ref_count = usize::from(descriptor_one & 0x07);
-            let data_len = usize::from(descriptor_two / 2);
+            let data_len = usize::from(descriptor_two).div_ceil(2);
             let data_end = cursor
                 .checked_add(data_len)
                 .expect("test BOC data length fits usize");
-            let data = bytes[cursor..data_end].to_vec();
+            let mut data = bytes[cursor..data_end].to_vec();
             cursor = data_end;
+            let bit_len = if descriptor_two & 1 == 0 {
+                data_len * 8
+            } else {
+                let trailing = usize::try_from(
+                    data.last()
+                        .copied()
+                        .expect("partial cell has one data byte")
+                        .trailing_zeros(),
+                )
+                .expect("trailing-zero count fits usize");
+                assert!(trailing < 7, "partial cell has a canonical top-up bit");
+                *data.last_mut().expect("partial cell data") &= !(1_u8 << trailing);
+                (data_len - 1) * 8 + (7 - trailing)
+            };
             let refs = (0..ref_count)
                 .map(|_| read_test_ton_boc_uint(bytes, &mut cursor, size_bytes))
                 .collect();
-            cells.push(TonBocCellV1 { data, refs });
+            cells.push(TonBocCellV1 {
+                data,
+                bit_len,
+                refs,
+            });
         }
         assert_eq!(cursor, cells_end);
         assert_eq!(cursor, bytes.len());
@@ -6692,11 +6872,8 @@ mod tests {
     }
     #[test]
     fn ton_boc_encoder_is_canonical_and_rejects_invalid_graphs() {
-        let one_cell = encode_ton_boc_cells_v1(&[TonBocCellV1 {
-            data: vec![0xaa],
-            refs: Vec::new(),
-        }])
-        .expect("one ordinary byte-aligned TON cell encodes");
+        let one_cell = encode_ton_boc_cells_v1(&[TonBocCellV1::full_bytes(vec![0xaa], Vec::new())])
+            .expect("one ordinary byte-aligned TON cell encodes");
         assert_eq!(
             one_cell,
             vec![
@@ -6705,18 +6882,11 @@ mod tests {
         );
         assert!(encode_ton_boc_cells_v1(&[]).is_none());
         assert!(
-            encode_ton_boc_cells_v1(&[TonBocCellV1 {
-                data: vec![0; 128],
-                refs: Vec::new(),
-            }])
-            .is_none()
+            encode_ton_boc_cells_v1(&[TonBocCellV1::full_bytes(vec![0; 128], Vec::new(),)])
+                .is_none()
         );
         assert!(
-            encode_ton_boc_cells_v1(&[TonBocCellV1 {
-                data: Vec::new(),
-                refs: vec![0],
-            }])
-            .is_none()
+            encode_ton_boc_cells_v1(&[TonBocCellV1::full_bytes(Vec::new(), vec![0])]).is_none()
         );
     }
     #[test]
@@ -6791,8 +6961,7 @@ mod tests {
             mint_breaker_address: [0x81; 20],
             mint_breaker_code_hash: [0x82; 32],
             taira_to_token_multiplier: SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER,
-            max_wrapped_supply: TEST_MAX_OUTSTANDING_LIABILITY
-                * SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER as u128,
+            max_wrapped_supply: test_max_wrapped_supply(SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER),
         }
     }
     fn ton_address(byte: u8) -> SccpTonAddressV1 {
@@ -6823,8 +6992,7 @@ mod tests {
             .into(),
             outbound_proof_policy: ton_outbound_proof_policy(),
             taira_to_token_multiplier: SCCP_V1_TAIRA_TO_TON_TOKEN_MULTIPLIER,
-            max_wrapped_supply: TEST_MAX_OUTSTANDING_LIABILITY
-                * SCCP_V1_TAIRA_TO_TON_TOKEN_MULTIPLIER as u128,
+            max_wrapped_supply: test_max_wrapped_supply(SCCP_V1_TAIRA_TO_TON_TOKEN_MULTIPLIER),
         }
     }
     #[test]
@@ -7218,7 +7386,14 @@ mod tests {
                 route_address,
             } if route_address == ton_address(0x82)
         ));
-        assert!(generic.calldata.starts_with(&SCCP_TON_BOC_MAGIC_V1));
+        assert!(
+            encode_sccp_verified_destination_calldata_v1(
+                &generic,
+                &SccpSparseMerkleWitnessV1::empty_shard(),
+            )
+            .is_none(),
+            "TON material must not be projected into Solidity calldata"
+        );
         let work = sccp_destination_proof_work_counters_v1();
         assert_eq!(work.artifact_framing_decodes, 1);
         assert_eq!(work.bundle_decodes, 1);
@@ -7228,32 +7403,37 @@ mod tests {
             work.bls12381_point_decodes > 0,
             "route-bound TON verification must perform metered point validation"
         );
-        let call = verify_sccp_ton_destination_proof_v1(
+        let material = verify_sccp_ton_destination_proof_v1(
             &bridge_proof,
             &bundle,
             &route,
             &finality,
             0x0102_0304_0506_0708,
         )
-        .expect("verified TON internal-message call");
-        assert_eq!(call.network, SccpNetworkV1::TonMainnet);
-        assert_eq!(call.route_address, ton_address(0x82));
-        assert_eq!(call.recipient, recipient);
-        assert_eq!(call.amount, 3);
-        assert_eq!(call.proof_bytes, raw_proof_bytes);
-        assert!(
-            call.internal_message_body_boc
-                .starts_with(&SCCP_TON_BOC_MAGIC_V1)
-        );
-        let cells = decode_test_ton_boc_cells(&call.internal_message_body_boc);
-        assert_eq!(cells.len(), 14);
-        assert_eq!(cells[0].refs, vec![1, 5, 9]);
+        .expect("verified TON settlement material");
+        assert_eq!(material.network, SccpNetworkV1::TonMainnet);
+        assert_eq!(material.route_address, ton_address(0x82));
+        assert_eq!(material.recipient, recipient);
+        assert_eq!(material.amount, 3);
+        assert_eq!(material.proof_bytes, raw_proof_bytes);
+        let replay_witnesses = SccpTonMintReplayWitnessesV1 {
+            bridge: SccpSparseMerkleWitnessV1::empty_shard(),
+            master: SccpSparseMerkleWitnessV1::empty_shard(),
+            wallet: SccpSparseMerkleWitnessV1::empty_shard(),
+        };
+        let internal_message_body_boc =
+            encode_sccp_ton_verified_destination_body_boc_v1(&material, &replay_witnesses)
+                .expect("current-state TON witnesses build the final message body");
+        assert!(internal_message_body_boc.starts_with(&SCCP_TON_BOC_MAGIC_V1));
+        let cells = decode_test_ton_boc_cells(&internal_message_body_boc);
+        assert_eq!(cells.len(), 18);
+        assert_eq!(cells[0].refs, vec![1, 5, 9, 14]);
         assert_eq!(cells[0].data.len(), 78);
         assert_eq!(
             &cells[0].data[..4],
             &SCCP_TON_FINALIZE_FROM_TAIRA_OPCODE_V1.to_be_bytes()
         );
-        assert_eq!(&cells[0].data[4..12], &call.query_id.to_be_bytes());
+        assert_eq!(&cells[0].data[4..12], &material.query_id.to_be_bytes());
         assert_eq!(&cells[0].data[12..14], &1_u16.to_be_bytes());
         assert_eq!(&cells[0].data[14..46], &request.public_inputs.message_id);
         assert_eq!(&cells[0].data[46..], &request.statement_hash);
@@ -7297,6 +7477,13 @@ mod tests {
         assert_eq!(cells[12].data, remainder[first_end..second_end]);
         assert_eq!(cells[13].data, remainder[second_end..]);
         assert!(cells[10..=13].iter().all(|cell| cell.refs.is_empty()));
+        assert_eq!(cells[14].refs, vec![15, 16, 17]);
+        assert!(cells[14].data.is_empty());
+        for witness_cell in &cells[15..=17] {
+            assert_eq!(witness_cell.bit_len, 3 * 256 + 1);
+            assert_eq!(witness_cell.data.len(), 97);
+            assert!(witness_cell.refs.is_empty());
+        }
 
         let mut untrusted_finality = finality.clone();
         untrusted_finality.finality_artifact.height += 1;
@@ -7307,7 +7494,7 @@ mod tests {
                 &bundle,
                 &route,
                 &untrusted_finality,
-                call.query_id,
+                material.query_id,
             )
             .is_none()
         );
@@ -7323,7 +7510,7 @@ mod tests {
                 &bundle,
                 &route,
                 &finality,
-                call.query_id,
+                material.query_id,
             )
             .is_none()
         );
@@ -7509,39 +7696,56 @@ mod tests {
             decode_canonical_sccp_groth16_bn254_proof_artifact_json_v1(&artifact_json),
             Some(fixture.artifact.clone())
         );
-        let call = verify_sccp_destination_proof_v1(
+        let material = verify_sccp_destination_proof_v1(
             &fixture.bridge_proof,
             &fixture.bundle,
             &fixture.route,
             &trusted_finality(&fixture.bundle),
         )
-        .expect("verified destination call");
-        assert_eq!(call.route_revision, 1);
+        .expect("verified destination settlement material");
+        assert_eq!(material.route_revision, 1);
         assert_eq!(
-            call.route_configuration_hash,
+            material.route_configuration_hash,
             fixture
                 .route
                 .route_configuration_hash()
                 .expect("route config")
         );
         assert_eq!(
-            call.destination_binding_hash,
+            material.destination_binding_hash,
             fixture.request.destination_binding_hash
         );
-        assert_eq!(&call.calldata[..4], &SCCP_FINALIZE_FROM_TAIRA_SELECTOR_V1);
-        let proof_offset = usize::try_from(abi_read_u32_word(&call.calldata[4..36]).unwrap())
-            .expect("proof offset");
-        let payload_offset = usize::try_from(abi_read_u32_word(&call.calldata[260..292]).unwrap())
+        let replay_witness = SccpSparseMerkleWitnessV1::empty_shard();
+        let calldata = encode_sccp_verified_destination_calldata_v1(&material, &replay_witness)
+            .expect("current-state replay witness builds destination calldata");
+        assert_eq!(&calldata[..4], &SCCP_FINALIZE_FROM_TAIRA_SELECTOR_V1);
+        let proof_offset =
+            usize::try_from(abi_read_u32_word(&calldata[4..36]).unwrap()).expect("proof offset");
+        let payload_offset = usize::try_from(abi_read_u32_word(&calldata[260..292]).unwrap())
             .expect("payload offset");
-        assert_eq!(proof_offset, 9 * 32);
+        let witness_offset = usize::try_from(abi_read_u32_word(&calldata[292..324]).unwrap())
+            .expect("witness offset");
+        assert_eq!(proof_offset, 10 * 32);
         assert!(payload_offset > proof_offset);
+        assert!(witness_offset > payload_offset);
         assert_eq!(
-            &call.calldata[4 + proof_offset + 32..4 + proof_offset + 32 + call.proof_bytes.len()],
-            call.proof_bytes.as_slice()
+            &calldata[4 + proof_offset + 32..4 + proof_offset + 32 + material.proof_bytes.len()],
+            material.proof_bytes.as_slice()
+        );
+        let witness_length = usize::try_from(
+            abi_read_u32_word(&calldata[4 + witness_offset..4 + witness_offset + 32]).unwrap(),
+        )
+        .expect("witness byte length");
+        let encoded_witness = encode_sccp_solidity_replay_witness_v1(&replay_witness)
+            .expect("canonical Solidity witness");
+        assert_eq!(witness_length, encoded_witness.len());
+        assert_eq!(
+            &calldata[4 + witness_offset + 32..4 + witness_offset + 32 + witness_length],
+            encoded_witness
         );
         assert_eq!(
-            decode_canonical_sccp_payload_bytes(&call.canonical_payload_bytes),
-            Some(call.bundle.payload.clone())
+            decode_canonical_sccp_payload_bytes(&material.canonical_payload_bytes),
+            Some(material.bundle.payload.clone())
         );
     }
     #[test]
@@ -8002,8 +8206,7 @@ mod tests {
             mint_breaker_address: [0x81; 20],
             mint_breaker_code_hash: [0x82; 32],
             taira_to_token_multiplier: SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER,
-            max_wrapped_supply: TEST_MAX_OUTSTANDING_LIABILITY
-                * SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER as u128,
+            max_wrapped_supply: test_max_wrapped_supply(SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER),
         };
         let inbound = SccpLaneIdV1 {
             source: SccpNetworkV1::TronMainnet,

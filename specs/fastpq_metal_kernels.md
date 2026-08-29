@@ -16,7 +16,7 @@ The canonical implementation lives under
 `crates/fastpq_prover/metal/kernels/` and is compiled by
 `crates/fastpq_prover/build.rs` whenever `fastpq-gpu` is enabled on macOS.
 Runtime metadata (`metal_kernel_descriptors`) mirrors the information below so
-benchmarks and diagnostics can surface the same facts programmatically.【crates/fastpq_prover/metal/kernels/ntt_stage.metal:1】【crates/fastpq_prover/metal/kernels/poseidon2.metal:1】【crates/fastpq_prover/build.rs:1】【crates/fastpq_prover/src/metal.rs:248】
+benchmarks and diagnostics can surface the same facts programmatically.【crates/fastpq_prover/metal/kernels/ntt_stage.metal:1】【crates/fastpq_prover/metal/kernels/poseidon.metal:1】【crates/fastpq_prover/build.rs:1】【crates/fastpq_prover/src/metal.rs:248】
 
 ## Kernel inventory
 
@@ -25,11 +25,9 @@ benchmarks and diagnostics can surface the same facts programmatically.【crates
 | `fastpq_fft_columns` | Forward FFT over trace columns | 256 threads | 8 stages | Uses shared-memory tiles for the first stages and applies inverse scaling when the planner requests an IFFT mode.【crates/fastpq_prover/metal/kernels/ntt_stage.metal:223】【crates/fastpq_prover/src/metal.rs:262】
 | `fastpq_fft_post_tiling` | Completes FFT/IFFT/LDE after the tile depth is reached | 256 threads | — | Runs the remaining butterflies directly out of device memory and handles the final coset/inverse factors before returning to the host.【crates/fastpq_prover/metal/kernels/ntt_stage.metal:447】【crates/fastpq_prover/src/metal.rs:262】
 | `fastpq_lde_columns` | Low-degree extension across columns | 256 threads | 8 stages | Copies coefficients into the evaluation buffer, executes tiled stages with the configured coset, and leaves the final stages to `fastpq_fft_post_tiling` when needed.【crates/fastpq_prover/metal/kernels/ntt_stage.metal:341】【crates/fastpq_prover/src/metal.rs:262】
-| `poseidon_permute` | Dense-MDS Goldilocks `x^7` permutation (STATE_WIDTH = 3) | 256 threads | — | Threadgroups cache the round constants/MDS rows in threadgroup memory. Production Goldilocks dispatches assign one independent state per lane and size the grid from the actual state count; there is no artificial minimum-thread floor. The source filename remains `poseidon2.metal` for build compatibility; the construction is not Poseidon2.【crates/fastpq_prover/metal/kernels/poseidon2.metal:1】【crates/fastpq_prover/src/metal.rs:3115】
-| `poseidon_hash_columns` | Hash flattened column payloads | 256 threads | — | Absorbs each domain-separated padded payload entirely on-device and returns one state per column.【crates/fastpq_prover/metal/kernels/poseidon2.metal:353】
-| `poseidon_hash_rows` | Hash independent trace rows | 256 threads | — | Reads column-major values and writes row digests in row order using one state per lane.【crates/fastpq_prover/metal/kernels/poseidon2.metal:454】
-| `poseidon_trace_fused` | Hash trace columns into a combined leaf/parent buffer | 256 threads | — | Writes the leaf slice into the combined buffer. The host waits for global visibility before launching `poseidon_trace_parents` for the depth-1 layer.【crates/fastpq_prover/metal/kernels/poseidon2.metal:524】
-| `poseidon_trace_parents` | Compute depth-1 trace Merkle parents | 256 threads | — | Hashes adjacent leaves after the leaf pass completes; odd leaf counts duplicate the final leaf exactly like the CPU builder.【crates/fastpq_prover/metal/kernels/poseidon2.metal:596】
+| `poseidon_permute` | Dense-MDS Goldilocks `x^7` permutation (STATE_WIDTH = 3) | 256 threads | — | Threadgroups cache the round constants/MDS rows in threadgroup memory. Production Goldilocks dispatches assign one independent state per lane and size the grid from the actual state count; there is no artificial minimum-thread floor.【crates/fastpq_prover/metal/kernels/poseidon.metal:1】【crates/fastpq_prover/src/metal.rs:3115】
+| `poseidon_hash_columns` | Hash flattened column payloads | 256 threads | — | Absorbs each domain-separated padded payload entirely on-device and returns one state per column.【crates/fastpq_prover/metal/kernels/poseidon.metal:353】
+| `poseidon_hash_rows` | Hash independent trace rows | 256 threads | — | Reads column-major values and writes row digests in row order using one state per lane.【crates/fastpq_prover/metal/kernels/poseidon.metal:454】
 | `bn254_fft_columns` | BN254 FFT over one canonical-limb column | Pipeline limit | — | A cooperative single threadgroup uses packed `n - 1` stage twiddles and deterministic Montgomery arithmetic.【crates/fastpq_prover/metal/kernels/bn254.metal:257】
 | `bn254_lde_columns` | BN254 coset LDE over one canonical-limb column | Pipeline limit | — | A cooperative single threadgroup performs coset scaling and the packed-twiddle FFT; the host bounds retained command buffers while dispatching columns.【crates/fastpq_prover/metal/kernels/bn254.metal:313】
 | `bn254_poseidon_hash_words` | BN254 Poseidon word-batch hashing | 128 threads | — | Converts canonical limbs to Montgomery form, hashes the requested word slices, and returns canonical BN254 digest bytes.【crates/fastpq_prover/metal/kernels/bn254.metal:532】
@@ -55,15 +53,14 @@ the same metadata.
 
 ## Metallib generation
 
-`build.rs` first resolves and executes both `metal -v` and `metallib -v`. Unless
-`FASTPQ_SKIP_GPU_BUILD` opts out, it runs exactly
-`xcodebuild -downloadComponent MetalToolchain` only when either probe fails,
-clears the `xcrun` cache, and probes both tools again. It then compiles the
+`build.rs` first resolves and executes both `metal -v` and `metallib -v`. It
+never installs Xcode components or clears system caches. Unless
+`FASTPQ_SKIP_GPU_BUILD` opts out, an available toolchain compiles the
 individual `.metal` sources into non-empty `.air` objects and links them into a
-non-empty `fastpq.metallib`, exporting every entry point listed above. Bootstrap
-diagnostics identify initial lookup/probe failures, cache-clear or redetection
-failures, and Xcode selection/license remediation. If toolchain bootstrap or
-offline compilation fails, the runtime concatenates the prelude, parameters,
+non-empty `fastpq.metallib`, exporting every entry point listed above. Probe
+diagnostics identify Xcode selection/license remediation and the explicit
+manual component-install command. If the toolchain is unavailable or offline
+compilation fails, the runtime concatenates the prelude, parameters,
 field helpers, and all kernel translation units into self-contained MSL 2.4
 source and creates the same pipelines through
 `MTLDevice::new_library_with_source`.
@@ -77,9 +74,9 @@ For parity with CI runs you can regenerate the library manually:
 ```bash
 export OUT_DIR=$PWD/target/metal && mkdir -p "$OUT_DIR"
 xcrun metal -std=macos-metal2.4 -O3 -c -I crates/fastpq_prover/metal/include -I crates/fastpq_prover/metal/kernels crates/fastpq_prover/metal/kernels/ntt_stage.metal -o "$OUT_DIR/ntt_stage.air"
-xcrun metal -std=macos-metal2.4 -O3 -c -I crates/fastpq_prover/metal/include -I crates/fastpq_prover/metal/kernels crates/fastpq_prover/metal/kernels/poseidon2.metal -o "$OUT_DIR/poseidon2.air"
+xcrun metal -std=macos-metal2.4 -O3 -c -I crates/fastpq_prover/metal/include -I crates/fastpq_prover/metal/kernels crates/fastpq_prover/metal/kernels/poseidon.metal -o "$OUT_DIR/poseidon.air"
 xcrun metal -std=macos-metal2.4 -O3 -c -I crates/fastpq_prover/metal/include -I crates/fastpq_prover/metal/kernels crates/fastpq_prover/metal/kernels/bn254.metal -o "$OUT_DIR/bn254.air"
-xcrun metallib "$OUT_DIR/ntt_stage.air" "$OUT_DIR/poseidon2.air" "$OUT_DIR/bn254.air" -o "$OUT_DIR/fastpq.metallib"
+xcrun metallib "$OUT_DIR/ntt_stage.air" "$OUT_DIR/poseidon.air" "$OUT_DIR/bn254.air" -o "$OUT_DIR/fastpq.metallib"
 ```
 
 ## Threadgroup sizing heuristics

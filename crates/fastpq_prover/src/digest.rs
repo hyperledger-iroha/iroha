@@ -20,7 +20,6 @@ const TRACE_NODE_PHASE_V1: &[u8] = b"binary-node";
 const TRACE_EMPTY_PHASE_V1: &[u8] = b"empty-tree";
 /// Typed phase for the final shape-bound preprocessing commitment.
 const TRACE_FINAL_PHASE_V1: &[u8] = b"final-commitment";
-
 /// Compute the deterministic commitment over a transition batch.
 ///
 /// The commitment is derived by building the canonical FASTPQ trace,
@@ -233,13 +232,13 @@ mod tests {
             b"asset/xor/alice".to_vec(),
             u64::to_le_bytes(1_000).to_vec(),
             u64::to_le_bytes(1_100).to_vec(),
-            OperationKind::Mint,
+            OperationKind::MetaSet,
         ));
         batch.push(StateTransition::new(
             b"asset/xor/bob".to_vec(),
             u64::to_le_bytes(500).to_vec(),
             u64::to_le_bytes(475).to_vec(),
-            OperationKind::Burn,
+            OperationKind::MetaSet,
         ));
         batch.sort();
         batch
@@ -270,41 +269,10 @@ mod tests {
                     to_bytes(&vec![transcript]).expect("encode transcripts"),
                 );
             }
-            "mint" => {
-                batch.push(StateTransition::new(
-                    b"asset/xor/reserve".to_vec(),
-                    u64_bytes(4_096),
-                    u64_bytes(5_120),
-                    OperationKind::Mint,
-                ));
-                batch.push(StateTransition::new(
-                    b"asset/xor/treasury".to_vec(),
-                    u64_bytes(64),
-                    u64_bytes(1_024),
-                    OperationKind::Mint,
-                ));
-            }
-            "burn" => {
-                batch.push(StateTransition::new(
-                    b"asset/xor/liability".to_vec(),
-                    u64_bytes(8_192),
-                    u64_bytes(6_656),
-                    OperationKind::Burn,
-                ));
-                batch.push(StateTransition::new(
-                    b"asset/xor/supply".to_vec(),
-                    u64_bytes(16_384),
-                    u64_bytes(14_848),
-                    OperationKind::Burn,
-                ));
-            }
             other => panic!("unknown fixture {other}"),
         }
         batch.sort();
         batch
-    }
-    fn u64_bytes(value: u64) -> Vec<u8> {
-        value.to_le_bytes().to_vec()
     }
     fn sample_transfer_transcript() -> TransferTranscript {
         let mut delta = TransferDeltaTranscript {
@@ -520,8 +488,6 @@ mod tests {
         let cases = [
             ("synthetic", sample_batch()),
             ("transfer", build_fixture("transfer")),
-            ("mint", build_fixture("mint")),
-            ("burn", build_fixture("burn")),
         ];
         for (label, batch) in cases {
             let commitment = trace_commitment(&params, &batch).expect("trace commitment");

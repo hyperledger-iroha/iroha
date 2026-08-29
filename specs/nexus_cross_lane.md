@@ -201,7 +201,6 @@ retirement is refused when the candidate:
 - has ordinary queued work, live reservations, delayed work, a pending merge
   entry, or an unmerged admissible relay/certified autonomous bundle;
 - has a certified lane block without a matching global application receipt;
-- has an unrepaired application marker;
 - has an unapplied or unverifiable Native participant control, including a
   per-height receipt whose exact finality, per-height manifest proof,
   descriptor-bound latest pointer, checkpoint, or application block no longer

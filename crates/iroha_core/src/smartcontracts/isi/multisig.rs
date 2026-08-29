@@ -1,4 +1,6 @@
 //! Built-in handling for multisig instructions without requiring an executor upgrade.
+mod parliament_rekey;
+
 use crate::{
     smartcontracts::Execute,
     smartcontracts::isi::domain::isi::ensure_controller_capabilities,
@@ -436,6 +438,7 @@ fn multisig_policy_from_spec(
     MultisigPolicy::new(spec.quorum.get(), members)
         .map_err(|err| InstructionExecutionError::InvariantViolation(format!("{err}").into()))
 }
+
 fn rekey_account_id(
     state_transaction: &mut StateTransaction<'_, '_>,
     old_account: &AccountId,
@@ -497,6 +500,12 @@ fn rekey_account_id(
         .get(old_account)
         .cloned()
         .ok_or_else(|| InstructionExecutionError::Find(FindError::Account(old_account.clone())))?;
+    // Parliament candidate roots, seat assignments, proposal fingerprints, and live,
+    // operational, or retryable validation-fee bindings are immutable. Rewriting those records
+    // would invalidate their hashes, while moving only the account/citizenship record would
+    // strand member actions or release the retained bond under the replacement identity. Reject
+    // before any rekey write.
+    parliament_rekey::ensure_account_rekey_preserves_bindings(state_transaction, old_account)?;
     let mut labels_to_repoint: BTreeSet<_> = state_transaction
         .world
         .account_aliases_by_account
@@ -1278,7 +1287,13 @@ fn replace_account_id_in_governance(
             .governance_proposals
             .get_mut(&proposal_id)
         {
-            replace_account_id(&mut record.proposer, old, new);
+            // A validation-fee proposal's retained proposer is also its embedded operator and is
+            // covered by the proposal fingerprint. Live/operational/retryable records were
+            // rejected during rekey preflight; exhausted terminal records remain immutable
+            // historical evidence and must survive restore-time operator checks byte-for-byte.
+            if !parliament_rekey::is_validation_fee_proposal(&record.kind) {
+                replace_account_id(&mut record.proposer, old, new);
+            }
         }
     }
     let lock_ids: Vec<_> = state_transaction
@@ -3198,6 +3213,7 @@ mod tests {
             register_multisig_account(&mut $transaction, &$authority, &$domain, &$spec, $message)
         };
     }
+    include!("multisig/parliament_rekey_tests.rs");
     fn spec(signatories: BTreeMap<AccountId, u8>, quorum: u16) -> MultisigSpec {
         MultisigSpec {
             signatories,
@@ -3388,6 +3404,7 @@ mod tests {
             );
         }
     }
+
     #[test]
     fn register_existing_multisig_account_refreshes_ttl() {
         tx!(
@@ -6336,7 +6353,9 @@ seiyaku TriggerDispatch {
             )
             .expect("initial propose");
             tx.apply();
-            block.commit().expect("commit first block");
+            block
+                .commit_world_overlay_for_testing()
+                .expect("commit first block");
             multisig_id
         };
         let block_header = BlockHeader::new(nonzero!(2_u64), None, None, None, 3, 0);

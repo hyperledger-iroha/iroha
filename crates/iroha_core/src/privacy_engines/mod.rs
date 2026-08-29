@@ -5,6 +5,7 @@
 //! governed statement and parameter digests through [`p256::TranscriptBindingV1`].
 pub(crate) mod aggregate_stark;
 pub mod anonymous_pgc;
+pub mod atomic_private_settlement;
 pub mod bootle_lantern;
 pub mod fcmp_plus_plus;
 pub mod ivm_private_note;

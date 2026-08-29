@@ -14,11 +14,13 @@ public final class SccpNativeMessageSubmitRequest {
   private final String signatureB64;
   private final String transactionPayloadB64;
   private final String nativeProofB64;
+  private final String replayWitnessB64;
   private final Long creationTimeMs;
 
   public SccpNativeMessageSubmitRequest(
       final String authority,
       final String nativeProofB64,
+      final String replayWitnessB64,
       final FeePaymentIntent feePayment,
       final String signatureB64,
       final String transactionPayloadB64,
@@ -35,6 +37,12 @@ public final class SccpNativeMessageSubmitRequest {
         SccpSubmitEncoding.MAX_NATIVE_PROOF_BYTES,
         SccpSubmitEncoding.NATIVE_INBOUND_PROOF_SCHEMA_NAME);
     this.nativeProofB64 = nativeProofB64;
+    SccpSubmitEncoding.validateCanonicalNoritoBase64(
+        replayWitnessB64,
+        "replayWitnessB64",
+        SccpSubmitEncoding.MAX_REPLAY_WITNESS_BYTES,
+        SccpSubmitEncoding.REPLAY_WITNESS_SCHEMA_NAME);
+    this.replayWitnessB64 = replayWitnessB64;
     this.creationTimeMs = SccpSubmitEncoding.normalizeOptionalCreationTimeMs(creationTimeMs);
     SccpSubmitEncoding.validateDetachedSigningState(
         this.signatureB64, this.transactionPayloadB64, this.creationTimeMs);
@@ -43,8 +51,9 @@ public final class SccpNativeMessageSubmitRequest {
   public SccpNativeMessageSubmitRequest(
       final String authority,
       final String nativeProofB64,
+      final String replayWitnessB64,
       final FeePaymentIntent feePayment) {
-    this(authority, nativeProofB64, feePayment, null, null, null);
+    this(authority, nativeProofB64, replayWitnessB64, feePayment, null, null, null);
   }
 
   public String authority() {
@@ -53,6 +62,10 @@ public final class SccpNativeMessageSubmitRequest {
 
   public String nativeProofB64() {
     return nativeProofB64;
+  }
+
+  public String replayWitnessB64() {
+    return replayWitnessB64;
   }
 
   public FeePaymentIntent feePayment() {
@@ -77,6 +90,7 @@ public final class SccpNativeMessageSubmitRequest {
     json.put("authority", authority);
     json.put("fee_payment", feePayment.toJsonMap());
     json.put("native_proof_b64", nativeProofB64);
+    json.put("replay_witness_b64", replayWitnessB64);
     if (signatureB64 != null) json.put("signature_b64", signatureB64);
     if (transactionPayloadB64 != null) {
       json.put("transaction_payload_b64", transactionPayloadB64);

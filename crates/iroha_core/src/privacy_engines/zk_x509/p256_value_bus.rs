@@ -30,8 +30,7 @@ use super::{
     p256_trace::{P256EcdsaTraceMaterialV1, compile_p256_ecdsa_topology_v1},
 };
 use crate::privacy_engines::transparent_stark::{
-    GoldilocksDigest384V1, GoldilocksFieldV1 as F, TransparentStarkErrorV1,
-    TransparentTranscriptV1,
+    GoldilocksDigest384V1, GoldilocksFieldV1 as F, TransparentStarkErrorV1, TransparentTranscriptV1,
 };
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use std::sync::Arc;
@@ -3142,6 +3141,7 @@ mod tests {
         ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1, ZkX509CredentialMainPreAuxV1,
         derive_zk_x509_credential_pre_aux_binding_v1,
     };
+    use crate::privacy_engines::zk_x509::stark::zk_x509_test_digest384_v1;
     #[derive(Clone)]
     struct ProgramV1 {
         initial: Vec<P256InitialValueBindingV1>,
@@ -3373,14 +3373,14 @@ mod tests {
             [seed; 32],
             [seed.wrapping_add(1); 32],
             core::array::from_fn::<_, ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1, _>(|index| {
-                [seed.wrapping_add(index as u8).wrapping_add(2); 32]
+                zk_x509_test_digest384_v1(seed.wrapping_add(index as u8).wrapping_add(2))
             }),
         );
         derive_zk_x509_credential_pre_aux_binding_v1(
             main,
-            [seed.wrapping_add(0x20); 32],
-            [seed.wrapping_add(0x40); 32],
-            [seed.wrapping_add(0x60); 32],
+            zk_x509_test_digest384_v1(seed.wrapping_add(0x20)),
+            zk_x509_test_digest384_v1(seed.wrapping_add(0x40)),
+            zk_x509_test_digest384_v1(seed.wrapping_add(0x60)),
         )
         .expect("opaque X5B1 binding")
         .main_post_base()

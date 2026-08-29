@@ -7,14 +7,16 @@
 //! reach a maintenance boundary fail closed because block headers do not commit
 //! the post-maintenance active-witness roster or witness permission mapping.
 use super::{
-    H256, SCCP_CODEC_TRON_ADDRESS21, SccpPayloadV1, canonical_sccp_payload_bytes, keccak256_bytes,
-    payload_hash, prefixed_blake2b, read_protobuf_varint_at, sccp_lane_id_hash_v1,
+    H256, SCCP_CODEC_TRON_ADDRESS21, SccpPayloadV1, canonical_sccp_payload_bytes,
+    decode_sccp_solidity_replay_witness_v1, encode_sccp_solidity_replay_witness_v1,
+    keccak256_bytes, payload_hash, prefixed_blake2b, read_protobuf_varint_at, sccp_lane_id_hash_v1,
     sccp_lane_source_event_digest_v1, sccp_message_id, sccp_network_tag_v1,
     sccp_source_identity_hash_v1, tron_recoverable_signature_for_recovery,
     verify_sccp_payload_structure,
 };
 use alloc::{collections::BTreeSet, vec::Vec};
 use iroha_crypto::EcdsaSecp256k1Sha256;
+use iroha_data_model::bridge::SccpSparseMerkleWitnessV1;
 use iroha_data_model::bridge::sccp::{
     SccpLaneIdV1, SccpNetworkV1, SccpSourceEmitterV1, SccpSourceIdentityV1,
 };
@@ -22,7 +24,7 @@ use sha2::{Digest, Sha256};
 const TRON_NATIVE_ANCHOR_PREFIX_V1: &[u8] = b"sccp:tron:native-dpos-anchor:v1";
 const TRON_TRIGGER_SMART_CONTRACT_TYPE_URL_V1: &[u8] =
     b"type.googleapis.com/protocol.TriggerSmartContract";
-const TRON_NATIVE_TRANSFER_CALL_ABI_V1: &[u8] = b"transferToTaira(bytes,uint256,uint64)";
+const TRON_NATIVE_TRANSFER_CALL_ABI_V1: &[u8] = b"transferToTaira(bytes,uint256,uint64,bytes)";
 const TRON_TAIRA_TO_TOKEN_SCALE_V1: u64 = 1_000_000_000;
 const TRON_ADDRESS_BYTES: usize = 21;
 const TRON_SIGNATURE_BYTES: usize = 65;
@@ -57,6 +59,7 @@ pub fn canonical_tron_native_transfer_call_data(
     sora_recipient: &[u8],
     taira_amount: u128,
     nonce: u64,
+    replay_witness: &SccpSparseMerkleWitnessV1,
 ) -> Option<Vec<u8>> {
     if sora_recipient.is_empty()
         || sora_recipient.len() > 256
@@ -65,19 +68,35 @@ pub fn canonical_tron_native_transfer_call_data(
     {
         return None;
     }
-    let padded_len = sora_recipient.len().checked_add(31)? & !31;
+    let replay_witness = encode_sccp_solidity_replay_witness_v1(replay_witness)?;
+    let recipient_padded_len = sora_recipient.len().checked_add(31)? & !31;
+    let witness_padded_len = replay_witness.len().checked_add(31)? & !31;
+    let head_len = 4usize * 32;
+    let recipient_tail_len = 32usize.checked_add(recipient_padded_len)?;
+    let witness_offset = head_len.checked_add(recipient_tail_len)?;
     let selector = keccak256_bytes(TRON_NATIVE_TRANSFER_CALL_ABI_V1);
-    let mut out = Vec::with_capacity(4 + 128 + padded_len);
+    let capacity = 4usize
+        .checked_add(head_len)?
+        .checked_add(recipient_tail_len)?
+        .checked_add(32)?
+        .checked_add(witness_padded_len)?;
+    let mut out = Vec::with_capacity(capacity);
     out.extend_from_slice(&selector[..4]);
     out.extend_from_slice(&[0; 31]);
-    out.push(96);
+    out.push(u8::try_from(head_len).ok()?);
     out.extend_from_slice(&scaled_tron_token_amount_word(taira_amount));
     out.extend_from_slice(&[0; 24]);
     out.extend_from_slice(&nonce.to_be_bytes());
     out.extend_from_slice(&[0; 24]);
+    out.extend_from_slice(&u64::try_from(witness_offset).ok()?.to_be_bytes());
+    out.extend_from_slice(&[0; 24]);
     out.extend_from_slice(&u64::try_from(sora_recipient.len()).ok()?.to_be_bytes());
     out.extend_from_slice(sora_recipient);
-    out.resize(4 + 128 + padded_len, 0);
+    out.resize(4 + head_len + recipient_tail_len, 0);
+    out.extend_from_slice(&[0; 24]);
+    out.extend_from_slice(&u64::try_from(replay_witness.len()).ok()?.to_be_bytes());
+    out.extend_from_slice(&replay_witness);
+    out.resize(capacity, 0);
     Some(out)
 }
 fn scaled_tron_token_amount_word(taira_amount: u128) -> [u8; 32] {
@@ -967,6 +986,30 @@ fn parse_tron_any(bytes: &[u8]) -> Result<&[u8], TronNativeTransactionError> {
     }
     value.ok_or_else(transaction_encoding_error)
 }
+fn abi_word_usize(word: &[u8]) -> Option<usize> {
+    if word.len() != 32 || word[..24].iter().any(|byte| *byte != 0) {
+        return None;
+    }
+    let mut raw = [0_u8; 8];
+    raw.copy_from_slice(&word[24..]);
+    usize::try_from(u64::from_be_bytes(raw)).ok()
+}
+fn tron_native_transfer_replay_witness(call_data: &[u8]) -> Option<SccpSparseMerkleWitnessV1> {
+    const HEAD_BYTES: usize = 4 * 32;
+    const WITNESS_OFFSET_WORD_START: usize = 4 + 3 * 32;
+    if call_data.len() < 4 + HEAD_BYTES
+        || call_data[..4] != keccak256_bytes(TRON_NATIVE_TRANSFER_CALL_ABI_V1)[..4]
+    {
+        return None;
+    }
+    let witness_offset =
+        abi_word_usize(call_data.get(WITNESS_OFFSET_WORD_START..WITNESS_OFFSET_WORD_START + 32)?)?;
+    let length_start = 4usize.checked_add(witness_offset)?;
+    let data_start = length_start.checked_add(32)?;
+    let encoded_len = abi_word_usize(call_data.get(length_start..data_start)?)?;
+    let data_end = data_start.checked_add(encoded_len)?;
+    decode_sccp_solidity_replay_witness_v1(call_data.get(data_start..data_end)?)
+}
 fn parse_tron_trigger_sccp_call(
     bytes: &[u8],
     expected_contract: [u8; 20],
@@ -1022,13 +1065,17 @@ fn parse_tron_trigger_sccp_call(
     if owner != expected_sender {
         return Err(TronNativeTransactionError::WrongCaller);
     }
+    let data = data.ok_or(TronNativeTransactionError::WrongCallData)?;
+    let replay_witness = tron_native_transfer_replay_witness(data)
+        .ok_or(TronNativeTransactionError::WrongCallData)?;
     let expected_data = canonical_tron_native_transfer_call_data(
         expected_recipient,
         expected_amount,
         expected_nonce,
+        &replay_witness,
     )
     .ok_or(TronNativeTransactionError::WrongCallData)?;
-    if data != Some(expected_data.as_slice()) {
+    if data != expected_data.as_slice() {
         return Err(TronNativeTransactionError::WrongCallData);
     }
     Ok((owner, contract))
@@ -1566,6 +1613,7 @@ mod tests {
             &test_transfer().recipient,
             test_transfer().amount,
             test_transfer().nonce,
+            &SccpSparseMerkleWitnessV1::empty_shard(),
         )
         .unwrap();
         let mut trigger = Vec::new();
@@ -2081,14 +2129,15 @@ mod tests {
     #[test]
     fn transfer_call_binds_nonce_and_scales_taira_units_to_trc20_base_units() {
         let recipient = b"alice@taira";
-        let call = canonical_tron_native_transfer_call_data(recipient, 77, 7)
-            .expect("canonical scaled transfer call");
+        let replay_witness = SccpSparseMerkleWitnessV1::empty_shard();
+        let call = canonical_tron_native_transfer_call_data(recipient, 77, 7, &replay_witness)
+            .expect("canonical scaled transfer call with replay witness");
         assert_eq!(
             &call[..4],
             &keccak256_bytes(TRON_NATIVE_TRANSFER_CALL_ABI_V1)[..4]
         );
         assert_eq!(&call[4..35], &[0; 31]);
-        assert_eq!(call[35], 96);
+        assert_eq!(call[35], 128);
         let mut expected_amount_word = [0u8; 32];
         expected_amount_word[16..].copy_from_slice(&(77_u128 * 1_000_000_000).to_be_bytes());
         assert_eq!(&call[36..68], &expected_amount_word);
@@ -2096,18 +2145,52 @@ mod tests {
         assert_eq!(&call[68..92], &[0; 24]);
         assert_eq!(&call[92..100], &7_u64.to_be_bytes());
         assert_eq!(&call[100..124], &[0; 24]);
+        let witness_offset =
+            usize::try_from(u64::from_be_bytes(call[124..132].try_into().unwrap()))
+                .expect("witness offset");
         assert_eq!(
-            &call[124..132],
+            &call[156..164],
             &u64::try_from(recipient.len()).unwrap().to_be_bytes()
         );
-        assert_eq!(&call[132..132 + recipient.len()], recipient);
-        assert!(
-            canonical_tron_native_transfer_call_data(recipient, u128::MAX, u64::MAX - 1).is_some()
+        assert_eq!(&call[164..164 + recipient.len()], recipient);
+        let witness_len_start = 4 + witness_offset;
+        let witness_len = usize::try_from(u64::from_be_bytes(
+            call[witness_len_start + 24..witness_len_start + 32]
+                .try_into()
+                .unwrap(),
+        ))
+        .expect("witness byte length");
+        let witness_start = witness_len_start + 32;
+        assert_eq!(
+            decode_sccp_solidity_replay_witness_v1(
+                &call[witness_start..witness_start + witness_len]
+            ),
+            Some(replay_witness.clone())
         );
-        assert!(canonical_tron_native_transfer_call_data(recipient, 1, u64::MAX).is_none());
-        assert!(canonical_tron_native_transfer_call_data(recipient, 0, 7).is_none());
-        assert!(canonical_tron_native_transfer_call_data(&[], 1, 7).is_none());
-        assert!(canonical_tron_native_transfer_call_data(&[b'a'; 257], 1, 7).is_none());
+        assert_eq!(
+            tron_native_transfer_replay_witness(&call),
+            Some(replay_witness.clone())
+        );
+        assert!(
+            canonical_tron_native_transfer_call_data(
+                recipient,
+                u128::MAX,
+                u64::MAX - 1,
+                &replay_witness,
+            )
+            .is_some()
+        );
+        assert!(
+            canonical_tron_native_transfer_call_data(recipient, 1, u64::MAX, &replay_witness)
+                .is_none()
+        );
+        assert!(
+            canonical_tron_native_transfer_call_data(recipient, 0, 7, &replay_witness).is_none()
+        );
+        assert!(canonical_tron_native_transfer_call_data(&[], 1, 7, &replay_witness).is_none());
+        assert!(
+            canonical_tron_native_transfer_call_data(&[b'a'; 257], 1, 7, &replay_witness).is_none()
+        );
     }
     #[test]
     fn native_transaction_authenticates_full_success_result_call_and_single_leaf_root() {
@@ -2573,7 +2656,7 @@ mod tests {
         );
     }
     #[test]
-    fn native_transaction_rejects_legacy_selector_and_unscaled_amount() {
+    fn native_transaction_rejects_retired_selectors_and_unscaled_amount() {
         let contract = [0x33; 20];
         let statement = test_transaction_statement();
         let valid = transaction_bytes(contract, 1, TRON_TRIGGER_SMART_CONTRACT_TYPE_URL_V1);
@@ -2581,25 +2664,31 @@ mod tests {
             &test_transfer().recipient,
             test_transfer().amount,
             test_transfer().nonce,
+            &SccpSparseMerkleWitnessV1::empty_shard(),
         )
         .expect("canonical scaled transfer call");
         let call_offset = valid
             .windows(canonical_call.len())
             .position(|window| window == canonical_call)
             .expect("embedded transfer call");
-        let mut old_selector = valid.clone();
-        old_selector[call_offset..call_offset + 4]
-            .copy_from_slice(&keccak256_bytes(b"transferToTaira(bytes,uint256)")[..4]);
-        let old_selector_root = sha256_bytes(&old_selector);
-        assert_eq!(
-            verify_test_transaction(
-                &single_transaction_proof(old_selector),
-                old_selector_root,
-                contract,
-                &statement,
-            ),
-            Err(TronNativeTransactionError::WrongCallData)
-        );
+        for retired_abi in [
+            b"transferToTaira(bytes,uint256)".as_slice(),
+            b"transferToTaira(bytes,uint256,uint64)".as_slice(),
+        ] {
+            let mut retired_selector = valid.clone();
+            retired_selector[call_offset..call_offset + 4]
+                .copy_from_slice(&keccak256_bytes(retired_abi)[..4]);
+            let retired_selector_root = sha256_bytes(&retired_selector);
+            assert_eq!(
+                verify_test_transaction(
+                    &single_transaction_proof(retired_selector),
+                    retired_selector_root,
+                    contract,
+                    &statement,
+                ),
+                Err(TronNativeTransactionError::WrongCallData)
+            );
+        }
         let mut legacy_unscaled = valid.clone();
         legacy_unscaled[call_offset + 36..call_offset + 52].fill(0);
         legacy_unscaled[call_offset + 52..call_offset + 68]

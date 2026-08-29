@@ -77,7 +77,6 @@
     "crates/iroha_core/src/sumeragi/v2_runtime.rs": 17217,
     "crates/iroha_core/src/telemetry.rs": 12919,
     "crates/iroha_core/src/tx.rs": 11875,
-    "crates/iroha_core/src/validation_fee.rs": 7855,
     "crates/iroha_core/src/zk.rs": 13527,
     "crates/iroha_core/src/zk/confidential_v2.rs": 6805,
     "crates/iroha_core/src/zk/kagemusha_recursion_adapter.rs": 13317,

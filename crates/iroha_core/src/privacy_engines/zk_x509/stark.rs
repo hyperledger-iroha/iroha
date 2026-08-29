@@ -252,14 +252,13 @@ use crate::privacy_engines::{
     transparent_stark::{
         GOLDILOCKS_GENERATOR_V1, GoldilocksDigest384V1, GoldilocksFieldV1 as F,
         GoldilocksFp4V1 as E, TransparentStarkDigestContextV1, TransparentStarkErrorV1,
-        TransparentTranscriptV1, append_u16_v1, append_u32_v1,
-        goldilocks_batch_invert_v1, goldilocks_digest384_frame_v1,
-        goldilocks_primitive_root_v1, verify_grinding_nonce_v1,
+        TransparentTranscriptV1, append_u16_v1, append_u32_v1, goldilocks_batch_invert_v1,
+        goldilocks_digest384_frame_v1, goldilocks_primitive_root_v1, verify_grinding_nonce_v1,
     },
 };
-use iroha_data_model::privacy::{IrohaZkX509StarkP256StatementV1, PrivacyProtocolIdV1};
 #[cfg(test)]
 use iroha_data_model::privacy::PrivacyStatementV1;
+use iroha_data_model::privacy::{IrohaZkX509StarkP256StatementV1, PrivacyProtocolIdV1};
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) use main_aggregate::commit_zk_x509_main_base_phase_v1_with_rng;
 #[cfg(test)]
@@ -466,6 +465,11 @@ pub(crate) const ZK_X509_DIGEST_CONTEXT_V1: TransparentStarkDigestContextV1 =
         PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
         b"iroha-zk-x509-stark-p256-release-profile-v1",
     );
+#[cfg(test)]
+/// Construct one canonical six-lane digest for cross-module zk-X509 tests.
+pub(crate) fn zk_x509_test_digest384_v1(seed: u8) -> GoldilocksDigest384V1 {
+    GoldilocksDigest384V1::new([u64::from(seed); 6]).expect("test digest is canonical")
+}
 #[cfg(test)]
 const DER_TERMINAL_CLAIMS_DOMAIN: &[u8] = b"iroha:privacy:zk-x509:stark:der-terminal-claims:v1";
 const MAIN_TERMINAL_CLAIMS_DOMAIN_V1: &[u8] =
@@ -2318,7 +2322,7 @@ fn main_log19_query_schedule_digest_v1(
         0,
         &[&encoded],
     )
-        .map_err(map_transparent_error_v1)
+    .map_err(map_transparent_error_v1)
 }
 impl MainLog19VerifierQueryScheduleV1 {
     fn from_query_coordinates_v1(query_coordinates: &[usize]) -> Result<Self, ZkX509StarkErrorV1> {
@@ -2498,8 +2502,7 @@ impl ZkX509MainBaseCommitmentSessionV1 {
             layout: layout.clone(),
             consensus_context_digest,
             main_profile_digest,
-            roots: [GoldilocksDigest384V1::default();
-                ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1],
+            roots: [GoldilocksDigest384V1::default(); ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1],
             recorded: [false; ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1],
             next_group: 0,
         };
@@ -2523,13 +2526,9 @@ impl ZkX509MainBaseCommitmentSessionV1 {
                 .iter()
                 .enumerate()
                 .any(|(index, recorded)| *recorded != (index < self.next_group))
-            || self
-                .roots
-                .iter()
-                .enumerate()
-                .any(|(index, root)| {
-                    (*root == GoldilocksDigest384V1::default()) != (index >= self.next_group)
-                })
+            || self.roots.iter().enumerate().any(|(index, root)| {
+                (*root == GoldilocksDigest384V1::default()) != (index >= self.next_group)
+            })
         {
             return Err(ZkX509StarkErrorV1::ProfileMismatch);
         }
@@ -3593,7 +3592,7 @@ fn io_public_digest_v1(
         0,
         &[&encoding],
     )
-        .map_err(|_| ZkX509StarkErrorV1::InvalidStatement)
+    .map_err(|_| ZkX509StarkErrorV1::InvalidStatement)
 }
 #[cfg(test)]
 fn der_public_digest_v1(
@@ -4834,7 +4833,7 @@ fn row_tree_v1(
         columns,
         rows,
     )
-        .map_err(map_aggregate_error_v1)
+    .map_err(map_aggregate_error_v1)
 }
 #[cfg(test)]
 fn composition_tree_v1(
@@ -6072,7 +6071,7 @@ pub(crate) fn prove_zk_x509_io_segmented_stark_v1_with_rng<R: TryRngCore>(
     )?;
     let mut trace_group_proofs = vec![TraceGroupProofV1 {
         base_root: base_tree.root(),
-        aux_root: [0; 32],
+        aux_root: GoldilocksDigest384V1::default(),
         base_frontier: Vec::new(),
         aux_frontier: Vec::new(),
     }];
@@ -6191,7 +6190,7 @@ pub(crate) fn prove_zk_x509_io_segmented_stark_v1_with_rng<R: TryRngCore>(
         &grinding_state,
         ZK_X509_GRINDING_BITS_V1,
     )
-        .map_err(map_transparent_error_v1)?;
+    .map_err(map_transparent_error_v1)?;
     absorb_grinding_nonce_v1(&mut transcript, grinding_nonce)?;
     let queries = query_indices_v1(&transcript, &aggregate_layout)?
         .into_iter()
@@ -6286,7 +6285,7 @@ pub(crate) fn prove_zk_x509_projection_segmented_stark_v1_with_rng<R: TryRngCore
     )?;
     let mut trace_group_proofs = vec![TraceGroupProofV1 {
         base_root: base_tree.root(),
-        aux_root: [0; 32],
+        aux_root: GoldilocksDigest384V1::default(),
         base_frontier: Vec::new(),
         aux_frontier: Vec::new(),
     }];
@@ -6394,7 +6393,7 @@ pub(crate) fn prove_zk_x509_projection_segmented_stark_v1_with_rng<R: TryRngCore
         &grinding_state,
         ZK_X509_GRINDING_BITS_V1,
     )
-        .map_err(map_transparent_error_v1)?;
+    .map_err(map_transparent_error_v1)?;
     absorb_grinding_nonce_v1(&mut transcript, grinding_nonce)?;
     let queries = query_indices_v1(&transcript, &aggregate_layout)?
         .into_iter()
@@ -6500,7 +6499,7 @@ fn build_zk_x509_der_segmented_stark_proof_v1_with_rng<R: TryRngCore>(
     .map_err(map_aggregate_error_v1)?;
     let mut trace_group_proofs = vec![TraceGroupProofV1 {
         base_root: base_commitment.commitment.root,
-        aux_root: [0; 32],
+        aux_root: GoldilocksDigest384V1::default(),
         base_frontier: Vec::new(),
         aux_frontier: Vec::new(),
     }];
@@ -6674,7 +6673,7 @@ fn build_zk_x509_der_segmented_stark_proof_v1_with_rng<R: TryRngCore>(
         &grinding_state,
         ZK_X509_GRINDING_BITS_V1,
     )
-        .map_err(map_transparent_error_v1)?;
+    .map_err(map_transparent_error_v1)?;
     absorb_grinding_nonce_v1(&mut transcript, grinding_nonce)?;
     let query_indices = query_indices_v1(&transcript, &aggregate_layout)?;
     let query_skeleton = query_indices

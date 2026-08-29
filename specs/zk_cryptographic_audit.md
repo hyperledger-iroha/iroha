@@ -305,7 +305,7 @@ round arity, and use a real smaller final subgroup instead of repeat-last
 padding. The old schedule then folded all the way to one value, under which any
 committed function has a valid terminal scalar and the degree check is vacuous.
 The prover now stops with the complete terminal domain still present
-(`2^19 -> ... -> 2` for balanced and `2^20 -> ... -> 2^4` for latency). The
+(`2^19 -> ... -> 2` for the sole V1 profile). The
 verifier derives the conservative exclusive bound `2 * N_trace` from the
 quadratic V1 residue ledger, reduces it alongside each fold, authenticates the
 single terminal leaf, inverse-interpolates all terminal evaluations, and rejects
@@ -318,8 +318,9 @@ its base constraints, and recomputes its trace/AIR commitments. That current
 boundary prevents the FRI layer from becoming the sole semantic batch check.
 A commitment/transcript design with at least 128-bit security and an independent
 quantitative analysis of the implemented FRI profile remain release blockers.
-The catalogue now honestly declares a base-field challenge, zero grinding, and
-a 32-bit target instead of claiming unimplemented Fp2/grinding.
+The implementation now exposes no inert Fp2, security-label, or grinding
+parameter fields. The base-field construction has no grinding step and its
+one-field commitment remains limited to roughly 32-bit collision security.
 
 ### ZK-AUDIT-11: Exact Halo2 production labels bypassed the outer envelope
 
@@ -362,10 +363,10 @@ importantly, two valid ZK-ACE identity roots with the same nonzero blinding were
 found to produce the same legacy identity commitment.
 
 CPU, CUDA, Metal, public-data digests, and the ZK-ACE AIR now use `x^7`, for
-which the exponent is coprime to `p - 1`. The current FASTPQ parameter versions
-are `5` and `6`; regenerated domain roots/coset offsets and the coherent
-trace/LDE relation prevent old proofs from being reinterpreted, and
-known-answer plus legacy-collision regressions pin the new construction.
+which the exponent is coprime to `p - 1`. FastPQ V1 accepts only its exact named
+canonical parameter records; regenerated domain roots/coset offsets and the
+coherent trace/LDE relation are pinned by known-answer and collision
+regressions. There is no independent pre-release parameter-version field.
 Descriptors now call it dense-MDS Goldilocks Poseidon `x^7`; it is not
 Poseidon2.
 
@@ -722,7 +723,8 @@ metadata, proof registration, and guardrailed dispatch. Production
 `ZkRosterV1` joins fail closed until the roster statement binds the signed
 participant authority; see ZK-AUDIT-21.
 
-FASTPQ `verify_with_limits()` checks protocol/parameter versions, batch consistency,
+FASTPQ `verify_with_limits()` checks the sole V1 protocol and exact named canonical
+parameter record, batch consistency,
 proof size/shape, trace commitment, expected public I/O, nonzero LDE domain, transcript
 challenges, lookup/AIR coefficients, sampled query indices, Merkle paths, AIR row
 widths, next-row openings, FRI roots, folded values, and query chains. A bounded

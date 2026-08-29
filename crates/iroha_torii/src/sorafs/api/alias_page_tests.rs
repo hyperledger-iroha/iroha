@@ -58,7 +58,9 @@ fn alias_page_projects_only_the_bounded_selection() {
             .insert(record.alias_id(), record);
     }
     tx.apply();
-    block.commit().expect("commit bounded alias page fixture");
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit bounded alias page fixture");
     let view = state.view();
     let page = collect_alias_page(view.world(), 0, 1, None, None)
         .expect("unselected broken alias must not be projected");

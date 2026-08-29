@@ -54,6 +54,8 @@ const DESTINATION_PROOF_NORITO_TYPE =
   "iroha_data_model::bridge::BridgeSccpDestinationProofV1";
 const NATIVE_MESSAGE_PROOF_NORITO_TYPE =
   "iroha_sccp::native_admission::SccpNativeInboundMessageProofV1";
+const REPLAY_WITNESS_NORITO_TYPE =
+  "iroha_data_model::bridge::sccp_replay::SccpSparseMerkleWitnessV1";
 const PUBLIC_SIGNAL_SCHEMA_HASH =
   "7567439F41173D6745A3D51923CB70371ACC7D66F23CEFB4100D6D5D7A432CBB";
 const SORA_TAIRA_CHAIN_ID_HASH =
@@ -368,6 +370,10 @@ function destinationProofB64(options) {
 
 function nativeProofB64(options) {
   return b64(sccpNoritoFrame(NATIVE_MESSAGE_PROOF_NORITO_TYPE, options));
+}
+
+function replayWitnessB64(options) {
+  return b64(sccpNoritoFrame(REPLAY_WITNESS_NORITO_TYPE, options));
 }
 
 function abiWord(value) {
@@ -2135,13 +2141,15 @@ test("submit DTOs preserve the exact prepared transaction for detached signing",
     authority: AUTHORITY,
     fee_payment: feePayment(),
     native_proof_b64: nativeProof,
-  })), ["authority", "fee_payment", "native_proof_b64"]);
+    replay_witness_b64: replayWitnessB64(),
+  })), ["authority", "fee_payment", "native_proof_b64", "replay_witness_b64"]);
   const native = normalizeBridgeMessageSubmitPayload({
     authority: AUTHORITY,
     fee_payment: feePayment(),
     signature_b64: "AQ==",
     transaction_payload_b64: transactionPayload,
     native_proof_b64: nativeProof,
+    replay_witness_b64: replayWitnessB64(),
     creation_time_ms: 10,
   });
   assert.equal(native.transaction_payload_b64, transactionPayload);
@@ -2212,6 +2220,7 @@ test("submit DTOs bind the exact proof schema and require zero header padding", 
     authority: AUTHORITY,
     fee_payment: feePayment(),
     native_proof_b64: nativeProofB64(),
+    replay_witness_b64: replayWitnessB64(),
   }));
   assert.throws(() => normalizeBridgeProofSubmitPayload({
     authority: AUTHORITY,
@@ -2229,6 +2238,7 @@ test("submit DTOs bind the exact proof schema and require zero header padding", 
     authority: AUTHORITY,
     fee_payment: feePayment(),
     native_proof_b64: destinationProofB64(),
+    replay_witness_b64: replayWitnessB64(),
   }), /schema hash/u);
   for (const padding of [1, 8, 64]) {
     assert.throws(() => normalizeBridgeProofSubmitPayload({
@@ -2240,6 +2250,7 @@ test("submit DTOs bind the exact proof schema and require zero header padding", 
       authority: AUTHORITY,
       fee_payment: feePayment(),
       native_proof_b64: nativeProofB64({ padding }),
+      replay_witness_b64: replayWitnessB64(),
     }), /exactly 0 bytes/u);
   }
   assert.throws(() => normalizeBridgeProofSubmitPayload({
@@ -2257,12 +2268,21 @@ test("submit DTOs bind the exact proof schema and require zero header padding", 
       authority,
       fee_payment: feePayment(),
       native_proof_b64: nativeProofB64(),
+      replay_witness_b64: replayWitnessB64(),
     }), /discriminant|prefix/u);
   }
 });
 
 test("bridge response and JSON parser reject contradictions, aliases, and duplicate fields", () => {
   assert.equal(normalizeSccpBridgeSubmitResponse(preparedResponse()).submitted, false);
+  assert.equal(normalizeSccpBridgeSubmitResponse(preparedResponse({
+    backend: "evm-groth16-bn254-v1",
+  })).backend, "evm-groth16-bn254-v1");
+  assert.equal(normalizeSccpBridgeSubmitResponse(preparedResponse({
+    backend: "ton-groth16-bls12381-v1",
+    counterparty_domain: 4,
+    counterparty_chain: "ton-mainnet",
+  })).backend, "ton-groth16-bls12381-v1");
   assert.equal(normalizeSccpBridgeSubmitResponse({
     ...preparedResponse(),
     submitted: true,
@@ -2301,6 +2321,11 @@ test("bridge response and JSON parser reject contradictions, aliases, and duplic
     /duplicate/u,
   );
   assert.throws(() => parseSccpJsonObject(`${json}{}`), /trailing/u);
+  assert.equal(
+    parseSccpJsonObject('{"value":9007199254740993}').value,
+    9007199254740993n,
+  );
+  assert.throws(() => parseSccpJsonObject('{"value":1.0}'), /canonical integers/u);
 });
 
 function response(

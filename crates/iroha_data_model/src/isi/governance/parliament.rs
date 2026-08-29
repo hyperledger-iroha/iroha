@@ -383,7 +383,7 @@ pub struct ParliamentFreezeTimedOvnCorpusV1 {
     /// One nonempty chunk of exact canonical 2,858-byte timed-OVN ballot records.
     ///
     /// The chunk contains at most
-    /// [`PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1`] records. Core derives
+    /// [`crate::governance::types::PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1`] records. Core derives
     /// its starting survivor offset from committed state, verifies every proof,
     /// and advances a replay-checkable rolling aggregate. The final chunk must
     /// complete exact survivor coverage and causes automatic corpus sealing
@@ -916,15 +916,6 @@ mod tests {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive checked Parliament instruction fixture account");
         AccountId::new(key_pair.public_key().clone())
-    }
-
-    #[test]
-    fn timed_ovn_required_chunk_blocks_round_up_at_the_wire_bound() {
-        assert_eq!(parliament_timed_ovn_required_chunk_blocks_v1(0), 0);
-        assert_eq!(parliament_timed_ovn_required_chunk_blocks_v1(1), 1);
-        assert_eq!(parliament_timed_ovn_required_chunk_blocks_v1(32), 1);
-        assert_eq!(parliament_timed_ovn_required_chunk_blocks_v1(33), 2);
-        assert_eq!(parliament_timed_ovn_required_chunk_blocks_v1(1_000), 32);
     }
 
     #[test]

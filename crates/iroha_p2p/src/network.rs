@@ -12712,7 +12712,10 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
     }
     fn set_reply_source_acl(&mut self, acl: message::UpdateAcl) {
         if let Err(error) = parse_acl_cidrs(&acl.allow_cidrs, &acl.deny_cidrs) {
-            iroha_logger::warn!(reason = %error, "Rejected malformed P2P ACL update");
+            iroha_logger::error!(
+                reason = %error,
+                "Rejected malformed runtime ACL update; retaining applied policy"
+            );
             return;
         }
         let prior = self.pending_reply_source_authority.clone();
@@ -12773,7 +12776,10 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
         let (allow_nets, deny_nets) = match parse_acl_cidrs(&acl.allow_cidrs, &acl.deny_cidrs) {
             Ok(parsed) => parsed,
             Err(error) => {
-                iroha_logger::warn!(reason = %error, "Rejected malformed P2P ACL update");
+                iroha_logger::error!(
+                    reason = %error,
+                    "Refused to apply malformed staged runtime ACL; retaining applied policy"
+                );
                 return;
             }
         };
@@ -24913,6 +24919,22 @@ mod tests {
             network.relay_hub_candidates.contains(hub.id()),
             "broadening the ACL should immediately restore the configured hub dial identity"
         );
+    }
+    #[test]
+    fn malformed_runtime_acl_update_preserves_applied_policy() {
+        let_test_network!(network);
+        let denied_key = random_node_key_pair().public_key().clone();
+
+        network.set_reply_source_acl(message::UpdateAcl {
+            allowlist_only: true,
+            deny_keys: vec![denied_key.clone()],
+            allow_cidrs: vec!["10.0.0.0/33".to_owned()],
+            ..message::UpdateAcl::default()
+        });
+
+        assert!(!network.allowlist_only);
+        assert!(!network.deny_keys.contains(&denied_key));
+        assert!(network.pending_reply_source_authority.is_empty());
     }
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn peer_message_hub_forwards_direct_frame_with_decremented_ttl() {

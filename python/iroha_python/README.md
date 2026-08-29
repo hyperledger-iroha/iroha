@@ -185,6 +185,18 @@ bytes. Python and PyO3 expose no generic owner-bundle, witness, polynomial,
 blinding, or secret constructor. ZK-X509 retains its separate authenticated
 profile-owned transport.
 
+Atomic private settlement uses a purpose-separated command family on that
+same authenticated process boundary. Call
+`import_private_settlement_credential()` with an owner-only native `APWB`
+file, then `prove_private_settlement()` with only canonical public Norito
+manifest, fixed-shape statement, encrypted audit capsule, governed audit
+policy, genesis hash, and height. Python receives the public statement,
+self-verified proof, encrypted capsule, and binding digests; note spending
+secrets, audit plaintext, and membership paths are decoded and wiped in Rust
+and never cross the Python API or worker pipe. Settlement handles occupy a
+separate opaque namespace and are consumed even when terminal native proving
+fails.
+
 Reserve-backed ZK-ACE, Orchard, and private-IVM actions always bind one exact
 transparent balance bucket. Their worker-owned public action requires
 `public_balance_scope`; its only accepted spellings are

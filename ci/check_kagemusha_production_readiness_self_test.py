@@ -2361,7 +2361,7 @@ static_mutations = (
     (KAGAMI, '.is_none_or(|delta| delta > 1)', '.is_none_or(|_| false)',
         'reject an unbounded staged-parent link transition',
         D_PROMOTION_PUBLISH),
-    (KAGAMI, '.is_some_and(|delta| delta <= 2)', '.is_some_and(|_| true)',
+    (KAGAMI, '.is_none_or(|delta| delta > 2)', '.is_none_or(|_| false)',
         'reject an unbounded two-leaf staging transition', D_PROMOTION_PUBLISH),
     (KAGAMI, '.checked_sub(staging_snapshot.links)',
         '.checked_sub(complete_staging_snapshot.links)',

@@ -33,17 +33,6 @@ use std::{
     vec::Vec,
 };
 
-/// Maximum number of contiguous timed-OVN ballot records accepted by one transition.
-pub const PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1: usize = 32;
-
-/// Return the minimum number of blocks needed to admit a configured ballot corpus.
-#[must_use]
-pub fn parliament_timed_ovn_required_chunk_blocks_v1(max_corpus_entries: u32) -> u64 {
-    let chunk_records = u64::try_from(PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1)
-        .expect("the V1 Parliament ballot chunk bound fits u64");
-    u64::from(max_corpus_entries).div_ceil(chunk_records)
-}
-
 /// Voting mode for a referendum.
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, iroha_schema::IntoSchema,
@@ -529,6 +518,7 @@ pub struct DeployContractProposal {
     /// ABI version (currently `1`).
     pub abi_version: AbiVersion,
     /// Optional manifest provenance used to attest the manifest when absent on-chain.
+    #[norito(required)]
     pub manifest_provenance: Option<ManifestProvenance>,
 }
 /// Proposal payload for scheduling a runtime upgrade through governance.
@@ -1037,8 +1027,26 @@ pub const MAX_PARLIAMENT_SORTITION_RETRIES_V1: u32 = 16;
 pub const MAX_PARLIAMENT_BALLOT_RETRIES_V1: u32 = 16;
 /// Hard protocol ceiling for registration, survivor, and ballot corpora.
 pub const MAX_PARLIAMENT_BALLOT_CORPUS_ENTRIES_V1: u32 = 1_000;
+/// Maximum number of contiguous timed-OVN ballot records accepted by one lifecycle transition.
+///
+/// The complete survivor corpus may contain up to the protocol-wide participant cap. Core derives
+/// each chunk's starting survivor offset from committed state and seals the corpus automatically
+/// after exact survivor coverage, so callers cannot skip, overlap, or reorder records.
+pub const PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1: usize = 32;
 /// Hard protocol ceiling for one canonical framed Parliament attempt state.
 pub const MAX_PARLIAMENT_ATTEMPT_STATE_BYTES_V1: usize = 16 * 1024 * 1024;
+
+/// Return the minimum number of blocks needed to admit a configured ballot corpus.
+///
+/// V1 charges enough gas that a block is only guaranteed to carry one maximum-sized chunk. A
+/// commitment window shorter than this ceiling would therefore make its configured maximum corpus
+/// objectively impossible to seal under the standard default-genesis block gas limit.
+#[must_use]
+pub fn parliament_timed_ovn_required_chunk_blocks_v1(max_corpus_entries: u32) -> u64 {
+    let chunk_records = u64::try_from(PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1)
+        .expect("the V1 Parliament ballot chunk bound fits u64");
+    u64::from(max_corpus_entries).div_ceil(chunk_records)
+}
 
 #[derive(Encode)]
 struct ParliamentCandidateRootPreimageV1 {
@@ -1696,8 +1704,9 @@ pub enum BallotAttemptStatusV1 {
 /// Deterministic reason a private ballot attempt ended without a result.
 ///
 /// Invalid caller-supplied proofs are rejected and never become lifecycle
-/// state. These reasons are reserved for phase expiry derived from persisted
-/// state or an unavailable finalized release pulse after its immutable height.
+/// state. These reasons are reserved for objective terminal conditions derived
+/// from persisted state: phase expiry, an unavailable finalized release pulse,
+/// or insufficient fresh Confirmation Jury capacity after a narrow opening.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -1720,6 +1729,9 @@ pub enum ParliamentBallotFailureKindV1 {
     /// The aggregate was not validly opened before its immutable deadline.
     #[codec(index = 4)]
     OpeningDeadlineExpired,
+    /// Fewer than two eligible citizens remained outside the sealed Policy Jury.
+    #[codec(index = 5)]
+    ConfirmationJuryCapacityUnavailable,
 }
 
 /// Closed audit classification for every Parliament body that ends without a result.
@@ -1758,6 +1770,9 @@ pub enum ParliamentNoResultKindV1 {
     /// The current body exhausted its bounded future-pulse sortition retries.
     #[codec(index = 7)]
     SortitionRetriesExhausted,
+    /// A narrow Policy Jury result had fewer than two eligible fresh confirmers.
+    #[codec(index = 8)]
+    ConfirmationJuryCapacityUnavailable,
 }
 
 impl From<ParliamentBallotFailureKindV1> for ParliamentNoResultKindV1 {
@@ -1777,6 +1792,9 @@ impl From<ParliamentBallotFailureKindV1> for ParliamentNoResultKindV1 {
             }
             ParliamentBallotFailureKindV1::OpeningDeadlineExpired => {
                 Self::BallotOpeningDeadlineExpired
+            }
+            ParliamentBallotFailureKindV1::ConfirmationJuryCapacityUnavailable => {
+                Self::ConfirmationJuryCapacityUnavailable
             }
         }
     }
@@ -2954,6 +2972,14 @@ mod tests {
         AccountId::new(checked_random_keypair().public_key().clone())
     }
     #[test]
+    fn timed_ovn_required_chunk_blocks_round_up_at_the_wire_bound() {
+        assert_eq!(parliament_timed_ovn_required_chunk_blocks_v1(0), 0);
+        assert_eq!(parliament_timed_ovn_required_chunk_blocks_v1(1), 1);
+        assert_eq!(parliament_timed_ovn_required_chunk_blocks_v1(32), 1);
+        assert_eq!(parliament_timed_ovn_required_chunk_blocks_v1(33), 2);
+        assert_eq!(parliament_timed_ovn_required_chunk_blocks_v1(1_000), 32);
+    }
+    #[test]
     fn contract_hash_roundtrips_hex() {
         let raw = [0xAAu8; 32];
         let hash = ContractCodeHash::new(raw);
@@ -3059,6 +3085,10 @@ mod tests {
                 ParliamentBallotFailureKindV1::OpeningDeadlineExpired,
                 ParliamentNoResultKindV1::BallotOpeningDeadlineExpired,
             ),
+            (
+                ParliamentBallotFailureKindV1::ConfirmationJuryCapacityUnavailable,
+                ParliamentNoResultKindV1::ConfirmationJuryCapacityUnavailable,
+            ),
         ];
         for (index, (ballot, audit)) in cases.into_iter().enumerate() {
             assert_eq!(ParliamentNoResultKindV1::from(ballot), audit);
@@ -3068,9 +3098,10 @@ mod tests {
                     .expect("ballot failure index fits u32")
                     .to_le_bytes()
             );
+            let expected_audit_index = if index == 5 { 8 } else { index + 2 };
             assert_eq!(
                 audit.encode(),
-                u32::try_from(index + 2)
+                u32::try_from(expected_audit_index)
                     .expect("audit failure index fits u32")
                     .to_le_bytes()
             );

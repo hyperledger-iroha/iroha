@@ -13,6 +13,8 @@ use zeroize::Zeroize;
 pub const PRIVATE_NOTE_MAX_INPUTS_V1: usize = 2;
 /// Maximum created notes in the sole compiled relation.
 pub const PRIVATE_NOTE_MAX_OUTPUTS_V1: usize = 2;
+/// Exact output count admitted by the crate-private three-output relation seam.
+pub(crate) const PRIVATE_NOTE_THREE_OUTPUT_COUNT_V1: usize = 3;
 /// Exact depth of the ledger's proof-managed note tree.
 pub const PRIVATE_NOTE_TREE_DEPTH_V1: usize = 32;
 /// Number of deterministic bytecode instructions.
@@ -34,6 +36,70 @@ pub(super) const ACCUMULATOR_NODE_DOMAIN_V1: &[u8] =
 pub(crate) const IVM_PRIVATE_NOTE_ENGINE_DESCRIPTOR_V1: &[u8] = b"iroha-ivm-private-note-stark-v1:native-rust:first-release:inputs=1..2:outputs=1..2:values=u128-checked:tree=sha256-depth32-exact-ledger-domains:program=IPN1-v1-fixed16x8:registers=8xu128:r4=reserved-zero:producer=typed-redacted-witness+relation-preflight+rand0.9-trycrypto-fixed64-reservoir-zeroize-poison-error-or-unwind-policy-v1+self-verify:wallet=x25519+xchacha20poly1305:wallet-rng=prover-rng:fixed64-reservoir:fallible-refill:reject-initial-constant-half+periods-1,2,4,8,16,32:retain-tail-max63:zeroize+poison-on-error-or-unwind:v1:successor=validator-derived-only:legacy=unrepresentable";
 /// Exact hash framing used inside the AIR and native differential oracle.
 pub(crate) const IVM_PRIVATE_NOTE_HASH_PROFILE_DESCRIPTOR_V1: &[u8] = b"sha256:frame-domain-len-u16be-field-count-u16be-field-len-u64be:program-id+authority+commitment+stable-pool-program-nullifier:proof-managed-leaf-and-level-node-exact-v1";
+/// Closed relation controls shared with the atomic private-settlement adapter.
+///
+/// The public IVM private-note API always selects [`Self::IvmPrivateNote`]. The
+/// crate-private three-output variant retains the same hash, VM, tree, and AIR
+/// machinery while fixing the only intentional semantic differences: exact
+/// two-input/three-output geometry, balanced-only value flow, zero-valued
+/// input/output cover notes, and verifier-selected output memo digests.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PrivateNoteRelationProfileV1 {
+    /// Canonical public one-or-two input/output IVM private-note relation.
+    IvmPrivateNote,
+    /// Exact balanced two-input/three-output relation with fixed output memos.
+    ExactThreeOutputBalanced {
+        /// Verifier-fixed memo digest for each canonical output slot.
+        output_memo_digests: [[u8; 32]; PRIVATE_NOTE_THREE_OUTPUT_COUNT_V1],
+    },
+}
+impl PrivateNoteRelationProfileV1 {
+    /// Canonical public IVM private-note relation profile.
+    pub(crate) const IVM_PRIVATE_NOTE: Self = Self::IvmPrivateNote;
+
+    /// Construct the exact three-output balanced profile.
+    pub(crate) const fn exact_three_output_balanced(
+        output_memo_digests: [[u8; 32]; PRIVATE_NOTE_THREE_OUTPUT_COUNT_V1],
+    ) -> Self {
+        Self::ExactThreeOutputBalanced {
+            output_memo_digests,
+        }
+    }
+
+    pub(super) const fn allows_zero_output_values(self) -> bool {
+        matches!(self, Self::ExactThreeOutputBalanced { .. })
+    }
+
+    pub(super) const fn allows_zero_input_values(self) -> bool {
+        matches!(self, Self::ExactThreeOutputBalanced { .. })
+    }
+
+    fn accepts_shape(self, input_count: usize, output_count: usize) -> bool {
+        match self {
+            Self::IvmPrivateNote => {
+                (1..=PRIVATE_NOTE_MAX_INPUTS_V1).contains(&input_count)
+                    && (1..=PRIVATE_NOTE_MAX_OUTPUTS_V1).contains(&output_count)
+            }
+            Self::ExactThreeOutputBalanced { .. } => {
+                input_count == PRIVATE_NOTE_MAX_INPUTS_V1
+                    && output_count == PRIVATE_NOTE_THREE_OUTPUT_COUNT_V1
+            }
+        }
+    }
+
+    pub(super) fn fixed_output_memo(self, output: usize) -> Option<[u8; 32]> {
+        match self {
+            Self::IvmPrivateNote => None,
+            Self::ExactThreeOutputBalanced {
+                output_memo_digests,
+            } => output_memo_digests.get(output).copied(),
+        }
+    }
+
+    fn requires_balanced_value(self) -> bool {
+        matches!(self, Self::ExactThreeOutputBalanced { .. })
+    }
+}
 /// Deterministic private-program opcode.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -318,6 +384,50 @@ impl PrivateNotePlaintextV1 {
         validate_note(&note)?;
         Ok(note)
     }
+    /// Construct an output note under one crate-private relation profile.
+    ///
+    /// The three-output profile permits a zero atomic value for a cover slot,
+    /// but never permits a zero authority, `rho`, or blinding. Its memo must
+    /// equal the verifier-fixed digest for `output_index`.
+    pub(crate) fn new_profiled_output_v1(
+        value: u128,
+        spending_authority: [u8; 32],
+        rho: [u8; 32],
+        blinding: [u8; 32],
+        memo_digest: [u8; 32],
+        output_index: usize,
+        profile: PrivateNoteRelationProfileV1,
+    ) -> Result<Self, IvmPrivateNoteRelationErrorV1> {
+        let note = Self {
+            value,
+            spending_authority,
+            rho,
+            blinding,
+            memo_digest,
+        };
+        validate_output_note_v1(&note, output_index, profile)?;
+        Ok(note)
+    }
+
+    /// Construct an input note under one crate-private relation profile.
+    pub(crate) fn new_profiled_input_v1(
+        value: u128,
+        spending_authority: [u8; 32],
+        rho: [u8; 32],
+        blinding: [u8; 32],
+        memo_digest: [u8; 32],
+        profile: PrivateNoteRelationProfileV1,
+    ) -> Result<Self, IvmPrivateNoteRelationErrorV1> {
+        let note = Self {
+            value,
+            spending_authority,
+            rho,
+            blinding,
+            memo_digest,
+        };
+        validate_input_note_v1(&note, profile)?;
+        Ok(note)
+    }
     /// Return the atomic value.
     #[must_use]
     pub const fn value(&self) -> u128 {
@@ -397,6 +507,28 @@ impl IvmPrivateNoteInputWitnessV1 {
             authentication_path,
         })
     }
+    /// Construct one input under a crate-private relation profile.
+    pub(crate) fn new_with_profile_v1(
+        note: PrivateNotePlaintextV1,
+        spending_secret: [u8; 32],
+        leaf_position: u32,
+        authentication_path: [[u8; 32]; PRIVATE_NOTE_TREE_DEPTH_V1],
+        profile: PrivateNoteRelationProfileV1,
+    ) -> Result<Self, IvmPrivateNoteRelationErrorV1> {
+        validate_input_note_v1(&note, profile)?;
+        if is_zero(&spending_secret) || authentication_path.iter().any(|sibling| is_zero(sibling)) {
+            return Err(IvmPrivateNoteRelationErrorV1::ZeroWitnessComponent);
+        }
+        if derive_note_authority_v1(&spending_secret)? != note.spending_authority {
+            return Err(IvmPrivateNoteRelationErrorV1::SpendingAuthorityMismatch);
+        }
+        Ok(Self {
+            note,
+            spending_secret,
+            leaf_position,
+            authentication_path,
+        })
+    }
     /// Borrow the committed plaintext.
     #[must_use]
     pub const fn note(&self) -> &PrivateNotePlaintextV1 {
@@ -416,6 +548,13 @@ impl IvmPrivateNoteInputWitnessV1 {
     pub fn commitment_v1(&self) -> Result<PrivacyCommitmentV1, IvmPrivateNoteRelationErrorV1> {
         derive_note_commitment_v1(&self.note)
     }
+    /// Derive the public commitment opened by this input under a crate-private profile.
+    pub(crate) fn commitment_with_profile_v1(
+        &self,
+        profile: PrivateNoteRelationProfileV1,
+    ) -> Result<PrivacyCommitmentV1, IvmPrivateNoteRelationErrorV1> {
+        derive_profiled_input_commitment_v1(&self.note, profile)
+    }
     /// Derive the stable public nullifier for this input and pool/program.
     ///
     /// The spending secret remains encapsulated by the redacted witness and is
@@ -425,6 +564,20 @@ impl IvmPrivateNoteInputWitnessV1 {
         statement: &IrohaIvmPrivateNoteStarkStatementV1,
     ) -> Result<PrivacyNullifierV1, IvmPrivateNoteRelationErrorV1> {
         let commitment = self.commitment_v1()?;
+        derive_note_nullifier_v1(
+            statement,
+            &self.spending_secret,
+            self.note.rho(),
+            commitment,
+        )
+    }
+    /// Derive the public nullifier under a crate-private relation profile.
+    pub(crate) fn nullifier_with_profile_v1(
+        &self,
+        statement: &IrohaIvmPrivateNoteStarkStatementV1,
+        profile: PrivateNoteRelationProfileV1,
+    ) -> Result<PrivacyNullifierV1, IvmPrivateNoteRelationErrorV1> {
+        let commitment = self.commitment_with_profile_v1(profile)?;
         derive_note_nullifier_v1(
             statement,
             &self.spending_secret,
@@ -458,6 +611,15 @@ impl IvmPrivateNoteOutputWitnessV1 {
     /// Rejects malformed note material.
     pub fn new(note: PrivateNotePlaintextV1) -> Result<Self, IvmPrivateNoteRelationErrorV1> {
         validate_note(&note)?;
+        Ok(Self { note })
+    }
+    /// Construct one output under a crate-private relation profile.
+    pub(crate) fn new_with_profile_v1(
+        note: PrivateNotePlaintextV1,
+        output_index: usize,
+        profile: PrivateNoteRelationProfileV1,
+    ) -> Result<Self, IvmPrivateNoteRelationErrorV1> {
+        validate_output_note_v1(&note, output_index, profile)?;
         Ok(Self { note })
     }
     /// Borrow the committed plaintext.
@@ -506,6 +668,37 @@ impl IvmPrivateNoteWitnessV1 {
             || outputs.len() > PRIVATE_NOTE_MAX_OUTPUTS_V1
         {
             return Err(IvmPrivateNoteRelationErrorV1::WitnessShape);
+        }
+        Ok(Self {
+            program,
+            inputs,
+            outputs,
+        })
+    }
+    /// Construct a witness for one crate-private relation profile.
+    pub(crate) fn new_with_profile_v1(
+        program: PrivateProgramV1,
+        inputs: Vec<IvmPrivateNoteInputWitnessV1>,
+        outputs: Vec<IvmPrivateNoteOutputWitnessV1>,
+        profile: PrivateNoteRelationProfileV1,
+    ) -> Result<Self, IvmPrivateNoteRelationErrorV1> {
+        program.validate()?;
+        if !profile.accepts_shape(inputs.len(), outputs.len()) {
+            return Err(IvmPrivateNoteRelationErrorV1::WitnessShape);
+        }
+        for input in &inputs {
+            validate_input_note_v1(&input.note, profile)?;
+            if is_zero(&input.spending_secret)
+                || input
+                    .authentication_path
+                    .iter()
+                    .any(|sibling| is_zero(sibling))
+            {
+                return Err(IvmPrivateNoteRelationErrorV1::ZeroWitnessComponent);
+            }
+        }
+        for (index, output) in outputs.iter().enumerate() {
+            validate_output_note_v1(&output.note, index, profile)?;
         }
         Ok(Self {
             program,
@@ -728,6 +921,32 @@ pub fn derive_note_commitment_v1(
     note: &PrivateNotePlaintextV1,
 ) -> Result<PrivacyCommitmentV1, IvmPrivateNoteRelationErrorV1> {
     validate_note(note)?;
+    derive_note_commitment_with_memo_v1(note, note.memo_digest)
+}
+/// Derive an output commitment under one crate-private relation profile.
+pub(crate) fn derive_profiled_output_commitment_v1(
+    note: &PrivateNotePlaintextV1,
+    output_index: usize,
+    profile: PrivateNoteRelationProfileV1,
+) -> Result<PrivacyCommitmentV1, IvmPrivateNoteRelationErrorV1> {
+    validate_output_note_v1(note, output_index, profile)?;
+    let memo = profile
+        .fixed_output_memo(output_index)
+        .unwrap_or(note.memo_digest);
+    derive_note_commitment_with_memo_v1(note, memo)
+}
+/// Derive an input commitment under one crate-private relation profile.
+pub(crate) fn derive_profiled_input_commitment_v1(
+    note: &PrivateNotePlaintextV1,
+    profile: PrivateNoteRelationProfileV1,
+) -> Result<PrivacyCommitmentV1, IvmPrivateNoteRelationErrorV1> {
+    validate_input_note_v1(note, profile)?;
+    derive_note_commitment_with_memo_v1(note, note.memo_digest)
+}
+fn derive_note_commitment_with_memo_v1(
+    note: &PrivateNotePlaintextV1,
+    memo_digest: [u8; 32],
+) -> Result<PrivacyCommitmentV1, IvmPrivateNoteRelationErrorV1> {
     Ok(PrivacyCommitmentV1::new(
         sha256_invocation_v1(
             Sha256InvocationRoleV1::OutputCommitment { output: 0 },
@@ -737,7 +956,7 @@ pub fn derive_note_commitment_v1(
                 &note.spending_authority,
                 &note.rho,
                 &note.blinding,
-                &note.memo_digest,
+                &memo_digest,
             ],
         )?
         .digest,
@@ -773,7 +992,13 @@ pub fn derive_note_nullifier_v1(
     ))
 }
 fn validate_note(note: &PrivateNotePlaintextV1) -> Result<(), IvmPrivateNoteRelationErrorV1> {
-    if note.value == 0
+    validate_note_material_v1(note, false)
+}
+fn validate_note_material_v1(
+    note: &PrivateNotePlaintextV1,
+    allow_zero_value: bool,
+) -> Result<(), IvmPrivateNoteRelationErrorV1> {
+    if (!allow_zero_value && note.value == 0)
         || is_zero(&note.spending_authority)
         || is_zero(&note.rho)
         || is_zero(&note.blinding)
@@ -781,6 +1006,26 @@ fn validate_note(note: &PrivateNotePlaintextV1) -> Result<(), IvmPrivateNoteRela
         return Err(IvmPrivateNoteRelationErrorV1::ZeroWitnessComponent);
     }
     Ok(())
+}
+fn validate_output_note_v1(
+    note: &PrivateNotePlaintextV1,
+    output_index: usize,
+    profile: PrivateNoteRelationProfileV1,
+) -> Result<(), IvmPrivateNoteRelationErrorV1> {
+    validate_note_material_v1(note, profile.allows_zero_output_values())?;
+    if profile
+        .fixed_output_memo(output_index)
+        .is_some_and(|expected| expected != note.memo_digest)
+    {
+        return Err(IvmPrivateNoteRelationErrorV1::CommitmentMismatch);
+    }
+    Ok(())
+}
+fn validate_input_note_v1(
+    note: &PrivateNotePlaintextV1,
+    profile: PrivateNoteRelationProfileV1,
+) -> Result<(), IvmPrivateNoteRelationErrorV1> {
+    validate_note_material_v1(note, profile.allows_zero_input_values())
 }
 fn is_zero(bytes: &[u8]) -> bool {
     bytes.iter().all(|byte| *byte == 0)
@@ -846,8 +1091,35 @@ pub(super) fn accumulator_node_invocation_v1(
         preimage,
     })
 }
+
+#[cfg(test)]
+pub(crate) fn accumulator_leaf_digest_for_testing_v1(
+    statement: &IrohaIvmPrivateNoteStarkStatementV1,
+    input: u8,
+    commitment: PrivacyCommitmentV1,
+) -> Result<[u8; 32], IvmPrivateNoteRelationErrorV1> {
+    accumulator_leaf_invocation_v1(statement, input, commitment).map(|invocation| invocation.digest)
+}
+
+#[cfg(test)]
+pub(crate) fn accumulator_node_digest_for_testing_v1(
+    input: u8,
+    level: u8,
+    left: &[u8; 32],
+    right: &[u8; 32],
+) -> Result<[u8; 32], IvmPrivateNoteRelationErrorV1> {
+    accumulator_node_invocation_v1(input, level, left, right).map(|invocation| invocation.digest)
+}
+
 pub(super) fn validate_statement_v1(
     statement: &IrohaIvmPrivateNoteStarkStatementV1,
+) -> Result<(), IvmPrivateNoteRelationErrorV1> {
+    validate_statement_with_profile_v1(statement, PrivateNoteRelationProfileV1::IVM_PRIVATE_NOTE)
+}
+/// Validate a statement against one crate-private relation profile.
+pub(crate) fn validate_statement_with_profile_v1(
+    statement: &IrohaIvmPrivateNoteStarkStatementV1,
+    profile: PrivateNoteRelationProfileV1,
 ) -> Result<(), IvmPrivateNoteRelationErrorV1> {
     if statement.context.transaction_intent_digest.is_zero()
         || statement.context.parameter_id.is_zero()
@@ -861,12 +1133,14 @@ pub(super) fn validate_statement_v1(
         || statement.state_root.is_zero()
         || statement.root_epoch == 0
         || statement.execution_epoch != statement.root_epoch
-        || statement.nullifiers.is_empty()
-        || statement.nullifiers.len() > PRIVATE_NOTE_MAX_INPUTS_V1
-        || statement.output_commitments.is_empty()
-        || statement.output_commitments.len() > PRIVATE_NOTE_MAX_OUTPUTS_V1
+        || !profile.accepts_shape(
+            statement.nullifiers.len(),
+            statement.output_commitments.len(),
+        )
         || statement.encrypted_outputs.len() != statement.output_commitments.len()
         || statement.value_balance.validate().is_err()
+        || (profile.requires_balanced_value()
+            && statement.value_balance != PrivacyValueBalanceV1::balanced())
         || statement
             .computed_action_digest()
             .map_err(|_| IvmPrivateNoteRelationErrorV1::Encoding)?
@@ -996,13 +1270,29 @@ pub(super) fn validate_private_note_relation_v1(
     statement: &IrohaIvmPrivateNoteStarkStatementV1,
     witness: &IvmPrivateNoteWitnessV1,
 ) -> Result<ValidatedPrivateNoteRelationV1, IvmPrivateNoteRelationErrorV1> {
-    validate_statement_v1(statement)?;
+    validate_private_note_relation_with_profile_v1(
+        statement,
+        witness,
+        PrivateNoteRelationProfileV1::IVM_PRIVATE_NOTE,
+    )
+}
+/// Preflight a witness under one crate-private relation profile.
+pub(crate) fn preflight_private_note_relation_with_profile_v1(
+    statement: &IrohaIvmPrivateNoteStarkStatementV1,
+    witness: &IvmPrivateNoteWitnessV1,
+    profile: PrivateNoteRelationProfileV1,
+) -> Result<(), IvmPrivateNoteRelationErrorV1> {
+    validate_private_note_relation_with_profile_v1(statement, witness, profile).map(|_| ())
+}
+pub(super) fn validate_private_note_relation_with_profile_v1(
+    statement: &IrohaIvmPrivateNoteStarkStatementV1,
+    witness: &IvmPrivateNoteWitnessV1,
+    profile: PrivateNoteRelationProfileV1,
+) -> Result<ValidatedPrivateNoteRelationV1, IvmPrivateNoteRelationErrorV1> {
+    validate_statement_with_profile_v1(statement, profile)?;
     if witness.inputs.len() != statement.nullifiers.len()
         || witness.outputs.len() != statement.output_commitments.len()
-        || witness.inputs.is_empty()
-        || witness.inputs.len() > PRIVATE_NOTE_MAX_INPUTS_V1
-        || witness.outputs.is_empty()
-        || witness.outputs.len() > PRIVATE_NOTE_MAX_OUTPUTS_V1
+        || !profile.accepts_shape(witness.inputs.len(), witness.outputs.len())
     {
         return Err(IvmPrivateNoteRelationErrorV1::WitnessShape);
     }
@@ -1037,7 +1327,7 @@ pub(super) fn validate_private_note_relation_v1(
     for (index, (input, public_nullifier)) in
         witness.inputs.iter().zip(&statement.nullifiers).enumerate()
     {
-        validate_note(&input.note)?;
+        validate_input_note_v1(&input.note, profile)?;
         let input_u8 =
             u8::try_from(index).map_err(|_| IvmPrivateNoteRelationErrorV1::WitnessShape)?;
         let authority_invocation = sha256_invocation_v1(
@@ -1115,9 +1405,12 @@ pub(super) fn validate_private_note_relation_v1(
         .zip(&statement.output_commitments)
         .enumerate()
     {
-        validate_note(&output.note)?;
+        validate_output_note_v1(&output.note, index, profile)?;
         let output_u8 =
             u8::try_from(index).map_err(|_| IvmPrivateNoteRelationErrorV1::WitnessShape)?;
+        let memo_digest = profile
+            .fixed_output_memo(index)
+            .unwrap_or(output.note.memo_digest);
         let invocation = sha256_invocation_v1(
             Sha256InvocationRoleV1::OutputCommitment { output: output_u8 },
             NOTE_COMMITMENT_DOMAIN_V1,
@@ -1126,7 +1419,7 @@ pub(super) fn validate_private_note_relation_v1(
                 &output.note.spending_authority,
                 &output.note.rho,
                 &output.note.blinding,
-                &output.note.memo_digest,
+                &memo_digest,
             ],
         )?;
         let commitment = PrivacyCommitmentV1::new(invocation.digest);

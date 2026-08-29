@@ -36,6 +36,7 @@ public final class SccpJsonParser {
           "message_bundle_path",
           "proof_request_path",
           "recent_messages_path",
+          "sora_outbound_material_path",
           "registry_limits",
           "resource_limits",
           "proof_submit_path",
@@ -48,6 +49,7 @@ public final class SccpJsonParser {
           "message_bundle_path",
           "proof_request_path",
           "recent_messages_path",
+          "sora_outbound_material_path",
           "registry_limits",
           "resource_limits");
   private static final Set<String> REGISTRY_LIMIT_FIELDS =
@@ -532,6 +534,11 @@ public final class SccpJsonParser {
                 "/v1/sccp/proof-requests/{message_id}",
                 false),
             exactPath(root, "recent_messages_path", "/v1/sccp/messages/recent", false),
+            exactPath(
+                root,
+                "sora_outbound_material_path",
+                "/v1/sccp/routes/{source_profile}/{route_id}/{asset_key}/{revision}/sora-outbound-material",
+                false),
             parseRegistryLimits(requiredObject(root, "registry_limits")),
             parseResourceLimits(requiredObject(root, "resource_limits")),
             proofSubmitPath,

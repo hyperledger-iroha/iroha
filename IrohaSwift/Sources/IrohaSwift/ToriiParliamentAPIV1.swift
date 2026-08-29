@@ -44,10 +44,13 @@ public struct ToriiParliamentProposalV1: Sendable, Equatable, Encodable {
     /// Validate one exact seven-kind proposal wire value before it can enter a draft request.
     public init(validating data: Data) throws {
         do {
-            try StrictJSONDuplicateKeyRejector.rejectDuplicateObjectKeys(in: data)
+            try StrictJSONDuplicateKeyRejector.rejectDuplicateObjectKeys(
+                in: data,
+                integerKeys: ["max_wrapped_supply", "max_outstanding_liability"]
+            )
         } catch {
             throw ToriiClientError.invalidPayload(
-                "proposal must be valid UTF-8 JSON without duplicate object keys."
+                "proposal must be valid UTF-8 JSON without duplicate object keys and with canonical SCCP UInt128 integers."
             )
         }
         let exactIntegerLexemes: [String: String]
@@ -751,6 +754,7 @@ public enum ToriiParliamentAPIV1 {
         .init(noritoIndex: 5, jsonTag: "BallotReleasePulseUnavailable"),
         .init(noritoIndex: 6, jsonTag: "BallotOpeningDeadlineExpired"),
         .init(noritoIndex: 7, jsonTag: "SortitionRetriesExhausted"),
+        .init(noritoIndex: 8, jsonTag: "ConfirmationJuryCapacityUnavailable"),
     ]
 
     public static let bodyStateFields = [
@@ -2185,7 +2189,7 @@ fileprivate extension ToriiParliamentAPIV1 {
                 }
                 try rejectSigningMaterial(item, context: "\(context).\(key)")
             }
-        case .string, .number, .bool, .null:
+        case .string, .number, .integer, .bool, .null:
             break
         }
     }

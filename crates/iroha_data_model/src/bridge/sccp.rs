@@ -111,16 +111,6 @@ impl SccpNetworkV1 {
             _ => None,
         }
     }
-    /// Return whether this is a production network profile.
-    #[must_use]
-    pub const fn is_production_profile(self) -> bool {
-        true
-    }
-    /// Return whether this is a staging or test network profile.
-    #[must_use]
-    pub const fn is_staging_profile(self) -> bool {
-        !self.is_production_profile()
-    }
     /// Return whether this profile belongs to the SORA domain.
     #[must_use]
     pub const fn is_sora(self) -> bool {
@@ -164,16 +154,6 @@ impl SccpLaneIdV1 {
     pub const fn is_well_formed(self) -> bool {
         self.source.is_sora() != self.target.is_sora()
             && self.source.domain_id() != self.target.domain_id()
-    }
-    /// Return whether both endpoints use production profiles.
-    #[must_use]
-    pub const fn is_production_environment(self) -> bool {
-        self.source.is_production_profile() && self.target.is_production_profile()
-    }
-    /// Return whether at least one endpoint uses a staging or test profile.
-    #[must_use]
-    pub const fn is_staging_environment(self) -> bool {
-        !self.is_production_environment()
     }
     /// Return the external endpoint when the lane topology is valid.
     #[must_use]
@@ -677,7 +657,7 @@ pub enum SccpSourceEmitterV1 {
     #[norito(rename = "tron")]
     Tron(SccpTronSourceEmitterV1),
     /// TON basechain source-bridge identity.
-    #[codec(index = 3)]
+    #[codec(index = 2)]
     #[norito(rename = "ton")]
     Ton(SccpTonSourceEmitterV1),
 }
@@ -701,14 +681,6 @@ impl SccpSourceEmitterV1 {
     pub fn matches_profile(&self, network: SccpNetworkV1) -> bool {
         self.matches_network(network)
     }
-    /// Return whether this is admissible production source material for `network`.
-    ///
-    /// This method classifies only the external source. It does not classify a
-    /// full lane, whose SORA target may still be Taira.
-    #[must_use]
-    pub fn is_production_source_for(&self, network: SccpNetworkV1) -> bool {
-        network.is_production_profile() && self.is_governance_activatable_source_for(network)
-    }
     /// Return whether reviewed material is complete enough for governance to
     /// activate native inbound settlement for `network`.
     ///
@@ -717,7 +689,6 @@ impl SccpSourceEmitterV1 {
     pub fn is_governance_activatable_source_for(&self, network: SccpNetworkV1) -> bool {
         network.is_external()
             && network.supports_native_inbound_source()
-            && network.is_production_profile()
             && self.is_well_formed()
             && self.matches_profile(network)
     }
@@ -768,14 +739,6 @@ impl SccpSourceIdentityV1 {
             && self.emitter.matches_profile(self.lane.source)
             && self.emitter.is_well_formed()
     }
-    /// Return whether the external endpoint and emitter are admissible production source material.
-    ///
-    /// This deliberately says nothing about the SORA target; use
-    /// [`Self::is_production_lane`] when the complete lane must be production.
-    #[must_use]
-    pub fn has_production_source(&self) -> bool {
-        self.is_well_formed() && self.emitter.is_production_source_for(self.lane.source)
-    }
     /// Return whether exact reviewed source material satisfies the closed governance-activation
     /// policy.
     #[must_use]
@@ -784,16 +747,6 @@ impl SccpSourceIdentityV1 {
             && self
                 .emitter
                 .is_governance_activatable_source_for(self.lane.source)
-    }
-    /// Return whether the complete inbound lane uses production endpoints and source material.
-    #[must_use]
-    pub fn is_production_lane(&self) -> bool {
-        self.has_production_source() && self.lane.is_production_environment()
-    }
-    /// Return whether the lane uses at least one staging or test endpoint.
-    #[must_use]
-    pub const fn uses_staging_environment(&self) -> bool {
-        self.lane.is_staging_environment()
     }
 }
 fn nonzero<const N: usize>(bytes: &[u8; N]) -> bool {
@@ -923,16 +876,6 @@ mod tests {
         assert_eq!(SccpNetworkV1::BscMainnet.domain_id(), 2);
         assert_eq!(SccpNetworkV1::TronMainnet.domain_id(), 5);
         assert_eq!(SccpNetworkV1::TonMainnet.domain_id(), 4);
-        assert!(
-            NETWORKS
-                .into_iter()
-                .all(SccpNetworkV1::is_production_profile)
-        );
-        assert!(
-            NETWORKS
-                .into_iter()
-                .all(|network| !network.is_staging_profile())
-        );
     }
     #[test]
     fn network_and_emitter_binary_roundtrips_cover_the_closed_inventory() {
@@ -1094,8 +1037,6 @@ mod tests {
                 assert_eq!(lane.sora_network().is_some(), expected);
             }
         }
-        assert!(inbound_lane(SccpNetworkV1::EthereumMainnet).is_production_environment());
-        assert!(outbound_lane(SccpNetworkV1::TronMainnet).is_production_environment());
     }
     #[test]
     fn native_source_support_is_closed_to_exact_external_inventory() {
@@ -1213,8 +1154,6 @@ mod tests {
             };
             assert!(identity.is_well_formed());
             assert!(identity.has_governance_activatable_source());
-            assert!(identity.has_production_source());
-            assert!(identity.is_production_lane());
         }
         for identity in [
             SccpSourceIdentityV1 {
@@ -1248,8 +1187,6 @@ mod tests {
         ] {
             assert!(!identity.is_well_formed(), "{identity:?}");
             assert!(!identity.has_governance_activatable_source());
-            assert!(!identity.has_production_source());
-            assert!(!identity.is_production_lane());
         }
     }
     #[test]

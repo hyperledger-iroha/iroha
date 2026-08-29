@@ -31,7 +31,9 @@ fn seed_sccp_ingress_auth_account(app: &SharedAppState) {
         .execute(&ALICE_ID, &mut transaction)
         .expect("register SCCP ingress authentication fixture account");
     transaction.apply();
-    block.commit().expect("commit SCCP ingress fixture account");
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit SCCP ingress fixture account");
 }
 fn authenticate_sccp_ingress_request(
     request: &mut axum::http::Request<axum::body::Body>,

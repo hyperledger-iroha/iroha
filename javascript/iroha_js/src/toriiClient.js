@@ -8282,32 +8282,6 @@ export class ToriiClient {
   }
 
   /**
-   * Fetch Sumeragi pacemaker timers (`GET /v1/sumeragi/pacemaker`).
-   * Returns null when telemetry outputs are disabled.
-   * @param {{signal?: AbortSignal}} [options]
-   * @returns {Promise<ToriiSumeragiPacemakerResponse | null>}
-   */
-  async getSumeragiPacemaker(options = {}) {
-    const { signal } = normalizeSignalOnlyOption(
-      options,
-      "getSumeragiPacemaker",
-    );
-    const response = await this._request("GET", "/v1/sumeragi/pacemaker", {
-      headers: JSON_ACCEPT_HEADERS,
-      signal,
-    });
-    if (response.status === 403 || response.status === 503) {
-      return null;
-    }
-    await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
-    if (!payload) {
-      throw new Error("sumeragi pacemaker endpoint returned no payload");
-    }
-    return normalizeSumeragiPacemakerSnapshot(payload);
-  }
-
-  /**
    * Fetch the authoritative v2 PrepareQC references (`GET /v1/sumeragi/qc`).
    * @param {{signal?: AbortSignal}} [options]
    * @returns {Promise<ToriiSumeragiV2QcResponse>}
@@ -15177,40 +15151,6 @@ function normalizeStringArray(payload, context) {
   return payload.map((value, index) =>
     requireNonEmptyString(value, `${context}[${index}]`),
   );
-}
-
-function normalizeSumeragiPacemakerSnapshot(payload) {
-  const record = ensureRecord(payload, "sumeragi pacemaker response");
-  return {
-    backoff_ms: coerceInteger(record.backoff_ms, "sumeragi pacemaker.backoff_ms"),
-    rtt_floor_ms: coerceInteger(record.rtt_floor_ms, "sumeragi pacemaker.rtt_floor_ms"),
-    jitter_ms: coerceInteger(record.jitter_ms, "sumeragi pacemaker.jitter_ms"),
-    backoff_multiplier: coerceInteger(
-      record.backoff_multiplier,
-      "sumeragi pacemaker.backoff_multiplier",
-    ),
-    rtt_floor_multiplier: coerceInteger(
-      record.rtt_floor_multiplier,
-      "sumeragi pacemaker.rtt_floor_multiplier",
-    ),
-    max_backoff_ms: coerceInteger(record.max_backoff_ms, "sumeragi pacemaker.max_backoff_ms"),
-    jitter_frac_permille: coerceInteger(
-      record.jitter_frac_permille,
-      "sumeragi pacemaker.jitter_frac_permille",
-    ),
-    round_elapsed_ms: coerceInteger(
-      record.round_elapsed_ms,
-      "sumeragi pacemaker.round_elapsed_ms",
-    ),
-    view_timeout_target_ms: coerceInteger(
-      record.view_timeout_target_ms,
-      "sumeragi pacemaker.view_timeout_target_ms",
-    ),
-    view_timeout_remaining_ms: coerceInteger(
-      record.view_timeout_remaining_ms,
-      "sumeragi pacemaker.view_timeout_remaining_ms",
-    ),
-  };
 }
 
 function normalizeSumeragiBlsKeysMap(payload) {

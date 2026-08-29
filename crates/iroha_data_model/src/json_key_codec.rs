@@ -770,7 +770,9 @@ mod tests {
         SccpInboundAnchorHighWaterKeyV1, SccpLaneIdV1, SccpNetworkV1,
         SccpOutboundMessageIndexKeyV1, SccpOutboundMessageKeyV1,
     };
-    use crate::bridge::{SccpReplayAccumulatorIdV1, SccpReplayBoundaryV1, SccpRouteKeyV1};
+    use crate::bridge::{
+        SccpReplayAccumulatorIdV1, SccpReplayBoundaryV1, SccpRouteKeyV1, SccpRouteLiabilityV1,
+    };
     use crate::{
         governance::types::{BallotAttemptId, GovernanceAttemptId, TleKeySessionId},
         musubi::{
@@ -781,8 +783,11 @@ mod tests {
         sorafs::{capacity::ProviderId, pin_registry::ReplicationOrderId},
     };
     use iroha_crypto::KeyPair;
-    use mv::json::JsonKeyCodec;
-    use norito::json::Parser;
+    use mv::{
+        json::JsonKeyCodec,
+        storage::{Storage, StorageReadOnly},
+    };
+    use norito::json::{Parser, from_json, to_json};
     fn checked_random_keypair() -> KeyPair {
         KeyPair::try_random().expect("generate checked JSON key codec fixture keypair")
     }
@@ -964,6 +969,27 @@ mod tests {
                 "accepted non-canonical replay accumulator key {encoded:?}"
             );
         }
+    }
+    #[test]
+    fn sccp_route_liability_storage_json_roundtrip_uses_route_key_codec() {
+        let key = SccpRouteKeyV1::new(
+            SccpLaneIdV1 {
+                source: SccpNetworkV1::BscMainnet,
+                target: SccpNetworkV1::SoraTaira,
+            },
+            "taira_bsc_xor".to_owned(),
+            "xor".to_owned(),
+            3,
+        )
+        .expect("valid SCCP route key");
+        let liability = SccpRouteLiabilityV1::new(42).expect("nonzero SCCP liability");
+        let storage = Storage::from_iter([(key.clone(), liability)]);
+
+        let encoded = to_json(&storage).expect("serialize SCCP route liability storage");
+        let decoded: Storage<SccpRouteKeyV1, SccpRouteLiabilityV1> =
+            from_json(&encoded).expect("deserialize SCCP route liability storage");
+
+        assert_eq!(decoded.view().get(&key), Some(&liability));
     }
     #[test]
     fn sccp_outbound_message_key_json_key_codec_is_canonical() {

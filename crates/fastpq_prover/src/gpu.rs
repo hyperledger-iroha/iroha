@@ -537,55 +537,6 @@ fn poseidon_hash_columns_cuda(batch: &PoseidonColumnBatch) -> Result<Vec<u64>, G
         .map(|state| state[0])
         .collect())
 }
-/// Dispatch the low-level fused leaf-plus-parent Poseidon kernel.
-///
-/// The production trace commitment path uses `trace::hash_columns_gpu_fused`, which composes the
-/// parity-proven column batch and Merkle-pair helpers. This lower-level hook remains available for
-/// backend parity tests and throughput experiments.
-#[allow(dead_code)]
-pub fn poseidon_hash_columns_fused(
-    batch: &PoseidonColumnBatch,
-    backend: GpuBackend,
-) -> Result<Vec<u64>, GpuError> {
-    match backend {
-        GpuBackend::Cuda => poseidon_hash_columns_fused_cuda(batch),
-        #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
-        GpuBackend::Metal => {
-            let _lane = crate::backend::acquire_gpu_lane();
-            metal::poseidon_hash_columns_fused(batch)
-        }
-        other => Err(GpuError::Unsupported(other)),
-    }
-}
-/// CUDA implementation for the low-level fused leaf-plus-parent Poseidon hook.
-#[allow(dead_code)]
-fn poseidon_hash_columns_fused_cuda(batch: &PoseidonColumnBatch) -> Result<Vec<u64>, GpuError> {
-    if batch.is_empty() {
-        return Ok(Vec::new());
-    }
-    if batch.block_count() == 0 {
-        return Ok(vec![0; batch.columns()]);
-    }
-    if batch.padded_len() == 0 {
-        return Ok(vec![0; batch.columns()]);
-    }
-    let parent_count = batch.columns().div_ceil(2);
-    let total = batch.columns() + parent_count;
-    let _lane = crate::backend::acquire_gpu_lane();
-    let mut hashes = vec![0u64; total];
-    fastpq_cuda::fastpq_poseidon_hash_columns_fused(
-        batch.payloads(),
-        batch.offsets(),
-        batch.columns(),
-        batch.block_count(),
-        &mut hashes,
-    )
-    .map_err(|err| GpuError::Execution {
-        backend: GpuBackend::Cuda,
-        message: err.to_string(),
-    })?;
-    Ok(hashes)
-}
 #[cfg(test)]
 mod tests {
     use super::{

@@ -5359,7 +5359,9 @@ mod tests {
             )
             .expect("activate contract instance");
             transaction.apply();
-            block.commit().expect("commit contract deployment");
+            block
+                .commit_world_overlay_for_testing()
+                .expect("commit contract deployment");
         }
         let tx = TransactionBuilder::new(
             ctx.config().network_id,

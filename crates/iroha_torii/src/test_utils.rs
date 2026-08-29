@@ -35,11 +35,7 @@ use iroha_data_model::{
     smart_contract::{CONTRACT_DEPLOY_NONCE_METADATA_KEY, ContractAddress},
     sorafs::pricing::PricingScheduleRecord,
 };
-use iroha_executor_data_model::permission::{
-    account::{AccountAliasPermissionScope, CanManageAccountAlias},
-    governance::CanEnactGovernance,
-    smart_contract::{CanInvokeContractEntrypoint, CanRegisterSmartContractCode},
-};
+use iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint;
 use nonzero_ext::nonzero;
 use std::{
     borrow::Cow,
@@ -337,41 +333,6 @@ pub fn world_with_authority(authority: &AccountId) -> iroha_core::state::World {
     let domain = Domain::new(domain_id.clone()).build(authority);
     let account = Account::new(authority.clone()).build(authority);
     iroha_core::state::World::with([domain], [account], [])
-}
-/// Grant the permissions needed for contract deploy/activate flows in integration tests.
-pub fn grant_contract_operator_permissions(state: &Arc<State>, authority: &AccountId) {
-    let height_u64 = u64::try_from(state.view().height())
-        .unwrap_or(0)
-        .saturating_add(1);
-    let header = BlockHeader::new(
-        NonZeroU64::new(height_u64).expect("height > 0"),
-        None,
-        None,
-        None,
-        0,
-        0,
-    );
-    let mut block = state.block(header);
-    let mut stx = block.transaction();
-    let register_permission: permission::Permission = CanRegisterSmartContractCode.into();
-    Grant::account_permission(register_permission, authority.clone())
-        .execute(authority, &mut stx)
-        .expect("grant CanRegisterSmartContractCode");
-    let enact_permission: permission::Permission = CanEnactGovernance.into();
-    Grant::account_permission(enact_permission, authority.clone())
-        .execute(authority, &mut stx)
-        .expect("grant CanEnactGovernance");
-    let alias_permission: permission::Permission = CanManageAccountAlias {
-        scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
-    }
-    .into();
-    Grant::account_permission(alias_permission, authority.clone())
-        .execute(authority, &mut stx)
-        .expect("grant universal-dataspace contract alias management");
-    stx.apply();
-    block
-        .commit()
-        .expect("commit contract operator permissions");
 }
 /// Build and enqueue a locally signed atomic contract deployment transaction.
 ///
@@ -1056,10 +1017,8 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             signing_private_key: None,
             bootstrap: Default::default(),
         },
-        telemetry_enabled: false,
         telemetry_profile: A::TelemetryProfile::Disabled,
         telemetry: None,
-        telemetry_redaction: A::TelemetryRedaction::default(),
         telemetry_integrity: A::TelemetryIntegrity::default(),
         dev_telemetry: iroha_config::parameters::user::DevTelemetry {
             out_file: None,
@@ -1262,7 +1221,6 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                 metal_threadgroup_width: fastpq::METAL_THREADGROUP_WIDTH,
                 metal_trace: fastpq::METAL_TRACE,
                 metal_debug_enum: fastpq::METAL_DEBUG_ENUM,
-                metal_debug_fused: fastpq::METAL_DEBUG_FUSED,
             },
             stark: A::Stark::default(),
             sccp: A::Sccp::default(),

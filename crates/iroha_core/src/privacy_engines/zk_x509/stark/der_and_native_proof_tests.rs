@@ -29,13 +29,26 @@ impl RngCore for MaxValueRng {
 #[test]
 fn canonical_multiproof_matches_small_trees_and_rejects_every_frontier_mutation() {
     let leaves = (0_u8..16)
-        .map(|value| {
-            sha256_frame_v1(b"aggregate-stark-multiproof-test-leaf-v1", &[&[value]]).expect("leaf")
+        .enumerate()
+        .map(|(index, value)| {
+            goldilocks_digest384_frame_v1(
+                ZK_X509_DIGEST_CONTEXT_V1,
+                b"iroha:privacy:zk-x509:test:multiproof-leaf:v1",
+                b"leaf",
+                0,
+                u64::try_from(index).expect("test leaf index fits u64"),
+                0,
+                &[&[value]],
+            )
+            .expect("leaf")
         })
         .collect::<Vec<_>>();
-    let tree =
-        Sha256MerkleTreeV1::from_leaves(leaves.clone(), b"aggregate-stark-multiproof-test-node-v1")
-            .expect("tree");
+    let tree = GoldilocksMerkleTreeV1::from_leaves(
+        leaves.clone(),
+        ZK_X509_DIGEST_CONTEXT_V1,
+        b"iroha:privacy:zk-x509:test:multiproof-node:v1",
+    )
+    .expect("tree");
     for indices in [
         vec![0_usize],
         vec![1, 2, 7, 8, 15],
@@ -49,7 +62,7 @@ fn canonical_multiproof_matches_small_trees_and_rejects_every_frontier_mutation(
             .map(|index| (index, leaves[index]))
             .collect::<BTreeMap<_, _>>();
         verify_canonical_multiproof_v1(
-            b"aggregate-stark-multiproof-test-node-v1",
+            b"iroha:privacy:zk-x509:test:multiproof-node:v1",
             &tree.root(),
             leaves.len(),
             &opened,
@@ -58,10 +71,16 @@ fn canonical_multiproof_matches_small_trees_and_rejects_every_frontier_mutation(
         .expect("valid multiproof");
         for position in 0..frontier.len() {
             let mut changed = frontier.clone();
-            changed[position][0] ^= 1;
+            let mut words = changed[position].words();
+            words[0] = F::canonical(words[0])
+                .expect("digest lane is canonical")
+                .add(F::ONE)
+                .value();
+            changed[position] =
+                GoldilocksDigest384V1::new(words).expect("mutated digest remains canonical");
             assert!(
                 verify_canonical_multiproof_v1(
-                    b"aggregate-stark-multiproof-test-node-v1",
+                    b"iroha:privacy:zk-x509:test:multiproof-node:v1",
                     &tree.root(),
                     leaves.len(),
                     &opened,
@@ -592,8 +611,8 @@ fn der_registration_claim_order_and_every_shape_field_are_bound() {
         node: [F(113), F(127), F(131), F(137)],
     };
     let roots = vec![TraceGroupProofV1 {
-        base_root: [0x31; 32],
-        aux_root: [0x53; 32],
+        base_root: test_stark_digest_v1(0x31),
+        aux_root: test_stark_digest_v1(0x53),
         base_frontier: Vec::new(),
         aux_frontier: Vec::new(),
     }];

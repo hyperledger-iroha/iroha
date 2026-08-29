@@ -380,7 +380,7 @@ lockstep.
   | `baseline-neon` | `aarch64` | AWS Graviton3 (c7g.4xlarge) | default release | Ensures NEON backend remains deterministic and aligned with x86 schedules. |
 
 - **Benchmark harness.** All gas calibration reports MUST be produced with:
-  - `CRITERION_HOME=target/criterion cargo bench -p iroha_core --bench isi_gas_calibration -- --sample-size 200 --warm-up-time 5 --save-baseline <profile-label>`
+  - `CRITERION_HOME=target/criterion cargo bench -p iroha_core --features bench --bench isi_gas_calibration -- --sample-size 200 --warm-up-time 5 --save-baseline <profile-label>`
   - `cargo test -p iroha_core bench_repro -- --ignored` to confirm the deterministic fixture.
   - `CRITERION_HOME=target/criterion cargo bench -p ivm --bench gas_calibration -- --sample-size 200 --warm-up-time 5 --save-baseline <profile-label>` whenever VM opcode costs change.
 

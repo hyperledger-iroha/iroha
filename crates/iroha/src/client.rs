@@ -3,6 +3,7 @@ mod bounded_async_response;
 mod moderation;
 #[cfg(test)]
 mod operator_auth_tests;
+mod private_settlement;
 mod public_musubi;
 mod repair;
 mod reputation_journal;
@@ -107,6 +108,18 @@ pub use iroha_torii_shared::parliament_api::{
     ParliamentTimedOvnSessionProjectionV1, ParliamentTlePartialReleaseShareV1,
     ParliamentTleReleaseContextResponseV1, ParliamentTransitionDraftRequestV1,
     ParliamentTransitionDraftResponseV1, RequiredParliamentBodyProjectionV1,
+};
+pub use iroha_torii_shared::private_settlement_api::{
+    PrivateSettlementAuditApprovalRequestV1, PrivateSettlementAuditApprovalResponseV1,
+    PrivateSettlementAuditorCapsuleResponseV1, PrivateSettlementAvailabilityShareRequestV1,
+    PrivateSettlementAvailabilityShareResponseV1, PrivateSettlementBundleReceiptResponseV1,
+    PrivateSettlementBundleStatusResponseV1, PrivateSettlementBundleSubmitRequestV1,
+    PrivateSettlementBundleSubmitResponseV1, PrivateSettlementCommitVoteRequestV1,
+    PrivateSettlementCommitteeProofResponseV1, PrivateSettlementLegStatusResponseV1,
+    PrivateSettlementLegUploadDispositionV1, PrivateSettlementLegUploadRequestV1,
+    PrivateSettlementLegUploadResponseV1, PrivateSettlementLifecycleDtoV1,
+    PrivateSettlementPhaseCertificateRequestV1, PrivateSettlementPhaseCertificateResponseV1,
+    PrivateSettlementPhaseVoteResponseV1, PrivateSettlementPrepareVoteRequestV1,
 };
 pub use iroha_torii_shared::sorafs_hedging_billing_api::BillingAcknowledgementProofV1 as SorafsBillingAcknowledgementProof;
 pub use iroha_torii_shared::validation_fee_api::{
@@ -3352,6 +3365,8 @@ pub struct SccpNativeMessageSubmitRequest {
     pub transaction_payload_b64: Option<String>,
     /// Canonical padded-base64 Norito native inbound SCCP proof.
     pub native_proof_b64: String,
+    /// Canonical padded-base64 Norito sparse replay non-membership witness.
+    pub replay_witness_b64: String,
     /// Optional fixed creation timestamp for deterministic detached signing.
     #[norito(default)]
     pub creation_time_ms: Option<u64>,
@@ -4006,6 +4021,7 @@ struct SccpBridgeSubmitExpectation {
     range_start_height: u64,
     range_end_height: u64,
     proof_payload: SccpBridgeExpectedProofPayload,
+    replay_witness: Option<iroha_data_model::bridge::SccpSparseMerkleWitnessV1>,
 }
 fn resolve_sccp_expected_route_configuration_hash(
     expectation: &SccpBridgeSubmitExpectation,
@@ -4262,6 +4278,7 @@ fn preflight_sccp_destination_submit(
         range_start_height: height,
         range_end_height: height,
         proof_payload: SccpBridgeExpectedProofPayload::Destination(destination),
+        replay_witness: None,
     })
 }
 fn preflight_sccp_native_submit(
@@ -4278,6 +4295,7 @@ fn preflight_sccp_native_submit(
         request.creation_time_ms,
     )?;
     let (native, encoded_envelope) = decode_sccp_native_proof_b64(&request.native_proof_b64)?;
+    let replay_witness = decode_sccp_replay_witness_b64(&request.replay_witness_b64)?;
     validate_sccp_taira_transfer_recipient(&native.payload)?;
     let lane = native.source.lane;
     if !lane.is_well_formed()
@@ -4316,6 +4334,7 @@ fn preflight_sccp_native_submit(
             encoded_envelope,
             backend,
         },
+        replay_witness: Some(replay_witness),
     })
 }
 fn decode_canonical_sccp_base64(encoded: &str, field: &str, maximum: usize) -> Result<Vec<u8>> {
@@ -4346,6 +4365,37 @@ fn decode_sccp_native_proof_b64(
     let proof = iroha_sccp::decode_sccp_native_inbound_message_proof_v1(&bytes)
         .map_err(|error| eyre!("invalid native SCCP proof: {error}"))?;
     Ok((proof, bytes))
+}
+fn decode_sccp_replay_witness_b64(
+    encoded: &str,
+) -> Result<iroha_data_model::bridge::SccpSparseMerkleWitnessV1> {
+    let bytes = decode_canonical_sccp_base64(
+        encoded,
+        "replay_witness_b64",
+        iroha_data_model::bridge::SCCP_REPLAY_WITNESS_MAX_BASE64_BYTES_V1,
+    )?;
+    if bytes.len() > iroha_data_model::bridge::SCCP_REPLAY_WITNESS_MAX_ENCODED_BYTES_V1 {
+        return Err(eyre!(
+            "replay_witness_b64 exceeds the canonical sparse replay witness bound"
+        ));
+    }
+    let witness =
+        norito::decode_from_bytes::<iroha_data_model::bridge::SccpSparseMerkleWitnessV1>(&bytes)
+            .map_err(|error| eyre!("invalid canonical sparse replay witness: {error}"))?;
+    if norito::to_bytes(&witness).ok().as_deref() != Some(bytes.as_slice()) {
+        return Err(eyre!(
+            "replay_witness_b64 must contain exactly one canonical sparse replay witness"
+        ));
+    }
+    witness
+        .validate()
+        .map_err(|error| eyre!("invalid canonical sparse replay witness: {error}"))?;
+    if witness.prior_record_digest != [0; 32] {
+        return Err(eyre!(
+            "replay_witness_b64 must contain a replay non-membership witness"
+        ));
+    }
+    Ok(witness)
 }
 fn decode_exact_nonzero_sccp_hex32(value: &str, field: &str) -> Result<[u8; 32]> {
     if value.len() != 64
@@ -4545,6 +4595,11 @@ fn validate_sccp_bridge_transaction_payload(
         .ok_or_else(|| {
             eyre!("bridge submit response transaction payload must contain only SubmitBridgeProof")
         })?;
+    if submit.replay_witness != expectation.replay_witness {
+        return Err(eyre!(
+            "SCCP transaction payload replay witness does not match the request"
+        ));
+    }
     let proof = &submit.proof;
     let route_configuration_hash = match &proof.payload {
         BridgeProofPayload::NativeProtocol(native) => native.route_configuration_hash,
@@ -9781,18 +9836,6 @@ impl Client {
     pub fn get_sumeragi_qc_json(&self) -> Result<norito::json::Value> {
         sumeragi_qc_json_payload(&self.get_sumeragi_qc()?)
     }
-    /// GET `/v1/sumeragi/pacemaker` — pacemaker timers/config snapshot.
-    ///
-    /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
-    pub fn get_sumeragi_pacemaker_json(&self) -> Result<norito::json::Value> {
-        let url = join_torii_url(&self.torii_url, "v1/sumeragi/pacemaker");
-        let resp = self.send_builder(
-            self.operator_signed_request(HttpMethod::GET, url, Vec::new())?
-                .header("Accept", APPLICATION_JSON),
-        )?;
-        Self::parse_json_ok_response(&resp, "Failed to get sumeragi pacemaker")
-    }
     /// GET `/v1/sumeragi/evidence/count` — total persisted evidence entries.
     ///
     /// # Errors
@@ -10188,7 +10231,6 @@ mod status_tests {
             teu_dataspace_backlog: Vec::new(),
             dataspace_catalog: Vec::new(),
             nexus: None,
-            sorafs_micropayments: Vec::new(),
             taikai_ingest: Vec::new(),
             taikai_alias_rotations: Vec::new(),
             da_receipt_cursors: Vec::new(),
@@ -31153,67 +31195,6 @@ mod tests {
         assert_operator_signature_headers(&snapshot);
     }
     #[test]
-    fn sumeragi_operator_endpoints_include_signature_headers_when_key_configured() {
-        type SumeragiEndpointCase = (&'static str, fn(&Client) -> Result<norito::json::Value>);
-        let cases: [SumeragiEndpointCase; 1] = [(
-            "/v1/sumeragi/pacemaker",
-            Client::get_sumeragi_pacemaker_json,
-        )];
-        for (path, request) in cases {
-            let mut client = client_with_base_url(base_url());
-            let operator_key_pair = checked_random_keypair();
-            client.set_operator_key_pair(operator_key_pair.clone());
-            let (result, snapshot) =
-                capture_request(empty_response(StatusCode::UNAUTHORIZED), || {
-                    request(&client)
-                });
-            let _ = result.expect_err("mocked unauthorized response should fail");
-            assert_sumeragi_json_request(&snapshot, path);
-            assert_operator_signature_headers(&snapshot);
-            let headers: HashMap<_, _> = snapshot.headers.iter().cloned().collect();
-            let timestamp_ms = headers[HEADER_OPERATOR_TIMESTAMP_MS]
-                .parse::<u64>()
-                .expect("operator timestamp header");
-            let nonce = &headers[HEADER_OPERATOR_NONCE];
-            let signature_bytes = base64::engine::general_purpose::STANDARD
-                .decode(headers[HEADER_OPERATOR_SIGNATURE].as_bytes())
-                .expect("operator signature header should decode");
-            let signature = Signature::try_from_bytes(&signature_bytes)
-                .expect("operator signature header must pass checked admission");
-            let local_message = Client::operator_network_request_message(
-                &client.network_id,
-                &snapshot.method,
-                &snapshot.url,
-                &snapshot.body,
-                timestamp_ms,
-                nonce,
-            )
-            .expect("bounded local operator message");
-            signature
-                .verify(operator_key_pair.public_key(), &local_message)
-                .expect("operator signature must bind the client's exact network");
-            let foreign_network =
-                NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
-                    Hash::prehashed([0xFD; Hash::LENGTH]),
-                ));
-            let foreign_message = Client::operator_network_request_message(
-                &foreign_network,
-                &snapshot.method,
-                &snapshot.url,
-                &snapshot.body,
-                timestamp_ms,
-                nonce,
-            )
-            .expect("bounded foreign operator message");
-            assert!(
-                signature
-                    .verify(operator_key_pair.public_key(), &foreign_message)
-                    .is_err(),
-                "same endpoint on another genesis must not accept the operator signature"
-            );
-        }
-    }
-    #[test]
     fn sumeragi_json_endpoints_request_json() {
         type SumeragiEndpointCase = (&'static str, fn(&Client) -> Result<norito::json::Value>);
         let cases: [SumeragiEndpointCase; 2] = [
@@ -31278,54 +31259,6 @@ mod tests {
         }
     }
     #[test]
-    fn sumeragi_operator_json_endpoints_reject_duplicate_key_payloads() {
-        type SumeragiEndpointCase = (&'static str, fn(&Client) -> Result<norito::json::Value>);
-        let cases: [SumeragiEndpointCase; 1] = [(
-            "/v1/sumeragi/pacemaker",
-            Client::get_sumeragi_pacemaker_json,
-        )];
-        for (path, request) in cases {
-            let mut client = client_with_base_url(base_url());
-            client.set_operator_key_pair(checked_random_keypair());
-            let (result, snapshot) = capture_request(
-                json_response(StatusCode::OK, r#"{"dup":1,"dup":2}"#),
-                || request(&client),
-            );
-            let err = result.expect_err("duplicate-key successful JSON payload should fail");
-            assert!(
-                err.to_string().contains("failed to decode JSON payload"),
-                "{path} returned unexpected error: {err}"
-            );
-            assert_sumeragi_json_request(&snapshot, path);
-            assert_operator_signature_headers(&snapshot);
-        }
-    }
-    #[test]
-    fn sumeragi_operator_json_endpoints_reject_non_ok_responses_with_context() {
-        type SumeragiEndpointCase = (
-            &'static str,
-            &'static str,
-            fn(&Client) -> Result<norito::json::Value>,
-        );
-        let cases: [SumeragiEndpointCase; 1] = [(
-            "/v1/sumeragi/pacemaker",
-            "Failed to get sumeragi pacemaker",
-            Client::get_sumeragi_pacemaker_json,
-        )];
-        for (path, context, request) in cases {
-            let mut client = client_with_base_url(base_url());
-            client.set_operator_key_pair(checked_random_keypair());
-            let (result, snapshot) = capture_request(
-                json_response(StatusCode::FORBIDDEN, "operator key rejected"),
-                || request(&client),
-            );
-            let err = result.expect_err("non-OK operator JSON endpoint response should fail");
-            assert_endpoint_error(&err, path, context, "403", "operator key rejected");
-            assert_sumeragi_json_request(&snapshot, path);
-            assert_operator_signature_headers(&snapshot);
-        }
-    }
-    #[test]
     fn transaction_response_handler_returns_err_on_bad_request() {
         let response = mk_response(StatusCode::BAD_REQUEST, Vec::new(), None);
         assert!(TransactionResponseHandler::handle(&response).is_err());
@@ -31378,7 +31311,6 @@ mod tests {
             teu_dataspace_backlog: Vec::new(),
             dataspace_catalog: Vec::new(),
             nexus: None,
-            sorafs_micropayments: Vec::new(),
             taikai_ingest: Vec::new(),
             taikai_alias_rotations: Vec::new(),
             da_receipt_cursors: Vec::new(),
@@ -35421,12 +35353,40 @@ mod tests {
     }
     #[test]
     fn native_submit_preflight_rejects_malformed_envelopes_before_http() {
+        for (mut witness, label) in [
+            (
+                iroha_data_model::bridge::SccpSparseMerkleWitnessV1::empty_shard(),
+                "zero expected root",
+            ),
+            (
+                iroha_data_model::bridge::SccpSparseMerkleWitnessV1::empty_shard(),
+                "membership witness",
+            ),
+        ] {
+            if label == "zero expected root" {
+                witness.expected_shard_root = [0; 32];
+            } else {
+                witness.prior_record_digest = [0xA5; 32];
+            }
+            let encoded = base64::engine::general_purpose::STANDARD.encode(
+                norito::to_bytes(&witness).expect("encode invalid replay witness fixture"),
+            );
+            assert!(
+                decode_sccp_replay_witness_b64(&encoded).is_err(),
+                "{label} must reject"
+            );
+        }
+        let replay_witness_b64 = base64::engine::general_purpose::STANDARD.encode(
+            norito::to_bytes(&iroha_data_model::bridge::SccpSparseMerkleWitnessV1::empty_shard())
+                .expect("encode empty replay witness"),
+        );
         let mut request = SccpNativeMessageSubmitRequest {
             authority: ALICE_ID.clone(),
             fee_payment: FeePaymentIntent::authority(Vec::new(), None),
             signature_b64: None,
             transaction_payload_b64: None,
             native_proof_b64: "AQ==".to_owned(),
+            replay_witness_b64,
             creation_time_ms: Some(1),
         };
         let error = sccp_client_with_base_url(base_url())
@@ -35490,6 +35450,12 @@ mod tests {
             signature_b64: None,
             transaction_payload_b64: None,
             native_proof_b64: base64::engine::general_purpose::STANDARD.encode(&proof_bytes),
+            replay_witness_b64: base64::engine::general_purpose::STANDARD.encode(
+                norito::to_bytes(
+                    &iroha_data_model::bridge::SccpSparseMerkleWitnessV1::empty_shard(),
+                )
+                .expect("encode empty replay witness"),
+            ),
             creation_time_ms: Some(1_700_000_000_321),
         };
         (
@@ -35530,7 +35496,11 @@ mod tests {
         builder.set_creation_time(Duration::from_millis(
             request.creation_time_ms.expect("fixed creation time"),
         ));
-        let builder = builder.with_instructions([SubmitBridgeProof::new(bridge_proof)]);
+        let replay_witness = decode_sccp_replay_witness_b64(&request.replay_witness_b64)
+            .expect("decode fixture replay witness");
+        let builder = builder.with_instructions([
+            SubmitBridgeProof::new(bridge_proof).with_replay_witness(replay_witness)
+        ]);
         let response_payload = SccpBridgeSubmitResponse {
             submitted: false,
             payload_kind: "transfer".to_owned(),
@@ -35681,6 +35651,9 @@ mod tests {
                 encoded_envelope: vec![1],
                 backend: iroha_data_model::bridge::BridgeNativeProofBackendV1::TronDpos,
             },
+            replay_witness: Some(
+                iroha_data_model::bridge::SccpSparseMerkleWitnessV1::empty_shard(),
+            ),
         };
         let valid = JsonValue::Object(JsonMap::from_iter([
             ("submitted".into(), JsonValue::from(true)),

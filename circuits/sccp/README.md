@@ -113,3 +113,11 @@ Any circuit, constant, dependency, builder, R1CS, or witness-compiler change
 invalidates the affected Phase-2 artifacts. Ceremony receipts, audit reports,
 guardian material, and production keys are external release inputs and must
 never be replaced by repository placeholders.
+
+The composable epoch-anchor recurrence repair changes all four epoch R1CS
+definitions by 97 constraints while leaving their positive KAT public values
+unchanged. `manifests/constraint-counts-final-v1.json` records the fresh
+canonical R1CS byte lengths and SHA-256 identities. All earlier epoch Phase-2
+transcripts, PK/VK pairs, fixed verifiers, and deployments are invalid; the two
+curve Phase-1 ceremonies and the four message-circuit definitions are not
+changed by this circuit-specific repair.

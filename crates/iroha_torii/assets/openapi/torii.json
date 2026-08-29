@@ -9859,43 +9859,6 @@
         ],
         "type": "object"
       },
-      "GovernanceEnactRequestV1": {
-        "additionalProperties": false,
-        "properties": {
-          "proposal_id": {
-            "maxLength": 64,
-            "minLength": 64,
-            "pattern": "^[0-9a-f]{64}$",
-            "type": "string"
-          }
-        },
-        "required": [
-          "proposal_id"
-        ],
-        "type": "object"
-      },
-      "GovernanceFinalizeRequestV1": {
-        "additionalProperties": false,
-        "properties": {
-          "proposal_id": {
-            "maxLength": 64,
-            "minLength": 64,
-            "pattern": "^[0-9a-f]{64}$",
-            "type": "string"
-          },
-          "referendum_id": {
-            "maxLength": 64,
-            "minLength": 64,
-            "pattern": "^[0-9a-f]{64}$",
-            "type": "string"
-          }
-        },
-        "required": [
-          "proposal_id",
-          "referendum_id"
-        ],
-        "type": "object"
-      },
       "GovernanceManifestProvenanceV1": {
         "additionalProperties": false,
         "description": "Public signature metadata binding the proposed contract manifest to its signer.",
@@ -11907,6 +11870,19 @@
             "properties": {
               "reason": {
                 "const": "SortitionRetriesExhausted",
+                "type": "string"
+              }
+            },
+            "required": [
+              "reason"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "reason": {
+                "const": "ConfirmationJuryCapacityUnavailable",
                 "type": "string"
               }
             },
@@ -29443,6 +29419,11 @@
             "description": "Canonical Norito native SCCP admission proof bytes.",
             "maxLength": 22369624
           },
+          "replay_witness_b64": {
+            "$ref": "#/components/schemas/SccpCanonicalBase64",
+            "description": "Canonical Norito sparse replay non-membership witness bytes.",
+            "maxLength": 21848
+          },
           "signature_b64": {
             "description": "Preparation carries no detached signature; canonical DTO JSON may encode the absent optional field as null.",
             "type": "null"
@@ -29455,7 +29436,8 @@
         "required": [
           "authority",
           "fee_payment",
-          "native_proof_b64"
+          "native_proof_b64",
+          "replay_witness_b64"
         ],
         "type": "object"
       },
@@ -29480,6 +29462,11 @@
             "description": "Canonical Norito native SCCP admission proof bytes.",
             "maxLength": 22369624
           },
+          "replay_witness_b64": {
+            "$ref": "#/components/schemas/SccpCanonicalBase64",
+            "description": "Canonical Norito sparse replay non-membership witness bytes.",
+            "maxLength": 21848
+          },
           "signature_b64": {
             "$ref": "#/components/schemas/SccpCanonicalBase64",
             "description": "Canonical algorithm-specific detached signature bytes for authority.",
@@ -29497,6 +29484,7 @@
           "signature_b64",
           "transaction_payload_b64",
           "native_proof_b64",
+          "replay_witness_b64",
           "creation_time_ms"
         ],
         "type": "object"
@@ -29657,14 +29645,9 @@
           "counterparty_chain": {
             "enum": [
               "ethereum-mainnet",
-              "ethereum-sepolia",
               "bsc-mainnet",
-              "bsc-testnet",
               "ton-mainnet",
-              "ton-testnet",
-              "tron-mainnet",
-              "tron-nile",
-              "tron-shasta"
+              "tron-mainnet"
             ],
             "type": "string"
           },
@@ -29849,6 +29832,12 @@
       "SccpDestinationDeploymentDetailsV1": {
         "additionalProperties": false,
         "properties": {
+          "max_wrapped_supply": {
+            "description": "Positive immutable wrapped-token supply cap in destination base units.",
+            "format": "uint128",
+            "minimum": 1,
+            "type": "integer"
+          },
           "outbound_proof_policy": {
             "$ref": "#/components/schemas/SccpOutboundProofPolicyV1"
           },
@@ -29894,6 +29883,7 @@
           "outbound_proof_policy",
           "route_address",
           "route_code_hash",
+          "max_wrapped_supply",
           "taira_to_token_multiplier"
         ],
         "type": "object"
@@ -29924,22 +29914,6 @@
               },
               "family": {
                 "const": "tron"
-              }
-            },
-            "required": [
-              "family",
-              "deployment"
-            ],
-            "type": "object"
-          },
-          {
-            "additionalProperties": false,
-            "properties": {
-              "deployment": {
-                "$ref": "#/components/schemas/SccpSolanaDestinationDeploymentV1"
-              },
-              "family": {
-                "const": "solana"
               }
             },
             "required": [
@@ -30021,7 +29995,6 @@
                 "enum": [
                   "taira_eth_xor",
                   "taira_bsc_xor",
-                  "taira_sol_xor",
                   "taira_ton_xor",
                   "taira_tron_xor"
                 ],
@@ -30045,15 +30018,9 @@
           "network": {
             "enum": [
               "ethereum_mainnet",
-              "ethereum_sepolia",
               "bsc_mainnet",
-              "bsc_testnet",
-              "solana_testnet",
               "ton_mainnet",
-              "ton_testnet",
-              "tron_mainnet",
-              "tron_nile",
-              "tron_shasta"
+              "tron_mainnet"
             ],
             "type": "string"
           },
@@ -30466,12 +30433,8 @@
               "network": {
                 "enum": [
                   "ethereum_mainnet",
-                  "ethereum_sepolia",
                   "bsc_mainnet",
-                  "bsc_testnet",
-                  "tron_mainnet",
-                  "tron_nile",
-                  "tron_shasta"
+                  "tron_mainnet"
                 ],
                 "type": "string"
               },
@@ -30793,7 +30756,6 @@
             "enum": [
               "ethereum_beacon_v1",
               "bsc_parlia_v1",
-              "solana_agave_v1",
               "ton_masterchain_v1",
               "tron_dpos_v1"
             ],
@@ -30853,9 +30815,6 @@
           },
           {
             "$ref": "#/components/schemas/SccpEvmAddressValueV1"
-          },
-          {
-            "$ref": "#/components/schemas/SccpSolanaPubkeyValueV1"
           },
           {
             "$ref": "#/components/schemas/SccpTonAccountValueV1"
@@ -31276,7 +31235,6 @@
             "enum": [
               1,
               2,
-              3,
               4,
               5
             ],
@@ -31285,15 +31243,9 @@
           "target_profile": {
             "enum": [
               "ethereum-mainnet",
-              "ethereum-sepolia",
               "bsc-mainnet",
-              "bsc-testnet",
-              "solana-testnet",
               "ton-mainnet",
-              "ton-testnet",
-              "tron-mainnet",
-              "tron-nile",
-              "tron-shasta"
+              "tron-mainnet"
             ],
             "type": "string"
           }
@@ -31926,150 +31878,6 @@
         "pattern": "^[A-Za-z0-9+/]{43}=$",
         "type": "string"
       },
-      "SccpSolanaDestinationDeploymentV1": {
-        "additionalProperties": false,
-        "properties": {
-          "native_verifier_config_hash": {
-            "$ref": "#/components/schemas/SccpNonzeroUpperHex32"
-          },
-          "native_verifier_material_account": {
-            "$ref": "#/components/schemas/SccpNonzeroUpperHex32"
-          },
-          "native_verifier_program_code_hash": {
-            "$ref": "#/components/schemas/SccpNonzeroUpperHex32"
-          },
-          "native_verifier_program_data_address": {
-            "$ref": "#/components/schemas/SccpNonzeroUpperHex32"
-          },
-          "native_verifier_program_data_slot": {
-            "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "native_verifier_program_id": {
-            "$ref": "#/components/schemas/SccpNonzeroUpperHex32"
-          },
-          "outbound_proof_policy": {
-            "$ref": "#/components/schemas/SccpOutboundProofPolicyV1"
-          },
-          "route_program_code_hash": {
-            "$ref": "#/components/schemas/SccpNonzeroUpperHex32"
-          },
-          "route_program_data_address": {
-            "$ref": "#/components/schemas/SccpNonzeroUpperHex32"
-          },
-          "route_program_data_slot": {
-            "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "route_program_id": {
-            "$ref": "#/components/schemas/SccpNonzeroUpperHex32"
-          },
-          "route_state_account": {
-            "$ref": "#/components/schemas/SccpNonzeroUpperHex32"
-          },
-          "taira_to_token_multiplier": {
-            "enum": [
-              1
-            ],
-            "format": "uint64",
-            "type": "integer"
-          },
-          "token_mint_address": {
-            "$ref": "#/components/schemas/SccpNonzeroUpperHex32"
-          },
-          "verifier_key_hash": {
-            "$ref": "#/components/schemas/SccpNonzeroUpperHex32"
-          },
-          "verifying_key": {
-            "$ref": "#/components/schemas/SccpGroth16Bn254VerifyingKeyV1"
-          }
-        },
-        "required": [
-          "token_mint_address",
-          "route_program_id",
-          "route_program_data_address",
-          "route_program_data_slot",
-          "route_state_account",
-          "route_program_code_hash",
-          "native_verifier_program_id",
-          "native_verifier_program_data_address",
-          "native_verifier_program_data_slot",
-          "native_verifier_material_account",
-          "native_verifier_program_code_hash",
-          "native_verifier_config_hash",
-          "verifying_key",
-          "verifier_key_hash",
-          "outbound_proof_policy",
-          "taira_to_token_multiplier"
-        ],
-        "type": "object"
-      },
-      "SccpSolanaPubkeyValueV1": {
-        "additionalProperties": false,
-        "properties": {
-          "SolanaPubkey32": {
-            "additionalProperties": false,
-            "properties": {
-              "bytes": {
-                "maxLength": 66,
-                "minLength": 66,
-                "not": {
-                  "pattern": "^0x0{64}$"
-                },
-                "pattern": "^0x[0-9a-f]{64}$",
-                "type": "string"
-              }
-            },
-            "required": [
-              "bytes"
-            ],
-            "type": "object"
-          }
-        },
-        "required": [
-          "SolanaPubkey32"
-        ],
-        "type": "object"
-      },
-      "SccpSolanaSourceEmitterIdentityV1": {
-        "additionalProperties": false,
-        "properties": {
-          "program_code_hash": {
-            "$ref": "#/components/schemas/SccpNonzeroUpperHex32"
-          },
-          "program_data_address": {
-            "$ref": "#/components/schemas/SccpNonzeroUpperHex32"
-          },
-          "program_data_slot": {
-            "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "program_id": {
-            "$ref": "#/components/schemas/SccpNonzeroUpperHex32"
-          },
-          "route_config_hash": {
-            "$ref": "#/components/schemas/SccpNonzeroUpperHex32"
-          },
-          "state_account": {
-            "$ref": "#/components/schemas/SccpNonzeroUpperHex32"
-          }
-        },
-        "required": [
-          "program_id",
-          "program_data_address",
-          "program_data_slot",
-          "state_account",
-          "program_code_hash",
-          "route_config_hash"
-        ],
-        "type": "object"
-      },
       "SccpSoraFinalityAnchorV1": {
         "additionalProperties": false,
         "properties": {
@@ -32222,6 +32030,12 @@
           "custody_owner": {
             "$ref": "#/components/schemas/SccpTairaI105Account"
           },
+          "max_outstanding_liability": {
+            "description": "Positive maximum outstanding SORA liability in Taira base units.",
+            "format": "uint128",
+            "minimum": 1,
+            "type": "integer"
+          },
           "payload_amount_scale": {
             "enum": [
               9
@@ -32232,6 +32046,7 @@
         "required": [
           "asset_definition_id",
           "custody_owner",
+          "max_outstanding_liability",
           "payload_amount_scale"
         ],
         "type": "object"
@@ -32282,22 +32097,6 @@
               },
               "identity": {
                 "$ref": "#/components/schemas/SccpSourceEmitterIdentityV1"
-              }
-            },
-            "required": [
-              "emitter",
-              "identity"
-            ],
-            "type": "object"
-          },
-          {
-            "additionalProperties": false,
-            "properties": {
-              "emitter": {
-                "const": "solana"
-              },
-              "identity": {
-                "$ref": "#/components/schemas/SccpSolanaSourceEmitterIdentityV1"
               }
             },
             "required": [
@@ -32469,6 +32268,12 @@
           "jetton_wallet_code_hash": {
             "$ref": "#/components/schemas/SccpNonzeroUpperHex32"
           },
+          "max_wrapped_supply": {
+            "description": "Positive immutable wrapped-token supply cap in destination base units.",
+            "format": "uint128",
+            "minimum": 1,
+            "type": "integer"
+          },
           "outbound_proof_policy": {
             "allOf": [
               {
@@ -32530,6 +32335,7 @@
           "verifier_key_hash",
           "proof_profile_commitment",
           "outbound_proof_policy",
+          "max_wrapped_supply",
           "taira_to_token_multiplier"
         ],
         "type": "object"
@@ -32623,8 +32429,7 @@
             "properties": {
               "network": {
                 "enum": [
-                  "ton_mainnet",
-                  "ton_testnet"
+                  "ton_mainnet"
                 ],
                 "type": "string"
               },
@@ -32761,35 +32566,6 @@
           {
             "properties": {
               "dest_domain": {
-                "const": 3
-              },
-              "recipient": {
-                "$ref": "#/components/schemas/SccpSolanaPubkeyValueV1"
-              },
-              "route_id": {
-                "properties": {
-                  "CanonicalText": {
-                    "properties": {
-                      "value": {
-                        "const": "taira_sol_xor"
-                      }
-                    },
-                    "required": [
-                      "value"
-                    ],
-                    "type": "object"
-                  }
-                },
-                "required": [
-                  "CanonicalText"
-                ],
-                "type": "object"
-              }
-            }
-          },
-          {
-            "properties": {
-              "dest_domain": {
                 "const": 4
               },
               "recipient": {
@@ -32865,7 +32641,6 @@
             "enum": [
               1,
               2,
-              3,
               4,
               5
             ],
@@ -32882,9 +32657,6 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/SccpEvmAddressValueV1"
-              },
-              {
-                "$ref": "#/components/schemas/SccpSolanaPubkeyValueV1"
               },
               {
                 "$ref": "#/components/schemas/SccpTonAccountValueV1"
@@ -75357,7 +75129,7 @@
         "operationId": "sccpSoraOutboundMaterial",
         "parameters": [
           {
-            "description": "Exact external SCCP source profile, for example solana-testnet.",
+            "description": "Exact external SCCP source profile, for example ethereum-mainnet.",
             "in": "path",
             "name": "source_profile",
             "required": true,
@@ -98206,38 +97978,6 @@
           }
         },
         "summary": "Fetch current leader.",
-        "tags": [
-          "Sumeragi"
-        ],
-        "x-iroha-tool-effect": "operator"
-      }
-    },
-    "/v1/sumeragi/pacemaker": {
-      "get": {
-        "description": "Return pacemaker status snapshot.",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response",
-            "headers": {
-              "Cache-Control": {
-                "description": "Authenticated responses which must never be retained.",
-                "required": true,
-                "schema": {
-                  "const": "private, no-store",
-                  "type": "string"
-                }
-              }
-            }
-          }
-        },
-        "summary": "Fetch pacemaker status.",
         "tags": [
           "Sumeragi"
         ],

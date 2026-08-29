@@ -784,7 +784,13 @@ def test_casting_proof_requires_exact_schema_frames() -> None:
             headers={"Content-Type": "application/x-norito"},
         )
     )
-    with pytest.raises(ValueError, match="expected 0x02"):
+    with pytest.raises(
+        ValueError,
+        match=(
+            "Parliament casting-proof response uses Norito layout flags 0x00; "
+            "the exact type requires 0x02"
+        ),
+    ):
         ToriiClient(
             "https://node.test", session=wrong_flags
         ).get_parliament_timed_ovn_casting_proof_page_v1(
@@ -840,8 +846,8 @@ def test_casting_proof_request_matches_shared_rust_golden() -> None:
         PARLIAMENT_GOVERNANCE_ATTEMPT_SEQUENCE_MAX_V1
     )
     assert fixture["no_result_kinds"][-1] == {
-        "norito_index": 7,
-        "json_tag": "SortitionRetriesExhausted",
+        "norito_index": 8,
+        "json_tag": "ConfirmationJuryCapacityUnavailable",
     }
 
 
@@ -859,6 +865,23 @@ def test_attempt_read_accepts_sortition_retries_exhausted_no_result() -> None:
     ).get_parliament_attempt_v1(ATTEMPT_ID, canonical_auth=_auth())
     assert parsed.raw["body_states"][0]["no_result_kind"] == {
         "reason": "SortitionRetriesExhausted"
+    }
+
+
+def test_attempt_read_accepts_confirmation_capacity_no_result() -> None:
+    payload = _attempt_read()
+    state = payload["body_states"][0]
+    state["body_instance_id"] = BODY_ID
+    state["status"] = {"status": "NoResult"}
+    state["no_result_kind"] = {"reason": "ConfirmationJuryCapacityUnavailable"}
+    state["no_result_height"] = 20
+    session = RecordingSession()
+    session.queue(_json_response(payload))
+    parsed = ToriiClient(
+        "https://node.test", session=session
+    ).get_parliament_attempt_v1(ATTEMPT_ID, canonical_auth=_auth())
+    assert parsed.raw["body_states"][0]["no_result_kind"] == {
+        "reason": "ConfirmationJuryCapacityUnavailable"
     }
 
 
@@ -1015,7 +1038,10 @@ def test_register_sortition_request_uses_one_atomic_body_ordered_batch() -> None
                 "tx_instructions": [
                     {
                         "wire_id": PARLIAMENT_TRANSITION_SUBMIT_WIRE_ID_V1,
-                        "payload_hex": _frame(b"atomic sortition instruction").hex(),
+                        "payload_hex": _instruction_frame(
+                            b"atomic sortition instruction",
+                            PARLIAMENT_TRANSITION_SUBMIT_WIRE_ID_V1,
+                        ).hex(),
                     }
                 ],
             }

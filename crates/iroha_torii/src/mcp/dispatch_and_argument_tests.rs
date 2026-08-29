@@ -78,13 +78,8 @@ fn tool_registry_skips_ws_and_sse_routes() {
             .iter()
             .any(|tool| tool.name == "torii.get_v1_api_version")
     );
-    assert_eq!(
-        tools
-            .iter()
-            .any(|tool| tool.name == "iroha.sumeragi.pacemaker"),
-        cfg!(feature = "telemetry")
-    );
     for retired in [
+        "iroha.sumeragi.pacemaker",
         "iroha.sumeragi.commit_certificates",
         "iroha.sumeragi.validator_sets.list",
         "iroha.sumeragi.validator_sets.get",

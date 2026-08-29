@@ -927,6 +927,9 @@ fn is_time_sensitive_instruction_type(type_id: TypeId) -> bool {
         iroha_data_model::isi::offline::AuthorizeKagemushaTairaCanaryV4,
         iroha_data_model::isi::offline::RegisterOfflineDeviceAttestation,
         iroha_data_model::isi::offline::SetOfflineDeviceAttestationPolicy,
+        iroha_data_model::isi::private_settlement::ActivatePrivateSettlementPoolV1,
+        iroha_data_model::isi::private_settlement::AbortAtomicPrivateSettlementV1,
+        iroha_data_model::isi::private_settlement::FinalizeAtomicPrivateSettlementV1,
         iroha_data_model::isi::oracle::RecordTwitterBinding,
         iroha_data_model::isi::social::ClaimTwitterFollowReward,
         iroha_data_model::isi::social::SendToTwitter,
@@ -6092,7 +6095,9 @@ pub mod tests {
             .expect("deactivation must retain typed subject history");
         assert_eq!(retained_binding.subject, contract_subject);
         state_tx.apply();
-        block.commit().expect("commit contract deactivation");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit contract deactivation");
         assert!(
             code::is_historical_contract_subject(state.view().world(), &contract_subject),
             "deactivation must retain the canonical subject in the admission-denial index"
@@ -6208,7 +6213,9 @@ pub mod tests {
             )
             .expect("register canonical multisig account");
         setup_tx.apply();
-        setup_block.commit().expect("commit multisig setup");
+        setup_block
+            .commit_world_overlay_for_testing()
+            .expect("commit multisig setup");
         let registration = Register::account(new_account_in_domain(&retail_id, &target_domain));
         let tx = TransactionBuilder::new(
             test_network_id(),
@@ -6300,7 +6307,9 @@ pub mod tests {
             )
             .expect("register canonical multisig account");
         setup_tx.apply();
-        setup_block.commit().expect("commit multisig setup");
+        setup_block
+            .commit_world_overlay_for_testing()
+            .expect("commit multisig setup");
         let mut statuses = BTreeMap::new();
         statuses.insert(
             TestLaneId::SINGLE,
@@ -8147,6 +8156,13 @@ pub mod tests {
             TypeId::of::<iroha_data_model::isi::offline::AuthorizeKagemushaTairaCanaryV4>(),
             TypeId::of::<iroha_data_model::isi::offline::RegisterOfflineDeviceAttestation>(),
             TypeId::of::<iroha_data_model::isi::offline::SetOfflineDeviceAttestationPolicy>(),
+            TypeId::of::<iroha_data_model::isi::private_settlement::ActivatePrivateSettlementPoolV1>(
+            ),
+            TypeId::of::<iroha_data_model::isi::private_settlement::AbortAtomicPrivateSettlementV1>(
+            ),
+            TypeId::of::<
+                iroha_data_model::isi::private_settlement::FinalizeAtomicPrivateSettlementV1,
+            >(),
             TypeId::of::<ProposeRuntimeUpgrade>(),
             TypeId::of::<ActivateRuntimeUpgrade>(),
             TypeId::of::<CancelRuntimeUpgrade>(),
@@ -9107,7 +9123,7 @@ pub mod tests {
             .signed(&fixture.keypair),
         );
         tx1.apply();
-        let _ = block1.commit();
+        let _ = block1.commit_world_overlay_for_testing();
         // Block 2: metadata manifest advertises the wrong abi_hash; admission must reject even
         // though the stored manifest matches.
         let header2 =
@@ -9317,7 +9333,7 @@ pub mod tests {
             .signed(&fixture.keypair),
         );
         tx1.apply();
-        let _ = block1.commit();
+        let _ = block1.commit_world_overlay_for_testing();
         // Block 2: attach a correct manifest in metadata; validation should still reject
         // because the stored manifest ABI hash mismatches the computed one.
         let header2 =
@@ -9508,7 +9524,7 @@ pub mod tests {
             .contract_manifests
             .insert(code_hash, manifest.clone());
         tx1.apply();
-        let _ = block1.commit();
+        let _ = block1.commit_world_overlay_for_testing();
         // Block 2: submit the IVM program; validation should find the manifest in WSV and accept
         let header2 =
             iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
@@ -12388,7 +12404,9 @@ pub mod tests {
             block.world.smart_contract_state.get(&marker_path).is_some(),
             "successful execution persists its claim marker"
         );
-        block.commit().expect("commit first faucet marker block");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit first faucet marker block");
         assert!(
             state
                 .view()

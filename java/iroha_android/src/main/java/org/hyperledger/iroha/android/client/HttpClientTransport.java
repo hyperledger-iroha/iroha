@@ -380,6 +380,21 @@ public final class HttpClientTransport implements IrohaClient {
         .build();
   }
 
+  /**
+   * Creates the exact-route private-settlement client without inheriting request observers.
+   *
+   * <p>Restricted proof and encrypted-capsule bodies must not enter generic SDK telemetry.
+   */
+  public AtomicPrivateSettlementToriiClientV1 newAtomicPrivateSettlementToriiClientV1() {
+    return AtomicPrivateSettlementToriiClientV1.builder()
+        .executor(executor)
+        .baseUri(config.baseUri())
+        .localSigningContext(config.requireLocalSigningContext())
+        .timeout(config.requestTimeout())
+        .defaultHeaders(config.defaultHeaders())
+        .build();
+  }
+
   /** Creates a SoraFS gateway client that reuses this transport's HTTP executor and configuration. */
   public SorafsGatewayClient newSorafsGatewayClient() {
     return newSorafsGatewayClient(config.sorafsGatewayUri());
@@ -4740,6 +4755,12 @@ public final class HttpClientTransport implements IrohaClient {
           "native_proof_b64",
           SccpSubmitEncoding.MAX_NATIVE_PROOF_BYTES,
           SccpSubmitEncoding.NATIVE_INBOUND_PROOF_SCHEMA_NAME);
+      final String replayWitness = requiredSccpArtifact(fields, "replay_witness_b64");
+      SccpSubmitEncoding.validateCanonicalNoritoBase64(
+          replayWitness,
+          "replay_witness_b64",
+          SccpSubmitEncoding.MAX_REPLAY_WITNESS_BYTES,
+          SccpSubmitEncoding.REPLAY_WITNESS_SCHEMA_NAME);
       return;
     }
     final String destinationProof = requiredSccpArtifact(fields, "destination_proof_b64");
@@ -5010,6 +5031,7 @@ public final class HttpClientTransport implements IrohaClient {
           "signature_b64",
           "transaction_payload_b64",
           "native_proof_b64",
+          "replay_witness_b64",
           "creation_time_ms");
   private static final long FEE_QUOTE_RESPONSE_MAX_BYTES = 64L * 1024L;
   private static final long FEE_SPONSOR_PROGRAM_RESPONSE_MAX_BYTES = 64L * 1024L;

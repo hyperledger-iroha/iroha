@@ -3,6 +3,8 @@
 //! The verifier reconstructs every selector and constant column from the
 //! public statement. The prover only commits witness-bearing base columns and
 //! one carry bridge needed by the alternating VM previous/next row layout.
+#[cfg(test)]
+use super::air::validate_private_note_base_trace_v1;
 use super::{
     air::{
         COPY_OFFSET, IvmPrivateNoteAirErrorV1, PRIVATE_NOTE_BASE_WIDTH_V1,
@@ -20,10 +22,12 @@ use super::{
         SCRATCH_VM_RIGHT_SELECT_OFFSET, SHA_BITS_OFFSET, SHA_CARRY_OFFSET, SHA_CARRY_WIDTH,
         SHA_INITIAL_STATE_OFFSET, SHA_SCHEDULE_OFFSET, SHA_STATE_OFFSET, SHA_T1_OFFSET,
         SHA_T2_OFFSET, SHA256_INITIAL_STATE_V1, SHA256_ROUND_CONSTANTS_V1, SumSideV1,
-        build_private_note_copy_schedule_v1, build_private_note_fixed_trace_v1,
-        validate_private_note_base_trace_v1,
+        build_private_note_base_trace_with_profile_v1,
+        build_private_note_copy_schedule_with_profile_v1,
+        build_private_note_fixed_trace_with_profile_v1,
+        validate_private_note_base_trace_with_profile_v1,
     },
-    relation::IvmPrivateNoteWitnessV1,
+    relation::{IvmPrivateNoteWitnessV1, PrivateNoteRelationProfileV1},
 };
 use crate::privacy_engines::{
     aggregate_stark as aggregate,
@@ -81,11 +85,11 @@ const FIXED_VM_INSTRUCTION_TRANSITION: usize = FIXED_VM_COMMON_TRANSITION + 1;
 const FIXED_VM_ACTION_LIMB_ZERO_BYTE: usize = FIXED_VM_INSTRUCTION_TRANSITION + 1;
 const FIXED_VM_ACTION_LIMB_ONE_BYTE: usize = FIXED_VM_ACTION_LIMB_ZERO_BYTE + 1;
 const FIXED_VM_EXECUTION_EPOCH_BYTE: usize = FIXED_VM_ACTION_LIMB_ONE_BYTE + 1;
-pub(super) const PRIVATE_NOTE_PROFILE_FIXED_WIDTH_V1: usize = FIXED_VM_EXECUTION_EPOCH_BYTE + 1;
-pub(super) const PRIVATE_NOTE_PROFILE_AUX_WIDTH_V1: usize = 1;
-pub(super) const PRIVATE_NOTE_PROFILE_CONSTRAINT_COUNT_V1: usize = 1_372;
+pub(crate) const PRIVATE_NOTE_PROFILE_FIXED_WIDTH_V1: usize = FIXED_VM_EXECUTION_EPOCH_BYTE + 1;
+pub(crate) const PRIVATE_NOTE_PROFILE_AUX_WIDTH_V1: usize = 1;
+pub(crate) const PRIVATE_NOTE_PROFILE_CONSTRAINT_COUNT_V1: usize = 1_372;
 /// Audited maximum algebraic degree across the complete shared/profile AIR.
-pub(super) const PRIVATE_NOTE_PROFILE_CONSTRAINT_DEGREE_V1: u8 =
+pub(crate) const PRIVATE_NOTE_PROFILE_CONSTRAINT_DEGREE_V1: u8 =
     PROOF_MANAGED_NOTE_MAX_CONSTRAINT_DEGREE_V1;
 const PROFILE_AUX_VM_CARRY_BRIDGE: usize = 0;
 /// Relation-local descriptor combined with the shared proof-driver geometry.
@@ -193,10 +197,21 @@ fn vm_same_instruction_transition(
         _ => false,
     }
 }
+#[cfg(test)]
 pub(super) fn private_note_profile_fixed_columns_v1(
     statement: &IrohaIvmPrivateNoteStarkStatementV1,
 ) -> Result<Vec<Vec<F>>, ProofManagedNoteStarkErrorV1> {
-    let fixed = build_private_note_fixed_trace_v1(statement).map_err(map_air_error_v1)?;
+    private_note_profile_fixed_columns_with_relation_profile_v1(
+        statement,
+        PrivateNoteRelationProfileV1::IVM_PRIVATE_NOTE,
+    )
+}
+fn private_note_profile_fixed_columns_with_relation_profile_v1(
+    statement: &IrohaIvmPrivateNoteStarkStatementV1,
+    profile: PrivateNoteRelationProfileV1,
+) -> Result<Vec<Vec<F>>, ProofManagedNoteStarkErrorV1> {
+    let fixed = build_private_note_fixed_trace_with_profile_v1(statement, profile)
+        .map_err(map_air_error_v1)?;
     if fixed.rows.len() != PRIVATE_NOTE_TRACE_SIZE_V1 {
         return Err(ProofManagedNoteStarkErrorV1::InvalidProfile);
     }
@@ -386,9 +401,21 @@ pub(super) fn private_note_profile_fixed_columns_v1(
     }
     Ok(columns)
 }
+#[cfg(test)]
 pub(super) fn private_note_profile_aux_columns_v1(
     statement: &IrohaIvmPrivateNoteStarkStatementV1,
     base_columns: &[Vec<F>],
+) -> Result<Vec<Vec<F>>, ProofManagedNoteStarkErrorV1> {
+    private_note_profile_aux_columns_with_relation_profile_v1(
+        statement,
+        base_columns,
+        PrivateNoteRelationProfileV1::IVM_PRIVATE_NOTE,
+    )
+}
+fn private_note_profile_aux_columns_with_relation_profile_v1(
+    statement: &IrohaIvmPrivateNoteStarkStatementV1,
+    base_columns: &[Vec<F>],
+    profile: PrivateNoteRelationProfileV1,
 ) -> Result<Vec<Vec<F>>, ProofManagedNoteStarkErrorV1> {
     if base_columns.len() != PRIVATE_NOTE_BASE_WIDTH_V1
         || base_columns
@@ -397,7 +424,8 @@ pub(super) fn private_note_profile_aux_columns_v1(
     {
         return Err(ProofManagedNoteStarkErrorV1::InvalidTrace);
     }
-    let fixed = build_private_note_fixed_trace_v1(statement).map_err(map_air_error_v1)?;
+    let fixed = build_private_note_fixed_trace_with_profile_v1(statement, profile)
+        .map_err(map_air_error_v1)?;
     let mut bridge = vec![F::ZERO; PRIVATE_NOTE_TRACE_SIZE_V1];
     for row in 1..PRIVATE_NOTE_TRACE_SIZE_V1 {
         if matches!(fixed.rows[row], PrivateNoteFixedRowV1::VmNext { .. }) {
@@ -624,11 +652,115 @@ const DISTINCT_RIGHT_BITS_OFFSET: usize = SCRATCH_VM_DIFFERENCE_BITS_OFFSET;
 const VM_DIFFERENCE_BITS_OFFSET: usize = SCRATCH_VM_DIFFERENCE_BITS_OFFSET;
 include!("../shared_note_profile_constraints.rs");
 define_note_profile_constraint_residues_v1!(private_note_profile_constraint_residues_inner_v1);
+/// Reusable crate-private bridge from one relation profile to the shared STARK driver.
+///
+/// A sibling adapter owns its protocol descriptor, profile digest, transcript
+/// labels, and public-input digest. This bridge exposes only the invariant IVM
+/// private-note geometry, fixed preprocessing, constraint evaluator, and
+/// prover-column compiler.
+#[derive(Clone, Copy)]
+pub(crate) struct PrivateNoteStarkRelationV1<'a> {
+    statement: &'a IrohaIvmPrivateNoteStarkStatementV1,
+    profile: PrivateNoteRelationProfileV1,
+}
+impl<'a> PrivateNoteStarkRelationV1<'a> {
+    /// Bind a public statement to one closed relation profile.
+    pub(crate) const fn new(
+        statement: &'a IrohaIvmPrivateNoteStarkStatementV1,
+        profile: PrivateNoteRelationProfileV1,
+    ) -> Self {
+        Self { statement, profile }
+    }
+
+    /// Native trace logarithm shared by both profiles.
+    pub(crate) const fn trace_log2_v1(self) -> u8 {
+        PRIVATE_NOTE_TRACE_LOG2_V1
+    }
+
+    /// Exact base-trace width shared by both profiles.
+    pub(crate) const fn base_width_v1(self) -> usize {
+        PRIVATE_NOTE_BASE_WIDTH_V1
+    }
+
+    /// Exact profile-only auxiliary width.
+    pub(crate) const fn profile_aux_width_v1(self) -> usize {
+        PRIVATE_NOTE_PROFILE_AUX_WIDTH_V1
+    }
+
+    /// Exact profile-only fixed width.
+    pub(crate) const fn profile_fixed_width_v1(self) -> usize {
+        PRIVATE_NOTE_PROFILE_FIXED_WIDTH_V1
+    }
+
+    /// Exact profile-only constraint count.
+    pub(crate) const fn profile_constraint_count_v1(self) -> usize {
+        PRIVATE_NOTE_PROFILE_CONSTRAINT_COUNT_V1
+    }
+
+    /// Compile the verifier-fixed copy schedule.
+    pub(crate) fn copy_schedule_v1(
+        self,
+    ) -> Result<NoteCopyScheduleV1, ProofManagedNoteStarkErrorV1> {
+        build_private_note_copy_schedule_with_profile_v1(self.statement, self.profile)
+            .map_err(map_air_error_v1)
+    }
+
+    /// Compile relation-specific fixed columns.
+    pub(crate) fn profile_fixed_columns_v1(
+        self,
+    ) -> Result<Vec<Vec<F>>, ProofManagedNoteStarkErrorV1> {
+        private_note_profile_fixed_columns_with_relation_profile_v1(self.statement, self.profile)
+    }
+
+    /// Build the relation-specific auxiliary columns.
+    pub(crate) fn profile_aux_columns_v1(
+        self,
+        base_columns: &[Vec<F>],
+    ) -> Result<Vec<Vec<F>>, ProofManagedNoteStarkErrorV1> {
+        private_note_profile_aux_columns_with_relation_profile_v1(
+            self.statement,
+            base_columns,
+            self.profile,
+        )
+    }
+
+    /// Evaluate the extension-domain relation residues.
+    pub(crate) fn constraint_residues_v1(
+        self,
+        current_base: &[F],
+        next_base: &[F],
+        current_aux: &[F],
+        next_aux: &[F],
+        fixed: &[F],
+    ) -> Result<Vec<F>, ProofManagedNoteStarkErrorV1> {
+        private_note_profile_constraint_residues_inner_v1(
+            current_base,
+            next_base,
+            current_aux,
+            next_aux,
+            fixed,
+        )
+    }
+
+    /// Compile and natively validate prover base columns.
+    pub(crate) fn compile_prover_columns_v1(
+        self,
+        witness: &IvmPrivateNoteWitnessV1,
+    ) -> Result<Vec<Vec<F>>, ProofManagedNoteStarkErrorV1> {
+        let trace =
+            build_private_note_base_trace_with_profile_v1(self.statement, witness, self.profile)
+                .map_err(map_air_error_v1)?;
+        validate_private_note_base_trace_with_profile_v1(self.statement, &trace, self.profile)
+            .map_err(map_air_error_v1)?;
+        private_note_base_columns_v1(&trace)
+    }
+}
 /// Statement-and-consensus-binding adapter used by both prover and verifier.
 pub(super) struct PrivateNoteStarkAdapterV1<'a> {
     statement: &'a IrohaIvmPrivateNoteStarkStatementV1,
     consensus_binding: &'a PrivacyNativeConsensusBindingV1,
     consensus_limits: &'a PrivacyConsensusLimitsV1,
+    relation_profile: PrivateNoteRelationProfileV1,
 }
 impl<'a> PrivateNoteStarkAdapterV1<'a> {
     pub(super) const fn new(
@@ -640,7 +772,26 @@ impl<'a> PrivateNoteStarkAdapterV1<'a> {
             statement,
             consensus_binding,
             consensus_limits,
+            relation_profile: PrivateNoteRelationProfileV1::IVM_PRIVATE_NOTE,
         }
+    }
+    #[cfg(test)]
+    const fn new_with_relation_profile_v1(
+        statement: &'a IrohaIvmPrivateNoteStarkStatementV1,
+        consensus_binding: &'a PrivacyNativeConsensusBindingV1,
+        consensus_limits: &'a PrivacyConsensusLimitsV1,
+        relation_profile: PrivateNoteRelationProfileV1,
+    ) -> Self {
+        Self {
+            statement,
+            consensus_binding,
+            consensus_limits,
+            relation_profile,
+        }
+    }
+
+    const fn relation_v1(&self) -> PrivateNoteStarkRelationV1<'a> {
+        PrivateNoteStarkRelationV1::new(self.statement, self.relation_profile)
     }
 }
 fn private_note_public_input_digest_v1(
@@ -678,25 +829,25 @@ impl ProofManagedNoteStarkAdapterV1 for PrivateNoteStarkAdapterV1<'_> {
         private_note_public_input_digest_v1(self.statement, binding_digest)
     }
     fn trace_log2_v1(&self) -> u8 {
-        PRIVATE_NOTE_TRACE_LOG2_V1
+        self.relation_v1().trace_log2_v1()
     }
     fn base_width_v1(&self) -> usize {
-        PRIVATE_NOTE_BASE_WIDTH_V1
+        self.relation_v1().base_width_v1()
     }
     fn profile_aux_width_v1(&self) -> usize {
-        PRIVATE_NOTE_PROFILE_AUX_WIDTH_V1
+        self.relation_v1().profile_aux_width_v1()
     }
     fn profile_fixed_width_v1(&self) -> usize {
-        PRIVATE_NOTE_PROFILE_FIXED_WIDTH_V1
+        self.relation_v1().profile_fixed_width_v1()
     }
     fn profile_constraint_count_v1(&self) -> usize {
-        PRIVATE_NOTE_PROFILE_CONSTRAINT_COUNT_V1
+        self.relation_v1().profile_constraint_count_v1()
     }
     fn copy_schedule_v1(&self) -> Result<NoteCopyScheduleV1, ProofManagedNoteStarkErrorV1> {
-        build_private_note_copy_schedule_v1(self.statement).map_err(map_air_error_v1)
+        self.relation_v1().copy_schedule_v1()
     }
     fn profile_fixed_columns_v1(&self) -> Result<Vec<Vec<F>>, ProofManagedNoteStarkErrorV1> {
-        private_note_profile_fixed_columns_v1(self.statement)
+        self.relation_v1().profile_fixed_columns_v1()
     }
     fn derive_profile_challenges_v1(
         &self,
@@ -713,7 +864,7 @@ impl ProofManagedNoteStarkAdapterV1 for PrivateNoteStarkAdapterV1<'_> {
         _copy_challenges: NoteCopyChallengesV1,
         _profile_challenges: &Self::ProfileChallenges,
     ) -> Result<Vec<Vec<F>>, ProofManagedNoteStarkErrorV1> {
-        private_note_profile_aux_columns_v1(self.statement, base_columns)
+        self.relation_v1().profile_aux_columns_v1(base_columns)
     }
     fn profile_constraint_residues_v1(
         &self,
@@ -725,7 +876,7 @@ impl ProofManagedNoteStarkAdapterV1 for PrivateNoteStarkAdapterV1<'_> {
         _copy_challenges: NoteCopyChallengesV1,
         _profile_challenges: &Self::ProfileChallenges,
     ) -> Result<Vec<F>, ProofManagedNoteStarkErrorV1> {
-        private_note_profile_constraint_residues_inner_v1(
+        self.relation_v1().constraint_residues_v1(
             current_base,
             next_base,
             current_aux,
@@ -739,10 +890,8 @@ pub(super) fn compile_private_note_prover_columns_v1(
     statement: &IrohaIvmPrivateNoteStarkStatementV1,
     witness: &IvmPrivateNoteWitnessV1,
 ) -> Result<Vec<Vec<F>>, ProofManagedNoteStarkErrorV1> {
-    let trace = super::air::build_private_note_base_trace_v1(statement, witness)
-        .map_err(map_air_error_v1)?;
-    validate_private_note_base_trace_v1(statement, &trace).map_err(map_air_error_v1)?;
-    private_note_base_columns_v1(&trace)
+    PrivateNoteStarkRelationV1::new(statement, PrivateNoteRelationProfileV1::IVM_PRIVATE_NOTE)
+        .compile_prover_columns_v1(witness)
 }
 /// Construct the canonical private-note proof with injected masking entropy.
 ///
@@ -778,7 +927,7 @@ pub(crate) fn verify_private_note_stark_v1(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::privacy_engines::ivm_private_note::tests::fixture;
+    use crate::privacy_engines::ivm_private_note::tests::{fixture, three_output_fixture};
     use iroha_data_model::privacy::{
         PrivacyActionDigestV1, PrivacyEngineManifestDigestV1,
         PrivacyNativeConsensusBindingValidationErrorV1, PrivacyParameterDigestV1,
@@ -1263,6 +1412,47 @@ mod tests {
                 ),
             );
         }
+    }
+    #[test]
+    #[ignore = "release gate: generates and verifies the full-domain three-output settlement seam proof"]
+    fn three_output_proof_rejects_a_substituted_fixed_output_memo() {
+        let value = three_output_fixture();
+        let (binding, limits) = consensus_material(&value.statement);
+        let relation = PrivateNoteStarkRelationV1::new(&value.statement, value.profile);
+        let base_columns = relation
+            .compile_prover_columns_v1(&value.witness)
+            .expect("three-output prover columns");
+        let adapter = PrivateNoteStarkAdapterV1::new_with_relation_profile_v1(
+            &value.statement,
+            &binding,
+            &limits,
+            value.profile,
+        );
+        let mut rng = StdRng::from_seed([0xB7; 32]);
+        let proof = prove_proof_managed_note_stark_v1_with_rng(&adapter, &base_columns, &mut rng)
+            .expect("three-output seam proof");
+        verify_proof_managed_note_stark_v1(&adapter, &proof)
+            .expect("canonical fixed output memos verify");
+
+        let PrivateNoteRelationProfileV1::ExactThreeOutputBalanced {
+            mut output_memo_digests,
+        } = value.profile
+        else {
+            unreachable!("fixture uses the exact three-output profile")
+        };
+        output_memo_digests[2][0] ^= 1;
+        let substituted_profile =
+            PrivateNoteRelationProfileV1::exact_three_output_balanced(output_memo_digests);
+        let substituted_adapter = PrivateNoteStarkAdapterV1::new_with_relation_profile_v1(
+            &value.statement,
+            &binding,
+            &limits,
+            substituted_profile,
+        );
+        assert_proof_equation_rejection_v1(
+            "verifier-fixed output memo",
+            verify_proof_managed_note_stark_v1(&substituted_adapter, &proof),
+        );
     }
     #[test]
     fn native_rows_satisfy_every_extension_residue_on_the_trace_domain() {

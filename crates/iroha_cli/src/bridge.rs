@@ -75,6 +75,9 @@ pub struct SubmitNativeMessageArgs {
     /// File containing one canonical Norito protocol-native SCCP inbound proof.
     #[arg(long, value_name = "PATH")]
     proof: PathBuf,
+    /// File containing one canonical Norito sparse replay non-membership witness.
+    #[arg(long, value_name = "PATH")]
+    replay_witness: PathBuf,
     #[command(flatten)]
     detached: DetachedSubmitArgs,
 }
@@ -538,6 +541,11 @@ fn sccp_submit_native_message(
         iroha_sccp::SCCP_NATIVE_ADMISSION_MAX_ENCODED_BYTES_V1,
         "SCCP native proof",
     )?;
+    let replay_witness = read_bounded_binary_artifact(
+        &args.replay_witness,
+        iroha_data_model::bridge::SCCP_REPLAY_WITNESS_MAX_ENCODED_BYTES_V1,
+        "SCCP sparse replay witness",
+    )?;
     let detached = load_detached_submit_material(&args.detached, &authority)?;
     let request = SccpNativeMessageSubmitRequest {
         authority,
@@ -545,6 +553,7 @@ fn sccp_submit_native_message(
         signature_b64: detached.signature_b64,
         transaction_payload_b64: detached.transaction_payload_b64,
         native_proof_b64: base64::engine::general_purpose::STANDARD.encode(proof),
+        replay_witness_b64: base64::engine::general_purpose::STANDARD.encode(replay_witness),
         creation_time_ms: detached.creation_time_ms,
     };
     let client = ctx.client_from_config();
