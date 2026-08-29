@@ -28,6 +28,7 @@ public final class GradleHarnessTests {
         "org.hyperledger.iroha.android.address.AssetDefinitionIdEncoderTests",
         "org.hyperledger.iroha.android.address.AssetIdDecoderTests",
         "org.hyperledger.iroha.android.address.AssetIdEncoderTests",
+        "org.hyperledger.iroha.android.client.AtomicPrivateSettlementToriiClientV1Tests",
         "org.hyperledger.iroha.android.client.CanonicalRequestSignerTests",
         "org.hyperledger.iroha.android.client.ClientConfigKeystoreTelemetryTests",
         "org.hyperledger.iroha.android.client.ClientConfigManifestLoaderTests",

@@ -70092,12 +70092,26 @@
                 }
               }
             },
-            "description": "Authenticated peer transport, routing, ingress compute, queue durability, or the signed public receipt is unavailable. PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN means admission may already have occurred; reconcile the exact entrypoint hash and do not create a replacement transaction until resolved.",
+            "description": "Authenticated peer transport, routing, ingress compute, queue durability, or the signed public receipt is unavailable. PRTRY:QUEUE_PLAN_JOURNAL_UNAVAILABLE means the journal definitely did not durably admit the transaction. PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN means admission may already have occurred: reconcile the exact hashes before retrying and do not create a replacement transaction until resolved. Only that outcome-unknown response carries singleton x-iroha-entrypoint-hash and x-iroha-signed-transaction-hash headers plus the same exact values in ErrorEnvelope.details.entrypoint_hash and ErrorEnvelope.details.tx_hash; it does not fabricate queue-pressure details or headers.",
             "headers": {
+              "x-iroha-entrypoint-hash": {
+                "description": "Present exactly once only for PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN; the exact external transaction-entrypoint hash also carried in ErrorEnvelope.details.entrypoint_hash.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
               "x-iroha-reject-code": {
                 "description": "Exact availability or durability result when known, including route_unavailable, kagemusha_lifecycle_transport_unavailable, transaction_ingress_compute_saturated, PRTRY:QUEUE_PLAN_JOURNAL_UNAVAILABLE, or PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN. Infrastructure failures sharing HTTP 503 may omit it.",
                 "schema": {
                   "example": "PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN",
+                  "type": "string"
+                }
+              },
+              "x-iroha-signed-transaction-hash": {
+                "description": "Present exactly once only for PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN; the exact unchanged lifecycle SignedTransaction hash also carried in ErrorEnvelope.details.tx_hash.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{64}$",
                   "type": "string"
                 }
               }
@@ -72443,6 +72457,44 @@
               }
             },
             "description": "Unsupported request content type."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The admission worker, authoritative Torii route, or durable queue-plan journal is unavailable. PRTRY:QUEUE_PLAN_JOURNAL_UNAVAILABLE means the journal definitely did not durably admit the entrypoint. PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN means admission may already have occurred: reconcile the exact hashes before retrying and do not create a replacement transaction until resolved. Only that outcome-unknown response carries a singleton x-iroha-entrypoint-hash matching ErrorEnvelope.details.entrypoint_hash. For External and SealedReveal entrypoints it also carries a singleton x-iroha-signed-transaction-hash matching ErrorEnvelope.details.tx_hash; for entrypoints without an inner SignedTransaction, both signed-transaction identity fields are absent. It does not fabricate queue-pressure details or headers.",
+            "headers": {
+              "x-iroha-entrypoint-hash": {
+                "description": "Present exactly once only for PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN; the exact transaction-entrypoint hash also carried in ErrorEnvelope.details.entrypoint_hash.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "x-iroha-reject-code": {
+                "description": "Exact queue or Torii availability code when the failure originated in canonical entrypoint admission; intermediary failures may omit the header.",
+                "schema": {
+                  "example": "PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN",
+                  "type": "string"
+                }
+              },
+              "x-iroha-signed-transaction-hash": {
+                "description": "Present exactly once only for PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN when the submitted External or SealedReveal entrypoint carries an inner SignedTransaction; the exact unchanged inner hash is also carried in ErrorEnvelope.details.tx_hash.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "summary": "Submit a versioned transaction entrypoint.",
@@ -72708,13 +72760,20 @@
                 }
               }
             },
-            "description": "The admission worker or authoritative Torii route is temporarily unavailable. A proxy timeout can be ambiguous with remote admission.",
+            "description": "The admission worker, authoritative Torii route, or durable queue-plan journal is unavailable. PRTRY:QUEUE_PLAN_JOURNAL_UNAVAILABLE means the journal definitely did not durably admit the transaction. PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN means admission may already have occurred: reconcile the exact hashes before retrying and do not create a replacement transaction until resolved. Only that outcome-unknown response carries singleton x-iroha-entrypoint-hash and x-iroha-signed-transaction-hash headers plus the same exact values in ErrorEnvelope.details.entrypoint_hash and ErrorEnvelope.details.tx_hash; it does not fabricate queue-pressure details or headers.",
             "headers": {
               "Retry-After": {
-                "description": "Whole-second retry delay; the ErrorEnvelope retry_after_seconds detail carries the same value.",
+                "description": "Whole-second retry delay when authoritative backpressure supplies one; journal outcome-unknown responses omit it.",
                 "schema": {
                   "minimum": 0,
                   "type": "integer"
+                }
+              },
+              "x-iroha-entrypoint-hash": {
+                "description": "Present exactly once only for PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN; the exact transaction-entrypoint hash also carried in ErrorEnvelope.details.entrypoint_hash.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
                 }
               },
               "x-iroha-reject-code": {
@@ -72722,9 +72781,18 @@
                 "schema": {
                   "enum": [
                     "transaction_admission_worker_failed",
-                    "route_unavailable"
+                    "route_unavailable",
+                    "PRTRY:QUEUE_PLAN_JOURNAL_UNAVAILABLE",
+                    "PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN"
                   ],
                   "example": "transaction_admission_worker_failed",
+                  "type": "string"
+                }
+              },
+              "x-iroha-signed-transaction-hash": {
+                "description": "Present exactly once only for PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN; the exact unchanged caller-signed transaction hash also carried in ErrorEnvelope.details.tx_hash.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{64}$",
                   "type": "string"
                 }
               }
@@ -98002,38 +98070,6 @@
           }
         },
         "summary": "Fetch current leader.",
-        "tags": [
-          "Sumeragi"
-        ],
-        "x-iroha-tool-effect": "operator"
-      }
-    },
-    "/v1/sumeragi/pacemaker": {
-      "get": {
-        "description": "Return pacemaker status snapshot.",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response",
-            "headers": {
-              "Cache-Control": {
-                "description": "Authenticated responses which must never be retained.",
-                "required": true,
-                "schema": {
-                  "const": "private, no-store",
-                  "type": "string"
-                }
-              }
-            }
-          }
-        },
-        "summary": "Fetch pacemaker status.",
         "tags": [
           "Sumeragi"
         ],

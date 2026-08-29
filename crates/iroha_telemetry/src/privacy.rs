@@ -1111,25 +1111,11 @@ impl SoranetSecureAggregator {
         }
         Ok(())
     }
-    /// Ingest a newline-delimited JSON payload emitted by relay admin endpoints.
-    ///
-    /// # Errors
-    /// Returns an error when any line fails to parse as a `SoranetPrivacyEventV1`.
-    pub fn ingest_ndjson(&self, payload: &str) -> Result<usize, PrivacyEventError> {
-        self.ingest_ndjson_inner(payload, false)
-    }
     /// Ingest newline-delimited historical events without wall-clock freshness checks.
     ///
     /// # Errors
     /// Returns an error when a line fails to parse or the bounded historical backlog is full.
     pub fn ingest_historical_ndjson(&self, payload: &str) -> Result<usize, PrivacyEventError> {
-        self.ingest_ndjson_inner(payload, true)
-    }
-    fn ingest_ndjson_inner(
-        &self,
-        payload: &str,
-        historical: bool,
-    ) -> Result<usize, PrivacyEventError> {
         let mut count = 0usize;
         for (idx, line) in payload.lines().enumerate() {
             let trimmed = line.trim();
@@ -1141,11 +1127,7 @@ impl SoranetSecureAggregator {
                     line: idx + 1,
                     source,
                 })?;
-            if historical {
-                self.record_historical_event(&event)?;
-            } else {
-                self.record_event(&event)?;
-            }
+            self.record_historical_event(&event)?;
             count = count.saturating_add(1);
         }
         Ok(count)

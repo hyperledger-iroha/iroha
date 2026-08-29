@@ -141,6 +141,12 @@ pub enum AdmissionPolicy {
     AuthenticatedProtocolPrincipal,
     /// A current validator or roster member is required.
     ValidatorRosterMember,
+    /// A governed auditor active for the exact policy and key epoch is required.
+    ///
+    /// Identity-bound middleware authenticates the submitted key. The route
+    /// handler must additionally authorize that key against current governed
+    /// auditor state before it reads a capsule or accepts an approval.
+    GovernedAuditor,
     /// A node operator principal is required.
     Operator,
     /// The exact nested target route admits its own account, validator, operator, signed-body, or
@@ -649,6 +655,8 @@ pub enum CatalogValidationErrorKind {
     AuthenticatedProtocolPrincipalRequiresHandshake,
     /// Validator/roster admission lacks a peer or operator identity boundary.
     ValidatorAdmissionRequiresAuthentication,
+    /// Governed-auditor admission lacks an identity-bound signature boundary.
+    GovernedAuditorAdmissionRequiresAuthentication,
     /// Operator admission lacks an operator-capable credential boundary.
     OperatorAdmissionRequiresAuthentication,
     /// Long-lived streams must use GET or a reviewed protocol catch-all.
@@ -855,6 +863,14 @@ pub fn validate_catalog(routes: &[RouteDescriptor]) -> Result<(), Vec<CatalogVal
             errors.push(CatalogValidationError {
                 stable_route_id: route_id,
                 kind: CatalogValidationErrorKind::ValidatorAdmissionRequiresAuthentication,
+            });
+        }
+        if route.admission == AdmissionPolicy::GovernedAuditor
+            && route.authentication != AuthenticationPolicy::IdentityBoundSignature
+        {
+            errors.push(CatalogValidationError {
+                stable_route_id: route_id,
+                kind: CatalogValidationErrorKind::GovernedAuditorAdmissionRequiresAuthentication,
             });
         }
         if route.admission == AdmissionPolicy::Operator
@@ -2228,6 +2244,9 @@ pub mod data_availability {
 /// First-release Musubi typed-query and unsigned-instruction descriptors.
 #[path = "route_catalog/musubi.rs"]
 pub mod musubi;
+/// Atomic private cross-dataspace settlement endpoints.
+#[path = "route_catalog/private_settlement.rs"]
+pub mod private_settlement;
 /// Protocol-native event and peer transports.
 pub mod streaming {
     use super::{
@@ -2378,9 +2397,6 @@ pub mod telemetry {
         .with_projections(RouteProjections::ALL)
         .with_cors_options(true)
     }
-    /// Read pacemaker status.
-    pub const PACEMAKER: RouteDescriptor =
-        telemetry_operator_get("operator.sumeragi.pacemaker", "/v1/sumeragi/pacemaker");
     /// Read the atomic cross-transaction cache diagnostic.
     pub const DEBUG_AXT_CACHE: RouteDescriptor =
         telemetry_operator_get("operator.debug.axt_cache", "/v1/debug/axt/cache")
@@ -2405,7 +2421,6 @@ pub mod telemetry {
     );
     /// Complete route family registered by `add_telemetry_routes`.
     pub const ROUTES: &[RouteDescriptor] = &[
-        PACEMAKER,
         DEBUG_AXT_CACHE,
         DEBUG_WITNESS,
         SORANET_PRIVACY_EVENT,
@@ -4332,6 +4347,7 @@ const CATALOGED_ROUTE_FAMILIES: &[&[RouteDescriptor]] = &[
     iso20022::ROUTES,
     data_availability::ROUTES,
     musubi::ROUTES,
+    private_settlement::ROUTES,
     streaming::APP_ROUTES,
     mcp_transport::ROUTES,
     connect::ROUTES,

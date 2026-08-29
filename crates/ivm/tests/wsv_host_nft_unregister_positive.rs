@@ -5,7 +5,6 @@ use ivm::{
     syscalls,
 };
 use norito::to_bytes;
-use std::collections::HashMap;
 mod common;
 use common::assemble_syscalls;
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
@@ -60,7 +59,7 @@ fn nft_burn_asset_then_unregister_account_succeeds() {
     // Alice can register domain/account
     wsv.grant_permission(&alice, ivm::mock_wsv::PermissionToken::RegisterDomain);
     wsv.grant_permission(&alice, ivm::mock_wsv::PermissionToken::RegisterAccount);
-    let host = WsvHost::new_with_subject(wsv, alice.clone(), HashMap::new());
+    let host = WsvHost::new_with_subject(wsv, alice.clone());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
     // Register domain wonder

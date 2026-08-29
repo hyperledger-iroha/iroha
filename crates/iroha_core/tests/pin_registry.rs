@@ -100,7 +100,9 @@ fn pin_registry_snapshot_matches_fixture() {
         .expect("complete provider replication assignment");
     }
     tx.apply();
-    block.commit().expect("commit block");
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit block");
     let view = state.view();
     let world = view.world();
     let manifest = world.pin_manifests().get(&digest).expect("manifest stored");
@@ -234,7 +236,9 @@ fn duplicate_alias_binding_is_rejected() {
         .execute(&alice(), &mut tx)
         .expect("initial alias bind succeeds");
         tx.apply();
-        block.commit().expect("commit block");
+        block
+            .commit_empty_block_for_testing()
+            .expect("commit block");
     }
     let digest_b = manifest_digest_for_seed(0xBB);
     let chunk_digest_b = chunk_digest_for_seed(0xBB);
@@ -522,7 +526,9 @@ fn register_manifest_accepts_active_successor() {
     .execute(&alice(), &mut tx)
     .expect("register predecessor");
     tx.apply();
-    block.commit().expect("commit predecessor");
+    block
+        .commit_empty_block_for_testing()
+        .expect("commit predecessor");
     let mut block = state.block(block_header(2));
     let mut tx = block.transaction();
     bootstrap_sorafs(&mut tx);
@@ -550,7 +556,9 @@ fn register_manifest_rejects_retired_successor() {
     bootstrap_sorafs(&mut tx);
     register_and_approve(&mut tx, parent, chunk_digest_for_seed(0xE5), &council_keys);
     tx.apply();
-    block.commit().expect("commit approved predecessor");
+    block
+        .commit_empty_block_for_testing()
+        .expect("commit approved predecessor");
     let mut block = state.block(block_header(2));
     let mut tx = block.transaction();
     bootstrap_sorafs(&mut tx);
@@ -561,7 +569,9 @@ fn register_manifest_rejects_retired_successor() {
     .execute(&alice(), &mut tx)
     .expect("retire predecessor");
     tx.apply();
-    block.commit().expect("commit retirement");
+    block
+        .commit_empty_block_for_testing()
+        .expect("commit retirement");
     let mut block = state.block(block_header(3));
     let mut tx = block.transaction();
     bootstrap_sorafs(&mut tx);
@@ -592,7 +602,9 @@ fn register_manifest_with_successor_persists_pointer() {
     bootstrap_sorafs(&mut tx);
     register_and_approve(&mut tx, parent, chunk_digest_for_seed(0xE7), &council_keys);
     tx.apply();
-    block.commit().expect("commit approved predecessor");
+    block
+        .commit_empty_block_for_testing()
+        .expect("commit approved predecessor");
     let mut block = state.block(block_header(2));
     let mut tx = block.transaction();
     bootstrap_sorafs(&mut tx);

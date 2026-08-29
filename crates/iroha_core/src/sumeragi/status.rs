@@ -45,8 +45,7 @@ use iroha_data_model::{
             COMMITTED_LANE_STATUS_PAYLOAD_PREFLIGHT_REJECTED_AWAITING_STATE_APPLICATION,
             COMMITTED_LANE_STATUS_PAYLOAD_PREFLIGHTED_AWAITING_STATE_APPLICATION,
             COMMITTED_LANE_STATUS_PAYLOAD_RECOVERED_AWAITING_STATE_APPLICATION,
-            COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK,
-            COMMITTED_LANE_STATUS_STATE_APPLIED_BY_DIRECT_EXECUTION, LaneBlockCommitment,
+            COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK, LaneBlockCommitment,
             LaneBlockProposalV1, LaneBlockQcV1, SumeragiLaneBlockSessionStatus,
             SumeragiLanePayloadOwnership,
         },
@@ -4734,27 +4733,25 @@ pub struct DataspaceCommitmentSnapshot {
     /// Block hash identifying the commitment.
     pub block_hash: HashOf<BlockHeader>,
 }
-/// Execution readiness for a certified standalone lane-local block.
+/// Execution readiness for a certified lane-local block awaiting canonical merge.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CommittedLaneBlockExecutionStatus {
     /// The block has proposal/prepare/commit certificates, but no executable lane payload yet.
     AwaitingExecutablePayload,
-    /// Accepted entrypoints are locally recoverable, but standalone execution is not wired yet.
+    /// Accepted entrypoints are locally recoverable, but merge execution is not prepared yet.
     PayloadAvailableAwaitingExecutor,
-    /// Accepted entrypoints have been durably recovered for standalone state application.
+    /// Accepted entrypoints have been durably recovered for canonical merge application.
     PayloadRecoveredAwaitingStateApplication,
-    /// Recovered entrypoints passed direct-execution preflight at the current local state tip.
+    /// Recovered entrypoints passed execution preflight at the current canonical WSV base.
     PayloadPreflightedAwaitingStateApplication,
-    /// Recovered entrypoints produced at least one rejection during direct-execution preflight.
+    /// Recovered entrypoints produced at least one rejection during execution preflight.
     PayloadPreflightRejectedAwaitingStateApplication,
-    /// Canonical application receipt disagrees with durable direct-execution preflight results.
+    /// Canonical application receipt disagrees with durable execution preflight results.
     ApplicationReceiptConflictsWithPreflight,
     /// This lane block cannot execute until its certified predecessor is applied.
     AwaitingPredecessorApplication,
     /// Accepted entrypoints already have canonical committed results recorded locally.
     StateAppliedByCanonicalBlock,
-    /// Accepted entrypoints were directly applied to local WSV without a canonical block append.
-    StateAppliedByDirectExecution,
 }
 impl CommittedLaneBlockExecutionStatus {
     /// Stable operator-facing label.
@@ -4783,9 +4780,6 @@ impl CommittedLaneBlockExecutionStatus {
             Self::StateAppliedByCanonicalBlock => {
                 COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK
             }
-            Self::StateAppliedByDirectExecution => {
-                COMMITTED_LANE_STATUS_STATE_APPLIED_BY_DIRECT_EXECUTION
-            }
         }
     }
     /// Whether the committed lane block can be handed to a standalone executor.
@@ -4796,8 +4790,7 @@ impl CommittedLaneBlockExecutionStatus {
             Self::PayloadAvailableAwaitingExecutor
             | Self::PayloadRecoveredAwaitingStateApplication
             | Self::PayloadPreflightedAwaitingStateApplication
-            | Self::StateAppliedByCanonicalBlock
-            | Self::StateAppliedByDirectExecution => true,
+            | Self::StateAppliedByCanonicalBlock => true,
             Self::ApplicationReceiptConflictsWithPreflight
             | Self::PayloadPreflightRejectedAwaitingStateApplication
             | Self::AwaitingPredecessorApplication => false,

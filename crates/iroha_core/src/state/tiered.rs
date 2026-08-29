@@ -1139,11 +1139,6 @@ impl TieredStateBackend {
             .as_ref()
             .or(self.da_store_root.as_ref())
     }
-    /// Returns true when tiering is enabled and a cold tier is configured.
-    #[must_use]
-    pub fn is_cold_tier_enabled(&self) -> bool {
-        self.enabled && self.primary_cold_root().is_some()
-    }
     /// Returns whether tiering is enabled.
     #[must_use]
     pub fn enabled(&self) -> bool {
@@ -1958,6 +1953,41 @@ impl TieredStateBackend {
             PrivacyRootHead,
             world.privacy_root_heads
         );
+        collect_map!(
+            TieredSegment::PrivateSettlementGovernance,
+            PrivateSettlementGovernance,
+            world.private_settlement_governance
+        );
+        collect_map!(
+            TieredSegment::PrivateSettlementPools,
+            PrivateSettlementPool,
+            world.private_settlement_pools
+        );
+        collect_map!(
+            TieredSegment::PrivateSettlementRoots,
+            PrivateSettlementRoot,
+            world.private_settlement_roots
+        );
+        collect_map!(
+            TieredSegment::PrivateSettlementNullifiers,
+            PrivateSettlementNullifier,
+            world.private_settlement_nullifiers
+        );
+        collect_map!(
+            TieredSegment::PrivateSettlementOutputs,
+            PrivateSettlementOutput,
+            world.private_settlement_outputs
+        );
+        collect_map!(
+            TieredSegment::PrivateSettlementReceipts,
+            PrivateSettlementReceipt,
+            world.private_settlement_receipts
+        );
+        collect_map!(
+            TieredSegment::PrivateSettlementAborts,
+            PrivateSettlementAbort,
+            world.private_settlement_aborts
+        );
         collect_map!(TieredSegment::Proofs, Proof, world.proofs);
         collect_map!(TieredSegment::ProofTags, ProofTag, world.proof_tags);
         collect_map!(TieredSegment::ProofsByTag, ProofByTag, world.proofs_by_tag);
@@ -2106,11 +2136,6 @@ impl TieredStateBackend {
             TieredSegment::KagemushaReplayKeys,
             KagemushaReplayKey,
             world.kagemusha_replay_keys
-        );
-        collect_map!(
-            TieredSegment::DirectLaneBlockApplicationMarkers,
-            DirectLaneBlockApplicationMarker,
-            world.direct_lane_block_application_markers
         );
         Ok(())
     }
@@ -2612,11 +2637,17 @@ mod measured_bytes_impls {
             PrivacyPgcAccountProvenanceV1, PrivacyPgcAccountStateV1, PrivacyPgcPoolInvariantV1,
             PrivacyRootHeadRecordV1, PrivacyRootProvenanceV1, PrivacyStateItemRecordV1,
         },
+        private_settlement::{
+            global_state::{
+                PrivateSettlementFinalizationReferenceV1, PrivateSettlementOutputRecordV1,
+                PrivateSettlementRootProvenanceV1,
+            },
+            state::{PrivateSettlementPoolGovernanceProjectionV1, PrivateSettlementPoolStateV1},
+        },
         smartcontracts::code::ContractSubjectBinding,
         state::{
             AssetDefinitionAliasBindingRecord, ConfidentialTreeProfile, ContractAliasBindingRecord,
-            DirectLaneBlockApplicationKey, DirectLaneBlockApplicationMarker, ElectionState,
-            FrontierCheckpoint, GovernanceLockCustody, GovernanceLockRecord,
+            ElectionState, FrontierCheckpoint, GovernanceLockCustody, GovernanceLockRecord,
             GovernanceLocksForReferendum, GovernanceProposalRecord, GovernanceProposalStatus,
             GovernanceReferendumMode, GovernanceReferendumRecord, GovernanceReferendumStatus,
             GovernanceSlashEntry, GovernanceSlashLedger, ZkAssetState, ZkAssetVerifierBinding,
@@ -2666,7 +2697,7 @@ mod measured_bytes_impls {
         nexus::{
             AxtAssetIncarnationV1, AxtHandleBudgetRecord, AxtHandleCounterRecord, AxtPolicyEntry,
             AxtReplayRecord, LanePrivacyMerkleWitness, LanePrivacyProof, LanePrivacyWitness,
-            UniversalAccountId,
+            PrivateSettlementAbortReceiptV1, PrivateSettlementReceiptV1, UniversalAccountId,
         },
         nft::NftData,
         peer::PeerId,
@@ -2779,6 +2810,28 @@ mod measured_bytes_impls {
         AxtAssetIncarnationV1,
         AxtHandleCounterRecord,
         AxtPolicyEntry,
+        PrivateSettlementFinalizationReferenceV1,
+    );
+    macro_rules! impl_measured_bytes_canonical {
+        ($($ty:ty),+ $(,)?) => {
+            $(
+                impl MeasuredBytes for $ty {
+                    fn measured_bytes(&self) -> usize {
+                        size_of::<$ty>().saturating_add(
+                            norito::codec::Encode::encode(self).len(),
+                        )
+                    }
+                }
+            )+
+        };
+    }
+    impl_measured_bytes_canonical!(
+        PrivateSettlementPoolGovernanceProjectionV1,
+        PrivateSettlementPoolStateV1,
+        PrivateSettlementRootProvenanceV1,
+        PrivateSettlementOutputRecordV1,
+        PrivateSettlementReceiptV1,
+        PrivateSettlementAbortReceiptV1,
     );
     impl<T: MeasuredBytes, const N: usize> MeasuredBytes for [T; N] {
         fn measured_bytes(&self) -> usize {
@@ -2935,21 +2988,6 @@ mod measured_bytes_impls {
     impl<T> MeasuredBytes for HashOf<T> {
         fn measured_bytes(&self) -> usize {
             size_of::<HashOf<T>>()
-        }
-    }
-    impl MeasuredBytes for DirectLaneBlockApplicationKey {
-        fn measured_bytes(&self) -> usize {
-            size_of::<DirectLaneBlockApplicationKey>()
-        }
-    }
-    impl MeasuredBytes for DirectLaneBlockApplicationMarker {
-        fn measured_bytes(&self) -> usize {
-            let mut total = size_of::<DirectLaneBlockApplicationMarker>();
-            total = total.saturating_add(self.descriptor_hash.measured_bytes_extra());
-            total = total.saturating_add(self.proposal_hash.measured_bytes_extra());
-            total = total.saturating_add(self.preflight_state_hash.measured_bytes_extra());
-            total = total.saturating_add(self.result_hashes.measured_bytes_extra());
-            total
         }
     }
     impl MeasuredBytes for Hash {
@@ -4122,6 +4160,13 @@ enum TieredSegment {
     PrivacyCommitments,
     PrivacyRoots,
     PrivacyRootHeads,
+    PrivateSettlementGovernance,
+    PrivateSettlementPools,
+    PrivateSettlementRoots,
+    PrivateSettlementNullifiers,
+    PrivateSettlementOutputs,
+    PrivateSettlementReceipts,
+    PrivateSettlementAborts,
     Proofs,
     ProofTags,
     ProofsByTag,
@@ -4153,7 +4198,6 @@ enum TieredSegment {
     GlobalBeaconLatestPulse,
     GlobalBeaconPulses,
     KagemushaReplayKeys,
-    DirectLaneBlockApplicationMarkers,
 }
 impl TieredSegment {
     fn dir_name(self) -> &'static str {
@@ -4194,6 +4238,13 @@ impl TieredSegment {
             TieredSegment::PrivacyCommitments => "privacy_commitments",
             TieredSegment::PrivacyRoots => "privacy_roots",
             TieredSegment::PrivacyRootHeads => "privacy_root_heads",
+            TieredSegment::PrivateSettlementGovernance => "private_settlement_governance",
+            TieredSegment::PrivateSettlementPools => "private_settlement_pools",
+            TieredSegment::PrivateSettlementRoots => "private_settlement_roots",
+            TieredSegment::PrivateSettlementNullifiers => "private_settlement_nullifiers",
+            TieredSegment::PrivateSettlementOutputs => "private_settlement_outputs",
+            TieredSegment::PrivateSettlementReceipts => "private_settlement_receipts",
+            TieredSegment::PrivateSettlementAborts => "private_settlement_aborts",
             TieredSegment::Proofs => "proofs",
             TieredSegment::ProofTags => "proof_tags",
             TieredSegment::ProofsByTag => "proofs_by_tag",
@@ -4225,9 +4276,6 @@ impl TieredSegment {
             TieredSegment::GlobalBeaconLatestPulse => "global_beacon_latest_pulse",
             TieredSegment::GlobalBeaconPulses => "global_beacon_pulses",
             TieredSegment::KagemushaReplayKeys => "kagemusha_replay_keys",
-            TieredSegment::DirectLaneBlockApplicationMarkers => {
-                "direct_lane_block_application_markers"
-            }
         }
     }
 }
@@ -4278,6 +4326,13 @@ impl norito::json::JsonDeserialize for TieredSegment {
             "privacy_commitments" => TieredSegment::PrivacyCommitments,
             "privacy_roots" => TieredSegment::PrivacyRoots,
             "privacy_root_heads" => TieredSegment::PrivacyRootHeads,
+            "private_settlement_governance" => TieredSegment::PrivateSettlementGovernance,
+            "private_settlement_pools" => TieredSegment::PrivateSettlementPools,
+            "private_settlement_roots" => TieredSegment::PrivateSettlementRoots,
+            "private_settlement_nullifiers" => TieredSegment::PrivateSettlementNullifiers,
+            "private_settlement_outputs" => TieredSegment::PrivateSettlementOutputs,
+            "private_settlement_receipts" => TieredSegment::PrivateSettlementReceipts,
+            "private_settlement_aborts" => TieredSegment::PrivateSettlementAborts,
             "proofs" => TieredSegment::Proofs,
             "proof_tags" => TieredSegment::ProofTags,
             "proofs_by_tag" => TieredSegment::ProofsByTag,
@@ -4309,9 +4364,6 @@ impl norito::json::JsonDeserialize for TieredSegment {
             "global_beacon_latest_pulse" => TieredSegment::GlobalBeaconLatestPulse,
             "global_beacon_pulses" => TieredSegment::GlobalBeaconPulses,
             "kagemusha_replay_keys" => TieredSegment::KagemushaReplayKeys,
-            "direct_lane_block_application_markers" => {
-                TieredSegment::DirectLaneBlockApplicationMarkers
-            }
             other => {
                 return Err(norito::json::Error::InvalidField {
                     field: "segment".into(),
@@ -4491,6 +4543,17 @@ pub(crate) enum TieredKeyHandle {
     PrivacyCommitment(crate::privacy_state::PrivacyCommitmentKeyV1),
     PrivacyRoot(crate::privacy_state::PrivacyRootKeyV1),
     PrivacyRootHead(crate::privacy_state::PrivacyRootHeadKeyV1),
+    PrivateSettlementGovernance(
+        crate::private_settlement::global_state::PrivateSettlementPoolKeyV1,
+    ),
+    PrivateSettlementPool(crate::private_settlement::global_state::PrivateSettlementPoolKeyV1),
+    PrivateSettlementRoot(crate::private_settlement::global_state::PrivateSettlementRootKeyV1),
+    PrivateSettlementNullifier(
+        crate::private_settlement::global_state::PrivateSettlementNullifierKeyV1,
+    ),
+    PrivateSettlementOutput(crate::private_settlement::global_state::PrivateSettlementOutputKeyV1),
+    PrivateSettlementReceipt(iroha_crypto::Hash),
+    PrivateSettlementAbort(iroha_crypto::Hash),
     Proof(iroha_data_model::proof::ProofId),
     ProofTag(iroha_data_model::proof::ProofId),
     ProofByTag([u8; 4]),
@@ -4522,7 +4585,6 @@ pub(crate) enum TieredKeyHandle {
     GlobalBeaconLatestPulse(u64),
     GlobalBeaconPulse([u8; 32]),
     KagemushaReplayKey(iroha_crypto::Hash),
-    DirectLaneBlockApplicationMarker(super::DirectLaneBlockApplicationKey),
 }
 impl TieredKeyHandle {
     fn segment(&self) -> TieredSegment {
@@ -4569,6 +4631,19 @@ impl TieredKeyHandle {
             TieredKeyHandle::PrivacyCommitment(_) => TieredSegment::PrivacyCommitments,
             TieredKeyHandle::PrivacyRoot(_) => TieredSegment::PrivacyRoots,
             TieredKeyHandle::PrivacyRootHead(_) => TieredSegment::PrivacyRootHeads,
+            TieredKeyHandle::PrivateSettlementGovernance(_) => {
+                TieredSegment::PrivateSettlementGovernance
+            }
+            TieredKeyHandle::PrivateSettlementPool(_) => TieredSegment::PrivateSettlementPools,
+            TieredKeyHandle::PrivateSettlementRoot(_) => TieredSegment::PrivateSettlementRoots,
+            TieredKeyHandle::PrivateSettlementNullifier(_) => {
+                TieredSegment::PrivateSettlementNullifiers
+            }
+            TieredKeyHandle::PrivateSettlementOutput(_) => TieredSegment::PrivateSettlementOutputs,
+            TieredKeyHandle::PrivateSettlementReceipt(_) => {
+                TieredSegment::PrivateSettlementReceipts
+            }
+            TieredKeyHandle::PrivateSettlementAbort(_) => TieredSegment::PrivateSettlementAborts,
             TieredKeyHandle::Proof(_) => TieredSegment::Proofs,
             TieredKeyHandle::ProofTag(_) => TieredSegment::ProofTags,
             TieredKeyHandle::ProofByTag(_) => TieredSegment::ProofsByTag,
@@ -4602,9 +4677,6 @@ impl TieredKeyHandle {
             TieredKeyHandle::GlobalBeaconLatestPulse(_) => TieredSegment::GlobalBeaconLatestPulse,
             TieredKeyHandle::GlobalBeaconPulse(_) => TieredSegment::GlobalBeaconPulses,
             TieredKeyHandle::KagemushaReplayKey(_) => TieredSegment::KagemushaReplayKeys,
-            TieredKeyHandle::DirectLaneBlockApplicationMarker(_) => {
-                TieredSegment::DirectLaneBlockApplicationMarkers
-            }
         }
     }
     fn encode_key(&self) -> Result<Vec<u8>> {
@@ -4656,6 +4728,17 @@ impl TieredKeyHandle {
             TieredKeyHandle::PrivacyCommitment(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::PrivacyRoot(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::PrivacyRootHead(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::PrivateSettlementGovernance(key)
+            | TieredKeyHandle::PrivateSettlementPool(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::PrivateSettlementRoot(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::PrivateSettlementNullifier(key) => {
+                Ok(norito::codec::Encode::encode(key))
+            }
+            TieredKeyHandle::PrivateSettlementOutput(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::PrivateSettlementReceipt(key)
+            | TieredKeyHandle::PrivateSettlementAbort(key) => {
+                Ok(norito::codec::Encode::encode(key))
+            }
             TieredKeyHandle::Proof(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::ProofTag(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::ProofByTag(key) => Ok(norito::codec::Encode::encode(key)),
@@ -4686,9 +4769,6 @@ impl TieredKeyHandle {
             TieredKeyHandle::GlobalBeaconLatestPulse(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::GlobalBeaconPulse(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::KagemushaReplayKey(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::DirectLaneBlockApplicationMarker(key) => {
-                Ok(norito::codec::Encode::encode(key))
-            }
         }
     }
     fn entry_id(&self) -> Result<(TieredEntryId, Vec<u8>)> {
@@ -4771,6 +4851,27 @@ impl TieredKeyHandle {
             TieredKeyHandle::PrivacyCommitment(id) => fetch!(world.privacy_commitments, id),
             TieredKeyHandle::PrivacyRoot(id) => fetch!(world.privacy_roots, id),
             TieredKeyHandle::PrivacyRootHead(id) => fetch!(world.privacy_root_heads, id),
+            TieredKeyHandle::PrivateSettlementGovernance(id) => {
+                fetch!(world.private_settlement_governance, id)
+            }
+            TieredKeyHandle::PrivateSettlementPool(id) => {
+                fetch!(world.private_settlement_pools, id)
+            }
+            TieredKeyHandle::PrivateSettlementRoot(id) => {
+                fetch!(world.private_settlement_roots, id)
+            }
+            TieredKeyHandle::PrivateSettlementNullifier(id) => {
+                fetch!(world.private_settlement_nullifiers, id)
+            }
+            TieredKeyHandle::PrivateSettlementOutput(id) => {
+                fetch!(world.private_settlement_outputs, id)
+            }
+            TieredKeyHandle::PrivateSettlementReceipt(id) => {
+                fetch!(world.private_settlement_receipts, id)
+            }
+            TieredKeyHandle::PrivateSettlementAbort(id) => {
+                fetch!(world.private_settlement_aborts, id)
+            }
             TieredKeyHandle::Proof(id) => fetch!(world.proofs, id),
             TieredKeyHandle::ProofTag(id) => fetch!(world.proof_tags, id),
             TieredKeyHandle::ProofByTag(tag) => fetch!(world.proofs_by_tag, tag),
@@ -4821,9 +4922,6 @@ impl TieredKeyHandle {
             TieredKeyHandle::GlobalBeaconPulse(id) => fetch!(world.global_beacon_pulses, id),
             TieredKeyHandle::KagemushaReplayKey(id) => {
                 fetch!(world.kagemusha_replay_keys, id)
-            }
-            TieredKeyHandle::DirectLaneBlockApplicationMarker(id) => {
-                fetch!(world.direct_lane_block_application_markers, id)
             }
         }
     }
@@ -4901,6 +4999,27 @@ impl TieredKeyHandle {
             TieredKeyHandle::PrivacyCommitment(id) => fetch!(world.privacy_commitments, id),
             TieredKeyHandle::PrivacyRoot(id) => fetch!(world.privacy_roots, id),
             TieredKeyHandle::PrivacyRootHead(id) => fetch!(world.privacy_root_heads, id),
+            TieredKeyHandle::PrivateSettlementGovernance(id) => {
+                fetch!(world.private_settlement_governance, id)
+            }
+            TieredKeyHandle::PrivateSettlementPool(id) => {
+                fetch!(world.private_settlement_pools, id)
+            }
+            TieredKeyHandle::PrivateSettlementRoot(id) => {
+                fetch!(world.private_settlement_roots, id)
+            }
+            TieredKeyHandle::PrivateSettlementNullifier(id) => {
+                fetch!(world.private_settlement_nullifiers, id)
+            }
+            TieredKeyHandle::PrivateSettlementOutput(id) => {
+                fetch!(world.private_settlement_outputs, id)
+            }
+            TieredKeyHandle::PrivateSettlementReceipt(id) => {
+                fetch!(world.private_settlement_receipts, id)
+            }
+            TieredKeyHandle::PrivateSettlementAbort(id) => {
+                fetch!(world.private_settlement_aborts, id)
+            }
             TieredKeyHandle::Proof(id) => fetch!(world.proofs, id),
             TieredKeyHandle::ProofTag(id) => fetch!(world.proof_tags, id),
             TieredKeyHandle::ProofByTag(tag) => fetch!(world.proofs_by_tag, tag),
@@ -4951,9 +5070,6 @@ impl TieredKeyHandle {
             TieredKeyHandle::GlobalBeaconPulse(id) => fetch!(world.global_beacon_pulses, id),
             TieredKeyHandle::KagemushaReplayKey(id) => {
                 fetch!(world.kagemusha_replay_keys, id)
-            }
-            TieredKeyHandle::DirectLaneBlockApplicationMarker(id) => {
-                fetch!(world.direct_lane_block_application_markers, id)
             }
         }
     }
@@ -5076,6 +5192,27 @@ impl fmt::Display for TieredKeyHandle {
             TieredKeyHandle::PrivacyRootHead(id) => {
                 write!(f, "privacy_root_head:{id:?}")
             }
+            TieredKeyHandle::PrivateSettlementGovernance(id) => {
+                write!(f, "private_settlement_governance:{id:?}")
+            }
+            TieredKeyHandle::PrivateSettlementPool(id) => {
+                write!(f, "private_settlement_pool:{id:?}")
+            }
+            TieredKeyHandle::PrivateSettlementRoot(id) => {
+                write!(f, "private_settlement_root:{id:?}")
+            }
+            TieredKeyHandle::PrivateSettlementNullifier(id) => {
+                write!(f, "private_settlement_nullifier:{id:?}")
+            }
+            TieredKeyHandle::PrivateSettlementOutput(id) => {
+                write!(f, "private_settlement_output:{id:?}")
+            }
+            TieredKeyHandle::PrivateSettlementReceipt(id) => {
+                write!(f, "private_settlement_receipt:{id}")
+            }
+            TieredKeyHandle::PrivateSettlementAbort(id) => {
+                write!(f, "private_settlement_abort:{id}")
+            }
             TieredKeyHandle::Proof(id) => write!(f, "proof:{id}"),
             TieredKeyHandle::ProofTag(id) => write!(f, "proof_tag:{id}"),
             TieredKeyHandle::ProofByTag(tag) => write!(f, "proofs_by_tag:{tag:?}"),
@@ -5137,12 +5274,6 @@ impl fmt::Display for TieredKeyHandle {
             TieredKeyHandle::KagemushaReplayKey(id) => {
                 write!(f, "kagemusha_replay_key:{id}")
             }
-            TieredKeyHandle::DirectLaneBlockApplicationMarker(id) => write!(
-                f,
-                "direct_lane_block_application_marker:{}:{}",
-                id.lane_id.as_u32(),
-                id.lane_block_height
-            ),
         }
     }
 }
@@ -5226,6 +5357,79 @@ mod tests {
                 .contains("unknown tiered segment `commit_qcs`"),
             "unexpected retired-segment rejection: {error}"
         );
+    }
+
+    #[test]
+    fn private_settlement_projection_persists_in_every_tiered_segment() {
+        let temp = tempdir().expect("tmpdir");
+        let root = temp.path().to_path_buf();
+        let mut backend = TieredStateBackend::new(true, 0, 1, 0, Some(root.clone()), None, 0, 0);
+        let (_, _, restricted_fixture) = crate::private_settlement::global_state::tests::fixture();
+        let restricted_asset_canary = restricted_fixture
+            .pool_governance
+            .body
+            .asset_definition_id
+            .to_string();
+        let restricted_salt_canary = restricted_fixture.pool_governance.body.asset_binding_salt;
+        let world = crate::private_settlement::global_state::tests::finalized_world_fixture();
+        backend
+            .record_world_snapshot(&world)
+            .expect("persist private-settlement tiered snapshot");
+        let manifest = backend.last_manifest().expect("snapshot manifest recorded");
+        let snapshot_dir = root.join(format!("{:020}", manifest.snapshot_index));
+        let assert_canaries_absent = |bytes: &[u8], context: &str| {
+            let text = String::from_utf8_lossy(bytes);
+            assert!(
+                !text.contains("asset_definition_id")
+                    && !text.contains("asset_binding_salt")
+                    && !text.contains(&restricted_asset_canary)
+                    && !text.contains(&hex::encode(restricted_salt_canary))
+                    && !text.contains(&hex::encode_upper(restricted_salt_canary))
+                    && !bytes
+                        .windows(restricted_salt_canary.len())
+                        .any(|window| window == restricted_salt_canary),
+                "tiered {context} must never contain restricted pool asset/salt canaries"
+            );
+        };
+        assert_canaries_absent(
+            &fs::read(snapshot_dir.join("manifest.json")).expect("read tiered manifest"),
+            "manifest",
+        );
+        let expected = [
+            TieredSegment::PrivateSettlementGovernance,
+            TieredSegment::PrivateSettlementPools,
+            TieredSegment::PrivateSettlementRoots,
+            TieredSegment::PrivateSettlementNullifiers,
+            TieredSegment::PrivateSettlementOutputs,
+            TieredSegment::PrivateSettlementReceipts,
+            TieredSegment::PrivateSettlementAborts,
+        ];
+        for segment in expected {
+            let entries = manifest
+                .cold_entries
+                .iter()
+                .filter(|entry| entry.segment == segment)
+                .collect::<Vec<_>>();
+            assert!(
+                !entries.is_empty(),
+                "private-settlement segment {segment:?} must be represented in the cold manifest"
+            );
+            for entry in entries {
+                let spill = entry
+                    .spill_path
+                    .as_ref()
+                    .expect("cold private-settlement entry has a spill path");
+                assert!(
+                    snapshot_dir.join(spill).is_file(),
+                    "private-settlement cold payload must exist at {}",
+                    spill.display()
+                );
+                assert_canaries_absent(
+                    &fs::read(snapshot_dir.join(spill)).expect("read settlement cold payload"),
+                    "private-settlement cold payload",
+                );
+            }
+        }
     }
 
     fn sccp_inbound_fixture() -> (SccpInboundMessageKeyV1, SccpInboundMessageRecordV1) {

@@ -192,7 +192,6 @@ from check_sorafs_repair_rollout_evidence import (  # noqa: E402
     HANDOFF_BOUND_KINDS as REPAIR_HANDOFF_BOUND_KINDS,
     KIND_BY_NAME as REPAIR_KIND_BY_NAME,
     POLICY_BOUND_KINDS as REPAIR_POLICY_BOUND_KINDS,
-    REQUIRED_METRICS as REPAIR_REQUIRED_METRICS,
     ROSTER_BOUND_KINDS as REPAIR_ROSTER_BOUND_KINDS,
 )
 from check_sorafs_reputation_rollout_evidence import (  # noqa: E402
@@ -402,8 +401,6 @@ SENSITIVE_KEYS = {
 # ("potr", "metrics"): ("observability",)
 # ("potr", "metric_count_values"): ("observability",)
 # ("reference_sdk_release", "signature_algorithms"): ("signed_manifest",)
-# ("repair", "metrics"): ("observability",)
-# ("repair", "metric_count_values"): ("observability",)
 # ("reputation", "metrics"): ("metrics",)
 # ("reputation", "metric_count_values"): ("metrics",)
 # ("reputation", "valid_reputation_weight_digests"): ("publish", "latest")

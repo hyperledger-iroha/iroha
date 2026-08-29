@@ -1,5 +1,5 @@
 error: [derive(ReadConfig)]: generics are not supported
- --> tests/config_base_ui_fail/generics.rs:4:13
+ --> tests/config_base_ui_fail/generics.rs:3:13
   |
-4 | struct Test<T> {
+3 | struct Test<T> {
   |             ^

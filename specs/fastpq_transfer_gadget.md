@@ -5,7 +5,7 @@
 The current FASTPQ planner records every primitive operation involved in a `TransferAsset` instruction, which means each transfer pays for balance arithmetic, hash rounds, and SMT updates separately. To reduce trace rows per transfer we introduce a dedicated gadget that verifies only the minimal arithmetic/commitment checks while the host continues to execute the canonical state transition.
 
 - **Scope**: single transfers and small batches emitted via the existing Kotodama/IVM `TransferAsset` syscall surface.
-- **Goal**: cut FFT/LDE column footprint for high-volume transfers by sharing lookup tables and collapsing per-transfer arithmetic into a compact constraint block.
+- **Goal**: cut FFT/LDE column footprint for high-volume transfers by collapsing per-transfer arithmetic and reusing the canonical sparse-Merkle context.
 
 # Architecture
 
@@ -57,7 +57,7 @@ struct TransferSmtWitness {
 
 - `batch_hash` ties the transcript to the transaction entrypoint hash for replay protection.
 - `authority_digest` is the host’s hash over sorted signers/quorum data; the gadget checks equality but does not redo signature verification. Concretely the host Norito-encodes the `AccountId` (which already embeds the canonical multisig controller) and hashes `b"iroha:fastpq:v1:authority|" || encoded_account` with Blake2b-256, storing the resulting `Hash`.
-- `poseidon_preimage_digest` = Poseidon(account_from || account_to || asset || amount || batch_hash); ensures the gadget recomputes the same digest as the host. The preimage bytes are constructed as `norito(from_account) || norito(to_account) || norito(asset_definition) || norito(amount) || batch_hash` using bare Norito encoding. The shared legacy-named byte helper uses the pinned dense-MDS Goldilocks `x^7` Poseidon permutation (not Poseidon2), appends `0x01`, and zero-pads to the next 8-byte word before applying its field-sponge padding, so trailing-zero byte extensions cannot collide. This digest is present for single-delta transcripts and omitted for multi-delta batches.
+- `poseidon_preimage_digest` = Poseidon2(account_from || account_to || asset || amount || batch_hash); ensures the prover recomputes the same digest as the host. The preimage bytes are `norito(from_account) || norito(to_account) || norito(asset_definition) || norito(amount) || batch_hash` using bare Norito encoding. The host packs that stream into little-endian `u64` words, while the prover feeds the same stream to `PoseidonByteHasher`; both use the canonical width-3, rate-2 BN254 Poseidon2 permutation with an `x^5` S-box. A byte-level `0x01` delimiter terminates the final word before the field-sponge padding, including a new word for an eight-byte-aligned preimage, so trailing-zero byte extensions remain distinct. The 32-byte output is the canonical BN254 field representation. This digest is present for single-delta transcripts and omitted for multi-delta batches.【crates/iroha_core/src/fastpq/mod.rs:171】【crates/fastpq_prover/src/gadgets/transfer.rs:946】【crates/iroha_zkp_halo2/src/poseidon.rs:458】
 
 All fields are serialized via Norito so existing determinism guarantees hold.
 Sender and receiver witnesses are required structured SMT paths, not optional
@@ -95,7 +95,7 @@ deterministic leaves on every peer.
    - Packed into a custom gate so all three equations consume one row group.
 
 2. **Poseidon Commitment Block**
-   - Recomputes `poseidon_preimage_digest` using the shared Poseidon lookup table already used in other gadgets. No per-transfer Poseidon rounds in the trace.
+   - Preflight validation recomputes `poseidon_preimage_digest` with the canonical BN254 Poseidon2 byte hasher before trace construction. V1 has no lookup-table column or lookup grand product; the canonical metadata commitment binds the validated transcript bytes.
 
 3. **Merkle Path Block**
    - Extends the existing Kaigi SMT gadget with a "paired update" mode. Two leaves (sender, receiver) share the same column for sibling hashes, reducing duplicated rows.
@@ -112,7 +112,7 @@ deterministic leaves on every peer.
 |-------|---------|
 | `ivm::syscalls` | Add `transfer_v1_batch_begin` (`0x29`) / `transfer_v1_batch_end` (`0x2A`) so programs can bracket multiple `transfer_v1` syscalls without emitting intermediate ISIs, plus `transfer_v1_batch_apply` (`0x2B`) for pre-encoded batches. |
 | `ivm::host` & tests | Core/Default hosts treat `transfer_v1` as a batch append while the scope is active, surface `SYSCALL_TRANSFER_V1_BATCH_{BEGIN,END,APPLY}`, and the mock WSV host buffers entries before committing so regression tests can assert deterministic balance updates.【crates/ivm/src/core_host.rs:1001】【crates/ivm/src/host.rs:451】【crates/ivm/src/mock_wsv.rs:3713】【crates/ivm/tests/wsv_host_pointer_tlv.rs:219】【crates/ivm/tests/wsv_host_pointer_tlv.rs:287】
-| `iroha_core` | Emit `TransferTranscript` after the state transition, build `FastpqTransitionBatch` records with explicit `public_inputs` during `StateBlock::capture_exec_witness`, and run the FASTPQ prover lane so both Torii/CLI tooling and the Stage 6 backend receive canonical `TransitionBatch` inputs. `TransferAssetBatch` groups sequential transfers into a single transcript, omitting the poseidon digest for multi-delta batches so the gadget can iterate across entries deterministically. |
+| `iroha_core` | Emit `TransferTranscript` after the state transition, build `FastpqTransitionBatch` records with explicit `public_inputs` during `StateBlock::capture_exec_witness`, and run the FASTPQ prover lane so both Torii/CLI tooling and the V1 backend receive canonical `TransitionBatch` inputs. `TransferAssetBatch` groups sequential transfers into a single transcript, omitting the poseidon digest for multi-delta batches so the gadget can iterate across entries deterministically. |
 | `fastpq_prover` | `gadgets::transfer` now validates multi-delta transcripts (balance arithmetic + Poseidon digest), requires real paired SMT witness material, checks chained roots from `public_inputs.old_root` to `public_inputs.new_root`, and surfaces validated witnesses for the planner (`crates/fastpq_prover/src/gadgets/transfer.rs`). `trace::build_trace` decodes those transcripts out of batch metadata, rejects transfer batches missing `transfer_transcripts`, rejects malformed witness paths, attaches the validated witnesses to `Trace::transfer_witnesses`, and `TracePolynomialData::transfer_plan()` keeps the aggregated plan alive until the planner consumes the gadget (`crates/fastpq_prover/src/trace.rs`). Row-count regression evidence now comes from execution-captured V1 batches; standalone synthetic row generation has been removed. |
 | Kotodama | Lowers the `transfer_batch((from,to,asset,amount), …)` helper into `transfer_v1_batch_begin`, sequential `transfer_asset` calls, and `transfer_v1_batch_end`. Each tuple argument must follow the `(AccountId, AccountId, AssetDefinitionId, quantity)` shape; single transfers keep the existing builder. |
 

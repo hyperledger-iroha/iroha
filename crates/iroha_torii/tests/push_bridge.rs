@@ -72,40 +72,6 @@ fn build_torii(
     let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
     let _ = peers_tx;
     let da_receipt_signer = cfg.common.key_pair.clone();
-    #[cfg(feature = "telemetry")]
-    let torii = {
-        use iroha_core::telemetry as core_telemetry;
-        use iroha_primitives::time::TimeSource;
-        let metrics = fixtures::shared_metrics();
-        let (_mh, ts) = TimeSource::new_mock(core::time::Duration::default());
-        let telemetry = core_telemetry::start(
-            metrics,
-            state.clone(),
-            kura.clone(),
-            queue.clone(),
-            peers_rx.clone(),
-            local_peer_id.clone(),
-            ts,
-            false,
-        )
-        .0;
-        Torii::new(
-            ChainId::from("test-chain"),
-            iroha_torii::test_utils::signed_query_network_id(),
-            kiso,
-            cfg.torii.clone(),
-            queue,
-            events,
-            LiveQueryStore::start_test(),
-            kura,
-            state,
-            da_receipt_signer.clone(),
-            OnlinePeersProvider::new(peers_rx),
-            telemetry,
-            true,
-        )
-    };
-    #[cfg(not(feature = "telemetry"))]
     let torii = Torii::new(
         ChainId::from("test-chain"),
         iroha_torii::test_utils::signed_query_network_id(),

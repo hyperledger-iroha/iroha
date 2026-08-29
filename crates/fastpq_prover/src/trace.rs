@@ -1,9 +1,10 @@
-//! Stage 1 FASTPQ trace builder.
+//! V1 FASTPQ trace builder.
 //!
 //! The builder canonicalises transition batches into the row/column layout
 //! expected by the FASTPQ AIR. Rows are ordered lexicographically by key,
-//! operation rank, and original insertion index. Columns are padded to the
-//! next power-of-two trace length and exposed as Goldilocks field elements.
+//! then operation rank; equal key/rank pairs retain their supplied order through
+//! the stable sort. Columns are padded to the next power-of-two trace length and
+//! exposed as Goldilocks field elements.
 #[cfg(feature = "fastpq-gpu")]
 use crate::gpu;
 use crate::{
@@ -25,12 +26,12 @@ use std::sync::Mutex;
 #[cfg(feature = "fastpq-gpu")]
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, VecDeque},
     sync::{Arc, OnceLock, RwLock},
 };
 /// Goldilocks modulus used by the FASTPQ AIR.
 const GOLDILOCKS_MODULUS: u64 = 0xffff_ffff_0000_0001;
-/// Sparse Merkle tree height used by the stage 1 trace layout.
+/// Sparse Merkle tree height used by the V1 trace layout.
 const SMT_HEIGHT: usize = transfer::TRANSFER_MERKLE_HEIGHT;
 /// Domain tag for the full-width metadata commitment.
 const METADATA_COMMITMENT_DOMAIN: &[u8] = b"fastpq:v1:metadata-commitment:blake2b-256";
@@ -336,31 +337,38 @@ pub struct TraceColumn {
     /// Column values (length equals [`Trace::padded_len`]).
     pub values: Vec<u64>,
 }
-/// Column digest set containing the leaf hashes plus optional fused parents.
+/// Column digest set containing leaf hashes plus an optional precomputed first level.
 #[derive(Clone, Debug)]
 pub struct ColumnDigests {
     /// Poseidon hash for each column (leaf nodes).
-    pub leaves: Vec<u64>,
-    /// Optional GPU-computed depth-1 parents (same slicing as described in the Stage7-P2 ABI).
-    pub fused_parents: Option<Vec<u64>>,
+    leaves: Vec<u64>,
+    /// Optional precomputed depth-1 parents.
+    first_level_parents: Option<Vec<u64>>,
 }
 impl ColumnDigests {
     /// Create a new digest set from leaves and optional parents.
-    pub fn new(leaves: Vec<u64>, fused_parents: Option<Vec<u64>>) -> Self {
+    pub(crate) fn new(leaves: Vec<u64>, first_level_parents: Option<Vec<u64>>) -> Self {
         Self {
             leaves,
-            fused_parents,
+            first_level_parents,
         }
     }
     /// Borrow the leaf hashes.
     #[must_use]
-    pub fn leaves(&self) -> &[u64] {
+    pub(crate) fn leaves(&self) -> &[u64] {
         &self.leaves
     }
-    /// Borrow the fused parent hashes, when available.
+    /// Borrow the precomputed first-level parent hashes, when available.
     #[must_use]
-    pub fn fused_parents(&self) -> Option<&[u64]> {
-        self.fused_parents.as_deref()
+    pub(crate) fn first_level_parents(&self) -> Option<&[u64]> {
+        self.first_level_parents.as_deref()
+    }
+
+    /// Consume this dev-tool result and return its leaf hashes.
+    #[cfg(all(feature = "dev-tools", feature = "fastpq-gpu"))]
+    #[must_use]
+    pub fn into_leaves(self) -> Vec<u64> {
+        self.leaves
     }
 }
 /// Intermediate per-row representation before column transposition.
@@ -368,72 +376,45 @@ struct RowData {
     key_limbs: Vec<u64>,
     value_old_limbs: Vec<u64>,
     value_new_limbs: Vec<u64>,
-    asset_limbs: Vec<u64>,
     delta: u64,
-    running_asset_delta: u64,
-    supply_counter: u64,
-    metadata_hash_limbs: [u64; METADATA_COMMITMENT_LIMBS],
-    perm_hash: u64,
-    neighbour_leaf: u64,
     selectors: Selectors,
+}
+/// Transfer-only SMT projection retained only when a batch contains transfers.
+#[derive(Default)]
+struct TransferRowData {
     path_bits: [u64; SMT_HEIGHT],
     siblings: [u64; SMT_HEIGHT],
     node_in: [u64; SMT_HEIGHT],
     node_out: [u64; SMT_HEIGHT],
-    dsid: u64,
-    slot: u64,
 }
 #[derive(Debug, Clone, Copy, Default)]
 struct Selectors {
     active: u64,
     transfer: u64,
-    mint: u64,
-    burn: u64,
-    role_grant: u64,
-    role_revoke: u64,
     meta_set: u64,
-    perm: u64,
 }
 impl RowData {
-    fn padding(
-        metadata_hash_limbs: [u64; METADATA_COMMITMENT_LIMBS],
-        dsid: u64,
-        slot: u64,
-    ) -> Self {
+    fn padding() -> Self {
         Self {
             key_limbs: Vec::new(),
             value_old_limbs: Vec::new(),
             value_new_limbs: Vec::new(),
-            asset_limbs: Vec::new(),
             delta: 0,
-            running_asset_delta: 0,
-            supply_counter: 0,
-            metadata_hash_limbs,
-            perm_hash: 0,
-            neighbour_leaf: 0,
             selectors: Selectors::default(),
-            path_bits: [0; SMT_HEIGHT],
-            siblings: [0; SMT_HEIGHT],
-            node_in: [0; SMT_HEIGHT],
-            node_out: [0; SMT_HEIGHT],
-            dsid,
-            slot,
         }
     }
 }
-/// Telemetry snapshot for the GPU Poseidon pipelined hashing path.
+/// Telemetry snapshot for GPU Poseidon column-batch hashing.
 #[cfg(feature = "fastpq-gpu")]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct PoseidonPipelineStats {
-    /// Whether the streaming pipeline executed.
+    /// Whether a GPU column batch was attempted.
     pub enabled: bool,
-    /// Columns prepped per chunk while streaming.
-    pub chunk_columns: u32,
-    /// Max buffered chunk count allowed.
-    pub pipe_depth: u32,
-    /// Number of chunks dispatched to the GPU worker.
+    /// Number of columns in the most recently submitted batch.
+    pub columns: u32,
+    /// Number of successful top-level column batches.
     pub batches: u32,
-    /// Number of times the pipeline aborted and fell back.
+    /// Number of column batches that fell back.
     pub fallbacks: u32,
     /// Number of Merkle parent batches hashed through the GPU pair path.
     pub merkle_pair_gpu_batches: u32,
@@ -444,7 +425,7 @@ pub struct PoseidonPipelineStats {
     /// Largest Merkle parent pair batch observed while telemetry was enabled.
     pub merkle_pair_max_pairs: u32,
 }
-/// Enable or disable collection of Poseidon pipeline telemetry.
+/// Enable or disable collection of Poseidon column-batch telemetry.
 #[cfg(feature = "fastpq-gpu")]
 pub fn enable_poseidon_pipeline_stats(enabled: bool) {
     POSEIDON_PIPELINE_STATS_ENABLED.store(enabled, Ordering::Relaxed);
@@ -452,7 +433,7 @@ pub fn enable_poseidon_pipeline_stats(enabled: bool) {
         reset_poseidon_pipeline_stats();
     }
 }
-/// Drain the accumulated Poseidon pipeline stats, if telemetry collection is active.
+/// Drain the accumulated Poseidon column-batch stats, if telemetry collection is active.
 #[cfg(feature = "fastpq-gpu")]
 pub fn take_poseidon_pipeline_stats() -> Option<PoseidonPipelineStats> {
     if !POSEIDON_PIPELINE_STATS_ENABLED.load(Ordering::Relaxed) {
@@ -471,7 +452,7 @@ fn saturating_u32(value: usize) -> u32 {
     u32::try_from(value).unwrap_or(u32::MAX)
 }
 #[cfg(feature = "fastpq-gpu")]
-fn record_poseidon_pipeline_start(chunk_columns: usize, depth: usize) {
+fn record_poseidon_pipeline_start(columns: usize) {
     if !POSEIDON_PIPELINE_STATS_ENABLED.load(Ordering::Relaxed) {
         return;
     }
@@ -479,8 +460,7 @@ fn record_poseidon_pipeline_start(chunk_columns: usize, depth: usize) {
         POSEIDON_PIPELINE_STATS.get_or_init(|| Mutex::new(PoseidonPipelineStats::default()));
     if let Ok(mut guard) = store.lock() {
         guard.enabled = true;
-        guard.chunk_columns = saturating_u32(chunk_columns);
-        guard.pipe_depth = saturating_u32(depth);
+        guard.columns = saturating_u32(columns);
         guard.batches = 0;
         guard.fallbacks = 0;
     }
@@ -550,69 +530,40 @@ fn reset_poseidon_pipeline_stats() {
         *guard = PoseidonPipelineStats::default();
     }
 }
-/// Row usage counts for each selector.
-#[allow(clippy::struct_field_names)]
+/// Row usage counts for the V1 selectors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct RowUsage {
     /// Total number of real (non-padding) rows in the trace.
     pub total_rows: usize,
     /// Rows tagged with `OperationKind::Transfer`.
     pub transfer_rows: usize,
-    /// Rows tagged with `OperationKind::Mint`.
-    pub mint_rows: usize,
-    /// Rows tagged with `OperationKind::Burn`.
-    pub burn_rows: usize,
-    /// Rows tagged with `OperationKind::RoleGrant`.
-    pub role_grant_rows: usize,
-    /// Rows tagged with `OperationKind::RoleRevoke`.
-    pub role_revoke_rows: usize,
     /// Rows tagged with `OperationKind::MetaSet`.
     pub meta_set_rows: usize,
-    /// Rows tagged with permission selectors (mirrors role grant/revoke rows).
-    pub permission_rows: usize,
 }
 impl RowUsage {
     fn from_rows(rows: &[RowData], real_rows: usize) -> Self {
-        let mut usage = Self {
+        Self {
             total_rows: real_rows,
-            ..Self::default()
-        };
-        for row in rows.iter().take(real_rows) {
-            usage.transfer_rows = usage
-                .transfer_rows
-                .saturating_add(selector_count(row.selectors.transfer));
-            usage.mint_rows = usage
-                .mint_rows
-                .saturating_add(selector_count(row.selectors.mint));
-            usage.burn_rows = usage
-                .burn_rows
-                .saturating_add(selector_count(row.selectors.burn));
-            usage.role_grant_rows = usage
-                .role_grant_rows
-                .saturating_add(selector_count(row.selectors.role_grant));
-            usage.role_revoke_rows = usage
-                .role_revoke_rows
-                .saturating_add(selector_count(row.selectors.role_revoke));
-            usage.meta_set_rows = usage
-                .meta_set_rows
-                .saturating_add(selector_count(row.selectors.meta_set));
-            usage.permission_rows = usage
-                .permission_rows
-                .saturating_add(selector_count(row.selectors.perm));
+            transfer_rows: rows
+                .iter()
+                .take(real_rows)
+                .filter(|row| row.selectors.transfer == 1)
+                .count(),
+            meta_set_rows: rows
+                .iter()
+                .take(real_rows)
+                .filter(|row| row.selectors.meta_set == 1)
+                .count(),
         }
-        usage
     }
     /// Rows tagged with anything other than transfers.
     #[must_use]
     pub fn non_transfer_rows(&self) -> usize {
-        self.total_rows.saturating_sub(self.transfer_rows)
+        self.meta_set_rows
     }
 }
-fn selector_count(value: u64) -> usize {
-    usize::try_from(value).unwrap_or(usize::MAX)
-}
 fn populate_merkle_columns(
-    row: &mut RowData,
+    row: &mut TransferRowData,
     key: &[u8],
     balance_before: u64,
     balance_after: u64,
@@ -646,13 +597,12 @@ fn hash_to_field(hash: &Hash) -> u64 {
     limb.copy_from_slice(&hash.as_ref()[..8]);
     u64::from_le_bytes(limb) % GOLDILOCKS_MODULUS
 }
-/// Build the stage 1 trace columns for a transition batch.
+/// Build the canonical V1 trace columns for a transition batch.
 ///
 /// # Errors
 ///
 /// Returns [`Error`] when the row or schema dimensions exceed supported bounds,
-/// or when numeric encodings, asset keys, mint/burn direction, permission
-/// witnesses, or transfer transcripts are malformed.
+/// or when transfer encodings, asset keys, or transcripts are malformed.
 #[allow(clippy::too_many_lines)]
 pub fn build_trace(batch: &TransitionBatch) -> Result<Trace> {
     let n_rows = batch.transitions.len();
@@ -661,8 +611,7 @@ pub fn build_trace(batch: &TransitionBatch) -> Result<Trace> {
         .checked_next_power_of_two()
         .ok_or(Error::TraceLengthOverflow { rows: n_rows })?;
     ensure_trace_schema_limit(batch, DEFAULT_MAX_TRACE_COLUMNS)?;
-    let mut canonical = batch.clone();
-    canonical.sort();
+    let canonical = batch.canonicalized();
     let transfer_witnesses = extract_transfer_witnesses(
         &canonical.metadata,
         &canonical.transitions,
@@ -675,148 +624,68 @@ pub fn build_trace(batch: &TransitionBatch) -> Result<Trace> {
     // unique canonical Goldilocks representative expected by every backend.
     let slot_value = canonical.public_inputs.slot % GOLDILOCKS_MODULUS;
     let mut rows: Vec<RowData> = Vec::with_capacity(canonical.transitions.len());
-    // TODO: Constrain these running values in the AIR before enabling Mint/Burn or generic
-    // multi-row conservation in a public proof-semantics profile.
-    let mut running_per_asset: HashMap<Vec<u8>, i128> = HashMap::new();
-    let mut supply_counters: HashMap<Vec<u8>, i128> = HashMap::new();
+    let mut transfer_rows = canonical
+        .transitions
+        .iter()
+        .any(|transition| matches!(transition.operation, crate::OperationKind::Transfer))
+        .then(|| Vec::with_capacity(canonical.transitions.len()));
     for transition in &canonical.transitions {
-        let mut selectors = Selectors {
-            active: 1,
-            ..Selectors::default()
-        };
-        let (asset_id_bytes, perm_hash) = match &transition.operation {
+        let selectors = match &transition.operation {
             crate::OperationKind::Transfer => {
-                selectors.transfer = 1;
-                (extract_canonical_asset_id(&transition.key)?, 0)
-            }
-            crate::OperationKind::Mint => {
-                selectors.mint = 1;
-                (extract_canonical_asset_id(&transition.key)?, 0)
-            }
-            crate::OperationKind::Burn => {
-                selectors.burn = 1;
-                (extract_canonical_asset_id(&transition.key)?, 0)
-            }
-            crate::OperationKind::RoleGrant {
-                role_id,
-                permission_id,
-                epoch,
-            }
-            | crate::OperationKind::RoleRevoke {
-                role_id,
-                permission_id,
-                epoch,
-            } => {
-                let perm = permission_hash(role_id, permission_id, *epoch)?;
-                selectors.perm = 1;
-                if matches!(
-                    &transition.operation,
-                    crate::OperationKind::RoleGrant { .. }
-                ) {
-                    selectors.role_grant = 1;
-                } else {
-                    selectors.role_revoke = 1;
+                canonical_asset_id_bytes(&transition.key)?;
+                Selectors {
+                    active: 1,
+                    transfer: 1,
+                    meta_set: 0,
                 }
-                (Vec::new(), perm)
             }
-            crate::OperationKind::MetaSet => {
-                selectors.meta_set = 1;
-                (transition.key.clone(), 0)
-            }
+            crate::OperationKind::MetaSet => Selectors {
+                active: 1,
+                transfer: 0,
+                meta_set: 1,
+            },
         };
         let key_limbs = pack_bytes(&transition.key).limbs;
         let value_old_limbs = pack_bytes(&transition.pre_value).limbs;
         let value_new_limbs = pack_bytes(&transition.post_value).limbs;
-        let asset_limbs = pack_bytes(&asset_id_bytes).limbs;
-        let numeric_values = matches!(
-            transition.operation,
-            crate::OperationKind::Transfer
-                | crate::OperationKind::Mint
-                | crate::OperationKind::Burn
-        );
-        let (_value_old, _value_new, delta_signed, pre_value_u64) = if numeric_values {
+        let (delta, pre_value_u64, post_value_u64) = if selectors.transfer == 1 {
             let pre_value_u64 = decode_u64_le(&transition.pre_value)?;
             let post_value_u64 = decode_u64_le(&transition.post_value)?;
-            match &transition.operation {
-                crate::OperationKind::Mint if post_value_u64 <= pre_value_u64 => {
-                    return Err(Error::InvalidAssetValueChange { operation: "mint" });
-                }
-                crate::OperationKind::Burn if post_value_u64 >= pre_value_u64 => {
-                    return Err(Error::InvalidAssetValueChange { operation: "burn" });
-                }
-                _ => {}
-            }
-            let value_old = i128::from(pre_value_u64);
-            let value_new = i128::from(post_value_u64);
-            (value_old, value_new, value_new - value_old, pre_value_u64)
+            let delta = i128::from(post_value_u64) - i128::from(pre_value_u64);
+            (field_from_i128(delta), pre_value_u64, post_value_u64)
         } else {
-            (0, 0, 0, 0)
+            (0, 0, 0)
         };
-        let delta = field_from_i128(delta_signed);
-        let asset_key = asset_id_bytes.clone();
-        let running_prev = running_per_asset.get(&asset_key).copied().unwrap_or(0);
-        let running_next = if numeric_values {
-            let running_next = running_prev + delta_signed;
-            running_per_asset.insert(asset_key.clone(), running_next);
-            running_next
-        } else {
-            running_prev
-        };
-        let supply_prev = supply_counters.get(&asset_key).copied().unwrap_or(0);
-        let supply_next = if numeric_values {
-            let mut supply_next = supply_prev;
-            if matches!(
-                &transition.operation,
-                crate::OperationKind::Mint | crate::OperationKind::Burn
-            ) {
-                supply_next += delta_signed;
-            }
-            supply_counters.insert(asset_key.clone(), supply_next);
-            supply_next
-        } else {
-            supply_prev
-        };
-        let mut row = RowData {
+        let row = RowData {
             key_limbs,
             value_old_limbs,
             value_new_limbs,
-            asset_limbs,
             delta,
-            running_asset_delta: field_from_i128(running_next),
-            supply_counter: field_from_i128(supply_next),
-            metadata_hash_limbs,
-            perm_hash,
-            neighbour_leaf: 0,
             selectors,
-            path_bits: [0; SMT_HEIGHT],
-            siblings: [0; SMT_HEIGHT],
-            node_in: [0; SMT_HEIGHT],
-            node_out: [0; SMT_HEIGHT],
-            dsid: dsid_hash,
-            slot: slot_value,
         };
-        if matches!(transition.operation, crate::OperationKind::Transfer) {
-            let proof = transfer_proof_index
-                .get_mut(&TransferRowKey::from_transition(transition))
-                .and_then(std::collections::VecDeque::pop_front)
-                .ok_or_else(|| Error::TransferInvariant {
-                    details: "transfer row is missing its canonical SMT proof witness".into(),
-                });
-            let proof = proof?;
-            populate_merkle_columns(
-                &mut row,
-                transition.key.as_slice(),
-                pre_value_u64,
-                decode_u64_le(&transition.post_value)?,
-                &proof,
-            );
-        }
         rows.push(row);
+        if let Some(projection) = transfer_rows.as_mut() {
+            let mut transfer_row = TransferRowData::default();
+            if selectors.transfer == 1 {
+                let proof = take_transfer_row_proof(&mut transfer_proof_index, transition)?;
+                populate_merkle_columns(
+                    &mut transfer_row,
+                    transition.key.as_slice(),
+                    pre_value_u64,
+                    post_value_u64,
+                    &proof,
+                );
+            }
+            projection.push(transfer_row);
+        }
     }
     debug_assert_eq!(rows.len(), n_rows);
     let row_usage = RowUsage::from_rows(&rows, n_rows);
     while rows.len() < padded_len {
-        rows.push(RowData::padding(metadata_hash_limbs, dsid_hash, slot_value));
+        rows.push(RowData::padding());
+        if let Some(projection) = transfer_rows.as_mut() {
+            projection.push(TransferRowData::default());
+        }
     }
     let max_key_limbs = rows
         .iter()
@@ -833,26 +702,10 @@ pub fn build_trace(batch: &TransitionBatch) -> Result<Trace> {
         .map(|row| row.value_new_limbs.len())
         .max()
         .unwrap_or_default();
-    let max_asset_limbs = rows
-        .iter()
-        .map(|row| row.asset_limbs.len())
-        .max()
-        .unwrap_or_default();
     let mut columns = vec![
         TraceColumn::new("s_active", rows.iter().map(|row| row.selectors.active)),
         TraceColumn::new("s_transfer", rows.iter().map(|row| row.selectors.transfer)),
-        TraceColumn::new("s_mint", rows.iter().map(|row| row.selectors.mint)),
-        TraceColumn::new("s_burn", rows.iter().map(|row| row.selectors.burn)),
-        TraceColumn::new(
-            "s_role_grant",
-            rows.iter().map(|row| row.selectors.role_grant),
-        ),
-        TraceColumn::new(
-            "s_role_revoke",
-            rows.iter().map(|row| row.selectors.role_revoke),
-        ),
         TraceColumn::new("s_meta_set", rows.iter().map(|row| row.selectors.meta_set)),
-        TraceColumn::new("s_perm", rows.iter().map(|row| row.selectors.perm)),
     ];
     for idx in 0..max_key_limbs {
         columns.push(TraceColumn::new(
@@ -875,55 +728,40 @@ pub fn build_trace(batch: &TransitionBatch) -> Result<Trace> {
                 .map(|row| row.value_new_limbs.get(idx).copied().unwrap_or(0)),
         ));
     }
-    for idx in 0..max_asset_limbs {
-        columns.push(TraceColumn::new(
-            format!("asset_id_limb_{idx}"),
-            rows.iter()
-                .map(|row| row.asset_limbs.get(idx).copied().unwrap_or(0)),
-        ));
-    }
     columns.push(TraceColumn::new("delta", rows.iter().map(|row| row.delta)));
-    columns.push(TraceColumn::new(
-        "running_asset_delta",
-        rows.iter().map(|row| row.running_asset_delta),
-    ));
     for limb in 0..METADATA_COMMITMENT_LIMBS {
         columns.push(TraceColumn::new(
             format!("metadata_hash_limb_{limb}"),
-            rows.iter().map(|row| row.metadata_hash_limbs[limb]),
+            std::iter::repeat_n(metadata_hash_limbs[limb], rows.len()),
         ));
     }
     columns.push(TraceColumn::new(
-        "supply_counter",
-        rows.iter().map(|row| row.supply_counter),
+        "dsid",
+        std::iter::repeat_n(dsid_hash, rows.len()),
     ));
     columns.push(TraceColumn::new(
-        "perm_hash",
-        rows.iter().map(|row| row.perm_hash),
+        "slot",
+        std::iter::repeat_n(slot_value, rows.len()),
     ));
-    columns.push(TraceColumn::new(
-        "neighbour_leaf",
-        rows.iter().map(|row| row.neighbour_leaf),
-    ));
-    columns.push(TraceColumn::new("dsid", rows.iter().map(|row| row.dsid)));
-    columns.push(TraceColumn::new("slot", rows.iter().map(|row| row.slot)));
-    for level in 0..SMT_HEIGHT {
-        columns.push(TraceColumn::new(
-            format!("path_bit_{level}"),
-            rows.iter().map(|row| row.path_bits[level]),
-        ));
-        columns.push(TraceColumn::new(
-            format!("sibling_{level}"),
-            rows.iter().map(|row| row.siblings[level]),
-        ));
-        columns.push(TraceColumn::new(
-            format!("node_in_{level}"),
-            rows.iter().map(|row| row.node_in[level]),
-        ));
-        columns.push(TraceColumn::new(
-            format!("node_out_{level}"),
-            rows.iter().map(|row| row.node_out[level]),
-        ));
+    if let Some(transfer_rows) = &transfer_rows {
+        for level in 0..SMT_HEIGHT {
+            columns.push(TraceColumn::new(
+                format!("path_bit_{level}"),
+                transfer_rows.iter().map(|row| row.path_bits[level]),
+            ));
+            columns.push(TraceColumn::new(
+                format!("sibling_{level}"),
+                transfer_rows.iter().map(|row| row.siblings[level]),
+            ));
+            columns.push(TraceColumn::new(
+                format!("node_in_{level}"),
+                transfer_rows.iter().map(|row| row.node_in[level]),
+            ));
+            columns.push(TraceColumn::new(
+                format!("node_out_{level}"),
+                transfer_rows.iter().map(|row| row.node_out[level]),
+            ));
+        }
     }
     Ok(Trace {
         rows: n_rows,
@@ -933,12 +771,24 @@ pub fn build_trace(batch: &TransitionBatch) -> Result<Trace> {
         row_usage,
     })
 }
+
+fn take_transfer_row_proof(
+    proof_index: &mut HashMap<TransferRowKey, VecDeque<transfer::TransferMerkleProof>>,
+    transition: &StateTransition,
+) -> Result<transfer::TransferMerkleProof> {
+    proof_index
+        .get_mut(&TransferRowKey::from_transition(transition))
+        .and_then(VecDeque::pop_front)
+        .ok_or_else(|| Error::TransferInvariant {
+            details: "transfer row is missing its canonical SMT proof witness".into(),
+        })
+}
 #[derive(Clone, Copy)]
 struct TraceSchemaLimbWidths {
     key: usize,
     old_value: usize,
     new_value: usize,
-    asset: usize,
+    has_transfer: bool,
 }
 fn packed_limb_len(byte_len: usize) -> usize {
     byte_len.div_ceil(crate::LIMB_BYTES)
@@ -948,16 +798,13 @@ fn trace_schema_limb_widths(batch: &TransitionBatch) -> Result<TraceSchemaLimbWi
         key: 0,
         old_value: 0,
         new_value: 0,
-        asset: 0,
+        has_transfer: false,
     };
     for transition in &batch.transitions {
-        let asset_len = match &transition.operation {
-            crate::OperationKind::MetaSet => transition.key.len(),
-            crate::OperationKind::RoleGrant { .. } | crate::OperationKind::RoleRevoke { .. } => 0,
-            crate::OperationKind::Transfer
-            | crate::OperationKind::Mint
-            | crate::OperationKind::Burn => canonical_asset_id_bytes(&transition.key)?.len(),
-        };
+        if matches!(transition.operation, crate::OperationKind::Transfer) {
+            widths.has_transfer = true;
+            canonical_asset_id_bytes(&transition.key)?;
+        }
         widths.key = widths.key.max(packed_limb_len(transition.key.len()));
         widths.old_value = widths
             .old_value
@@ -965,22 +812,25 @@ fn trace_schema_limb_widths(batch: &TransitionBatch) -> Result<TraceSchemaLimbWi
         widths.new_value = widths
             .new_value
             .max(packed_limb_len(transition.post_value.len()));
-        widths.asset = widths.asset.max(packed_limb_len(asset_len));
     }
     Ok(widths)
 }
 /// Return the number of columns in the canonical FASTPQ layout without allocating column names.
 pub(crate) fn column_count_for_batch(batch: &TransitionBatch) -> Result<usize> {
-    const SELECTOR_COLUMNS: usize = 8;
-    const DELTA_COLUMNS: usize = 2;
-    const TRAILING_COLUMNS: usize = 5;
+    const SELECTOR_COLUMNS: usize = 3;
+    const DELTA_COLUMNS: usize = 1;
+    const TRAILING_COLUMNS: usize = 2;
     let widths = trace_schema_limb_widths(batch)?;
     let fixed_columns = SELECTOR_COLUMNS
         + DELTA_COLUMNS
         + METADATA_COMMITMENT_LIMBS
         + TRAILING_COLUMNS
-        + SMT_HEIGHT * 4;
-    Ok(fixed_columns + widths.key + widths.old_value + widths.new_value + widths.asset)
+        + if widths.has_transfer {
+            SMT_HEIGHT * 4
+        } else {
+            0
+        };
+    Ok(fixed_columns + widths.key + widths.old_value + widths.new_value)
 }
 /// Enforce a caller-selected trace schema width before materialising columns.
 pub(crate) fn ensure_trace_schema_limit(
@@ -1005,45 +855,23 @@ pub(crate) fn ensure_trace_schema_limit(
 /// `asset/<asset-id>/<account>` key shape.
 pub(crate) fn column_names_for_batch(batch: &TransitionBatch) -> Result<Vec<String>> {
     let widths = trace_schema_limb_widths(batch)?;
-    let mut columns = [
-        "s_active",
-        "s_transfer",
-        "s_mint",
-        "s_burn",
-        "s_role_grant",
-        "s_role_revoke",
-        "s_meta_set",
-        "s_perm",
-    ]
-    .into_iter()
-    .map(str::to_owned)
-    .collect::<Vec<_>>();
+    let mut columns = ["s_active", "s_transfer", "s_meta_set"]
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
     columns.extend((0..widths.key).map(|idx| format!("key_limb_{idx}")));
     columns.extend((0..widths.old_value).map(|idx| format!("value_old_limb_{idx}")));
     columns.extend((0..widths.new_value).map(|idx| format!("value_new_limb_{idx}")));
-    columns.extend((0..widths.asset).map(|idx| format!("asset_id_limb_{idx}")));
-    columns.extend(
-        ["delta", "running_asset_delta"]
-            .into_iter()
-            .map(str::to_owned),
-    );
+    columns.push("delta".to_owned());
     columns.extend((0..METADATA_COMMITMENT_LIMBS).map(|limb| format!("metadata_hash_limb_{limb}")));
-    columns.extend(
-        [
-            "supply_counter",
-            "perm_hash",
-            "neighbour_leaf",
-            "dsid",
-            "slot",
-        ]
-        .into_iter()
-        .map(str::to_owned),
-    );
-    for level in 0..SMT_HEIGHT {
-        columns.push(format!("path_bit_{level}"));
-        columns.push(format!("sibling_{level}"));
-        columns.push(format!("node_in_{level}"));
-        columns.push(format!("node_out_{level}"));
+    columns.extend(["dsid", "slot"].into_iter().map(str::to_owned));
+    if widths.has_transfer {
+        for level in 0..SMT_HEIGHT {
+            columns.push(format!("path_bit_{level}"));
+            columns.push(format!("sibling_{level}"));
+            columns.push(format!("node_in_{level}"));
+            columns.push(format!("node_out_{level}"));
+        }
     }
     Ok(columns)
 }
@@ -1119,25 +947,6 @@ fn extract_transfer_witnesses(
         &public_inputs.new_root,
     )
 }
-pub(crate) fn permission_hash(role_id: &[u8], permission_id: &[u8], epoch: u64) -> Result<u64> {
-    if role_id.len() != 32 {
-        return Err(Error::InvalidRoleIdLength {
-            length: role_id.len(),
-        });
-    }
-    if permission_id.len() != 32 {
-        return Err(Error::InvalidPermissionIdLength {
-            length: permission_id.len(),
-        });
-    }
-    let mut payload = Vec::with_capacity(32 + 32 + 8);
-    payload.extend_from_slice(role_id);
-    payload.extend_from_slice(permission_id);
-    payload.extend_from_slice(&epoch.to_le_bytes());
-    Ok(poseidon::hash_field_elements_cpu(
-        &pack_bytes(&payload).limbs,
-    ))
-}
 fn hash_with_domain(domain: &[u8], payload: &[u8]) -> Result<u64> {
     let domain_packed = pack_bytes(domain);
     let payload_packed = pack_bytes(payload);
@@ -1171,11 +980,9 @@ fn hash_field_with_domain_cpu(domain: &[u8], values: &[u64]) -> u64 {
 }
 #[cfg(feature = "fastpq-gpu")]
 /// Flattened Poseidon column payloads used by GPU hashing backends.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct PoseidonColumnBatch {
-    payloads: Arc<[u64]>,
-    payload_start: usize,
-    payload_len: usize,
+    payloads: Vec<u64>,
     offsets: Vec<PoseidonColumnSlice>,
     block_count: usize,
     padded_len: usize,
@@ -1184,7 +991,7 @@ pub struct PoseidonColumnBatch {
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// Offset metadata describing where a column resides inside the flattened payload buffer.
-pub struct PoseidonColumnSlice {
+pub(crate) struct PoseidonColumnSlice {
     offset: u32,
     len: u32,
 }
@@ -1196,20 +1003,15 @@ impl PoseidonColumnSlice {
         Some(Self { offset, len })
     }
     /// Return the starting index of this column within the flattened payload slice.
-    pub fn offset(self) -> usize {
+    pub(crate) fn offset(self) -> usize {
         self.offset as usize
     }
     /// Return the number of limbs reserved for this column payload (including padding).
-    pub fn len(self) -> usize {
+    pub(crate) fn len(self) -> usize {
         self.len as usize
     }
-    /// Return true when this descriptor does not cover any payload limbs.
-    pub fn is_empty(self) -> bool {
-        self.len == 0
-    }
     fn rebased(self, base: usize) -> Option<Self> {
-        let offset = self.offset().checked_sub(base)?;
-        Self::new(offset, self.len())
+        Self::new(self.offset().checked_sub(base)?, self.len())
     }
 }
 #[cfg(feature = "fastpq-gpu")]
@@ -1226,9 +1028,7 @@ pub(crate) fn poseidon_limb_padded_len(limb_len: usize) -> Option<usize> {
 impl PoseidonColumnBatch {
     fn empty() -> Self {
         Self {
-            payloads: Arc::<[u64]>::from(Vec::<u64>::new()),
-            payload_start: 0,
-            payload_len: 0,
+            payloads: Vec::new(),
             offsets: Vec::new(),
             block_count: 0,
             padded_len: 0,
@@ -1303,11 +1103,7 @@ impl PoseidonColumnBatch {
             }
         }
         Some(Self {
-            payloads: payloads.into(),
-            payload_start: 0,
-            payload_len: offsets
-                .last()
-                .map_or(0, |slice| slice.offset() + slice.len()),
+            payloads,
             offsets,
             block_count: block_count.unwrap_or(0),
             padded_len,
@@ -1367,11 +1163,7 @@ impl PoseidonColumnBatch {
             }
         }
         Some(Self {
-            payloads: payloads.into(),
-            payload_start: 0,
-            payload_len: offsets
-                .last()
-                .map_or(0, |slice| slice.offset() + slice.len()),
+            payloads,
             offsets,
             block_count: block_count.unwrap_or(0),
             padded_len,
@@ -1425,11 +1217,7 @@ impl PoseidonColumnBatch {
             }
         }
         Some(Self {
-            payloads: payloads.into(),
-            payload_start: 0,
-            payload_len: offsets
-                .last()
-                .map_or(0, |slice| slice.offset() + slice.len()),
+            payloads,
             offsets,
             block_count,
             padded_len,
@@ -1445,9 +1233,7 @@ impl PoseidonColumnBatch {
         self.block_count
     }
     pub(crate) fn payloads(&self) -> &[u64] {
-        let start = self.payload_start.min(self.payloads.len());
-        let end = (self.payload_start + self.payload_len).min(self.payloads.len());
-        &self.payloads[start..end]
+        &self.payloads
     }
     pub(crate) fn offsets(&self) -> &[PoseidonColumnSlice] {
         &self.offsets
@@ -1471,35 +1257,6 @@ impl PoseidonColumnBatch {
         }
         Some(slices)
     }
-    /// Materialise a batch containing a contiguous window of columns.
-    ///
-    /// The returned batch copies only the payload region that covers the requested columns and
-    /// re-bases the column offsets so GPU kernels can ingest the flattened buffer directly.
-    pub fn column_window(&self, offset: usize, count: usize) -> Option<Self> {
-        if count == 0 {
-            return Some(Self::empty());
-        }
-        let end = offset.checked_add(count)?;
-        let base_slice = self.offsets.get(offset)?;
-        let last_slice = self.offsets.get(end.checked_sub(1)?)?;
-        let absolute_base = self.payload_start.checked_add(base_slice.offset())?;
-        let window_end = self
-            .payload_start
-            .checked_add(last_slice.offset())?
-            .checked_add(last_slice.len())?;
-        if window_end > self.payload_start + self.payload_len || absolute_base >= window_end {
-            return None;
-        }
-        let offsets = self.rebased_slices(offset, count)?;
-        Some(Self {
-            payloads: Arc::clone(&self.payloads),
-            payload_start: absolute_base,
-            payload_len: window_end - absolute_base,
-            offsets,
-            block_count: self.block_count,
-            padded_len: self.padded_len,
-        })
-    }
 }
 #[cfg(feature = "fastpq-gpu")]
 /// Attempt to hash the supplied columns using the active GPU backend.
@@ -1518,7 +1275,7 @@ pub fn hash_columns_gpu_batch(batch: &PoseidonColumnBatch) -> Option<Vec<u64>> {
         return None;
     }
     if !batch.is_empty() {
-        record_poseidon_pipeline_start(batch.columns(), 1);
+        record_poseidon_pipeline_start(batch.columns());
     }
     match gpu::poseidon_hash_columns(batch, backend) {
         Ok(result) if poseidon_column_result_count_matches(batch, &result) => {
@@ -1707,14 +1464,14 @@ pub fn hash_columns_cpu_batch_inputs(domains: &[&str], columns: &[Vec<u64>]) -> 
 }
 #[cfg(feature = "fastpq-gpu")]
 /// Hash the supplied Poseidon column batch on the GPU, returning leaf digests
-/// alongside the fused depth-1 parent layer when acceleration succeeds.
+/// alongside the depth-1 parent layer when acceleration succeeds.
 ///
-/// The public contract is a fused digest result; internally the implementation uses the
-/// parity-proven column batch kernel for leaves and the Merkle pair batch helper for parents.
+/// The implementation uses the parity-proven column batch kernel for leaves and
+/// the Merkle-pair batch helper for parents.
 ///
 /// Returns `None` when GPU acceleration is unavailable, disabled via [`ExecutionMode`], or a batch
 /// dispatch encounters an error so callers can fall back to the scalar sponge.
-pub fn hash_columns_gpu_fused(
+pub fn hash_columns_gpu_with_first_level(
     batch: &PoseidonColumnBatch,
     mode: ExecutionMode,
 ) -> Option<ColumnDigests> {
@@ -1751,9 +1508,6 @@ fn canonical_asset_id_bytes(key: &[u8]) -> Result<&[u8]> {
     }
     Ok(asset_id)
 }
-fn extract_canonical_asset_id(key: &[u8]) -> Result<Vec<u8>> {
-    Ok(canonical_asset_id_bytes(key)?.to_vec())
-}
 fn decode_u64_le(bytes: &[u8]) -> Result<u64> {
     if bytes.len() != core::mem::size_of::<u64>() {
         return Err(Error::InvalidAssetValueLength {
@@ -1783,20 +1537,17 @@ fn field_from_i128(value: i128) -> u64 {
 /// and [`Error::VerifierLimitExceeded`] or
 /// [`Error::TraceDomainCapacityExceeded`] when its dimensions exceed the
 /// supported schema or selected parameter domain.
-pub fn column_hashes(trace: &Trace, params: &StarkParameterSet) -> Result<ColumnDigests> {
+pub(crate) fn column_hashes(trace: &Trace, params: &StarkParameterSet) -> Result<ColumnDigests> {
     validate_trace_shape(trace, params)?;
     if trace.columns.is_empty() {
         return Ok(ColumnDigests::new(Vec::new(), None));
     }
     let planner = Planner::new(params);
-    let mode = ExecutionMode::Cpu;
     let coefficients = trace_coefficients(trace, &planner, ExecutionMode::Cpu);
     Ok(hash_columns_from_coefficients(
         trace,
         &coefficients,
-        &planner,
-        mode,
-        PoseidonPipelinePolicy::for_mode(mode),
+        PoseidonPipelinePolicy::for_mode(ExecutionMode::Cpu),
     ))
 }
 fn validate_trace_shape(trace: &Trace, params: &StarkParameterSet) -> Result<()> {
@@ -1882,12 +1633,9 @@ pub(crate) fn trace_coefficients(
         }
     }
 }
-#[cfg_attr(not(feature = "fastpq-gpu"), allow(unused_variables))]
 pub(crate) fn hash_columns_from_coefficients(
     trace: &Trace,
     coefficients: &[Vec<u64>],
-    _planner: &Planner,
-    _mode: ExecutionMode,
     poseidon_policy: PoseidonPipelinePolicy,
 ) -> ColumnDigests {
     assert_eq!(
@@ -1900,10 +1648,6 @@ pub(crate) fn hash_columns_from_coefficients(
     #[cfg(not(feature = "fastpq-gpu"))]
     let poseidon_backend: Option<backend::GpuBackend> = None;
     #[cfg(feature = "fastpq-gpu")]
-    let mut poseidon_recorded = false;
-    #[cfg(not(feature = "fastpq-gpu"))]
-    let poseidon_recorded = false;
-    #[cfg(feature = "fastpq-gpu")]
     {
         let domain_names: Vec<String> = trace
             .columns
@@ -1915,47 +1659,20 @@ pub(crate) fn hash_columns_from_coefficients(
             PoseidonColumnBatch::from_domains_and_columns(&domain_refs, coefficients)
         {
             if matches!(poseidon_policy.resolved(), ExecutionMode::Gpu) {
-                if let Some(fused) = hash_columns_gpu_fused(&batch, ExecutionMode::Gpu) {
-                    notify_poseidon_pipeline_observer(
-                        poseidon_policy,
-                        "gpu_fused",
-                        poseidon_backend,
-                    );
-                    return fused;
-                }
-                if poseidon_backend.is_some()
-                    && let Some(result) = hash_columns_gpu_batch(&batch)
+                if let Some(accelerated) =
+                    hash_columns_gpu_with_first_level(&batch, ExecutionMode::Gpu)
                 {
-                    notify_poseidon_pipeline_observer(
-                        poseidon_policy,
-                        "gpu_batch",
-                        poseidon_backend,
-                    );
-                    return ColumnDigests::new(result, None);
+                    notify_poseidon_pipeline_observer(poseidon_policy, "gpu", poseidon_backend);
+                    return accelerated;
                 }
-                notify_poseidon_pipeline_observer(
-                    poseidon_policy,
-                    poseidon_policy.cpu_label(),
-                    poseidon_backend,
-                );
-                poseidon_recorded = true;
-            } else {
-                notify_poseidon_pipeline_observer(
-                    poseidon_policy,
-                    poseidon_policy.cpu_label(),
-                    poseidon_backend,
-                );
-                poseidon_recorded = true;
             }
         }
     }
-    if !poseidon_recorded {
-        notify_poseidon_pipeline_observer(
-            poseidon_policy,
-            poseidon_policy.cpu_label(),
-            poseidon_backend,
-        );
-    }
+    notify_poseidon_pipeline_observer(
+        poseidon_policy,
+        poseidon_policy.cpu_label(),
+        poseidon_backend,
+    );
     let leaves: Vec<u64> = trace
         .columns
         .par_iter()
@@ -1969,61 +1686,43 @@ pub(crate) fn hash_columns_from_coefficients(
 }
 pub(crate) struct TracePolynomialData {
     pub coefficients: Vec<Vec<u64>>,
-    lde_state: LdeColumnsState,
+    lde_columns: Vec<Vec<u64>>,
     transfer_plan: transfer::TransferGadgetPlan,
-}
-enum LdeColumnsState {
-    Ready(Vec<Vec<u64>>),
 }
 impl TracePolynomialData {
     #[cfg(test)]
-    pub(crate) fn lde_columns(&mut self) -> &Vec<Vec<u64>> {
-        match &self.lde_state {
-            LdeColumnsState::Ready(columns) => columns,
-        }
+    pub(crate) fn lde_columns(&self) -> &[Vec<u64>] {
+        &self.lde_columns
     }
     pub(crate) fn into_lde_columns(self) -> Vec<Vec<u64>> {
-        match self.lde_state {
-            LdeColumnsState::Ready(columns) => columns,
-        }
-    }
-    #[allow(dead_code)]
-    pub(crate) fn transfer_witnesses(&self) -> &[transfer::TransferGadgetInput] {
-        self.transfer_plan.witnesses()
+        self.lde_columns
     }
     pub(crate) fn transfer_plan(&self) -> &transfer::TransferGadgetPlan {
         &self.transfer_plan
     }
 }
-pub(crate) fn derive_polynomial_data(
-    trace: &Trace,
-    planner: &Planner,
-    _mode: ExecutionMode,
-) -> TracePolynomialData {
+pub(crate) fn derive_polynomial_data(trace: &Trace, planner: &Planner) -> TracePolynomialData {
     let coefficients = trace_coefficients(trace, planner, ExecutionMode::Cpu);
-    let lde_state = if coefficients.is_empty() {
-        LdeColumnsState::Ready(Vec::new())
+    let lde_columns = if coefficients.is_empty() {
+        Vec::new()
     } else {
         // Proof LDE columns must be byte-identical across CPU and accelerator builds.
         // Metal LDE remains available through the planner APIs, but proof construction
         // materializes these columns on CPU and reserves GPU proof work for batched
         // Poseidon paths with parity gates.
-        LdeColumnsState::Ready(planner.lde_columns(&coefficients))
+        planner.lde_columns(&coefficients)
     };
     TracePolynomialData {
         coefficients,
-        lde_state,
+        lde_columns,
         transfer_plan: transfer::TransferGadgetPlan::from_inputs(&trace.transfer_witnesses),
     }
 }
-pub(crate) fn column_index(trace: &Trace, name: &str) -> Option<usize> {
-    trace.columns.iter().position(|column| column.name == name)
-}
-/// Compute a Poseidon Merkle root over column hashes using an optional fused first level.
-pub fn merkle_root_with_first_level(leaves: &[u64], first_level: Option<&[u64]>) -> u64 {
+/// Compute a Poseidon Merkle root over column hashes using an optional precomputed first level.
+pub(crate) fn merkle_root_with_first_level(leaves: &[u64], first_level: Option<&[u64]>) -> u64 {
     merkle_root_with_first_level_using(leaves, first_level, compute_merkle_level)
 }
-/// Compute a Poseidon Merkle root using the requested pipeline for every non-fused level.
+/// Compute a Poseidon Merkle root using the requested pipeline after any precomputed first level.
 pub(crate) fn merkle_root_with_first_level_with_mode(
     leaves: &[u64],
     first_level: Option<&[u64]>,
@@ -2055,6 +1754,7 @@ fn merkle_root_with_first_level_using(
     current[0]
 }
 /// Compute the traditional Merkle root using scalar-equivalent Poseidon hashes.
+#[cfg(any(test, feature = "dev-tools"))]
 pub fn merkle_root(leaves: &[u64]) -> u64 {
     merkle_root_with_first_level(leaves, None)
 }
@@ -2382,15 +2082,11 @@ mod tests {
         for transition in sample_transitions(&transcript) {
             batch.push(transition);
         }
-        let mint_key = format!(
-            "asset/{}/{}",
-            transcript.deltas[0].asset_definition, transcript.deltas[0].to_account
-        );
         batch.push(StateTransition::new(
-            mint_key.into_bytes(),
-            20u64.to_le_bytes().to_vec(),
-            40u64.to_le_bytes().to_vec(),
-            OperationKind::Mint,
+            b"metadata/trace-fixture".to_vec(),
+            b"old".to_vec(),
+            b"new".to_vec(),
+            OperationKind::MetaSet,
         ));
         batch.metadata.insert(
             TRANSFER_TRANSCRIPTS_METADATA_KEY.into(),
@@ -2544,43 +2240,7 @@ mod tests {
         );
     }
     #[test]
-    fn build_trace_enforces_strict_mint_and_burn_direction() {
-        for (operation, before, after) in [
-            (OperationKind::Mint, 4_u64, 5_u64),
-            (OperationKind::Burn, 5_u64, 4_u64),
-        ] {
-            let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
-            batch.push(StateTransition::new(
-                b"asset/xor/alice".to_vec(),
-                before.to_le_bytes().to_vec(),
-                after.to_le_bytes().to_vec(),
-                operation,
-            ));
-            build_trace(&batch).expect("correctly directed asset operation");
-        }
-
-        for (operation, before, after, expected_operation) in [
-            (OperationKind::Mint, 5_u64, 4_u64, "mint"),
-            (OperationKind::Mint, 5_u64, 5_u64, "mint"),
-            (OperationKind::Burn, 4_u64, 5_u64, "burn"),
-            (OperationKind::Burn, 5_u64, 5_u64, "burn"),
-        ] {
-            let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
-            batch.push(StateTransition::new(
-                b"asset/xor/alice".to_vec(),
-                before.to_le_bytes().to_vec(),
-                after.to_le_bytes().to_vec(),
-                operation,
-            ));
-            let error = build_trace(&batch).expect_err("wrong-direction asset operation");
-            assert!(matches!(
-                error,
-                Error::InvalidAssetValueChange { operation } if operation == expected_operation
-            ));
-        }
-    }
-    #[test]
-    fn build_trace_rejects_noncanonical_asset_operation_keys() {
+    fn canonical_asset_key_parser_rejects_noncanonical_shapes() {
         for key in [
             b"xor/alice".as_slice(),
             b"asset//alice".as_slice(),
@@ -2588,38 +2248,19 @@ mod tests {
             b"asset/xor/".as_slice(),
             b"asset/xor/account/alice".as_slice(),
         ] {
-            let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
-            batch.push(StateTransition::new(
-                key.to_vec(),
-                4_u64.to_le_bytes().to_vec(),
-                5_u64.to_le_bytes().to_vec(),
-                OperationKind::Mint,
+            assert!(matches!(
+                canonical_asset_id_bytes(key),
+                Err(Error::InvalidAssetKey)
             ));
-            assert!(matches!(build_trace(&batch), Err(Error::InvalidAssetKey)));
         }
     }
     #[test]
-    fn build_trace_rejects_noncanonical_numeric_asset_value_lengths() {
+    fn numeric_asset_decoder_rejects_noncanonical_lengths() {
         for length in [0_usize, 1, 7, 9] {
-            for mutate_pre_value in [true, false] {
-                let mut batch =
-                    TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
-                let (pre_value, post_value) = if mutate_pre_value {
-                    (vec![0; length], 5_u64.to_le_bytes().to_vec())
-                } else {
-                    (4_u64.to_le_bytes().to_vec(), vec![0; length])
-                };
-                batch.push(StateTransition::new(
-                    b"asset/xor/alice".to_vec(),
-                    pre_value,
-                    post_value,
-                    OperationKind::Mint,
-                ));
-                assert!(matches!(
-                    build_trace(&batch),
-                    Err(Error::InvalidAssetValueLength { length: actual }) if actual == length
-                ));
-            }
+            assert!(matches!(
+                decode_u64_le(&vec![0; length]),
+                Err(Error::InvalidAssetValueLength { length: actual }) if actual == length
+            ));
         }
     }
     #[test]
@@ -2760,7 +2401,7 @@ mod tests {
             .expect("canonical parameter set");
         let hashes = column_hashes(&trace, &params).expect("hashes");
         assert!(!hashes.leaves().is_empty());
-        let root = merkle_root_with_first_level(hashes.leaves(), hashes.fused_parents());
+        let root = merkle_root_with_first_level(hashes.leaves(), hashes.first_level_parents());
         assert_ne!(root, 0);
     }
     #[test]
@@ -2878,19 +2519,17 @@ mod tests {
         let trace = build_trace(&sample_batch()).expect("build");
         let params = CANONICAL_PARAMETER_SETS[0];
         let planner = Planner::new(&params);
-        let mut data = derive_polynomial_data(&trace, &planner, ExecutionMode::Cpu);
+        let data = derive_polynomial_data(&trace, &planner);
         let via_coeffs = hash_columns_from_coefficients(
             &trace,
             &data.coefficients,
-            &planner,
-            ExecutionMode::Cpu,
             PoseidonPipelinePolicy::for_mode(ExecutionMode::Cpu),
         );
         let via_api = column_hashes(&trace, &params).expect("hash via api");
         assert_eq!(via_coeffs.leaves(), via_api.leaves());
         assert_eq!(
-            merkle_root_with_first_level(via_coeffs.leaves(), via_coeffs.fused_parents()),
-            merkle_root_with_first_level(via_api.leaves(), via_api.fused_parents())
+            merkle_root_with_first_level(via_coeffs.leaves(), via_coeffs.first_level_parents()),
+            merkle_root_with_first_level(via_api.leaves(), via_api.first_level_parents())
         );
         assert_eq!(data.lde_columns().len(), trace.columns.len());
     }
@@ -2918,19 +2557,15 @@ mod tests {
                 hash_field_with_domain_cpu(domain.as_bytes(), coeffs)
             })
             .collect();
-        let params = CANONICAL_PARAMETER_SETS[0];
-        let planner = Planner::new(&params);
         let parallel = hash_columns_from_coefficients(
             &trace,
             &coefficients,
-            &planner,
-            ExecutionMode::Cpu,
             PoseidonPipelinePolicy::for_mode(ExecutionMode::Cpu),
         );
         assert_eq!(parallel.leaves(), sequential.as_slice());
         assert!(
-            parallel.fused_parents().is_none(),
-            "CPU hashing should not emit fused parents"
+            parallel.first_level_parents().is_none(),
+            "CPU hashing should not emit precomputed parents"
         );
     }
     #[cfg(feature = "fastpq-gpu")]
@@ -3012,7 +2647,7 @@ mod tests {
     }
     #[cfg(feature = "fastpq-gpu")]
     #[test]
-    fn poseidon_column_batch_window_rejects_out_of_range_and_overflow() {
+    fn poseidon_column_batch_rebasing_rejects_out_of_range_and_overflow() {
         let domains = vec![
             "fastpq:v1:trace:column:a",
             "fastpq:v1:trace:column:b",
@@ -3021,8 +2656,7 @@ mod tests {
         let columns = vec![vec![1u64, 2], vec![3u64, 4], vec![5u64, 6]];
         let batch =
             PoseidonColumnBatch::from_domains_and_columns(&domains, &columns).expect("batch");
-        assert!(batch.column_window(domains.len(), 1).is_none());
-        assert!(batch.column_window(1, usize::MAX).is_none());
+        assert!(batch.rebased_slices(domains.len(), 1).is_none());
         assert!(batch.rebased_slices(1, usize::MAX).is_none());
     }
     #[cfg(feature = "fastpq-gpu")]
@@ -3058,50 +2692,12 @@ mod tests {
     }
     #[cfg(feature = "fastpq-gpu")]
     #[test]
-    fn fused_poseidon_respects_execution_mode() {
+    fn gpu_column_hashing_respects_execution_mode() {
         let domains: Vec<&str> = Vec::new();
         let columns: Vec<Vec<u64>> = Vec::new();
         let batch =
             PoseidonColumnBatch::from_domains_and_columns(&domains, &columns).expect("batch");
-        assert!(hash_columns_gpu_fused(&batch, ExecutionMode::Cpu).is_none());
-    }
-    #[cfg(feature = "fastpq-gpu")]
-    #[test]
-    fn fused_poseidon_gpu_batch_matches_cpu_leaves_and_first_level() {
-        let Some(backend) = backend::current_gpu_backend() else {
-            return;
-        };
-        let domains = vec!["fastpq:v1:trace:column:a", "fastpq:v1:trace:column:b"];
-        let columns = vec![vec![1u64, 2, 3, 4], vec![5u64, 6, 7, 8]];
-        let batch =
-            PoseidonColumnBatch::from_domains_and_columns(&domains, &columns).expect("batch");
-        match gpu::poseidon_hash_columns_fused(&batch, backend) {
-            Ok(hashes) => {
-                let expected_leaves =
-                    hash_columns_cpu_batch_inputs(&domains, &columns).expect("valid CPU batch");
-                let expected_parents = compute_merkle_level(&expected_leaves);
-                assert_eq!(
-                    hashes.len(),
-                    expected_leaves.len() + expected_parents.len(),
-                    "fused Poseidon output must contain leaves followed by first-level parents"
-                );
-                let (actual_leaves, actual_parents) = hashes.split_at(expected_leaves.len());
-                assert_eq!(
-                    actual_leaves,
-                    expected_leaves.as_slice(),
-                    "low-level fused Poseidon leaves diverged from CPU"
-                );
-                assert_eq!(
-                    actual_parents,
-                    expected_parents.as_slice(),
-                    "low-level fused Poseidon parents diverged from CPU first level"
-                );
-            }
-            Err(gpu::GpuError::Unsupported(_)) => {
-                eprintln!("skipping fused poseidon gpu batch test: backend unavailable");
-            }
-            Err(error) => panic!("gpu fused failed: {error:?}"),
-        }
+        assert!(hash_columns_gpu_with_first_level(&batch, ExecutionMode::Cpu).is_none());
     }
     #[cfg(feature = "fastpq-gpu")]
     #[test]
@@ -3170,34 +2766,6 @@ mod tests {
     }
     #[cfg(feature = "fastpq-gpu")]
     #[test]
-    fn poseidon_column_batch_windows_preserve_offsets() {
-        let domains = vec![
-            "fastpq:v1:trace:column:a",
-            "fastpq:v1:trace:column:b",
-            "fastpq:v1:trace:column:c",
-        ];
-        let columns = vec![vec![1u64, 2], vec![3u64, 4], vec![5u64, 6]];
-        let batch =
-            PoseidonColumnBatch::from_domains_and_columns(&domains, &columns).expect("batch");
-        let window = batch.column_window(1, 2).expect("slice");
-        assert_eq!(window.columns(), 2);
-        let offsets = window.offsets();
-        assert_eq!(offsets.len(), 2);
-        let payloads = window.payloads();
-        for (index, slice) in offsets.iter().enumerate() {
-            let start = slice.offset();
-            let end = slice.offset() + slice.len();
-            let region = &payloads[start..end];
-            let domain = domains[index + 1].as_bytes();
-            assert_eq!(region[0], domain_seed(domain));
-            assert_eq!(
-                &region[1..=columns[index + 1].len()],
-                columns[index + 1].as_slice()
-            );
-        }
-    }
-    #[cfg(feature = "fastpq-gpu")]
-    #[test]
     fn poseidon_gpu_hashes_match_cpu_when_backend_available() {
         if backend::current_gpu_backend().is_none() {
             eprintln!("skipping poseidon gpu parity test; backend unavailable");
@@ -3206,12 +2774,10 @@ mod tests {
         let trace = build_trace(&sample_batch()).expect("build trace");
         let params = CANONICAL_PARAMETER_SETS[0];
         let planner = Planner::new(&params);
-        let data = derive_polynomial_data(&trace, &planner, ExecutionMode::Cpu);
+        let data = derive_polynomial_data(&trace, &planner);
         let cpu_hashes = hash_columns_from_coefficients(
             &trace,
             &data.coefficients,
-            &planner,
-            ExecutionMode::Cpu,
             PoseidonPipelinePolicy::for_mode(ExecutionMode::Cpu),
         );
         let domain_names: Vec<String> = trace
@@ -3256,12 +2822,10 @@ mod tests {
         let trace = build_trace(&sample_batch()).expect("build trace");
         let params = CANONICAL_PARAMETER_SETS[0];
         let planner = Planner::new(&params);
-        let data = derive_polynomial_data(&trace, &planner, ExecutionMode::Cpu);
+        let data = derive_polynomial_data(&trace, &planner);
         let cpu_hashes = hash_columns_from_coefficients(
             &trace,
             &data.coefficients,
-            &planner,
-            ExecutionMode::Cpu,
             PoseidonPipelinePolicy::for_mode(ExecutionMode::Cpu),
         );
         let domain_names: Vec<String> = trace
@@ -3292,23 +2856,23 @@ mod tests {
         let leaves = vec![1u64, 2, 3, 4, 5];
         let full_root = merkle_root(&leaves);
         let first_level = compute_merkle_level(&leaves);
-        let fused_root = merkle_root_with_first_level(&leaves, Some(&first_level));
+        let precomputed_root = merkle_root_with_first_level(&leaves, Some(&first_level));
         assert_eq!(
-            fused_root, full_root,
+            precomputed_root, full_root,
             "providing the first level must not change the merkle root"
         );
     }
     #[test]
-    fn empty_fused_level_falls_back_for_a_single_leaf() {
+    fn empty_precomputed_level_falls_back_for_a_single_leaf() {
         let leaves = [7u64];
         assert_eq!(
             merkle_root_with_first_level(&leaves, Some(&[])),
             merkle_root(&leaves),
-            "a missing fused level must not expose the raw leaf as a non-canonical root"
+            "a missing precomputed level must not expose the raw leaf as a non-canonical root"
         );
     }
     #[test]
-    fn malformed_fused_level_cardinality_falls_back_to_canonical_hashing() {
+    fn malformed_precomputed_level_cardinality_falls_back_to_canonical_hashing() {
         let leaves = vec![1u64, 2, 3, 4, 5];
         let expected = merkle_root(&leaves);
         let canonical_first_level = compute_merkle_level(&leaves);
@@ -3319,14 +2883,14 @@ mod tests {
                 Some(&canonical_first_level[..canonical_first_level.len() - 1]),
             ),
             expected,
-            "a truncated fused level must not change the root"
+            "a truncated precomputed level must not change the root"
         );
         let mut oversized = canonical_first_level;
         oversized.push(99);
         assert_eq!(
             merkle_root_with_first_level(&leaves, Some(&oversized)),
             expected,
-            "an oversized fused level must not change the root"
+            "an oversized precomputed level must not change the root"
         );
     }
     #[test]
@@ -3528,9 +3092,9 @@ mod tests {
     }
     #[cfg(feature = "fastpq-gpu")]
     #[test]
-    fn poseidon_fused_gpu_matches_cpu_first_level() {
+    fn poseidon_gpu_columns_and_first_level_match_cpu() {
         if backend::current_gpu_backend().is_none() {
-            eprintln!("skipping poseidon fused parity test; backend unavailable");
+            eprintln!("skipping Poseidon GPU parity test; backend unavailable");
             return;
         }
         let trace = build_trace(&sample_batch()).expect("build trace");
@@ -3540,8 +3104,6 @@ mod tests {
         let cpu_hashes = hash_columns_from_coefficients(
             &trace,
             &coefficients,
-            &planner,
-            ExecutionMode::Cpu,
             PoseidonPipelinePolicy::for_mode(ExecutionMode::Cpu),
         );
         let domain_names: Vec<String> = trace
@@ -3552,23 +3114,24 @@ mod tests {
         let domains: Vec<&str> = domain_names.iter().map(String::as_str).collect();
         let batch =
             PoseidonColumnBatch::from_domains_and_columns(&domains, &coefficients).expect("batch");
-        let Some(fused) = hash_columns_gpu_fused(&batch, ExecutionMode::Gpu) else {
-            eprintln!("skipping poseidon fused parity test; fused dispatch declined");
+        let Some(accelerated) = hash_columns_gpu_with_first_level(&batch, ExecutionMode::Gpu)
+        else {
+            eprintln!("skipping Poseidon GPU parity test; dispatch declined");
             return;
         };
         assert_eq!(
-            fused.leaves(),
+            accelerated.leaves(),
             cpu_hashes.leaves(),
-            "fused gpu leaves diverged from cpu reference"
+            "GPU leaves diverged from CPU reference"
         );
         let expected_parents = compute_merkle_level(cpu_hashes.leaves());
-        let fused_parents = fused
-            .fused_parents()
-            .expect("fused gpu path must return parents");
+        let first_level_parents = accelerated
+            .first_level_parents()
+            .expect("GPU path must return first-level parents");
         assert_eq!(
-            fused_parents,
+            first_level_parents,
             expected_parents.as_slice(),
-            "fused gpu parents diverged from cpu reference"
+            "GPU parents diverged from CPU reference"
         );
     }
     #[test]
@@ -3582,13 +3145,13 @@ mod tests {
         assert_eq!(independent_gpu.cpu_label(), "cpu_fallback");
     }
     #[test]
-    fn derive_polynomial_data_materializes_cpu_lde_for_gpu_mode() {
+    fn derive_polynomial_data_materializes_deterministic_cpu_lde() {
         let params = CANONICAL_PARAMETER_SETS[0];
         let planner = Planner::new(&params);
         let trace = build_trace(&sample_batch()).expect("build");
         let coefficients = trace_coefficients(&trace, &planner, ExecutionMode::Cpu);
         let expected = planner.lde_columns(&coefficients);
-        let mut data = derive_polynomial_data(&trace, &planner, ExecutionMode::Gpu);
+        let data = derive_polynomial_data(&trace, &planner);
         assert_eq!(data.coefficients, coefficients);
         assert_eq!(data.lde_columns(), &expected);
     }
@@ -3631,6 +3194,46 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn repeated_transfer_rows_consume_witnesses_in_transcript_order() {
+        let transcript = sample_transfer_transcript();
+        let (old_root, new_root) = transcript_roots(&transcript);
+        let witnesses =
+            transfer::transcripts_to_witnesses(&[transcript.clone()], &old_root, &new_root)
+                .expect("witness extraction");
+        let first = witnesses[0].deltas[0].clone();
+        let mut later = first.clone();
+        later.smt_proof.from.siblings[0][0] ^= 0xA5;
+        let first_proof = first.smt_proof.from.clone();
+        let later_proof = later.smt_proof.from.clone();
+        let inputs = [transfer::TransferGadgetInput {
+            batch_hash: witnesses[0].batch_hash,
+            authority_digest: witnesses[0].authority_digest,
+            deltas: vec![first, later],
+        }];
+        let mut proof_index = transfer::index_row_proofs(&inputs);
+        let sender_transition = sample_transitions(&transcript)
+            .into_iter()
+            .next()
+            .expect("sender transition");
+
+        assert_eq!(
+            take_transfer_row_proof(&mut proof_index, &sender_transition)
+                .expect("first repeated proof"),
+            first_proof
+        );
+        assert_eq!(
+            take_transfer_row_proof(&mut proof_index, &sender_transition)
+                .expect("second repeated proof"),
+            later_proof
+        );
+        assert!(
+            take_transfer_row_proof(&mut proof_index, &sender_transition).is_err(),
+            "a third identical row must not reuse an earlier proof"
+        );
+    }
+
     #[test]
     fn build_trace_rejects_invalid_transfer_transcripts() {
         let (mut batch, mut transcript) = batch_with_transfer_metadata();
@@ -3671,6 +3274,31 @@ mod tests {
         ));
         let trace = build_trace(&batch).expect("build trace");
         assert_eq!(trace.rows, 1);
+        assert!(trace.columns.iter().all(|column| {
+            !column.name.starts_with("path_bit_")
+                && !column.name.starts_with("sibling_")
+                && !column.name.starts_with("node_in_")
+                && !column.name.starts_with("node_out_")
+        }));
+        assert_eq!(
+            trace.columns.len(),
+            column_count_for_batch(&batch).expect("metadata-only schema count")
+        );
+        assert_eq!(
+            trace
+                .columns
+                .iter()
+                .map(|column| column.name.clone())
+                .collect::<Vec<_>>(),
+            column_names_for_batch(&batch).expect("metadata-only schema names")
+        );
+    }
+    #[test]
+    fn generic_rows_do_not_embed_the_transfer_projection() {
+        assert!(
+            core::mem::size_of::<RowData>() < core::mem::size_of::<TransferRowData>(),
+            "metadata-only rows must not carry the 128 transfer-SMT limbs"
+        );
     }
     #[test]
     fn polynomial_data_exposes_transfer_witnesses() {
@@ -3678,7 +3306,7 @@ mod tests {
         let trace = build_trace(&batch).expect("trace");
         let params = CANONICAL_PARAMETER_SETS[0];
         let planner = Planner::new(&params);
-        let data = derive_polynomial_data(&trace, &planner, ExecutionMode::Cpu);
+        let data = derive_polynomial_data(&trace, &planner);
         let expected = transfer::transcripts_to_witnesses(
             &[transcript],
             &batch.public_inputs.old_root,
@@ -3692,10 +3320,10 @@ mod tests {
         let trace = build_trace(&sample_batch()).expect("build");
         assert_eq!(trace.row_usage.total_rows, trace.rows);
         assert_eq!(trace.row_usage.transfer_rows, 2);
-        assert_eq!(trace.row_usage.mint_rows, 1);
+        assert_eq!(trace.row_usage.meta_set_rows, 1);
         assert_eq!(
             trace.row_usage.non_transfer_rows(),
-            trace.row_usage.total_rows - trace.row_usage.transfer_rows
+            trace.row_usage.meta_set_rows
         );
     }
     fn batch_with_transfer_metadata() -> (TransitionBatch, TransferTranscript) {

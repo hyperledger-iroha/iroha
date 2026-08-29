@@ -5905,22 +5905,10 @@ impl Kura {
                 ));
             }
         }
-        for (identity, receipt) in &receipts {
+        for receipt in receipts.values() {
             let valid = match receipt.format {
                 LaneBlockApplicationReceiptArtifactFormat::Current => {
                     self.lane_retirement_current_receipt_matches_canonical_block(receipt)
-                }
-                LaneBlockApplicationReceiptArtifactFormat::DirectExecution => {
-                    inputs
-                        .get(identity)
-                        .zip(preflights.get(identity))
-                        .and_then(|(input, preflight)| {
-                            LaneBlockApplicationReceiptArtifact::new_direct_execution(
-                                input, preflight,
-                            )
-                        })
-                        .as_ref()
-                        == Some(receipt)
                 }
                 LaneBlockApplicationReceiptArtifactFormat::MergeExecution => {
                     self.lane_block_application_receipt_matches_merge_log_under_prune_and_canonical_guards(
@@ -5975,16 +5963,6 @@ impl Kura {
                     }
                     match receipt.format {
                         LaneBlockApplicationReceiptArtifactFormat::Current => false,
-                        LaneBlockApplicationReceiptArtifactFormat::DirectExecution => {
-                            inputs.get(identity).is_some_and(|input| {
-                                input.proposal == *proposal
-                                    && input.source.autonomous_binding().is_some_and(
-                                        |(_, _, payload_hash)| {
-                                            payload_hash == artifact.executable_payload.payload_hash
-                                        },
-                                    )
-                            })
-                        }
                         LaneBlockApplicationReceiptArtifactFormat::MergeExecution => self
                             .lane_retirement_merge_receipt_applies_autonomous_payload(
                                 receipt,

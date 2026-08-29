@@ -14,8 +14,7 @@ use iroha::{
         block::{
             ExternalExecutionRouteLeg, ExternalExecutionRouteRole, Header, SignedBlock,
             consensus::{
-                COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK,
-                COMMITTED_LANE_STATUS_STATE_APPLIED_BY_DIRECT_EXECUTION, LaneBlockCommitment,
+                COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK, LaneBlockCommitment,
                 NativeAmxLegRecordV2, NativeAmxPhase, NativeAmxReceipt,
             },
         },
@@ -1693,7 +1692,6 @@ fn next_universal_autonomous_lane_author_peer(
                         && matches!(
                             block.execution_status.as_str(),
                             COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK
-                                | COMMITTED_LANE_STATUS_STATE_APPLIED_BY_DIRECT_EXECUTION
                         )
                 }),
                 "{context}: pre-cut peer {index} universal-lane frontier is not durably applied"

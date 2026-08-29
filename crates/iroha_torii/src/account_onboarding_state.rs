@@ -278,13 +278,8 @@ mod tests {
             .update_latest_block_header_cache_for_tests(header.clone());
         app.state
             .block(header)
-            .commit()
+            .commit_empty_block_for_testing()
             .expect("commit account-onboarding current-state anchor");
-        {
-            let mut block_hashes = app.state.block_hashes.block();
-            block_hashes.push_for_tests(block_hash);
-            block_hashes.commit_for_tests();
-        }
         block_hash
     }
 

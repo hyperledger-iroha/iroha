@@ -76,8 +76,8 @@ engineering-level detail.
   availability guarantees.
 - **Sampling budgets:** Validators follow deterministic sampling rules (`q_in_slot_per_ds`) to validate proofs
   and witness material without central coordination.
-- **Backpressure insights:** Sumeragi pacemaker events correlate with RBC statistics to diagnose stalled lanes
-  (see `scripts/sumeragi_backpressure_log_scraper.py`).
+- **Backpressure insights:** Authenticated Sumeragi status and bounded transaction,
+  ingress, and P2P queue metrics diagnose stalled lanes without a second RBC path.
 
 ## 6. Operations and migration
 

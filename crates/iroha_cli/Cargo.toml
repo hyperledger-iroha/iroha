@@ -129,4 +129,5 @@ build-support = { path = "../build-support", default-features = false }
 tempfile = { workspace = true }
 ed25519-dalek = { version = "2.2.0", default-features = false, features = ["std"] }
 iroha_test_samples = { workspace = true }
+iroha_core = { workspace = true, default-features = false, features = ["iroha-core-tests"] }
 iroha_sccp = { workspace = true, features = ["test-fixtures"] }

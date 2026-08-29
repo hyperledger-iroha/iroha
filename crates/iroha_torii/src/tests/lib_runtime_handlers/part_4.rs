@@ -157,11 +157,15 @@ async fn queue_plan_outcome_unknown_survives_both_retryable_completion_orders() 
     let expected_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::new(
         b"outcome-unknown-retryable-order",
     ));
+    let expected_signed_hash =
+        HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::from(expected_hash.clone()));
     let expected_hash_literal = expected_hash.to_string();
+    let expected_signed_hash_literal = expected_signed_hash.to_string();
     for unknown_arrives_first in [true, false] {
         let mut strongest = None;
         let unknown = super::queue_plan_outcome_unknown_response(
             expected_hash.clone(),
+            Some(expected_signed_hash.clone()),
             "authoritative cleanup sync outcome is unknown",
         );
         let retryable = super::torii_proxy_error_response(
@@ -183,18 +187,40 @@ async fn queue_plan_outcome_unknown_survives_both_retryable_completion_orders() 
             Some("PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN"),
             "ordinary retryable failures must never overwrite an indeterminate admission"
         );
+        assert_eq!(
+            torii_response_header(&response, "x-iroha-entrypoint-hash"),
+            Some(expected_hash_literal.as_str())
+        );
+        assert_eq!(
+            torii_response_header(&response, "x-iroha-signed-transaction-hash"),
+            Some(expected_signed_hash_literal.as_str())
+        );
+        assert_eq!(
+            torii_response_header(&response, "x-iroha-queue-depth"),
+            None
+        );
+        assert_eq!(
+            torii_response_header(&response, "x-iroha-queue-capacity"),
+            None
+        );
+        assert_eq!(
+            torii_response_header(&response, "x-iroha-queue-state"),
+            None
+        );
         let body = torii_body_bytes(response, "read preserved outcome-unknown response").await;
         let envelope: ErrorEnvelope =
             norito::decode_from_bytes(&body).expect("decode outcome-unknown error envelope");
         assert_eq!(envelope.code(), "queue_plan_journal_outcome_unknown");
+        let details = envelope.details.expect("outcome-unknown details");
         assert_eq!(
-            envelope
-                .details
-                .expect("outcome-unknown details")
-                .tx_hash
-                .as_deref(),
+            details.entrypoint_hash.as_deref(),
             Some(expected_hash_literal.as_str())
         );
+        assert_eq!(
+            details.tx_hash.as_deref(),
+            Some(expected_signed_hash_literal.as_str())
+        );
+        assert!(details.queue.is_none());
     }
 }
 #[cfg(feature = "connect")]
@@ -203,11 +229,14 @@ async fn queue_plan_outcome_unknown_dominates_nonretryable_failure_in_both_compl
     let expected_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::new(
         b"outcome-unknown-nonretryable-order",
     ));
-    let expected_hash_literal = expected_hash.to_string();
+    let expected_signed_hash =
+        HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::from(expected_hash.clone()));
+    let expected_signed_hash_literal = expected_signed_hash.to_string();
     for unknown_arrives_first in [true, false] {
         let mut strongest = None;
         let unknown = super::queue_plan_outcome_unknown_response(
             expected_hash.clone(),
+            Some(expected_signed_hash.clone()),
             "authority may have durably admitted before response loss",
         );
         let nonretryable = super::torii_proxy_error_response(
@@ -238,7 +267,7 @@ async fn queue_plan_outcome_unknown_dominates_nonretryable_failure_in_both_compl
                 .expect("outcome-unknown details")
                 .tx_hash
                 .as_deref(),
-            Some(expected_hash_literal.as_str())
+            Some(expected_signed_hash_literal.as_str())
         );
     }
     for candidate_zero_arrives_first in [true, false] {
@@ -281,14 +310,24 @@ async fn queue_plan_outcome_unknown_rejects_forged_reconciliation_hash() {
         incoming_proxy_submit_fixture(0xad, ToriiProxyTransactionAdmissionV1::QueuePlanSynced);
     let expected_hash = super::queue_plan_synced_entrypoint_hash(&request.request)
         .expect("strict request exposes a typed reconciliation identity");
+    let expected_signed_hash = super::queue_plan_synced_acceptance_expectation(&request)
+        .expect("strict request expectation must be valid")
+        .expect("strict request must have an expectation")
+        .signed_transaction_hash
+        .expect("external strict request must have a signed transaction hash");
     let forged_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::new(
         b"forged-outcome-unknown-reconciliation-hash",
     ));
     assert_ne!(forged_hash, expected_hash);
     let expected_hash_literal = expected_hash.to_string();
+    let expected_signed_hash_literal = expected_signed_hash.to_string();
+    let forged_signed_hash = HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::new(
+        b"forged-outcome-unknown-signed-transaction-hash",
+    ));
     let forged_snapshot = super::response_to_torii_proxy_snapshot(
         super::queue_plan_outcome_unknown_response(
             forged_hash,
+            Some(forged_signed_hash),
             "forged authoritative reconciliation identity",
         ),
         usize::MAX,
@@ -316,15 +355,123 @@ async fn queue_plan_outcome_unknown_rejects_forged_reconciliation_hash() {
     let envelope: ErrorEnvelope =
         norito::decode_from_bytes(&body).expect("decode rebuilt outcome-unknown envelope");
     assert_eq!(envelope.code(), "queue_plan_journal_outcome_unknown");
+    let details = envelope.details.expect("rebuilt outcome-unknown details");
     assert_eq!(
-        envelope
-            .details
-            .expect("rebuilt outcome-unknown details")
-            .tx_hash
-            .as_deref(),
+        details.entrypoint_hash.as_deref(),
         Some(expected_hash_literal.as_str()),
-        "a forged authority hash must be replaced with the submitted transaction identity"
+        "a forged authority entrypoint hash must be replaced with the submitted identity"
     );
+    assert_eq!(
+        details.tx_hash.as_deref(),
+        Some(expected_signed_hash_literal.as_str()),
+        "a forged authority signed hash must be replaced with the submitted identity"
+    );
+}
+#[cfg(feature = "connect")]
+#[tokio::test]
+async fn queue_plan_outcome_unknown_validates_distinct_sealed_reveal_identities() {
+    let (app, request) =
+        incoming_proxy_submit_fixture(0xae, ToriiProxyTransactionAdmissionV1::QueuePlanSynced);
+    let ToriiProxyRequestKindV1::SubmitTransaction {
+        transaction: TransactionEntrypoint::External(signed_transaction),
+        ..
+    } = &request.request
+    else {
+        panic!("strict proxy fixture must contain an external signed transaction");
+    };
+    let signed_transaction = signed_transaction.clone();
+    let signed_transaction_hash = signed_transaction.hash();
+    let network_id = *app.state.network_id_ref();
+    let salt = [0xA9; 32];
+    let commitment =
+        compute_sealed_transaction_commitment(&network_id, &signed_transaction, salt, 17);
+    let entrypoint = TransactionEntrypoint::SealedReveal(SealedTransactionReveal::new(
+        commitment,
+        signed_transaction,
+        salt,
+    ));
+    let entrypoint_hash = entrypoint.hash();
+    assert_ne!(
+        Hash::from(entrypoint_hash.clone()),
+        Hash::from(signed_transaction_hash.clone()),
+        "sealed-reveal outer and inner identities must differ for this regression"
+    );
+
+    let routing_plan =
+        RoutingPlan::single(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL));
+    let admission_context = app
+        .queue
+        .plan_admission_context_with_state(app.state.as_ref(), &routing_plan)
+        .expect("sealed-reveal QueuePlan admission context");
+    let admission_binding = QueuePlanAdmissionBindingV1::new(
+        &network_id,
+        &entrypoint,
+        &routing_plan,
+        admission_context,
+        app.queue.queue_plan_admission_timestamp_ms(),
+    )
+    .expect("sealed-reveal QueuePlan admission binding");
+    let expected = super::QueuePlanSyncedAcceptanceExpectation {
+        entrypoint_hash: entrypoint_hash.clone(),
+        signed_transaction_hash: Some(signed_transaction_hash.clone()),
+        admission_binding,
+        durability_threshold: 1,
+    };
+
+    let outer_hash_mislabelled_as_signed =
+        HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::from(entrypoint_hash.clone()));
+    let mut invalid_snapshot = super::response_to_torii_proxy_snapshot(
+        super::queue_plan_outcome_unknown_response(
+            entrypoint_hash.clone(),
+            Some(outer_hash_mislabelled_as_signed),
+            "authority confused the sealed-reveal outer and inner identities",
+        ),
+        usize::MAX,
+    )
+    .await;
+    invalid_snapshot
+        .headers
+        .iter_mut()
+        .find(|header| {
+            header
+                .name
+                .eq_ignore_ascii_case("x-iroha-signed-transaction-hash")
+        })
+        .expect("outcome-unknown response must carry its signed identity header")
+        .value = signed_transaction_hash.to_string().into_bytes();
+    assert_eq!(
+        super::validate_queue_plan_outcome_unknown_evidence(&invalid_snapshot, &expected),
+        super::QueuePlanOutcomeUnknownEvidenceValidation::Invalid(
+            "error-envelope transaction hash does not match the submitted transaction"
+        ),
+        "the outcome-evidence validator must compare the body tx_hash with the inner signed identity"
+    );
+    let response = super::queue_plan_synced_snapshot_to_response(invalid_snapshot, &expected);
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let expected_entrypoint_hash = entrypoint_hash.to_string();
+    let expected_signed_transaction_hash = signed_transaction_hash.to_string();
+    assert_eq!(
+        torii_response_header(&response, "x-iroha-entrypoint-hash"),
+        Some(expected_entrypoint_hash.as_str())
+    );
+    assert_eq!(
+        torii_response_header(&response, "x-iroha-signed-transaction-hash"),
+        Some(expected_signed_transaction_hash.as_str())
+    );
+    let body = torii_body_bytes(response, "read rebuilt sealed-reveal outcome").await;
+    let envelope: ErrorEnvelope =
+        norito::decode_from_bytes(&body).expect("decode sealed-reveal outcome envelope");
+    let details = envelope.details.expect("sealed-reveal outcome details");
+    assert_eq!(
+        details.entrypoint_hash.as_deref(),
+        Some(expected_entrypoint_hash.as_str())
+    );
+    assert_eq!(
+        details.tx_hash.as_deref(),
+        Some(expected_signed_transaction_hash.as_str()),
+        "the proxy must validate the inner signed hash rather than the distinct outer hash"
+    );
+    assert!(details.queue.is_none());
 }
 #[cfg(feature = "connect")]
 #[tokio::test]

@@ -43,6 +43,11 @@ kotlin {
 
 tasks.test {
     useJUnitPlatform()
+    inputs.file(
+        rootProject.layout.projectDirectory
+            .dir("..")
+            .file("fixtures/norito_rpc/atomic_private_settlement_sdk_v1.json"),
+    )
     inputs.file(rootProject.layout.projectDirectory.dir("..").file("fixtures/musubi/sdk_v1.json"))
     inputs.file(
         rootProject.layout.projectDirectory

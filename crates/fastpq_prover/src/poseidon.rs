@@ -1,110 +1,31 @@
 //! Poseidon hashing backends for FASTPQ.
 //!
-//! The prover routes all Poseidon usage (commitments, lookup witnesses,
-//! transcripts) through this module so we can transparently switch between the
-//! canonical scalar implementation and accelerator-backed permutations.  CUDA
-//! kernels mirror the exact permutation used by `fastpq_isi`, and hosts without
-//! GPU support automatically fall back to the CPU path while keeping the API
-//! stable.
+//! Scalar hashes and sponges use the canonical `fastpq_isi` implementation
+//! directly. Wide, independent batches are accelerated by the dedicated GPU
+//! paths in `trace` and `gpu`; routing a single sponge through a dynamic backend
+//! only added allocation and dispatch overhead because that path was always
+//! scalar.
 #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
 use crate::metal;
-/// Goldilocks field modulus (2^64 - 2^32 + 1).
-pub use cpu::FIELD_MODULUS;
+/// Goldilocks field modulus (2^64 - 2^32 + 1) and canonical scalar sponge.
+pub use cpu::{FIELD_MODULUS, PoseidonSponge};
+use fastpq_isi::poseidon as cpu;
 #[cfg(feature = "fastpq-gpu")]
 use fastpq_isi::poseidon::STATE_WIDTH;
-use fastpq_isi::poseidon::{self as cpu, PoseidonSponge as CpuPoseidonSponge};
-use std::sync::OnceLock;
 #[cfg(feature = "fastpq-gpu")]
 use {
     crate::backend::{self, GpuBackend},
     crate::fastpq_cuda,
-    std::sync::atomic::{AtomicBool, Ordering},
+    std::sync::{
+        OnceLock,
+        atomic::{AtomicBool, Ordering},
+    },
     tracing::warn,
 };
 #[cfg(feature = "fastpq-gpu")]
 static POSEIDON_GPU_DISABLED: AtomicBool = AtomicBool::new(false);
 #[cfg(feature = "fastpq-gpu")]
 static POSEIDON_GPU_SELF_TEST: OnceLock<bool> = OnceLock::new();
-/// Trait describing a Poseidon backend.
-pub trait PoseidonBackend: Send + Sync {
-    /// Hash the provided field elements with the Poseidon permutation.
-    fn hash_field_elements(&self, elements: &[u64]) -> u64;
-    /// Create a new sponge instance backed by this implementation.
-    fn new_sponge(&self) -> Box<dyn PoseidonSpongeCore>;
-}
-/// Trait describing a Poseidon sponge instance.
-pub trait PoseidonSpongeCore: Send {
-    /// Absorb a single field element into the sponge.
-    fn absorb(&mut self, element: u64);
-    /// Absorb a slice of field elements into the sponge.
-    fn absorb_slice(&mut self, elements: &[u64]);
-    #[allow(dead_code)]
-    /// Squeeze a single field element from the sponge.
-    fn squeeze_element(&mut self) -> u64;
-    /// Finalise the sponge and return the first output element.
-    fn squeeze(self: Box<Self>) -> u64;
-}
-#[derive(Clone, Default)]
-struct CpuPoseidonBackend;
-impl PoseidonBackend for CpuPoseidonBackend {
-    fn hash_field_elements(&self, elements: &[u64]) -> u64 {
-        cpu::hash_field_elements(elements)
-    }
-    fn new_sponge(&self) -> Box<dyn PoseidonSpongeCore> {
-        Box::new(CpuSponge(CpuPoseidonSponge::new()))
-    }
-}
-struct CpuSponge(CpuPoseidonSponge);
-impl PoseidonSpongeCore for CpuSponge {
-    fn absorb(&mut self, element: u64) {
-        self.0.absorb(element);
-    }
-    fn absorb_slice(&mut self, elements: &[u64]) {
-        self.0.absorb_slice(elements);
-    }
-    fn squeeze_element(&mut self) -> u64 {
-        self.0.squeeze_element()
-    }
-    fn squeeze(self: Box<Self>) -> u64 {
-        self.0.squeeze()
-    }
-}
-#[cfg(feature = "fastpq-gpu")]
-#[derive(Clone)]
-struct GpuPoseidonBackend {
-    fallback: CpuPoseidonBackend,
-}
-#[cfg(feature = "fastpq-gpu")]
-impl GpuPoseidonBackend {
-    fn new(_accelerator: GpuBackend) -> Self {
-        Self {
-            fallback: CpuPoseidonBackend,
-        }
-    }
-}
-#[cfg(feature = "fastpq-gpu")]
-impl PoseidonBackend for GpuPoseidonBackend {
-    fn hash_field_elements(&self, elements: &[u64]) -> u64 {
-        self.fallback.hash_field_elements(elements)
-    }
-    fn new_sponge(&self) -> Box<dyn PoseidonSpongeCore> {
-        self.fallback.new_sponge()
-    }
-}
-fn backend() -> &'static dyn PoseidonBackend {
-    static BACKEND: OnceLock<Box<dyn PoseidonBackend>> = OnceLock::new();
-    BACKEND
-        .get_or_init(|| {
-            #[cfg(feature = "fastpq-gpu")]
-            if !POSEIDON_GPU_DISABLED.load(Ordering::Acquire)
-                && let Some(accelerator) = backend::current_gpu_backend()
-            {
-                return Box::new(GpuPoseidonBackend::new(accelerator));
-            }
-            Box::new(CpuPoseidonBackend)
-        })
-        .as_ref()
-}
 /// Preflight the configured Poseidon GPU backend used by the prover path.
 ///
 /// The preflight performs backend discovery and a tiny deterministic
@@ -212,52 +133,18 @@ fn first_poseidon_state_mismatch(
         })
     })
 }
-/// Hash the provided field elements with the active Poseidon backend.
+/// Hash field elements with the canonical scalar Poseidon implementation.
+///
+/// Independent batches use the explicit GPU helpers instead of paying dynamic
+/// dispatch overhead for this small-message API.
 #[must_use]
 pub fn hash_field_elements(elements: &[u64]) -> u64 {
-    backend().hash_field_elements(elements)
+    cpu::hash_field_elements(elements)
 }
 /// Hash the provided field elements with the canonical scalar Poseidon backend.
 #[must_use]
 pub fn hash_field_elements_cpu(elements: &[u64]) -> u64 {
     cpu::hash_field_elements(elements)
-}
-/// Create a new Poseidon sponge backed by the active backend.
-pub struct PoseidonSponge {
-    inner: Box<dyn PoseidonSpongeCore>,
-}
-impl PoseidonSponge {
-    /// Construct a sponge using the active backend.
-    #[must_use]
-    pub fn new() -> Self {
-        Self {
-            inner: backend().new_sponge(),
-        }
-    }
-    /// Absorb a single field element into the sponge.
-    pub fn absorb(&mut self, element: u64) {
-        self.inner.absorb(element);
-    }
-    /// Absorb a slice of field elements into the sponge.
-    pub fn absorb_slice(&mut self, elements: &[u64]) {
-        self.inner.absorb_slice(elements);
-    }
-    /// Squeeze a field element while keeping the sponge ready for the next output.
-    #[allow(dead_code)]
-    #[must_use]
-    pub fn squeeze_element(&mut self) -> u64 {
-        self.inner.squeeze_element()
-    }
-    /// Finalise the sponge and return the first output element.
-    #[must_use]
-    pub fn squeeze(self) -> u64 {
-        self.inner.squeeze()
-    }
-}
-impl Default for PoseidonSponge {
-    fn default() -> Self {
-        Self::new()
-    }
 }
 #[cfg(test)]
 mod tests {

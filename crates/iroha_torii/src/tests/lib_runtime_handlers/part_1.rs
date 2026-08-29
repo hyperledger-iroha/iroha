@@ -247,7 +247,9 @@ fn grant_account_permission_for_test(
     tx.world_mut_for_testing()
         .add_account_permission(authority, permission);
     tx.apply();
-    block.commit().expect("commit permission seed");
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit permission seed");
 }
 fn seed_asset_definition_for_test(
     app: &SharedAppState,
@@ -289,7 +291,9 @@ fn seed_asset_definition_for_test(
         .execute(&ALICE_ID, &mut tx)
         .expect("register asset definition");
     tx.apply();
-    block.commit().expect("commit asset definition seed");
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit asset definition seed");
 }
 fn asset_definition_requires_restricted_balance_policy_for_test(
     app: &SharedAppState,
@@ -774,7 +778,9 @@ fn ensure_runtime_peer_binding_for_test(
     .execute(validator, &mut tx)
     .expect("consensus key registration");
     tx.apply();
-    block.commit().expect("commit runtime peer binding");
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit runtime peer binding");
 }
 #[derive(Default)]
 struct CapturingIterableQueryExecutor {
@@ -1135,7 +1141,9 @@ pub(crate) fn bind_account_alias_for_test(
         norito::codec::Encode::encode(&record),
     );
     tx.apply();
-    block.commit().expect("commit account alias for test");
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit account alias for test");
 }
 #[cfg(feature = "app_api")]
 pub(crate) fn bind_dynamic_account_alias_for_test(
@@ -1234,7 +1242,7 @@ pub(crate) fn bind_dynamic_account_alias_for_test(
     );
     tx.apply();
     block
-        .commit()
+        .commit_world_overlay_for_testing()
         .expect("commit dynamic account alias for test");
 }
 #[cfg(feature = "app_api")]
@@ -1264,7 +1272,9 @@ pub(crate) fn bind_contract_alias_for_test(
         .bind_contract_alias(contract_address, contract_alias, None, None, 0)
         .expect("bind contract alias");
     tx.apply();
-    block.commit().expect("commit contract alias for test");
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit contract alias for test");
 }
 #[cfg(feature = "app_api")]
 pub(crate) fn bind_domain_name_for_test(app: &SharedAppState, literal: &str) {
@@ -1315,7 +1325,9 @@ pub(crate) fn bind_domain_name_for_test_with_status(
             norito::codec::Encode::encode(&record),
         );
     tx.apply();
-    block.commit().expect("commit domain alias for test");
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit domain alias for test");
 }
 pub(crate) fn signed_app_headers(
     account: &AccountId,
@@ -1628,7 +1640,7 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
     let sorafs_gateway_config = iroha_config::parameters::actual::SorafsGateway::default();
     #[cfg(feature = "app_api")]
     let sorafs_site_bindings = None;
-    let telemetry = routing::MaybeTelemetry::for_tests().map_gate(TelemetryProfile::Full);
+    let telemetry = routing::MaybeTelemetry::for_tests().with_profile(TelemetryProfile::Full);
     let telemetry_profile = telemetry.profile();
     let iso_bridge = iso
         .as_ref()

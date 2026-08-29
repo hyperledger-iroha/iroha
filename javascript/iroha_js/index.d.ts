@@ -6565,8 +6565,7 @@ export type ToriiSumeragiCommittedLaneExecutionStatus =
   | "payload_preflight_rejected_awaiting_state_application"
   | "application_receipt_conflicts_with_preflight"
   | "awaiting_predecessor_application"
-  | "state_applied_by_canonical_block"
-  | "state_applied_by_direct_execution";
+  | "state_applied_by_canonical_block";
 
 export interface ToriiSumeragiCommittedLaneBlock {
   lane_id: number;
@@ -6826,19 +6825,6 @@ export interface ToriiSumeragiCommitQuorumSummary {
   signatures_set_b: number;
   signatures_required: number;
   last_updated_ms: number;
-}
-
-export interface ToriiSumeragiPacemakerResponse {
-  backoff_ms: number;
-  rtt_floor_ms: number;
-  jitter_ms: number;
-  backoff_multiplier: number;
-  rtt_floor_multiplier: number;
-  max_backoff_ms: number;
-  jitter_frac_permille: number;
-  round_elapsed_ms: number;
-  view_timeout_target_ms: number;
-  view_timeout_remaining_ms: number;
 }
 
 export interface ToriiSumeragiV2QcResponse {
@@ -11906,9 +11892,6 @@ export declare class ToriiClient {
   getSumeragiDiagnosticsTyped(options?: {
     signal?: AbortSignal;
   }): Promise<ToriiSumeragiDiagnostics>;
-  getSumeragiPacemaker(options?: {
-    signal?: AbortSignal;
-  }): Promise<ToriiSumeragiPacemakerResponse | null>;
   getSumeragiQc(options?: {
     signal?: AbortSignal;
   }): Promise<ToriiSumeragiV2QcResponse>;

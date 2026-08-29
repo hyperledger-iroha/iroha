@@ -104,49 +104,6 @@ fn status_value_by_path(status: &Status, tail: &str) -> Option<norito::json::Val
                 _ => None,
             }
         }
-        "sorafs_micropayments" => match segments.next() {
-            None => norito::json::to_value(&status.sorafs_micropayments).ok(),
-            Some(provider_hex) => {
-                let sample = status
-                    .sorafs_micropayments
-                    .iter()
-                    .find(|entry| entry.provider_id_hex == provider_hex)?;
-                match segments.next() {
-                    None => norito::json::to_value(sample).ok(),
-                    Some("credits") => match segments.next() {
-                        None => norito::json::to_value(&sample.credits).ok(),
-                        Some("deterministic_charge") if segments.next().is_none() => {
-                            Some(json_value(&sample.credits.deterministic_charge))
-                        }
-                        Some("credit_generated") if segments.next().is_none() => {
-                            Some(json_value(&sample.credits.credit_generated))
-                        }
-                        Some("credit_applied") if segments.next().is_none() => {
-                            Some(json_value(&sample.credits.credit_applied))
-                        }
-                        Some("credit_carry") if segments.next().is_none() => {
-                            Some(json_value(&sample.credits.credit_carry))
-                        }
-                        Some("outstanding") if segments.next().is_none() => {
-                            Some(json_value(&sample.credits.outstanding))
-                        }
-                        _ => None,
-                    },
-                    Some("tickets") => match segments.next() {
-                        None => norito::json::to_value(&sample.tickets).ok(),
-                        Some("processed") if segments.next().is_none() => {
-                            Some(sample.tickets.processed.into())
-                        }
-                        Some("won") if segments.next().is_none() => Some(sample.tickets.won.into()),
-                        Some("duplicate") if segments.next().is_none() => {
-                            Some(sample.tickets.duplicate.into())
-                        }
-                        _ => None,
-                    },
-                    _ => None,
-                }
-            }
-        },
         _ => None,
     }
 }

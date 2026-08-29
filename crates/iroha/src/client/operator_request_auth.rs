@@ -1,4 +1,30 @@
 impl Client {
+    fn request_without_iroha_identity_auth(
+        &self,
+        method: HttpMethod,
+        url: Url,
+    ) -> DefaultRequestBuilder {
+        let headers = self.headers.iter().filter(|(name, _)| {
+            ![
+                "x-iroha-witness",
+                HEADER_ACCOUNT,
+                HEADER_SIGNATURE,
+                HEADER_TIMESTAMP_MS,
+                HEADER_NONCE,
+                HEADER_OPERATOR_PUBLIC_KEY,
+                HEADER_OPERATOR_TIMESTAMP_MS,
+                HEADER_OPERATOR_NONCE,
+                HEADER_OPERATOR_SIGNATURE,
+            ]
+            .iter()
+            .any(|reserved| name.eq_ignore_ascii_case(reserved))
+        });
+        let mut builder = DefaultRequestBuilder::new(method, url).headers(headers);
+        if self.torii_request_timeout != Duration::ZERO {
+            builder = builder.timeout(self.torii_request_timeout);
+        }
+        builder
+    }
     fn request_without_operator_or_token_auth(
         &self,
         method: HttpMethod,
@@ -37,6 +63,15 @@ impl Client {
             .operator_key_pair
             .as_ref()
             .ok_or_else(|| eyre!("operator signing key is required before request dispatch"))?;
+        self.identity_signed_request(operator_key_pair, method, url, body)
+    }
+    fn identity_signed_request(
+        &self,
+        identity_key_pair: &KeyPair,
+        method: HttpMethod,
+        url: Url,
+        body: Vec<u8>,
+    ) -> Result<DefaultRequestBuilder> {
         let timestamp_ms: u64 = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
@@ -52,12 +87,12 @@ impl Client {
             timestamp_ms,
             nonce.as_str(),
         )?;
-        let signature = Signature::try_new(operator_key_pair.private_key(), &message)
-            .wrap_err("failed to sign operator request headers")?;
-        let public_key = operator_key_pair
+        let signature = Signature::try_new(identity_key_pair.private_key(), &message)
+            .wrap_err("failed to sign identity-bound request headers")?;
+        let public_key = identity_key_pair
             .public_key()
             .try_to_multihash_string()
-            .wrap_err("failed to encode operator public key header")?;
+            .wrap_err("failed to encode identity-bound public key header")?;
         let timestamp = canonical_request_timestamp_header_value(timestamp_ms)?;
         let signature_b64 = canonical_request_signature_header_value(&signature)?;
         let builder = self

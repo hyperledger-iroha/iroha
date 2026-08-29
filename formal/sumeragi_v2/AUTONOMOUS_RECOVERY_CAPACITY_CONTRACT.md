@@ -14,7 +14,7 @@ cuts:
    exact per-incarnation WSV frontier, a MergeExecution receipt revalidated
    against its merge log and canonical carrier, or a `Current` receipt
    revalidated against the exact canonical block and results. Hash-only
-   ownership and `DirectExecution` receipts are not application proofs.
+   ownership is not an application proof.
 3. Startup performs no capacity-consuming repair before carrier envelopes are
    reconstructed.
 4. A certified frontier durably creates both pair and bundle capacity
@@ -31,7 +31,6 @@ The positive config is
 
 - `RouteLatestOnlySkip`
 - `HashOnlyAutonomousPredecessor`
-- `DirectExecutionAutonomousPredecessor`
 - `StartupRepairBeforeEnvelope`
 - `FrontierMissingBundleEnvelope`
 - `ClaimPeakAfterMutation`
@@ -48,9 +47,8 @@ MergeExecution receipt revalidators, and
 `Kura::canonical_lane_block_predecessor_receipt_revalidates_without_sidecar_repair`.
 The canonical receipt path holds the prune fence, admits only `Current`, and
 revalidates the exact canonical block/results bytes; its paired regressions
-prove that malformed replicated frontier bytes fail closed and
-`DirectExecution` remains rejected. These bindings also reject use of
-hash-only snapshot helpers in the autonomous gate.
+prove that malformed replicated frontier bytes fail closed. These bindings
+also reject use of hash-only snapshot helpers in the autonomous gate.
 
 Exact incomplete-carrier recovery is source-bound through
 `MergeLedgerLog::execution_entries_for_bounded_identities` and

@@ -97,7 +97,7 @@ Example (using the published fixture):
 sorafs_cli fetch \
   --plan fixtures/sorafs_orchestrator/multi_peer_parity_v1/plan.json \
   --gateway-provider gw-alpha=... \
-  --telemetry-source-label otlp::staging \
+  --telemetry-source-label prometheus::staging \
   --scoreboard-out artifacts/sorafs_orchestrator/latest/scoreboard.json \
   --json-out artifacts/sorafs_orchestrator/latest/summary.json \
   --provider-metrics-out artifacts/sorafs_orchestrator/latest/provider_metrics.json \

@@ -87,7 +87,7 @@ Additional knobs mirror the CLI flags:
   discovery set to the best N candidates).
 - `OrchestratorConfig::with_telemetry_region("region")` tags the
   `sorafs_orchestrator_*` metrics emitted by the runtime so Grafana dashboards
-  and OpenTelemetry exporters can break out activity by region or environment.
+  can break out activity by region or environment.
 - `OrchestratorConfig::with_transport_policy` mirrors the CLI
   `--transport-policy` flag. `TransportPolicy::SoranetPreferred` is now the
   default across binaries; supply `TransportPolicy::DirectOnly` only when a
@@ -108,8 +108,8 @@ Additional knobs mirror the CLI flags:
   module, so multi-language test harnesses can exercise the same scheduler with
   local fixtures. Set `return_scoreboard=true` in those helpers to retrieve the
   computed weights and eligibility decisions alongside chunk receipts.
-- `SorafsGatewayScoreboardOptions::telemetry_source_label` records which OTLP
-  stream produced the adoption evidence. When you omit it, the client derives
+- `SorafsGatewayScoreboardOptions::telemetry_source_label` records which collector
+  or evidence source produced the adoption evidence. When you omit it, the client derives
   `region:<telemetry_region>` (or falls back to `chain:<chain_id>`) so metadata
   always carries a descriptive label.
 
@@ -155,7 +155,7 @@ pub async fn fetch_payload(
                 "capture_id": "sdk-smoke-run",
                 "fixture": "multi_peer_parity_v1"
             })),
-            telemetry_source_label: Some("otel::staging".into()),
+            telemetry_source_label: Some("prometheus::staging".into()),
         }),
         ..SorafsGatewayFetchOptions::default()
     };

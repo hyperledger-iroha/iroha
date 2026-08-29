@@ -141,14 +141,15 @@ pub fn set_send_hook(hook: Option<SendHook>) {
     *send_hook_slot().lock().expect("set send hook") = hook;
 }
 #[cfg(test)]
-pub fn with_send_hook<R>(hook: SendHook, f: impl FnOnce() -> R) -> R {
-    use std::panic::{AssertUnwindSafe, catch_unwind};
+fn send_hook_guard() -> &'static Mutex<()> {
     static HOOK_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
-    let guard = HOOK_MUTEX
-        .get_or_init(|| Mutex::new(()))
-        .lock()
-        .expect("hook guard");
-    set_send_hook(Some(hook));
+    HOOK_MUTEX.get_or_init(|| Mutex::new(()))
+}
+#[cfg(test)]
+fn with_scoped_send_hook<R>(hook: Option<SendHook>, f: impl FnOnce() -> R) -> R {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    let guard = send_hook_guard().lock().expect("hook guard");
+    set_send_hook(hook);
     let outcome = catch_unwind(AssertUnwindSafe(f));
     set_send_hook(None);
     drop(guard);
@@ -156,6 +157,14 @@ pub fn with_send_hook<R>(hook: SendHook, f: impl FnOnce() -> R) -> R {
         Ok(result) => result,
         Err(panic) => std::panic::resume_unwind(panic),
     }
+}
+#[cfg(test)]
+pub fn with_send_hook<R>(hook: SendHook, f: impl FnOnce() -> R) -> R {
+    with_scoped_send_hook(Some(hook), f)
+}
+#[cfg(test)]
+pub fn with_real_http<R>(f: impl FnOnce() -> R) -> R {
+    with_scoped_send_hook(None, f)
 }
 #[cfg(test)]
 fn try_send_with_hook(request: &DefaultRequest) -> Option<Result<Response<Bytes>>> {
@@ -523,7 +532,7 @@ impl TryFrom<ClientResponse> for Response<Bytes> {
             .headers_mut()
             .ok_or_else(|| eyre!("Failed to get headers map reference."))?;
         for (key, value) in headers {
-            headers_map.insert(key, value);
+            headers_map.append(key, value);
         }
         builder
             .body(body)

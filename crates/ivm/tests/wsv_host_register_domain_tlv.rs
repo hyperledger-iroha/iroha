@@ -4,7 +4,6 @@ use ivm::{
     mock_wsv::{AccountId, MockWorldStateView, PermissionToken, WsvHost},
     syscalls,
 };
-use std::collections::HashMap;
 mod common;
 use common::assemble_syscalls;
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
@@ -40,7 +39,7 @@ fn register_domain_with_permission_via_tlv() {
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(alice.clone());
     wsv.grant_permission(&alice, PermissionToken::RegisterDomain);
-    let host = WsvHost::new_with_subject(wsv, alice.clone(), HashMap::new());
+    let host = WsvHost::new_with_subject(wsv, alice.clone());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
     let dom = make_tlv(PointerType::DomainId as u16, b"new_domain");
@@ -59,7 +58,7 @@ fn register_domain_without_permission_rejected() {
     );
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(alice.clone());
-    let host = WsvHost::new_with_subject(wsv, alice.clone(), HashMap::new());
+    let host = WsvHost::new_with_subject(wsv, alice.clone());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
     let dom = make_tlv(PointerType::DomainId as u16, b"no_perm_domain");

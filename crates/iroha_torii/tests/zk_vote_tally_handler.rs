@@ -171,7 +171,9 @@ async fn vote_tally_handler_returns_finalized_tally() {
         .execute_instruction(&mut stx, &owner, InstructionBox::from(finalize))
         .unwrap();
     stx.apply();
-    block.commit().expect("commit block");
+    block
+        .commit_empty_block_for_testing()
+        .expect("commit block");
     let expected_view = state.view();
     let expected_height = u64::try_from(expected_view.height()).expect("height fits u64");
     let expected_hash = expected_view

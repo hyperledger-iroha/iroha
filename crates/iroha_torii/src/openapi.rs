@@ -266,8 +266,12 @@ mod tests {
         "PRTRY:QUEUE_LATENCY",
         "PRTRY:QUEUE_RATE",
     ];
-    const TRANSACTION_SUBMISSION_UNAVAILABLE_REJECT_CODES: &[&str] =
-        &["transaction_admission_worker_failed", "route_unavailable"];
+    const TRANSACTION_SUBMISSION_UNAVAILABLE_REJECT_CODES: &[&str] = &[
+        "transaction_admission_worker_failed",
+        "route_unavailable",
+        "PRTRY:QUEUE_PLAN_JOURNAL_UNAVAILABLE",
+        "PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN",
+    ];
     const OFFLINE_COMMAND_FORBIDDEN_REJECT_CODES: &[&str] = &[
         "offline_auth_header_unsupported",
         "PRTRY:QUEUE_GOVERNANCE_REJECTED",
@@ -5101,6 +5105,7 @@ mod tests {
         assert!(!paths.contains_key("/v1/multisig/proposals/list"));
         assert!(!paths.contains_key("/v1/multisig/proposals/get"));
         assert!(!paths.contains_key("/v1/multisig/proposals/search"));
+        assert!(!paths.contains_key("/v1/sumeragi/pacemaker"));
         let protected_namespaces = paths
             .get("/v1/gov/protected-namespaces")
             .and_then(Value::as_object)
@@ -5113,26 +5118,6 @@ mod tests {
                 .and_then(Value::as_str),
             Some("operator")
         );
-        for path in ["/v1/sumeragi/pacemaker"] {
-            let operation = paths
-                .get(path)
-                .and_then(Value::as_object)
-                .and_then(|path| path.get("get"))
-                .and_then(Value::as_object);
-            let expected = catalog_openapi_route_enabled(CatalogHttpMethod::Get, path);
-            assert_eq!(
-                operation.is_some(),
-                expected,
-                "{path} presence must follow the enabled catalog OpenAPI projection"
-            );
-            if let Some(operation) = operation {
-                assert_eq!(
-                    operation.get(TOOL_EFFECT_EXTENSION).and_then(Value::as_str),
-                    Some("operator"),
-                    "{path} must remain operator-only"
-                );
-            }
-        }
         for route in RouteCatalog::new(CATALOGED_ROUTES)
             .project(
                 iroha_torii_shared::route_catalog::CatalogProjection::OpenApi,
@@ -5520,6 +5505,84 @@ mod tests {
                 && conflict_description.contains("already present"),
             "a duplicate response must be documented as existing admission state"
         );
+    }
+    #[test]
+    fn transaction_submission_503s_document_exact_outcome_unknown_identity() {
+        let document = canonical_document();
+        for path in [
+            uri::TRANSACTION,
+            uri::TRANSACTION_ENTRYPOINT,
+            uri::KAGEMUSHA_LIFECYCLE_TRANSACTION,
+        ] {
+            let operation = openapi_operation(&document, path, "post");
+            assert_eq!(
+                operation_response_schema_ref(operation, "503", path),
+                "#/components/schemas/ErrorEnvelope"
+            );
+            let unavailable = operation
+                .get("responses")
+                .and_then(Value::as_object)
+                .and_then(|responses| responses.get("503"))
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("POST {path} HTTP 503 response"));
+            let description = unavailable
+                .get("description")
+                .and_then(Value::as_str)
+                .unwrap_or_else(|| panic!("POST {path} HTTP 503 description"));
+            for required_text in [
+                "PRTRY:QUEUE_PLAN_JOURNAL_UNAVAILABLE",
+                "PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN",
+                "ErrorEnvelope.details.entrypoint_hash",
+                "ErrorEnvelope.details.tx_hash",
+                "does not fabricate queue-pressure",
+            ] {
+                assert!(
+                    description.contains(required_text),
+                    "POST {path} HTTP 503 must document {required_text}"
+                );
+            }
+            let headers = unavailable
+                .get("headers")
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("POST {path} HTTP 503 headers"));
+            for (header_name, detail_name) in [
+                ("x-iroha-entrypoint-hash", "entrypoint_hash"),
+                ("x-iroha-signed-transaction-hash", "tx_hash"),
+            ] {
+                let header = headers
+                    .get(header_name)
+                    .and_then(Value::as_object)
+                    .unwrap_or_else(|| panic!("POST {path} HTTP 503 {header_name}"));
+                let header_description = header
+                    .get("description")
+                    .and_then(Value::as_str)
+                    .unwrap_or_else(|| panic!("POST {path} HTTP 503 {header_name} description"));
+                assert!(
+                    header_description.contains(
+                        "Present exactly once only for PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN"
+                    ) && header_description.contains(detail_name),
+                    "POST {path} HTTP 503 {header_name} must document its conditional exact body binding"
+                );
+                if path == uri::TRANSACTION_ENTRYPOINT
+                    && header_name == "x-iroha-signed-transaction-hash"
+                {
+                    assert!(
+                        header_description.contains("External or SealedReveal")
+                            && header_description.contains("inner SignedTransaction"),
+                        "POST {path} HTTP 503 signed identity must be conditional on an inner signed transaction"
+                    );
+                }
+                assert_eq!(
+                    header
+                        .get("schema")
+                        .and_then(Value::as_object)
+                        .and_then(|schema| schema.get("pattern"))
+                        .and_then(Value::as_str),
+                    Some("^[0-9a-f]{64}$"),
+                    "POST {path} HTTP 503 {header_name} exact hash syntax"
+                );
+            }
+        }
     }
     #[test]
     fn signed_transaction_reject_code_inventory_matches_runtime_metadata() {

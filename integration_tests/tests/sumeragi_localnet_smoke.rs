@@ -122,12 +122,10 @@ const THROUGHPUT_RNG_SEED: u64 = 0x0049_524f_4841;
 const THROUGHPUT_SLO_P95_MS: u64 = 1_500;
 const THROUGHPUT_SLO_P99_MS: u64 = 2_000;
 const THROUGHPUT_SLO_VIEW_CHANGE_RATE_MAX: f64 = 0.1;
-const THROUGHPUT_SLO_BACKPRESSURE_RATE_MAX: f64 = 2.0;
 const THROUGHPUT_SLO_QUEUE_SAT_FRAC_MAX: f64 = 0.2;
 const THROUGHPUT_NPOS_SLO_P95_MS: u64 = 2_000;
 const THROUGHPUT_NPOS_SLO_P99_MS: u64 = 3_000;
 const THROUGHPUT_NPOS_SLO_VIEW_CHANGE_RATE_MAX: f64 = 0.2;
-const THROUGHPUT_NPOS_SLO_BACKPRESSURE_RATE_MAX: f64 = 3.0;
 const THROUGHPUT_NPOS_SLO_QUEUE_SAT_FRAC_MAX: f64 = 0.3;
 const THROUGHPUT_QUEUE_PROGRESS_TIMEOUT_ENV: &str = "IROHA_THROUGHPUT_QUEUE_PROGRESS_TIMEOUT_SECS";
 const REALISTIC_30TPS_PEERS: usize = 4;
@@ -4258,10 +4256,6 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
             "IROHA_THROUGHPUT_SLO_VIEW_CHANGE_RATE",
             THROUGHPUT_SLO_VIEW_CHANGE_RATE_MAX,
         );
-        let slo_backpressure_rate = env_or_default_f64(
-            "IROHA_THROUGHPUT_SLO_BACKPRESSURE_RATE",
-            THROUGHPUT_SLO_BACKPRESSURE_RATE_MAX,
-        );
         let slo_queue_saturation = env_or_default_f64(
             "IROHA_THROUGHPUT_SLO_QUEUE_SAT_FRAC",
             THROUGHPUT_SLO_QUEUE_SAT_FRAC_MAX,
@@ -4270,7 +4264,6 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
             commit_p95_ms: slo_p95_ms,
             commit_p99_ms: slo_p99_ms,
             view_change_rate_max: slo_view_change_rate,
-            backpressure_rate_max: slo_backpressure_rate,
             queue_saturation_max: slo_queue_saturation,
         });
         let submit_clients: Vec<_> =
@@ -4507,31 +4500,6 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
                 .as_slice(),
             steady_elapsed,
         );
-        let (backpressure_avg, backpressure_max) = rate_summary(
-            warmup_metrics
-                .iter()
-                .map(|snapshot| {
-                    parse_prom_counter(
-                        &snapshot.payload,
-                        "sumeragi_pacemaker_backpressure_deferrals_total",
-                    )
-                    .expect("metrics must expose pacemaker backpressure counter")
-                })
-                .collect::<Vec<u64>>()
-                .as_slice(),
-            after_metrics
-                .iter()
-                .map(|snapshot| {
-                    parse_prom_counter(
-                        &snapshot.payload,
-                        "sumeragi_pacemaker_backpressure_deferrals_total",
-                    )
-                    .expect("metrics must expose pacemaker backpressure counter")
-                })
-                .collect::<Vec<u64>>()
-                .as_slice(),
-            steady_elapsed,
-        );
         let mut saturated_samples = 0_u64;
         let mut total_samples = 0_u64;
         let mut max_queue_depth = 0_u64;
@@ -4560,8 +4528,6 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
             commit_time_ms_max: max_commit_time_ms,
             view_change_rate_avg: view_change_avg,
             view_change_rate_max: view_change_max,
-            backpressure_rate_avg: backpressure_avg,
-            backpressure_rate_max: backpressure_max,
             queue_saturated_frac,
             max_queue_depth,
             steady_elapsed_ms: steady_elapsed.as_millis() as u64,
@@ -4573,7 +4539,7 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
         artifacts.warmup_metrics = warmup_metrics;
         artifacts.after_metrics = after_metrics;
         eprintln!(
-            "localnet throughput metrics: peers={}, warmup_blocks={}, steady_blocks={}, warmup_txs={}, steady_txs={}, submit_batch={}, submit_parallelism={}, queue_soft_limit={}, payload_bytes={}, warmup_submit_elapsed={:?}, steady_submit_elapsed={:?}, steady_elapsed={:?}, submitted_tps={:.2}, committed_tps={:.2}, commit_hist_count={}, commit_time_ms(min/avg/max/p95/p99)={}/{}/{}/{}/{}, view_change_rate(avg/max)={:.4}/{:.4}, backpressure_rate(avg/max)={:.4}/{:.4}, queue_saturated_frac={:.2}, max_queue_depth={}",
+            "localnet throughput metrics: peers={}, warmup_blocks={}, steady_blocks={}, warmup_txs={}, steady_txs={}, submit_batch={}, submit_parallelism={}, queue_soft_limit={}, payload_bytes={}, warmup_submit_elapsed={:?}, steady_submit_elapsed={:?}, steady_elapsed={:?}, submitted_tps={:.2}, committed_tps={:.2}, commit_hist_count={}, commit_time_ms(min/avg/max/p95/p99)={}/{}/{}/{}/{}, view_change_rate(avg/max)={:.4}/{:.4}, queue_saturated_frac={:.2}, max_queue_depth={}",
             network.peers().len(),
             warmup_blocks,
             steady_blocks,
@@ -4596,8 +4562,6 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
             commit_p99_ms,
             view_change_avg,
             view_change_max,
-            backpressure_avg,
-            backpressure_max,
             queue_saturated_frac,
             max_queue_depth,
         );
@@ -4619,12 +4583,6 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
             ensure!(
                 view_change_max <= slo_view_change_rate,
                 "view change rate exceeded SLO: max_rate={view_change_max:.4}, slo_rate={slo_view_change_rate:.4}",
-            );
-        }
-        if slo_backpressure_rate > 0.0 {
-            ensure!(
-                backpressure_max <= slo_backpressure_rate,
-                "backpressure deferral rate exceeded SLO: max_rate={backpressure_max:.4}, slo_rate={slo_backpressure_rate:.4}",
             );
         }
         if slo_queue_saturation > 0.0 {
@@ -4851,10 +4809,6 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
             "IROHA_THROUGHPUT_SLO_VIEW_CHANGE_RATE",
             THROUGHPUT_NPOS_SLO_VIEW_CHANGE_RATE_MAX,
         );
-        let slo_backpressure_rate = env_or_default_f64(
-            "IROHA_THROUGHPUT_SLO_BACKPRESSURE_RATE",
-            THROUGHPUT_NPOS_SLO_BACKPRESSURE_RATE_MAX,
-        );
         let slo_queue_saturation = env_or_default_f64(
             "IROHA_THROUGHPUT_SLO_QUEUE_SAT_FRAC",
             THROUGHPUT_NPOS_SLO_QUEUE_SAT_FRAC_MAX,
@@ -4863,7 +4817,6 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
             commit_p95_ms: slo_p95_ms,
             commit_p99_ms: slo_p99_ms,
             view_change_rate_max: slo_view_change_rate,
-            backpressure_rate_max: slo_backpressure_rate,
             queue_saturation_max: slo_queue_saturation,
         });
         let submit_clients: Vec<_> =
@@ -5091,31 +5044,6 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
                 .as_slice(),
             steady_elapsed,
         );
-        let (backpressure_avg, backpressure_max) = rate_summary(
-            warmup_metrics
-                .iter()
-                .map(|snapshot| {
-                    parse_prom_counter(
-                        &snapshot.payload,
-                        "sumeragi_pacemaker_backpressure_deferrals_total",
-                    )
-                    .expect("metrics must expose pacemaker backpressure counter")
-                })
-                .collect::<Vec<u64>>()
-                .as_slice(),
-            after_metrics
-                .iter()
-                .map(|snapshot| {
-                    parse_prom_counter(
-                        &snapshot.payload,
-                        "sumeragi_pacemaker_backpressure_deferrals_total",
-                    )
-                    .expect("metrics must expose pacemaker backpressure counter")
-                })
-                .collect::<Vec<u64>>()
-                .as_slice(),
-            steady_elapsed,
-        );
         let mut saturated_samples = 0_u64;
         let mut total_samples = 0_u64;
         let mut max_queue_depth = 0_u64;
@@ -5144,8 +5072,6 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
             commit_time_ms_max: max_commit_time_ms,
             view_change_rate_avg: view_change_avg,
             view_change_rate_max: view_change_max,
-            backpressure_rate_avg: backpressure_avg,
-            backpressure_rate_max: backpressure_max,
             queue_saturated_frac,
             max_queue_depth,
             steady_elapsed_ms: steady_elapsed.as_millis() as u64,
@@ -5157,7 +5083,7 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
         artifacts.warmup_metrics = warmup_metrics;
         artifacts.after_metrics = after_metrics;
         eprintln!(
-            "localnet throughput metrics: peers={}, warmup_blocks={}, steady_blocks={}, warmup_txs={}, steady_txs={}, submit_batch={}, submit_parallelism={}, queue_soft_limit={}, payload_bytes={}, warmup_submit_elapsed={:?}, steady_submit_elapsed={:?}, steady_elapsed={:?}, submitted_tps={:.2}, committed_tps={:.2}, commit_hist_count={}, commit_time_ms(min/avg/max/p95/p99)={}/{}/{}/{}/{}, view_change_rate(avg/max)={:.4}/{:.4}, backpressure_rate(avg/max)={:.4}/{:.4}, queue_saturated_frac={:.2}, max_queue_depth={}",
+            "localnet throughput metrics: peers={}, warmup_blocks={}, steady_blocks={}, warmup_txs={}, steady_txs={}, submit_batch={}, submit_parallelism={}, queue_soft_limit={}, payload_bytes={}, warmup_submit_elapsed={:?}, steady_submit_elapsed={:?}, steady_elapsed={:?}, submitted_tps={:.2}, committed_tps={:.2}, commit_hist_count={}, commit_time_ms(min/avg/max/p95/p99)={}/{}/{}/{}/{}, view_change_rate(avg/max)={:.4}/{:.4}, queue_saturated_frac={:.2}, max_queue_depth={}",
             network.peers().len(),
             warmup_blocks,
             steady_blocks,
@@ -5180,8 +5106,6 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
             commit_p99_ms,
             view_change_avg,
             view_change_max,
-            backpressure_avg,
-            backpressure_max,
             queue_saturated_frac,
             max_queue_depth,
         );
@@ -5203,12 +5127,6 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
             ensure!(
                 view_change_max <= slo_view_change_rate,
                 "view change rate exceeded SLO: max_rate={view_change_max:.4}, slo_rate={slo_view_change_rate:.4}",
-            );
-        }
-        if slo_backpressure_rate > 0.0 {
-            ensure!(
-                backpressure_max <= slo_backpressure_rate,
-                "backpressure deferral rate exceeded SLO: max_rate={backpressure_max:.4}, slo_rate={slo_backpressure_rate:.4}",
             );
         }
         if slo_queue_saturation > 0.0 {
@@ -8183,7 +8101,6 @@ struct ThroughputArtifactSlo {
     commit_p95_ms: u64,
     commit_p99_ms: u64,
     view_change_rate_max: f64,
-    backpressure_rate_max: f64,
     queue_saturation_max: f64,
 }
 #[derive(Clone, Debug)]
@@ -8198,8 +8115,6 @@ struct ThroughputArtifactMetrics {
     commit_time_ms_max: u64,
     view_change_rate_avg: f64,
     view_change_rate_max: f64,
-    backpressure_rate_avg: f64,
-    backpressure_rate_max: f64,
     queue_saturated_frac: f64,
     max_queue_depth: u64,
     steady_elapsed_ms: u64,
@@ -8472,10 +8387,6 @@ fn write_throughput_artifacts(
             Value::from(slo.view_change_rate_max),
         );
         slo_map.insert(
-            "backpressure_rate_max".to_string(),
-            Value::from(slo.backpressure_rate_max),
-        );
-        slo_map.insert(
             "queue_saturation_max".to_string(),
             Value::from(slo.queue_saturation_max),
         );
@@ -8522,14 +8433,6 @@ fn write_throughput_artifacts(
         metrics_map.insert(
             "view_change_rate_max".to_string(),
             Value::from(metrics.view_change_rate_max),
-        );
-        metrics_map.insert(
-            "backpressure_rate_avg".to_string(),
-            Value::from(metrics.backpressure_rate_avg),
-        );
-        metrics_map.insert(
-            "backpressure_rate_max".to_string(),
-            Value::from(metrics.backpressure_rate_max),
         );
         metrics_map.insert(
             "queue_saturated_frac".to_string(),

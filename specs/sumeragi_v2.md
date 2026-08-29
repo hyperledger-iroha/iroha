@@ -770,11 +770,11 @@ reservation metadata and is reconstructed only from its exact committed entrypoi
 
 The crash-atomic Kura lane-geometry marker is a universal active-segment boundary, not an
 autonomous-payload special case. Globally anchored lane-ownership sidecars, autonomous payloads,
-certified lane sessions, globally anchored or autonomous execution inputs, direct-execution
-preflights, and `Current`, `DirectExecution`, and `MergeExecution` application receipts all require
+certified lane sessions, globally anchored or autonomous execution inputs, execution
+preflights, and `Current` and `MergeExecution` application receipts all require
 the exact active lane, dataspace, and incarnation, with proposal height strictly after that
 incarnation's activation, both when persisted and when served. Canonical ownership repair and
-active-session, ownership, and direct-receipt snapshots apply the same marker check and revalidate
+active-session and ownership snapshots apply the same marker check and revalidate
 the active segment after checking canonical execution evidence. A same-ID lane recreation therefore
 establishes a new durable storage generation
 before accepting height one; delayed payloads, certified sessions, or cached execution artifacts
@@ -786,7 +786,7 @@ historical merge executions instead of repopulating them into the active segment
 Recovered execution evidence carries one canonical typed source. `GlobalBlock` contains the exact
 `LaneBlockArtifact` committed by the readable global body; `AutonomousLane` contains the exact
 network identity, epoch, and executable-payload hash authenticated by the lane-owned payload. The
-same source value is copied into the durable execution input, direct preflight, and application
+same source value is copied into the durable execution input, execution preflight, and application
 receipt. A proposal payload hint remains consensus scheduling evidence only: it is never promoted
 into a global storage anchor for autonomous execution. In particular, a hint-free payload does not
 invent a `HashOf<BlockHeader>` or proposal view zero, and the pre-release artifact-plus-three-option

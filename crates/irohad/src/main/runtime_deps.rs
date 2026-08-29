@@ -1098,7 +1098,9 @@ mod parliament_tle_release_tests {
             .put_parliament_attempt_for_testing(attempt_id, attempt)
             .expect("persist deadline-retaining Parliament attempt");
         state_transaction.apply();
-        block.commit().expect("commit startup-readiness fixture");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit startup-readiness fixture");
 
         {
             let mut topology = state.commit_topology.block();

@@ -10,7 +10,7 @@ use iroha_core::{
     query::store::LiveQueryStore,
     queue::Queue,
     smartcontracts::Execute,
-    state::{State, WorldReadOnly},
+    state::{State, StateReadOnly, WorldReadOnly},
 };
 use iroha_crypto::Signature;
 use iroha_data_model::{
@@ -46,6 +46,52 @@ fn can_burn_asset_definition(
         asset_definition: asset_definition.clone(),
     }
     .into()
+}
+fn grant_contract_operator_permissions(
+    state: &Arc<State>,
+    authority: &iroha_data_model::account::AccountId,
+) {
+    use iroha_data_model::prelude::Grant;
+    use iroha_executor_data_model::permission::{
+        account::{AccountAliasPermissionScope, CanManageAccountAlias},
+        governance::CanEnactGovernance,
+        smart_contract::CanRegisterSmartContractCode,
+    };
+
+    let height = u64::try_from(state.view().height())
+        .unwrap_or(0)
+        .saturating_add(1);
+    let header = iroha_data_model::block::BlockHeader::new(
+        NonZeroU64::new(height).expect("height > 0"),
+        None,
+        None,
+        None,
+        0,
+        0,
+    );
+    let mut block = state.block(header);
+    let mut transaction = block.transaction();
+    Grant::account_permission(CanRegisterSmartContractCode.into(), authority.clone())
+        .execute(authority, &mut transaction)
+        .expect("grant CanRegisterSmartContractCode");
+    Grant::account_permission(CanEnactGovernance.into(), authority.clone())
+        .execute(authority, &mut transaction)
+        .expect("grant CanEnactGovernance");
+    Grant::account_permission(
+        CanManageAccountAlias {
+            scope: AccountAliasPermissionScope::Dataspace(
+                iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+            ),
+        }
+        .into(),
+        authority.clone(),
+    )
+    .execute(authority, &mut transaction)
+    .expect("grant universal-dataspace contract alias management");
+    transaction.apply();
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit contract operator permissions");
 }
 fn contract_call_noop_program() -> Vec<u8> {
     let src = include_str!("fixtures/contracts_call/noop.ko");
@@ -341,7 +387,7 @@ fn contract_test_state() -> (
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
-    iroha_torii::test_utils::grant_contract_operator_permissions(&state, &creds.account);
+    grant_contract_operator_permissions(&state, &creds.account);
     (creds, state, kura)
 }
 fn contract_test_queue_and_app(
@@ -1498,7 +1544,9 @@ async fn contracts_call_persists_declared_state_after_mint_asset() {
     .execute(&creds.account, &mut seed_tx)
     .expect("register asset definition");
     seed_tx.apply();
-    seed_block.commit().expect("commit seeded asset definition");
+    seed_block
+        .commit_world_overlay_for_testing()
+        .expect("commit seeded asset definition");
     let (queue, chain_id, app) = contract_test_queue_and_app(&state, &kura);
     let program = contract_call_declared_state_with_mint_program();
     let (contract_address, _, _) =
@@ -1600,7 +1648,9 @@ async fn contracts_call_persists_n3x_like_state_after_mint_asset() {
     .execute(&creds.account, &mut seed_tx)
     .expect("register asset definition");
     seed_tx.apply();
-    seed_block.commit().expect("commit seeded asset definition");
+    seed_block
+        .commit_world_overlay_for_testing()
+        .expect("commit seeded asset definition");
     let (queue, chain_id, app) = contract_test_queue_and_app(&state, &kura);
     let program = contract_call_n3x_like_program();
     let (contract_address, _, _) =
@@ -1727,7 +1777,9 @@ async fn contracts_call_executes_n3x_like_burn_after_mint_asset() {
     .execute(&creds.account, &mut seed_tx)
     .expect("register asset definition");
     seed_tx.apply();
-    seed_block.commit().expect("commit seeded asset definition");
+    seed_block
+        .commit_world_overlay_for_testing()
+        .expect("commit seeded asset definition");
     let (queue, chain_id, app) = contract_test_queue_and_app(&state, &kura);
     let program = contract_call_n3x_like_program();
     let (contract_address, _, _) =

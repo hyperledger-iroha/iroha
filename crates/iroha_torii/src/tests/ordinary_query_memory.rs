@@ -105,7 +105,9 @@ mod ordinary_query_memory_tests {
             .proofs_mut_for_testing()
             .insert(id.clone(), record.clone());
         transaction.apply();
-        block.commit().expect("commit bounded proof fixture");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit bounded proof fixture");
         let signed = authorize_query_for_test(
             QueryRequest::Singular(SingularQueryBox::FindProofRecordById(FindProofRecordById {
                 id,
@@ -405,7 +407,9 @@ mod ordinary_query_memory_tests {
             .world_mut_for_testing()
             .add_account_permission(&authority, CanReadAllLedgerData.into());
         transaction.apply();
-        block.commit().expect("commit cursor-cleanup permission");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit cursor-cleanup permission");
 
         let mut query = tests_runtime_handlers::build_find_account_ids_query_for_test();
         query.params.fetch_size.fetch_size =

@@ -147,10 +147,6 @@ fn committed_lane_block_status_progress_policy_is_fail_closed() {
             true,
         ),
         (COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK, true),
-        (
-            COMMITTED_LANE_STATUS_STATE_APPLIED_BY_DIRECT_EXECUTION,
-            true,
-        ),
     ] {
         assert!(
             committed_lane_block_status_counts_as_progress(status, executable),
@@ -187,10 +183,6 @@ fn committed_lane_block_status_progress_policy_is_fail_closed() {
     ));
     assert!(!committed_lane_block_status_counts_as_progress(
         COMMITTED_LANE_STATUS_PAYLOAD_RECOVERED_AWAITING_STATE_APPLICATION,
-        false
-    ));
-    assert!(!committed_lane_block_status_counts_as_progress(
-        COMMITTED_LANE_STATUS_STATE_APPLIED_BY_DIRECT_EXECUTION,
         false
     ));
 }

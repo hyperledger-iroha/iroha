@@ -81,7 +81,9 @@ fn register_zk_asset_writes_policy_metadata() {
         .execute_instruction(&mut stx, &owner, ib)
         .unwrap();
     stx.apply();
-    block.commit().expect("commit setup block");
+    block
+        .commit_empty_block_for_testing()
+        .expect("commit setup block");
     // Verify metadata key exists
     let view_policy = state.view();
     let def = view_policy
@@ -154,7 +156,9 @@ fn register_zk_asset_without_shielding_sets_transparent_policy() {
         .execute_instruction(&mut stx, &owner, InstructionBox::from(reg))
         .unwrap();
     stx.apply();
-    block.commit().expect("commit setup block");
+    block
+        .commit_empty_block_for_testing()
+        .expect("commit setup block");
     let view_policy = state.view();
     let def = view_policy
         .world
@@ -293,7 +297,9 @@ fn schedule_confidential_policy_transition_records_pending() {
         .unwrap();
     set_confidential_policy_mode(&mut stx, &asset_def_id, ConfidentialPolicyMode::Convertible);
     stx.apply();
-    block.commit().expect("commit setup block");
+    block
+        .commit_empty_block_for_testing()
+        .expect("commit setup block");
     // New block for scheduling the transition.
     let header2 =
         iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
@@ -316,7 +322,9 @@ fn schedule_confidential_policy_transition_records_pending() {
         .execute_instruction(&mut stx2, &owner, schedule.into())
         .unwrap();
     stx2.apply();
-    block2.commit().expect("commit schedule block");
+    block2
+        .commit_empty_block_for_testing()
+        .expect("commit schedule block");
     let view = state.view();
     let def = view
         .world
@@ -401,12 +409,14 @@ fn stale_confidential_downgrade_is_discarded_and_metadata_remains_coherent() {
         transition.effective_height(),
     );
     stx.apply();
-    block.commit().expect("commit stale pending transition");
+    block
+        .commit_empty_block_for_testing()
+        .expect("commit stale pending transition");
     let transition_header =
         iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     state
         .block(transition_header)
-        .commit()
+        .commit_empty_block_for_testing()
         .expect("commit defensive transition sweep");
     let view = state.view();
     let definition = view
@@ -486,7 +496,9 @@ fn confidential_policy_transition_applies_at_effective_height() {
         .unwrap();
     set_confidential_policy_mode(&mut stx, &asset_def_id, ConfidentialPolicyMode::Convertible);
     stx.apply();
-    block.commit().expect("commit setup block");
+    block
+        .commit_empty_block_for_testing()
+        .expect("commit setup block");
     let header2 =
         iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block2 = state.block(header2);
@@ -508,7 +520,9 @@ fn confidential_policy_transition_applies_at_effective_height() {
         .execute_instruction(&mut stx2, &owner, schedule.into())
         .unwrap();
     stx2.apply();
-    block2.commit().expect("commit schedule block");
+    block2
+        .commit_empty_block_for_testing()
+        .expect("commit schedule block");
     // New block at the scheduled effective height.
     let header3 = iroha_data_model::block::BlockHeader::new(
         NonZeroU64::new(effective_height).unwrap(),
@@ -535,7 +549,9 @@ fn confidential_policy_transition_applies_at_effective_height() {
         .execute_instruction(&mut stx3, &owner, reschedule.into())
         .unwrap();
     stx3.apply();
-    block3.commit().expect("commit effective block");
+    block3
+        .commit_world_overlay_for_testing()
+        .expect("commit effective block");
     let view = state.view();
     let def = view
         .world
@@ -595,7 +611,9 @@ fn cancel_confidential_policy_transition_clears_pending() {
         .unwrap();
     set_confidential_policy_mode(&mut stx, &asset_def_id, ConfidentialPolicyMode::Convertible);
     stx.apply();
-    block.commit().expect("commit setup block");
+    block
+        .commit_empty_block_for_testing()
+        .expect("commit setup block");
     let header2 =
         iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block2 = state.block(header2);
@@ -626,7 +644,9 @@ fn cancel_confidential_policy_transition_clears_pending() {
         .execute_instruction(&mut stx2, &owner, cancel.into())
         .unwrap();
     stx2.apply();
-    block2.commit().expect("commit cancel block");
+    block2
+        .commit_empty_block_for_testing()
+        .expect("commit cancel block");
     let view = state.view();
     let def = view
         .world
@@ -692,7 +712,6 @@ fn zk_roots_are_bounded_in_world_state() {
                 metal_threadgroup_width: None,
                 metal_trace: defaults::zk::fastpq::METAL_TRACE,
                 metal_debug_enum: defaults::zk::fastpq::METAL_DEBUG_ENUM,
-                metal_debug_fused: defaults::zk::fastpq::METAL_DEBUG_FUSED,
             },
             stark: cfg::Stark::default(),
             sccp: cfg::Sccp::default(),
@@ -791,7 +810,9 @@ fn zk_roots_are_bounded_in_world_state() {
     stx.world.zk_assets.remove(asset_def_id.clone());
     stx.world.zk_assets.insert(asset_def_id.clone(), zk_state);
     stx.apply();
-    block.commit().expect("commit bounded root-history fixture");
+    block
+        .commit_empty_block_for_testing()
+        .expect("commit bounded root-history fixture");
     // Assert bounded roots in world state
     let view = state.view();
     let zk_state = view.world.zk_assets().get(&asset_def_id).expect("zk state");
@@ -836,7 +857,6 @@ fn frontier_checkpoints_respect_reorg_depth_bound() {
                 metal_threadgroup_width: None,
                 metal_trace: defaults::zk::fastpq::METAL_TRACE,
                 metal_debug_enum: defaults::zk::fastpq::METAL_DEBUG_ENUM,
-                metal_debug_fused: defaults::zk::fastpq::METAL_DEBUG_FUSED,
             },
             stark: cfg::Stark::default(),
             sccp: cfg::Sccp::default(),
@@ -920,7 +940,9 @@ fn frontier_checkpoints_respect_reorg_depth_bound() {
                 .unwrap();
         }
         stx.apply();
-        block.commit().expect("commit setup block");
+        block
+            .commit_empty_block_for_testing()
+            .expect("commit setup block");
     }
     // Subsequent blocks append one authenticated commitment and advance frontiers.
     for h in 2_u64..=8 {
@@ -951,7 +973,9 @@ fn frontier_checkpoints_respect_reorg_depth_bound() {
         stx.world.zk_assets.remove(asset_def_id.clone());
         stx.world.zk_assets.insert(asset_def_id.clone(), zk_state);
         stx.apply();
-        block.commit().expect("commit frontier checkpoint block");
+        block
+            .commit_empty_block_for_testing()
+            .expect("commit frontier checkpoint block");
     }
     let view = state.view();
     let zk_state = view.world.zk_assets().get(&asset_def_id).expect("zk state");

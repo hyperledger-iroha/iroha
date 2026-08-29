@@ -921,14 +921,6 @@ def default_gate_metadata(
         )
         fingerprints["signature_algorithm"] = "ed25519"
     elif gate_name == "repair":
-        metadata["metric_count_values"] = [len(MODULE.REPAIR_REQUIRED_METRICS)]
-        metadata["metrics"] = sorted(MODULE.REPAIR_REQUIRED_METRICS)
-        fingerprints.update(
-            {
-                "metric_count": len(MODULE.REPAIR_REQUIRED_METRICS),
-                "metrics": list(MODULE.REPAIR_REQUIRED_METRICS),
-            }
-        )
         add_hex_list("valid_failure_bundle_digests", "evidence_bundle_digest_hex")
         add_hex_list("valid_handoff_digests", "handoff_digest_hex")
         add_policy()
@@ -8349,63 +8341,6 @@ def test_repair_policy_bound_artifacts_must_match_handoff_policy(
         "repair policy-bound artifact fingerprints must match "
         "valid_policy_digests"
     ) in errors
-
-
-def test_repair_metrics_metadata_must_match_owner_kind_fingerprints(
-    tmp_path: Path,
-) -> None:
-    payload = gate_summary("repair")
-    remove_fingerprint_metadata(
-        payload,
-        "metric_count",
-        "metrics",
-        kind_name="observability",
-    )
-    summary = tmp_path / "summary.json"
-    write_json(tmp_path / "repair.json", payload)
-
-    assert (
-        run_gate(
-            tmp_path,
-            "--require-gate",
-            "repair",
-            "--summary-out",
-            str(summary),
-        )
-        == 1
-    )
-
-    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
-    assert "metrics must match recognized artifact fingerprints" in errors
-    assert "metric_count_values must match recognized artifact fingerprints" in errors
-
-
-def test_repair_metrics_metadata_must_cover_required_values(tmp_path: Path) -> None:
-    payload = gate_summary("repair")
-    missing = payload["metrics"].pop()
-    payload["metric_count_values"] = [len(payload["metrics"])]
-    add_fingerprint_metadata(
-        payload,
-        metric_count=len(payload["metrics"]),
-        metrics=payload["metrics"],
-        kind_name="observability",
-    )
-    summary = tmp_path / "summary.json"
-    write_json(tmp_path / "repair.json", payload)
-
-    assert (
-        run_gate(
-            tmp_path,
-            "--require-gate",
-            "repair",
-            "--summary-out",
-            str(summary),
-        )
-        == 1
-    )
-
-    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
-    assert f"metrics must include metadata value `{missing}`" in errors
 
 
 def test_reference_sdk_release_policy_metadata_for_gate_passes(

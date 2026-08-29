@@ -36932,9 +36932,10 @@ mod advert_tests {
                 .execute(&manager_id, &mut transaction)
                 .expect("commit fixture PoTR outcome");
             transaction.apply();
-            block.commit().expect("commit fixture proof-outcome block");
+            block
+                .commit_empty_block_for_testing()
+                .expect("commit fixture proof-outcome block");
         }
-        core_state.push_block_hash_for_testing(HashOf::new(&header));
         (app, challenge, receipt, finalized_cursor)
     }
     async fn proof_stream_body(response: Response) -> (StatusCode, String) {
@@ -37595,7 +37596,9 @@ mod advert_tests {
                 },
             );
         tx.apply();
-        block.commit().expect("commit block");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit block");
         let view = state.view();
         let world = view.world();
         let snapshot = collect_pin_registry(world).expect("collect pin registry snapshot");
@@ -37658,7 +37661,9 @@ mod advert_tests {
                 );
         }
         tx.apply();
-        block.commit().expect("commit replication page fixture");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit replication page fixture");
         let view = state.view();
         let page = collect_replication_order_page(view.world(), 0, 1, |_| true)
             .expect("the selected valid order should decode");
@@ -37873,7 +37878,9 @@ mod advert_tests {
                 },
             );
         tx.apply();
-        block.commit().expect("commit registry seed block");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit registry seed block");
     }
     fn make_state() -> CoreState {
         let kura = Kura::blank_kura_for_testing();
@@ -37993,7 +38000,9 @@ mod advert_tests {
             .pin_manifests_mut_for_testing()
             .insert(manifest_digest, manifest_record);
         tx.apply();
-        block.commit().expect("commit paid pin seed block");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit paid pin seed block");
     }
     fn seed_paid_pin_record_for_plan(
         state: &SharedAppState,
@@ -39207,7 +39216,14 @@ mod advert_tests {
     #[tokio::test]
     async fn pin_manifest_readback_is_finalized_native_state_without_local_storage() {
         let mut app = mk_app_state_for_tests();
-        let header = default_block_header();
+        let header = BlockHeader::new(
+            NonZeroU64::new(1).expect("non-zero fixture block height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
         let mut block = app.state.block(header.clone());
         let mut tx = block.transaction();
         let manifest_digest = ManifestDigest::new([0x61; 32]);
@@ -39253,8 +39269,9 @@ mod advert_tests {
             .pin_manifests_mut_for_testing()
             .insert(manifest_digest.clone(), manifest_record);
         tx.apply();
-        block.commit().expect("commit pin manifest readback seed");
-        push_finalized_block_hash(&mut app, &header);
+        block
+            .commit_empty_block_for_testing()
+            .expect("commit pin manifest readback seed");
 
         let response = api_test_route!(get_pin_manifest; State(app.clone()); Path(hex::encode(manifest_digest.as_bytes())); axum::extract::RawQuery(None); None);
         assert_eq!(response.status(), StatusCode::OK);

@@ -13,14 +13,13 @@ fn sample_account() -> ivm::mock_wsv::AccountId {
 }
 #[test]
 fn boxed_submit_ballot_yields_permission_denied_without_verify() {
-    use std::collections::HashMap;
     // Seed WSV with a simple election
     let mut wsv = ivm::MockWorldStateView::new();
     assert!(wsv.create_election("e1".to_string(), 2, [0u8; 32], 0, u64::MAX));
     // Caller/account (matches other tests' format)
     let caller: ivm::mock_wsv::AccountId = sample_account();
     // Host + VM
-    let host = ivm::mock_wsv::WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new());
+    let host = ivm::mock_wsv::WsvHost::new_with_subject(wsv, caller.clone());
     let mut vm = IVM::new(0);
     vm.set_host(host);
     // Build and canonically encode a boxed SubmitBallot.
@@ -66,12 +65,11 @@ fn boxed_submit_ballot_yields_permission_denied_without_verify() {
 }
 #[test]
 fn boxed_finalize_is_rejected_for_submit_ballot_tag() {
-    use std::collections::HashMap;
     // Seed WSV with an election
     let mut wsv = ivm::MockWorldStateView::new();
     assert!(wsv.create_election("e2".to_string(), 3, [0u8; 32], 0, u64::MAX));
     let caller: ivm::mock_wsv::AccountId = sample_account();
-    let host = ivm::mock_wsv::WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new());
+    let host = ivm::mock_wsv::WsvHost::new_with_subject(wsv, caller.clone());
     let mut vm = IVM::new(0);
     vm.set_host(host);
     // Build and canonically encode a boxed FinalizeElection.

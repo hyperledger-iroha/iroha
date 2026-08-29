@@ -212,8 +212,6 @@ use iroha_config::{
 };
 #[cfg(feature = "app_api")]
 use iroha_core::state::StateBlock;
-#[cfg(feature = "telemetry")]
-use iroha_core::telemetry::Telemetry;
 use iroha_core::telemetry::{SorafsGatewayRequestMetricLabels, SorafsGatewayResponseMetricLabels};
 use iroha_core::{
     EventsSender,
@@ -930,6 +928,8 @@ mod mcp;
 mod musubi;
 #[cfg(feature = "app_api")]
 mod predicates;
+#[cfg(feature = "app_api")]
+mod private_settlement;
 mod router;
 pub(crate) mod routing;
 mod runtime;
@@ -1029,8 +1029,8 @@ pub use routing::{
     handle_post_soranet_privacy_event, handle_post_soranet_privacy_share,
     handle_v1_kaigi_relay_detail, handle_v1_kaigi_relays, handle_v1_kaigi_relays_health,
     handle_v1_kaigi_relays_sse, handle_v1_sumeragi_diagnostics, handle_v1_sumeragi_leader,
-    handle_v1_sumeragi_pacemaker, handle_v1_sumeragi_params, handle_v1_sumeragi_qc,
-    handle_v1_sumeragi_status, handle_v1_sumeragi_status_sse,
+    handle_v1_sumeragi_params, handle_v1_sumeragi_qc, handle_v1_sumeragi_status,
+    handle_v1_sumeragi_status_sse,
 };
 pub use runtime::{
     ActivateCancelResponse, handle_runtime_activate_upgrade, handle_runtime_cancel_upgrade,
@@ -19744,6 +19744,7 @@ fn ordinary_kagemusha_lifecycle_admission_response(
     ) {
         return queue_plan_outcome_unknown_response(
             expected_binding.entrypoint_hash.clone(),
+            Some(expected_binding.signed_transaction_hash.clone()),
             format!("ordinary lifecycle durable admission is not exact: {error}"),
         );
     }
@@ -19784,6 +19785,7 @@ fn ordinary_kagemusha_lifecycle_admission_response(
         Err(error) => {
             return queue_plan_outcome_unknown_response(
                 expected_binding.entrypoint_hash.clone(),
+                Some(expected_binding.signed_transaction_hash.clone()),
                 format!("failed to encode ordinary lifecycle attestation: {error}"),
             );
         }
@@ -19794,6 +19796,7 @@ fn ordinary_kagemusha_lifecycle_admission_response(
             Err(error) => {
                 return queue_plan_outcome_unknown_response(
                     expected_binding.entrypoint_hash.clone(),
+                    Some(expected_binding.signed_transaction_hash.clone()),
                     format!("failed to sign ordinary lifecycle attestation: {error}"),
                 );
             }
@@ -24669,17 +24672,39 @@ fn queue_plan_synced_entrypoint_hash(
 #[cfg(feature = "connect")]
 fn queue_plan_outcome_unknown_response(
     entrypoint_hash: HashOf<TransactionEntrypoint>,
+    signed_transaction_hash: Option<HashOf<SignedTransaction>>,
     reason: impl Into<String>,
 ) -> Response {
-    Error::PushIntoQueue {
-        source: Box::new(queue::Error::PlanJournalDurabilityIndeterminate {
-            entrypoint_hash,
-            signed_transaction_hash: None,
-            reason: reason.into(),
-        }),
-        backpressure: queue::BackpressureState::default(),
+    let reason = reason.into();
+    iroha_logger::warn!(
+        %entrypoint_hash,
+        ?signed_transaction_hash,
+        internal_reason = %reason,
+        "transaction admission outcome is unknown"
+    );
+    let source = queue::Error::PlanJournalDurabilityIndeterminate {
+        entrypoint_hash: entrypoint_hash.clone(),
+        signed_transaction_hash: signed_transaction_hash.clone(),
+        reason,
+    };
+    let status = Error::status_code_for_queue_error(&source);
+    // A distributed admission ambiguity has no authoritative point-in-time
+    // queue snapshot. Omit queue telemetry instead of fabricating local load.
+    let envelope = Error::queue_error_envelope(&source, None);
+    let mut response =
+        utils::respond_with_status_and_format(status, envelope, utils::current_response_format());
+    let (reject_code, _detail) = queue_rejection_metadata(&source);
+    if let Ok(header) = HeaderValue::from_str(reject_code) {
+        response
+            .headers_mut()
+            .insert(HeaderName::from_static("x-iroha-reject-code"), header);
     }
-    .into_response()
+    insert_transaction_submission_identity_headers(
+        &mut response,
+        &entrypoint_hash,
+        signed_transaction_hash.as_ref(),
+    );
+    response
 }
 #[cfg(feature = "connect")]
 const QUEUE_PLAN_OUTCOME_UNKNOWN_REJECT_CODE: &str = "PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN";
@@ -24999,17 +25024,19 @@ fn merge_ordinary_kagemusha_lifecycle_attestations(
     Ok(())
 }
 #[cfg(feature = "connect")]
-fn queue_plan_synced_snapshot_to_response(
-    snapshot: ToriiProxyHttpResponseV1,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum QueuePlanOutcomeUnknownEvidenceValidation {
+    NotClaimed,
+    Valid,
+    Invalid(&'static str),
+}
+#[cfg(feature = "connect")]
+fn validate_queue_plan_outcome_unknown_evidence(
+    snapshot: &ToriiProxyHttpResponseV1,
     expected: &QueuePlanSyncedAcceptanceExpectation,
-) -> Response {
-    let expected_entrypoint_hash = &expected.entrypoint_hash;
-    let expected_transaction_hash_literal = expected_entrypoint_hash.to_string();
-    if validate_queue_plan_synced_acceptance(&snapshot, expected)
-        .is_ok_and(|receipts| receipts.len() >= expected.durability_threshold)
-    {
-        return torii_proxy_snapshot_to_response(snapshot);
-    }
+) -> QueuePlanOutcomeUnknownEvidenceValidation {
+    use QueuePlanOutcomeUnknownEvidenceValidation::{Invalid, NotClaimed, Valid};
+
     let mut reject_code_header_count = 0_usize;
     let mut first_reject_code_header_value = None;
     let mut header_claims_outcome_unknown = false;
@@ -25025,7 +25052,7 @@ fn queue_plan_synced_snapshot_to_response(
             == QUEUE_PLAN_OUTCOME_UNKNOWN_REJECT_CODE.as_bytes()
             || header.value.as_slice() == QUEUE_PLAN_OUTCOME_UNKNOWN_ENVELOPE_CODE.as_bytes();
     }
-    let decoded_envelope = validate_queue_plan_synced_snapshot_bounds(&snapshot)
+    let decoded_envelope = validate_queue_plan_synced_snapshot_bounds(snapshot)
         .ok()
         .and_then(|()| {
             norito::decode_from_bytes_with_limits::<ErrorEnvelope>(
@@ -25040,76 +25067,118 @@ fn queue_plan_synced_snapshot_to_response(
                 details.reject_code.as_deref() == Some(QUEUE_PLAN_OUTCOME_UNKNOWN_REJECT_CODE)
             })
     });
-    let envelope_is_canonical = decoded_envelope.as_ref().is_some_and(|envelope| {
-        norito::to_bytes(envelope)
-            .is_ok_and(|canonical| canonical.as_slice() == snapshot.body.as_slice())
-    });
     if !header_claims_outcome_unknown && !envelope_claims_outcome_unknown {
-        // The current strict proxy response schema has no authenticated
-        // admission-phase evidence for rejections. A complete response can
-        // therefore still have been produced after durable queue admission
-        // (for example, when receipt signing fails).
-        return queue_plan_outcome_unknown_response(
-            expected_entrypoint_hash.clone(),
-            format!(
-                "authenticated authority returned HTTP {} without exact durable-acceptance or outcome-unknown evidence",
-                snapshot.status_code
-            ),
-        );
+        return NotClaimed;
     }
-    let validation_error = if snapshot.status_code != StatusCode::SERVICE_UNAVAILABLE.as_u16() {
-        Some("status is not 503 Service Unavailable")
-    } else if validate_queue_plan_synced_response_header(
-        &snapshot,
+    if snapshot.status_code != StatusCode::SERVICE_UNAVAILABLE.as_u16() {
+        return Invalid("status is not 503 Service Unavailable");
+    }
+    if validate_queue_plan_synced_response_header(
+        snapshot,
         "content-type",
         Some(utils::NORITO_MIME_TYPE),
     )
     .is_err()
     {
-        Some("content-type header is missing, duplicated, or non-canonical")
-    } else if reject_code_header_count != 1
+        return Invalid("content-type header is missing, duplicated, or non-canonical");
+    }
+    if reject_code_header_count != 1
         || first_reject_code_header_value != Some(QUEUE_PLAN_OUTCOME_UNKNOWN_REJECT_CODE.as_bytes())
     {
-        Some("reject-code header is missing, duplicated, or non-canonical")
-    } else {
-        match decoded_envelope {
-            None => Some("body is not a decodable Norito error envelope"),
-            Some(ref envelope) if envelope.code() != QUEUE_PLAN_OUTCOME_UNKNOWN_ENVELOPE_CODE => {
-                Some("error-envelope code is not canonical")
-            }
-            Some(_) if !envelope_is_canonical => {
-                Some("error-envelope body is not the canonical Norito encoding")
-            }
-            Some(ref envelope) => match envelope.details.as_ref() {
-                None => Some("error envelope is missing details"),
-                Some(details)
-                    if details.reject_code.as_deref()
-                        != Some(QUEUE_PLAN_OUTCOME_UNKNOWN_REJECT_CODE) =>
-                {
-                    Some("error-envelope reject code is missing or non-canonical")
-                }
-                Some(details)
-                    if details.tx_hash.as_deref()
-                        != Some(expected_transaction_hash_literal.as_str()) =>
-                {
-                    Some("error-envelope transaction hash does not match the submitted transaction")
-                }
-                Some(_) => None,
-            },
-        }
-    };
-    if let Some(reason) = validation_error {
-        return queue_plan_outcome_unknown_response(
-            expected_entrypoint_hash.clone(),
-            format!(
-                "authenticated authority returned invalid QueuePlanSynced outcome evidence: {reason}"
-            ),
+        return Invalid("reject-code header is missing, duplicated, or non-canonical");
+    }
+    let expected_entrypoint_hash_literal = expected.entrypoint_hash.to_string();
+    if validate_queue_plan_synced_response_header(
+        snapshot,
+        "x-iroha-entrypoint-hash",
+        Some(expected_entrypoint_hash_literal.as_str()),
+    )
+    .is_err()
+    {
+        return Invalid(
+            "entrypoint identity header is missing, duplicated, or does not match the submitted entrypoint",
         );
     }
-    queue_plan_outcome_unknown_response(
-        expected_entrypoint_hash.clone(),
-        "authenticated authority reported an indeterminate durable-admission outcome",
+    let expected_signed_transaction_hash_literal = expected
+        .signed_transaction_hash
+        .as_ref()
+        .map(ToString::to_string);
+    if validate_queue_plan_synced_response_header(
+        snapshot,
+        "x-iroha-signed-transaction-hash",
+        expected_signed_transaction_hash_literal.as_deref(),
     )
+    .is_err()
+    {
+        return Invalid(
+            "signed-transaction identity header is missing, duplicated, or does not match the submitted transaction",
+        );
+    }
+    let Some(envelope) = decoded_envelope.as_ref() else {
+        return Invalid("body is not a decodable Norito error envelope");
+    };
+    if envelope.code() != QUEUE_PLAN_OUTCOME_UNKNOWN_ENVELOPE_CODE {
+        return Invalid("error-envelope code is not canonical");
+    }
+    if !norito::to_bytes(envelope)
+        .is_ok_and(|canonical| canonical.as_slice() == snapshot.body.as_slice())
+    {
+        return Invalid("error-envelope body is not the canonical Norito encoding");
+    }
+    let Some(details) = envelope.details.as_ref() else {
+        return Invalid("error envelope is missing details");
+    };
+    if details.reject_code.as_deref() != Some(QUEUE_PLAN_OUTCOME_UNKNOWN_REJECT_CODE) {
+        return Invalid("error-envelope reject code is missing or non-canonical");
+    }
+    if details.entrypoint_hash.as_deref() != Some(expected_entrypoint_hash_literal.as_str()) {
+        return Invalid("error-envelope entrypoint hash does not match the submitted entrypoint");
+    }
+    if details.tx_hash.as_deref() != expected_signed_transaction_hash_literal.as_deref() {
+        return Invalid("error-envelope transaction hash does not match the submitted transaction");
+    }
+    Valid
+}
+#[cfg(feature = "connect")]
+fn queue_plan_synced_snapshot_to_response(
+    snapshot: ToriiProxyHttpResponseV1,
+    expected: &QueuePlanSyncedAcceptanceExpectation,
+) -> Response {
+    if validate_queue_plan_synced_acceptance(&snapshot, expected)
+        .is_ok_and(|receipts| receipts.len() >= expected.durability_threshold)
+    {
+        return torii_proxy_snapshot_to_response(snapshot);
+    }
+    match validate_queue_plan_outcome_unknown_evidence(&snapshot, expected) {
+        QueuePlanOutcomeUnknownEvidenceValidation::NotClaimed => {
+            // The current strict proxy response schema has no authenticated
+            // admission-phase evidence for rejections. A complete response can
+            // therefore still have been produced after durable queue admission
+            // (for example, when receipt signing fails).
+            queue_plan_outcome_unknown_response(
+                expected.entrypoint_hash.clone(),
+                expected.signed_transaction_hash.clone(),
+                format!(
+                    "authenticated authority returned HTTP {} without exact durable-acceptance or outcome-unknown evidence",
+                    snapshot.status_code
+                ),
+            )
+        }
+        QueuePlanOutcomeUnknownEvidenceValidation::Invalid(reason) => {
+            queue_plan_outcome_unknown_response(
+                expected.entrypoint_hash.clone(),
+                expected.signed_transaction_hash.clone(),
+                format!(
+                    "authenticated authority returned invalid QueuePlanSynced outcome evidence: {reason}"
+                ),
+            )
+        }
+        QueuePlanOutcomeUnknownEvidenceValidation::Valid => queue_plan_outcome_unknown_response(
+            expected.entrypoint_hash.clone(),
+            expected.signed_transaction_hash.clone(),
+            "authenticated authority reported an indeterminate durable-admission outcome",
+        ),
+    }
 }
 #[cfg(feature = "connect")]
 fn retain_strongest_retryable_response(slot: &mut Option<Response>, candidate: Response) {
@@ -26173,6 +26242,7 @@ where
                             ) {
                                 let mut response = queue_plan_outcome_unknown_response(
                                     expected.entrypoint_hash.clone(),
+                                    expected.signed_transaction_hash.clone(),
                                     format!(
                                         "coordinator validator index `{validator_index}` produced conflicting durable admission claims"
                                     ),
@@ -26204,6 +26274,7 @@ where
                                     }) => {
                                         let mut response = queue_plan_outcome_unknown_response(
                                             expected.entrypoint_hash.clone(),
+                                            expected.signed_transaction_hash.clone(),
                                             "durable admission certificate exceeds its protocol bound",
                                         );
                                         insert_route_transport_header(
@@ -26220,6 +26291,7 @@ where
                                     Err(error) => {
                                         let mut response = queue_plan_outcome_unknown_response(
                                             expected.entrypoint_hash.clone(),
+                                            expected.signed_transaction_hash.clone(),
                                             format!(
                                                 "failed to encode durable admission certificate: {error}"
                                             ),
@@ -26264,6 +26336,7 @@ where
                             {
                                 let mut response = queue_plan_outcome_unknown_response(
                                     expected.entrypoint_hash.clone(),
+                                    Some(expected.signed_transaction_hash.clone()),
                                     format!(
                                         "coordinator validator index `{validator_index}` produced conflicting ordinary lifecycle durable claims"
                                     ),
@@ -26309,6 +26382,7 @@ where
                                     Err(error) => {
                                         let mut response = queue_plan_outcome_unknown_response(
                                             expected.entrypoint_hash.clone(),
+                                            Some(expected.signed_transaction_hash.clone()),
                                             format!(
                                                 "ordinary lifecycle durability quorum is invalid: {error}"
                                             ),
@@ -26333,6 +26407,7 @@ where
                                     Err(error) => {
                                         let mut response = queue_plan_outcome_unknown_response(
                                             expected.entrypoint_hash.clone(),
+                                            Some(expected.signed_transaction_hash.clone()),
                                             format!(
                                                 "failed to encode ordinary lifecycle durability certificate: {error}"
                                             ),
@@ -26373,6 +26448,7 @@ where
                     None => match ordinary_lifecycle_expectation.as_ref() {
                         Some(expected) => queue_plan_outcome_unknown_response(
                             expected.entrypoint_hash.clone(),
+                            Some(expected.signed_transaction_hash.clone()),
                             "authenticated authority returned no exact ordinary lifecycle durable-acceptance evidence",
                         ),
                         None => torii_proxy_snapshot_to_response(snapshot),
@@ -26403,17 +26479,29 @@ where
                     "Torii ingress proxy attempt failed"
                 );
                 if error.may_have_reached_authority()
-                    && let Some(expected) = queue_plan_synced_expectation
-                        .as_ref()
-                        .map(|expected| &expected.entrypoint_hash)
-                        .or_else(|| {
-                            ordinary_lifecycle_expectation
-                                .as_ref()
-                                .map(|expected| &expected.entrypoint_hash)
-                        })
+                    && let Some((entrypoint_hash, signed_transaction_hash)) =
+                        queue_plan_synced_expectation
+                            .as_ref()
+                            .map(|expected| {
+                                (
+                                    &expected.entrypoint_hash,
+                                    expected.signed_transaction_hash.as_ref(),
+                                )
+                            })
+                            .or_else(|| {
+                                ordinary_lifecycle_expectation.as_ref().map(|expected| {
+                                    (
+                                        &expected.entrypoint_hash,
+                                        Some(&expected.signed_transaction_hash),
+                                    )
+                                })
+                            })
                 {
-                    let mut response =
-                        queue_plan_outcome_unknown_response(expected.clone(), error.to_string());
+                    let mut response = queue_plan_outcome_unknown_response(
+                        entrypoint_hash.clone(),
+                        signed_transaction_hash.cloned(),
+                        error.to_string(),
+                    );
                     insert_route_transport_header(&mut response, peer_id.transport_label());
                     retain_strongest_queue_plan_synced_failure(
                         &mut queue_plan_synced_failure,
@@ -26430,6 +26518,7 @@ where
     {
         return queue_plan_outcome_unknown_response(
             expected.entrypoint_hash.clone(),
+            expected.signed_transaction_hash.clone(),
             format!(
                 "recovered {} of {} required distinct durable authority attestations",
                 durable_attestations.len(),
@@ -26442,6 +26531,7 @@ where
     {
         return queue_plan_outcome_unknown_response(
             expected.entrypoint_hash.clone(),
+            Some(expected.signed_transaction_hash.clone()),
             format!(
                 "recovered {} of {} required distinct ordinary lifecycle durable authority attestations",
                 ordinary_lifecycle_attestations.len(),
@@ -26682,12 +26772,14 @@ async fn persist_queue_plan_admission_certificate(
         Ok(_) => {
             return queue_plan_outcome_unknown_response(
                 expected_binding.entrypoint_hash.clone(),
+                expected_binding.signed_transaction_hash.clone(),
                 "aggregated QueuePlan certificate differs from the exact ingress binding",
             );
         }
         Err(error) => {
             return queue_plan_outcome_unknown_response(
                 expected_binding.entrypoint_hash.clone(),
+                expected_binding.signed_transaction_hash.clone(),
                 format!("aggregated QueuePlan certificate is malformed: {error}"),
             );
         }
@@ -26699,6 +26791,7 @@ async fn persist_queue_plan_admission_certificate(
     ) {
         return queue_plan_outcome_unknown_response(
             expected_binding.entrypoint_hash.clone(),
+            expected_binding.signed_transaction_hash.clone(),
             format!("aggregated QueuePlan certificate is not an exact quorum: {error}"),
         );
     }
@@ -26728,6 +26821,7 @@ async fn persist_queue_plan_admission_certificate(
         Err(error) => {
             return queue_plan_outcome_unknown_response(
                 expected_binding.entrypoint_hash.clone(),
+                expected_binding.signed_transaction_hash.clone(),
                 format!(
                     "failed to persist the exact QueuePlan certificate before carrier wake: {error}"
                 ),
@@ -26794,12 +26888,14 @@ async fn validate_ordinary_kagemusha_lifecycle_admission_quorum_response(
         Ok(_) => {
             return queue_plan_outcome_unknown_response(
                 expected_binding.entrypoint_hash.clone(),
+                Some(expected_binding.signed_transaction_hash.clone()),
                 "aggregated ordinary lifecycle certificate differs from the exact ingress binding",
             );
         }
         Err(error) => {
             return queue_plan_outcome_unknown_response(
                 expected_binding.entrypoint_hash.clone(),
+                Some(expected_binding.signed_transaction_hash.clone()),
                 format!("aggregated ordinary lifecycle certificate is malformed: {error}"),
             );
         }
@@ -26812,6 +26908,7 @@ async fn validate_ordinary_kagemusha_lifecycle_admission_quorum_response(
     ) {
         return queue_plan_outcome_unknown_response(
             expected_binding.entrypoint_hash.clone(),
+            Some(expected_binding.signed_transaction_hash.clone()),
             format!("aggregated ordinary lifecycle certificate is not an exact quorum: {error}"),
         );
     }
@@ -26837,7 +26934,7 @@ fn normalize_ordinary_kagemusha_lifecycle_submission_response(
     let mut response = transaction_submission_response(
         app,
         entrypoint_hash.clone(),
-        Some(signed_transaction_hash),
+        Some(signed_transaction_hash.clone()),
         routing_decision,
         "proxy",
         false,
@@ -26846,6 +26943,7 @@ fn normalize_ordinary_kagemusha_lifecycle_submission_response(
     if response.status() != StatusCode::ACCEPTED {
         return queue_plan_outcome_unknown_response(
             entrypoint_hash,
+            Some(signed_transaction_hash),
             "ordinary lifecycle durability quorum was authenticated, but the public signed receipt could not be produced",
         );
     }
@@ -29504,7 +29602,8 @@ async fn execute_incoming_torii_proxy_request_with_admission_inner(
                                             );
                                         if durable_binding.as_ref() != Ok(&expected_binding) {
                                             return queue_plan_outcome_unknown_response(
-                                                durable_claim.entrypoint_hash.clone(),
+                                                expected_binding.entrypoint_hash.clone(),
+                                                expected_binding.signed_transaction_hash.clone(),
                                                 "exact QueuePlan binding changed across strict durable admission",
                                             );
                                         }
@@ -34145,34 +34244,6 @@ async fn handler_sumeragi_status_sse(
     )
 }
 
-#[cfg(feature = "telemetry")]
-async fn handler_pacemaker_status(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    validate_api_token(app.as_ref(), &headers)?;
-    let key = rate_limit_key(
-        &headers,
-        Some(remote_ip),
-        "v1/sumeragi/pacemaker",
-        app.api_token_enforced(),
-    );
-    if !app.rate_limiter.allow(&key).await {
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
-    if !app.telemetry.allows_developer_outputs() {
-        return Ok(telemetry_unavailable_response(
-            "/v1/sumeragi/pacemaker",
-            &app.telemetry,
-        ));
-    }
-    let accept = headers.get(axum::http::header::ACCEPT).cloned();
-    routing::handle_v1_sumeragi_pacemaker(&app.telemetry, accept).await
-}
 #[cfg(feature = "telemetry")]
 async fn handler_sumeragi_leader(
     State(app): State<SharedAppState>,
@@ -44792,6 +44863,8 @@ pub struct Torii {
         Arc<iroha_core::tle_release::TleReleaseCoordinatorV1>,
     #[cfg(feature = "app_api")]
     musubi_search: Arc<RwLock<iroha_core::musubi_search::MusubiSearchIndexV1>>,
+    #[cfg(feature = "app_api")]
+    private_settlement_runtime: private_settlement::PrivateSettlementToriiRuntimeV1,
     bootle_lantern_issuance_runtime:
         Option<Arc<privacy_issuance_api::BootleLanternIssuanceToriiRuntimeV1>>,
     telemetry: routing::MaybeTelemetry,
@@ -44983,6 +45056,12 @@ pub struct Torii {
 pub struct ToriiRuntimeDeps {
     telemetry: routing::MaybeTelemetry,
     #[cfg(feature = "app_api")]
+    private_settlement_availability_signer:
+        Option<Arc<iroha_core::private_settlement::PrivateSettlementAvailabilitySignerV1>>,
+    #[cfg(feature = "app_api")]
+    private_settlement_phase_signer:
+        Option<Arc<iroha_core::private_settlement::PrivateSettlementPhaseSignerV1>>,
+    #[cfg(feature = "app_api")]
     parliament_tle_release_coordinator:
         Arc<iroha_core::tle_release::TleReleaseCoordinatorV1>,
     bootle_lantern_issuance_provider_registry: Option<
@@ -45103,6 +45182,10 @@ impl ToriiRuntimeDeps {
         Self {
             telemetry,
             #[cfg(feature = "app_api")]
+            private_settlement_availability_signer: None,
+            #[cfg(feature = "app_api")]
+            private_settlement_phase_signer: None,
+            #[cfg(feature = "app_api")]
             parliament_tle_release_coordinator: Arc::new(
                 iroha_core::tle_release::TleReleaseCoordinatorV1::without_signer(),
             ),
@@ -45207,6 +45290,33 @@ impl ToriiRuntimeDeps {
         coordinator: Arc<iroha_core::tle_release::TleReleaseCoordinatorV1>,
     ) -> Self {
         self.parliament_tle_release_coordinator = coordinator;
+        self
+    }
+    /// Attach the node-owned bounded BLS signer for private-settlement DA shares.
+    ///
+    /// The capability exposes only fsync-after-store availability signing and
+    /// never returns its retained private key.
+    #[cfg(feature = "app_api")]
+    #[must_use]
+    pub fn with_private_settlement_availability_signer(
+        mut self,
+        signer: Arc<iroha_core::private_settlement::PrivateSettlementAvailabilitySignerV1>,
+    ) -> Self {
+        self.private_settlement_availability_signer = Some(signer);
+        self
+    }
+    /// Attach the node-owned bounded BLS signer for private-settlement phases.
+    ///
+    /// The capability signs Prepare only after complete verification and
+    /// durable staging, and signs Commit only after the exact complete barrier
+    /// and local durable Prepare QC have been verified.
+    #[cfg(feature = "app_api")]
+    #[must_use]
+    pub fn with_private_settlement_phase_signer(
+        mut self,
+        signer: Arc<iroha_core::private_settlement::PrivateSettlementPhaseSignerV1>,
+    ) -> Self {
+        self.private_settlement_phase_signer = Some(signer);
         self
     }
     /// Attach the deployment-owned Bootle/Lantern issuance provider registry.
@@ -46883,7 +46993,6 @@ impl Torii {
         let app_state = builder.state().clone();
         mount_catalog_route_rows!(
             builder, telemetry;
-            PACEMAKER => operator_get(handler_pacemaker_status, app_state);
             DEBUG_AXT_CACHE => operator_get(handler_debug_axt_cache, app_state);
             DEBUG_WITNESS => operator_get(handler_debug_witness, app_state);
         );
@@ -48508,55 +48617,91 @@ impl Torii {
     fn add_runtime_governance_routes(&self, builder: &mut RouterBuilder) {
         self.add_cataloged_runtime_governance_routes(builder);
     }
-    /// Construct `Torii` using the classic telemetry arguments (`Telemetry` + enabled flag).
-    #[allow(clippy::too_many_arguments)]
-    #[cfg(feature = "telemetry")]
-    /// Construct `Torii` with runtime telemetry configuration.
-    pub fn new(
-        chain_id: ChainId,
-        network_id: NetworkId,
-        kiso: KisoHandle,
-        config: Config,
-        queue: Arc<Queue>,
-        events: EventsSender,
-        query_service: LiveQueryStoreHandle,
-        kura: Arc<Kura>,
-        state: Arc<CoreState>,
-        da_receipt_signer: KeyPair,
-        online_peers: OnlinePeersProvider,
-        telemetry: Telemetry,
-        telemetry_enabled: bool,
-    ) -> Self {
-        let profile = if telemetry_enabled {
-            TelemetryProfile::Operator
-        } else {
-            TelemetryProfile::Disabled
-        };
-        let handle = if telemetry_enabled {
-            routing::MaybeTelemetry::from_profile(Some(telemetry), profile)
-        } else {
-            routing::MaybeTelemetry::from_profile(None, profile)
-        };
-        Self::new_with_handle(
-            chain_id,
-            network_id,
-            kiso,
-            config,
-            queue,
-            events,
-            query_service,
-            kura,
-            state,
-            da_receipt_signer,
-            online_peers,
-            None,
-            handle,
-        )
+    #[cfg(feature = "app_api")]
+    fn add_private_settlement_routes(&self, builder: &mut RouterBuilder) {
+        use iroha_core::private_settlement::PRIVATE_SETTLEMENT_SIDECAR_MAX_RECORD_BYTES_V1;
+        use route_catalog::private_settlement as routes;
+
+        let app_state = builder.state().clone();
+        let runtime = self.private_settlement_runtime.clone();
+        let upload_limit = usize::try_from(PRIVATE_SETTLEMENT_SIDECAR_MAX_RECORD_BYTES_V1)
+            .expect("private-settlement sidecar limit fits usize");
+        builder.route(
+            &routes::AVAILABILITY_SHARE,
+            catalog_post(private_settlement::handler_availability_share)
+                .layer(axum::Extension(runtime.clone()))
+                .authenticated_canonical_account_body(app_state.clone(), upload_limit),
+        );
+        builder.route(
+            &routes::PREPARE_VOTE,
+            catalog_post(private_settlement::handler_prepare_vote)
+                .layer(axum::Extension(runtime.clone()))
+                .authenticated_canonical_account_body(app_state.clone(), upload_limit),
+        );
+        builder.route(
+            &routes::COMMIT_VOTE,
+            catalog_post(private_settlement::handler_commit_vote)
+                .layer(axum::Extension(runtime.clone()))
+                .authenticated_canonical_account_body(app_state.clone(), upload_limit),
+        );
+        builder.route(
+            &routes::PHASE_CERTIFICATE,
+            catalog_post(private_settlement::handler_phase_certificate)
+                .layer(axum::Extension(runtime.clone()))
+                .authenticated_canonical_account_body(app_state.clone(), upload_limit),
+        );
+        builder.route(
+            &routes::LEG_UPLOAD,
+            catalog_post(private_settlement::handler_leg_upload)
+                .layer(axum::Extension(runtime.clone()))
+                .authenticated_canonical_account_body(app_state.clone(), upload_limit),
+        );
+        builder.route(
+            &routes::LEG_STATUS,
+            catalog_get(private_settlement::handler_leg_status)
+                .layer(axum::Extension(runtime.clone()))
+                .authenticated_canonical_account_body(app_state.clone(), 0),
+        );
+        builder.route(
+            &routes::COMMITTEE_PROOF,
+            catalog_get(private_settlement::handler_committee_proof)
+                .layer(axum::Extension(runtime.clone()))
+                .authenticated_identity_bound(app_state.clone()),
+        );
+        builder.route(
+            &routes::AUDITOR_CAPSULE,
+            catalog_get(private_settlement::handler_auditor_capsule)
+                .layer(axum::Extension(runtime.clone()))
+                .authenticated_identity_bound(app_state.clone()),
+        );
+        builder.route(
+            &routes::AUDITOR_APPROVAL,
+            catalog_post(private_settlement::handler_auditor_approval)
+                .layer(axum::extract::DefaultBodyLimit::max(upload_limit))
+                .layer(axum::Extension(runtime))
+                .authenticated_identity_bound(app_state.clone()),
+        );
+        builder.route(
+            &routes::BUNDLE_SUBMIT,
+            catalog_post(private_settlement::handler_bundle_submit)
+                .authenticated_canonical_account_body(app_state, upload_limit),
+        );
+        builder.route(
+            &routes::BUNDLE_STATUS,
+            catalog_get(private_settlement::handler_bundle_status)
+                .layer(axum::Extension(self.private_settlement_runtime.clone())),
+        );
+        builder.route(
+            &routes::BUNDLE_RECEIPT,
+            catalog_get(private_settlement::handler_bundle_receipt)
+                .layer(axum::Extension(self.private_settlement_runtime.clone())),
+        );
     }
-    /// Construct `Torii` when the telemetry feature is disabled.
+    /// Construct `Torii` with telemetry disabled.
+    ///
+    /// Embeddings that provide telemetry must use [`Self::new_with_handle`] and
+    /// pass an explicit [`routing::MaybeTelemetry`] profile.
     #[allow(clippy::too_many_arguments)]
-    #[cfg(not(feature = "telemetry"))]
-    /// Construct `Torii` when telemetry support is disabled.
     pub fn new(
         chain_id: ChainId,
         network_id: NetworkId,
@@ -49959,6 +50104,17 @@ impl Torii {
         } else {
             select_initial_musubi_search_index(rebuild_musubi_search_index(state.as_ref(), None))
         }));
+        #[cfg(feature = "app_api")]
+        let private_settlement_runtime = private_settlement::PrivateSettlementToriiRuntimeV1::open(
+            state.as_ref(),
+            kura.store_root(),
+            emergency_fast,
+            runtime_deps.private_settlement_availability_signer.clone(),
+            runtime_deps.private_settlement_phase_signer.clone(),
+        )
+        .unwrap_or_else(|error| {
+            panic!("invalid atomic private-settlement sidecar runtime: {error}")
+        });
         Self {
             chain_id: Arc::new(chain_id),
             signed_query_admission,
@@ -49973,6 +50129,8 @@ impl Torii {
             parliament_tle_release_coordinator,
             #[cfg(feature = "app_api")]
             musubi_search,
+            #[cfg(feature = "app_api")]
+            private_settlement_runtime,
             bootle_lantern_issuance_runtime,
             online_peers,
             #[cfg(all(feature = "app_api", feature = "telemetry"))]
@@ -50868,6 +51026,8 @@ impl Torii {
         self.add_profiling_routes(&mut builder);
         // Runtime/Governance routes that require state
         self.add_runtime_governance_routes(&mut builder);
+        #[cfg(feature = "app_api")]
+        self.add_private_settlement_routes(&mut builder);
         // Transaction, Contracts, VK
         self.add_transaction_routes(&mut builder);
         self.add_da_routes(&mut builder);
@@ -51247,6 +51407,14 @@ impl Torii {
         } else {
             self.spawn_evidence_viewer_compaction_worker(shutdown_signal.clone())
         };
+        #[cfg(feature = "app_api")]
+        if !emergency_fast {
+            private_settlement::spawn_private_settlement_finality_reconciliation_v1(
+                self.private_settlement_runtime.clone(),
+                Arc::clone(&self.state),
+                shutdown_signal.clone(),
+            );
+        }
         #[cfg(feature = "app_api")]
         if !emergency_fast && let Some(runtime) = &self.por_runtime {
             runtime.clone().spawn(shutdown_signal.clone());
@@ -52971,7 +53139,7 @@ impl IntoResponse for Error {
                 backpressure,
             } => {
                 let status = Self::status_code_for_queue_error(source.as_ref());
-                let envelope = Self::queue_error_envelope(source.as_ref(), backpressure);
+                let envelope = Self::queue_error_envelope(source.as_ref(), Some(backpressure));
                 let mut response = utils::respond_with_status_and_format(status, envelope, format);
                 let headers = response.headers_mut();
                 let (reject_code, _detail) = queue_rejection_metadata(source.as_ref());

@@ -930,7 +930,9 @@ mod tests {
             .insert(alias, contract_address.clone());
         stx.world.clear_contract_alias(&contract_address);
         stx.apply();
-        block.commit().expect("commit block");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit block");
         let view = state.view();
         // Manifest fetch
         let got_manifest = fetch_manifest(&view, &code_hash).expect("manifest stored");
@@ -1003,7 +1005,9 @@ mod tests {
         activate_instance(&authority, contract_address.clone(), code_hash, &mut stx)
             .expect("governed activation");
         stx.apply();
-        block.commit().expect("commit block");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit block");
         let view = state.view();
         let bound = fetch_instance_binding(&view, &contract_address).expect("binding exists");
         assert_eq!(bound, code_hash);
@@ -1297,12 +1301,16 @@ seiyaku LifecycleAba {
                 .expect("valid first lifecycle state")
                 .expect("first hajimari transition");
         first_transaction.apply();
-        first_block.commit().expect("commit first activation");
+        first_block
+            .commit_world_overlay_for_testing()
+            .expect("commit first activation");
         let mut completion_block = state.block(default_header(2));
         let mut completion = completion_block.transaction();
         set_pending_contract_lifecycle(&mut completion, &contract_address, None);
         completion.apply();
-        completion_block.commit().expect("commit first completion");
+        completion_block
+            .commit_world_overlay_for_testing()
+            .expect("commit first completion");
         let mut deactivate_block = state.block(default_header(3));
         let mut deactivate = deactivate_block.transaction();
         deactivate.tx_call_hash = Some(Hash::new(b"lifecycle-aba-deactivation"));
@@ -1313,7 +1321,9 @@ seiyaku LifecycleAba {
         .execute(&authority, &mut deactivate)
         .expect("authorized deactivation");
         deactivate.apply();
-        deactivate_block.commit().expect("commit deactivation");
+        deactivate_block
+            .commit_world_overlay_for_testing()
+            .expect("commit deactivation");
         let mut second_block = state.block(default_header(4));
         let mut second_transaction = second_block.transaction();
         second_transaction.tx_call_hash = Some(Hash::new(b"lifecycle-aba-second-activation"));

@@ -138,10 +138,9 @@ def _extract_pipeline(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return None
     pipeline = {
         "batches": payload.get("batches"),
-        "chunk_columns": payload.get("chunk_columns"),
+        "columns": payload.get("columns"),
         "enabled": payload.get("enabled"),
         "fallbacks": payload.get("fallbacks"),
-        "pipe_depth": payload.get("pipe_depth"),
     }
     if any(value not in (None, 0) for value in pipeline.values()):
         return pipeline
@@ -287,9 +286,9 @@ def _render_markdown(summaries: Iterable[ReportSummary]) -> str:
         "Poseidon flatten",
         "Poseidon wait",
         "Poseidon wait %",
-        "Pipe depth",
-        "Pipe batches",
-        "Pipe fallbacks",
+        "Batch columns",
+        "Column batches",
+        "Batch fallbacks",
     ]
     lines = ["| " + " | ".join(headers) + " |", "|" + "---|" * len(headers)]
     for summary in summaries:
@@ -323,7 +322,7 @@ def _render_markdown(summaries: Iterable[ReportSummary]) -> str:
             str(_round(poseidon.get("flatten_ms")) or "-"),
             str(_round(poseidon.get("wait_ms")) or "-"),
             poseidon_ratio,
-            str(pipeline.get("pipe_depth", "-")),
+            str(pipeline.get("columns", "-")),
             str(pipeline.get("batches", "-")),
             str(pipeline.get("fallbacks", "-")),
         ]
@@ -439,16 +438,15 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             pipeline = summary.poseidon_pipeline
             status = "enabled" if pipeline.get("enabled") else "disabled"
             batches = pipeline.get("batches")
-            depth = pipeline.get("pipe_depth")
             fallbacks = pipeline.get("fallbacks")
-            chunk_cols = pipeline.get("chunk_columns")
+            columns = pipeline.get("columns")
             print(
-                "Poseidon pipeline "
-                f"status={status} depth={depth} batches={batches} "
-                f"chunk_cols={chunk_cols} fallbacks={fallbacks}"
+                "Poseidon column batches "
+                f"status={status} columns={columns} batches={batches} "
+                f"fallbacks={fallbacks}"
             )
         else:
-            print("Poseidon pipeline: missing")
+            print("Poseidon column batches: missing")
         if isinstance(summary.run_status, dict):
             state = summary.run_status.get("state")
             reasons = summary.run_status.get("reasons", [])

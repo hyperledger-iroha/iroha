@@ -159,22 +159,23 @@ incident retrospectives.
 
 **Detection**
 
-- Alerts:
-  - `SoraFSRepairBacklogHigh` (queue depth > 50 or oldest queued age > 4h for 10m).
-  - `SoraFSRepairEscalations` (> 3 escalations/hour).
-  - `SoraFSRepairLeaseExpirySpike` (> 5 lease expiries/hour).
-  - `SoraFSRetentionBlockedEvictions` (retention blocked by active repairs in last 15m).
-- Dashboard: `dashboards/grafana/sorafs_capacity_health.json` (Repair SLA Escalations, Repair Queue Depth by Provider, Retention Blocked Evictions).
+- Query `/v1/sorafs/audit/repair/tasks` at one finalized anchor and group by
+  status/provider; query `/v1/sorafs/audit/repair/events` from the preceding
+  stored cursor to count escalations and lease expiries.
+- Alert `SoraFSRetentionBlockedEvictions` reports retention blocked by active
+  repairs in the last 15 minutes.
+- Dashboard: `dashboards/grafana/sorafs_capacity_health.json` (Retention Blocked
+  Evictions).
 
 **Immediate actions**
 
-1. Identify affected providers (queue depth spikes) and pause new pins/replication orders for them.
+1. Identify affected providers from the finalized repair-task projection and pause new pins/replication orders for them.
 2. Verify repair worker liveness (recent heartbeats) and bump worker concurrency if safe.
 
 **Triage**
 
-- Compare `torii_sorafs_repair_backlog_oldest_age_seconds` against the 4h SLA window.
-- Inspect `torii_sorafs_repair_lease_expired_total{outcome=...}` for crash/clock-skew patterns.
+- Compare queued task timestamps from the anchored repair-task query against the 4h SLA window.
+- Inspect finalized lease-expiry events and native-forwarder warnings for crash/clock-skew patterns.
 - Review escalated tickets for repeated manifest/provider pairs and verify evidence bundles.
 
 **Remediation options**

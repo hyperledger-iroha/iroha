@@ -409,22 +409,6 @@ class KaigiRelayHealthSnapshot:
 
 
 @dataclass(frozen=True)
-class SumeragiPacemakerSnapshot:
-    """Pacemaker metrics returned by ``GET /v1/sumeragi/pacemaker``."""
-
-    backoff_ms: int
-    rtt_floor_ms: int
-    jitter_ms: int
-    backoff_multiplier: int
-    rtt_floor_multiplier: int
-    max_backoff_ms: int
-    jitter_frac_permille: int
-    round_elapsed_ms: int
-    view_timeout_target_ms: int
-    view_timeout_remaining_ms: int
-
-
-@dataclass(frozen=True)
 class SumeragiPrfContext:
     """PRF state returned by Sumeragi inspection endpoints."""
 

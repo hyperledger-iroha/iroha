@@ -98008,38 +98008,6 @@
         "x-iroha-tool-effect": "operator"
       }
     },
-    "/v1/sumeragi/pacemaker": {
-      "get": {
-        "description": "Return pacemaker status snapshot.",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response",
-            "headers": {
-              "Cache-Control": {
-                "description": "Authenticated responses which must never be retained.",
-                "required": true,
-                "schema": {
-                  "const": "private, no-store",
-                  "type": "string"
-                }
-              }
-            }
-          }
-        },
-        "summary": "Fetch pacemaker status.",
-        "tags": [
-          "Sumeragi"
-        ],
-        "x-iroha-tool-effect": "operator"
-      }
-    },
     "/v1/sumeragi/params": {
       "get": {
         "description": "Return Sumeragi consensus parameters.",

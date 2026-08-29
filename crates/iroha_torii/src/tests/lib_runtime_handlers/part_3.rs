@@ -651,12 +651,16 @@ fn incoming_proxy_submit_fixture(
     seed: u8,
     admission: ToriiProxyTransactionAdmissionV1,
 ) -> (SharedAppState, ToriiProxyRequestV1) {
-    let local_signer = checked_torii_test_keypair_from_seed_byte(
-        seed,
-        Algorithm::BlsNormal,
-        "derive incoming proxy validator fixture key",
-    );
-    incoming_proxy_submit_fixture_with_validator_signers(seed, admission, &[local_signer])
+    let validator_signers = (0_u8..4)
+        .map(|offset| {
+            checked_torii_test_keypair_from_seed_byte(
+                seed.wrapping_add(offset),
+                Algorithm::BlsNormal,
+                "derive exact 3f+1 incoming proxy validator fixture key",
+            )
+        })
+        .collect::<Vec<_>>();
+    incoming_proxy_submit_fixture_with_validator_signers(seed, admission, &validator_signers)
 }
 #[cfg(feature = "connect")]
 fn incoming_proxy_submit_fixture_with_validator_signers(

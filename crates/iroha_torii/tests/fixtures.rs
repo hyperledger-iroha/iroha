@@ -8,6 +8,7 @@ use axum::{
     http::Request,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+use iroha_config::parameters::actual::TelemetryProfile;
 use iroha_core::{
     kiso::KisoHandle,
     kura::Kura,
@@ -19,7 +20,7 @@ use iroha_crypto::{KeyPair, Signature};
 use iroha_data_model::{ChainId, NetworkId, account::AccountId, peer::PeerId};
 use iroha_telemetry::metrics::Metrics;
 use iroha_test_samples::ALICE_ID;
-use iroha_torii::{OnlinePeersProvider, Torii};
+use iroha_torii::{MaybeTelemetry, OnlinePeersProvider, Torii};
 use std::sync::{
     Arc, LazyLock, Mutex,
     atomic::{AtomicU64, Ordering},
@@ -114,35 +115,41 @@ impl ToriiHarness {
         queue: &Arc<Queue>,
         local_peer_id: &PeerId,
         events: iroha_core::EventsSender,
-        telemetry_enabled: bool,
-        state_telemetry_enabled: bool,
+        telemetry_profile: TelemetryProfile,
     ) -> Self {
         let (kiso, kiso_child) = KisoHandle::start(cfg.clone());
         let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
         let _ = peers_tx;
         #[cfg(feature = "telemetry")]
-        let telemetry = if telemetry_enabled {
+        let telemetry = if telemetry_profile.metrics_enabled() {
             use iroha_core::telemetry as core_telemetry;
             use iroha_primitives::time::TimeSource;
             let metrics = shared_metrics();
             let (_mock_handle, time_source) = TimeSource::new_mock(core::time::Duration::default());
-            let telemetry = core_telemetry::start(
-                metrics,
-                state.clone(),
-                kura.clone(),
-                queue.clone(),
-                peers_rx.clone(),
-                local_peer_id.clone(),
-                time_source,
-                state_telemetry_enabled,
+            Some(
+                core_telemetry::start(
+                    metrics,
+                    state.clone(),
+                    kura.clone(),
+                    queue.clone(),
+                    peers_rx.clone(),
+                    local_peer_id.clone(),
+                    time_source,
+                    false,
+                )
+                .0,
             )
-            .0;
-            telemetry
         } else {
-            iroha_core::telemetry::Telemetry::new(shared_metrics(), false)
+            None
         };
         #[cfg(feature = "telemetry")]
-        let torii = Torii::new(
+        let telemetry = MaybeTelemetry::from_profile(telemetry, telemetry_profile);
+        #[cfg(not(feature = "telemetry"))]
+        let telemetry = {
+            let _ = telemetry_profile;
+            MaybeTelemetry::disabled()
+        };
+        let torii = Torii::new_with_handle(
             chain_id,
             network_id,
             kiso,
@@ -154,28 +161,10 @@ impl ToriiHarness {
             state.clone(),
             cfg.common.key_pair.clone(),
             OnlinePeersProvider::new(peers_rx),
+            None,
             telemetry,
-            telemetry_enabled,
         )
         .with_local_peer_id(local_peer_id.clone());
-        #[cfg(not(feature = "telemetry"))]
-        let torii = {
-            let _ = (telemetry_enabled, state_telemetry_enabled);
-            Torii::new(
-                chain_id,
-                network_id,
-                kiso,
-                cfg.torii.clone(),
-                queue.clone(),
-                events,
-                LiveQueryStore::start_test(),
-                kura.clone(),
-                state.clone(),
-                cfg.common.key_pair.clone(),
-                OnlinePeersProvider::new(peers_rx),
-            )
-            .with_local_peer_id(local_peer_id.clone())
-        };
         Self {
             torii,
             _kiso_child: kiso_child,
@@ -201,8 +190,7 @@ impl ToriiHarness {
             queue,
             &local_peer_id,
             events,
-            false,
-            false,
+            TelemetryProfile::Disabled,
         )
     }
     /// Build the complete test router while retaining the backing Kiso task.
@@ -253,8 +241,7 @@ impl StandardToriiHarness {
             &queue,
             &local_peer_id,
             tokio::sync::broadcast::channel(1).0,
-            true,
-            false,
+            TelemetryProfile::Operator,
         );
         Self {
             harness,

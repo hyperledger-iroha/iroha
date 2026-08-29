@@ -12,7 +12,7 @@ use ivm::{
     syscall_metering::SyscallMetering,
     syscalls,
 };
-use std::{collections::HashMap, str::FromStr};
+use std::str::FromStr;
 fn sample_account() -> AccountId {
     let public_key = PublicKey::from_str(
         "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774",
@@ -21,7 +21,7 @@ fn sample_account() -> AccountId {
     AccountId::new(public_key)
 }
 fn wsv_host() -> WsvHost {
-    WsvHost::new_with_subject(MockWorldStateView::new(), sample_account(), HashMap::new())
+    WsvHost::new_with_subject(MockWorldStateView::new(), sample_account())
 }
 fn assert_not_unknown_syscall(result: Result<u64, VMError>, host_name: &str, number: u32) {
     if let Err(error) = result

@@ -3,14 +3,13 @@ mod bounded_async_response;
 mod moderation;
 #[cfg(test)]
 mod operator_auth_tests;
+mod private_settlement;
 mod public_musubi;
 mod repair;
 mod reputation_journal;
 mod reserve;
 mod runtime_governance_client_auth;
 use self::{blocks_api::AsyncBlockStream, events_api::AsyncEventStream};
-#[cfg(test)]
-use crate::data_model::transaction::TransactionEntrypoint;
 pub use crate::query::QueryError;
 use crate::{
     config::Config,
@@ -32,7 +31,8 @@ use crate::{
         },
         prelude::*,
         transaction::{
-            TransactionBuilder, TransactionSubmissionReceipt, error::TransactionRejectionReason,
+            TransactionBuilder, TransactionEntrypoint, TransactionSubmissionReceipt,
+            error::TransactionRejectionReason,
         },
     },
     http::{Method as HttpMethod, RequestBuilder, Response, StatusCode},
@@ -107,6 +107,18 @@ pub use iroha_torii_shared::parliament_api::{
     ParliamentTimedOvnSessionProjectionV1, ParliamentTlePartialReleaseShareV1,
     ParliamentTleReleaseContextResponseV1, ParliamentTransitionDraftRequestV1,
     ParliamentTransitionDraftResponseV1, RequiredParliamentBodyProjectionV1,
+};
+pub use iroha_torii_shared::private_settlement_api::{
+    PrivateSettlementAuditApprovalRequestV1, PrivateSettlementAuditApprovalResponseV1,
+    PrivateSettlementAuditorCapsuleResponseV1, PrivateSettlementAvailabilityShareRequestV1,
+    PrivateSettlementAvailabilityShareResponseV1, PrivateSettlementBundleReceiptResponseV1,
+    PrivateSettlementBundleStatusResponseV1, PrivateSettlementBundleSubmitRequestV1,
+    PrivateSettlementBundleSubmitResponseV1, PrivateSettlementCommitVoteRequestV1,
+    PrivateSettlementCommitteeProofResponseV1, PrivateSettlementLegStatusResponseV1,
+    PrivateSettlementLegUploadDispositionV1, PrivateSettlementLegUploadRequestV1,
+    PrivateSettlementLegUploadResponseV1, PrivateSettlementLifecycleDtoV1,
+    PrivateSettlementPhaseCertificateRequestV1, PrivateSettlementPhaseCertificateResponseV1,
+    PrivateSettlementPhaseVoteResponseV1, PrivateSettlementPrepareVoteRequestV1,
 };
 pub use iroha_torii_shared::sorafs_hedging_billing_api::BillingAcknowledgementProofV1 as SorafsBillingAcknowledgementProof;
 pub use iroha_torii_shared::validation_fee_api::{
@@ -186,6 +198,8 @@ const ACCOUNT_ONBOARDING_CURRENT_STATE_RESPONSE_MAX_BYTES: usize =
     iroha_torii_shared::ACCOUNT_ONBOARDING_CURRENT_STATE_RESPONSE_MAX_BYTES;
 const TRANSACTION_ENTRYPOINT_HASH_HEADER: &str = "x-iroha-entrypoint-hash";
 const SIGNED_TRANSACTION_HASH_HEADER: &str = "x-iroha-signed-transaction-hash";
+const QUEUE_PLAN_OUTCOME_UNKNOWN_REJECT_CODE: &str = "PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN";
+const QUEUE_PLAN_OUTCOME_UNKNOWN_ENVELOPE_CODE: &str = "queue_plan_journal_outcome_unknown";
 const FEE_SPONSOR_PROGRAM_RESPONSE_MAX_BYTES: usize = 64 * 1024;
 const FEE_QUOTE_RESPONSE_MAX_BYTES: usize = 64 * 1024;
 const PRIVACY_CAPABILITIES_RESPONSE_MAX_BYTES: usize = 256 * 1024;
@@ -8781,10 +8795,76 @@ impl VerifiedTransactionResponseHandler {
         .wrap_err("verified transaction receipt failed canonical authentication")
     }
 }
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct QueuePlanOutcomeUnknownIdentity {
+    entrypoint_hash: HashOf<TransactionEntrypoint>,
+    signed_transaction_hash: HashOf<SignedTransaction>,
+}
+impl QueuePlanOutcomeUnknownIdentity {
+    fn for_transaction(transaction: &SignedTransaction) -> Option<Self> {
+        (transaction.admission_intent() == TransactionAdmissionIntent::QueuePlanSynced).then(|| {
+            Self {
+                entrypoint_hash: transaction.hash_as_entrypoint(),
+                signed_transaction_hash: transaction.hash(),
+            }
+        })
+    }
+
+    fn for_prepared_payload(payload: &PreparedTransactionPayload) -> Result<Option<Self>> {
+        let transaction = SignedTransaction::decode_all_versioned(payload.as_bytes())
+            .wrap_err("prepared transaction payload is not a versioned SignedTransaction")?;
+        if transaction.encode_versioned().as_slice() != payload.as_bytes()
+            || transaction.hash() != payload.hash()
+        {
+            return Err(eyre!(
+                "prepared transaction payload bytes and hash are not canonical"
+            ));
+        }
+        Ok(Self::for_transaction(&transaction))
+    }
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct QueuePlanOutcomeUnknownContext {
+    identity: QueuePlanOutcomeUnknownIdentity,
+    diagnostic: Option<String>,
+}
+impl QueuePlanOutcomeUnknownContext {
+    fn exact(identity: QueuePlanOutcomeUnknownIdentity) -> Self {
+        Self {
+            identity,
+            diagnostic: None,
+        }
+    }
+
+    fn with_diagnostic(
+        identity: QueuePlanOutcomeUnknownIdentity,
+        diagnostic: impl Into<String>,
+    ) -> Self {
+        Self {
+            identity,
+            diagnostic: Some(diagnostic.into()),
+        }
+    }
+}
+impl From<QueuePlanOutcomeUnknownIdentity> for QueuePlanOutcomeUnknownContext {
+    fn from(identity: QueuePlanOutcomeUnknownIdentity) -> Self {
+        Self::exact(identity)
+    }
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum TransactionSubmissionDisposition {
+    Accepted,
+    QueuePlanOutcomeUnknown(QueuePlanOutcomeUnknownContext),
+}
 /// Phantom struct that handles Transaction API HTTP response
 #[derive(Clone, Copy)]
 struct TransactionResponseHandler;
 impl TransactionResponseHandler {
+    fn rejection_report(resp: &Response<Vec<u8>>) -> eyre::Report {
+        ResponseReport::with_msg("Unexpected transaction response", resp)
+            .unwrap_or_else(core::convert::identity)
+            .into()
+    }
     fn handle(resp: &Response<Vec<u8>>) -> Result<()> {
         if resp.body().len() > TRANSACTION_SUBMISSION_RESPONSE_MAX_BYTES {
             return Err(eyre!(
@@ -8795,11 +8875,50 @@ impl TransactionResponseHandler {
         if matches!(resp.status(), StatusCode::OK | StatusCode::ACCEPTED) {
             Ok(())
         } else {
-            Err(
-                ResponseReport::with_msg("Unexpected transaction response", resp)
-                    .unwrap_or_else(core::convert::identity)
-                    .into(),
-            )
+            Err(Self::rejection_report(resp))
+        }
+    }
+    fn handle_for_confirmation(
+        resp: &Response<Vec<u8>>,
+        transaction: &SignedTransaction,
+    ) -> Result<TransactionSubmissionDisposition> {
+        let expected = QueuePlanOutcomeUnknownIdentity::for_transaction(transaction);
+        Self::handle_with_queue_plan_identity(resp, expected.as_ref())
+    }
+    fn handle_with_queue_plan_identity(
+        resp: &Response<Vec<u8>>,
+        expected: Option<&QueuePlanOutcomeUnknownIdentity>,
+    ) -> Result<TransactionSubmissionDisposition> {
+        if resp.body().len() > TRANSACTION_SUBMISSION_RESPONSE_MAX_BYTES {
+            return Err(eyre!(
+                "transaction response exceeds the {} byte limit",
+                TRANSACTION_SUBMISSION_RESPONSE_MAX_BYTES
+            ));
+        }
+        if let Some(expected) = expected {
+            match classify_queue_plan_outcome_unknown_response(resp, expected) {
+                Ok(Some(identity)) => {
+                    return Ok(TransactionSubmissionDisposition::QueuePlanOutcomeUnknown(
+                        QueuePlanOutcomeUnknownContext::exact(identity),
+                    ));
+                }
+                Ok(None) => {}
+                Err(reason) => {
+                    return Ok(TransactionSubmissionDisposition::QueuePlanOutcomeUnknown(
+                        QueuePlanOutcomeUnknownContext::with_diagnostic(
+                            expected.clone(),
+                            format!(
+                                "Torii claimed QueuePlan outcome-unknown with invalid evidence: {reason}"
+                            ),
+                        ),
+                    ));
+                }
+            }
+        }
+        if matches!(resp.status(), StatusCode::OK | StatusCode::ACCEPTED) {
+            Ok(TransactionSubmissionDisposition::Accepted)
+        } else {
+            Err(Self::rejection_report(resp))
         }
     }
 }
@@ -9782,18 +9901,6 @@ impl Client {
     pub fn get_sumeragi_qc_json(&self) -> Result<norito::json::Value> {
         sumeragi_qc_json_payload(&self.get_sumeragi_qc()?)
     }
-    /// GET `/v1/sumeragi/pacemaker` — pacemaker timers/config snapshot.
-    ///
-    /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
-    pub fn get_sumeragi_pacemaker_json(&self) -> Result<norito::json::Value> {
-        let url = join_torii_url(&self.torii_url, "v1/sumeragi/pacemaker");
-        let resp = self.send_builder(
-            self.operator_signed_request(HttpMethod::GET, url, Vec::new())?
-                .header("Accept", APPLICATION_JSON),
-        )?;
-        Self::parse_json_ok_response(&resp, "Failed to get sumeragi pacemaker")
-    }
     /// GET `/v1/sumeragi/evidence/count` — total persisted evidence entries.
     ///
     /// # Errors
@@ -10189,7 +10296,6 @@ mod status_tests {
             teu_dataspace_backlog: Vec::new(),
             dataspace_catalog: Vec::new(),
             nexus: None,
-            sorafs_micropayments: Vec::new(),
             taikai_ingest: Vec::new(),
             taikai_alias_rotations: Vec::new(),
             da_receipt_cursors: Vec::new(),
@@ -13424,13 +13530,209 @@ mod evidence_http_tests {
 }
 /// Private structure to incapsulate error reporting for HTTP response.
 pub(crate) struct ResponseReport(pub(crate) eyre::Report);
-fn decode_norito_error_body(response: &Response<Vec<u8>>) -> Option<String> {
-    let is_norito = response
+type RetainedQueuePlanResponseHeaders = Vec<(&'static str, Vec<::http::HeaderValue>)>;
+fn retain_queue_plan_response_headers(
+    headers: &::http::HeaderMap,
+) -> RetainedQueuePlanResponseHeaders {
+    [
+        "content-type",
+        "x-iroha-reject-code",
+        TRANSACTION_ENTRYPOINT_HASH_HEADER,
+        SIGNED_TRANSACTION_HASH_HEADER,
+    ]
+    .into_iter()
+    .map(|name| (name, headers.get_all(name).iter().cloned().collect()))
+    .collect()
+}
+fn restore_queue_plan_response_headers(
+    response: &mut Response<Vec<u8>>,
+    retained: RetainedQueuePlanResponseHeaders,
+) {
+    for (name, values) in retained {
+        response.headers_mut().remove(name);
+        for value in values {
+            response.headers_mut().append(name, value);
+        }
+    }
+}
+fn response_has_norito_error_content_type(response: &Response<Vec<u8>>) -> bool {
+    response
         .headers()
         .get(http::header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
-        .is_none_or(|ct| ct.starts_with(APPLICATION_NORITO));
-    if !is_norito {
+        .is_none_or(|content_type| content_type.starts_with(APPLICATION_NORITO))
+}
+fn response_has_json_error_content_type(response: &Response<Vec<u8>>) -> bool {
+    response
+        .headers()
+        .get(http::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(Client::is_json_content_type)
+}
+fn decode_canonical_queue_plan_error_envelope(
+    response: &Response<Vec<u8>>,
+) -> Result<ErrorEnvelope, String> {
+    let content_types = response
+        .headers()
+        .get_all(http::header::CONTENT_TYPE)
+        .iter()
+        .collect::<Vec<_>>();
+    if content_types.len() != 1 {
+        return Err(
+            "QueuePlan outcome-unknown content-type header is missing or duplicated".to_owned(),
+        );
+    }
+    let content_type = content_types[0].to_str().map_err(|_| {
+        "QueuePlan outcome-unknown content-type header is not valid text".to_owned()
+    })?;
+    let envelope = match content_type {
+        APPLICATION_NORITO => decode_from_bytes::<ErrorEnvelope>(response.body())
+            .map_err(|_| "QueuePlan outcome-unknown Norito envelope is invalid".to_owned())?,
+        APPLICATION_JSON => norito::json::from_slice::<ErrorEnvelope>(response.body())
+            .map_err(|_| "QueuePlan outcome-unknown JSON envelope is invalid".to_owned())?,
+        _ => {
+            return Err(
+                "QueuePlan outcome-unknown content type is not canonical Norito or JSON".to_owned(),
+            );
+        }
+    };
+    let canonical = if content_type == APPLICATION_NORITO {
+        to_bytes(&envelope)
+            .map_err(|_| "QueuePlan outcome-unknown Norito envelope cannot be encoded".to_owned())?
+    } else {
+        norito::json::to_vec(&envelope)
+            .map_err(|_| "QueuePlan outcome-unknown JSON envelope cannot be encoded".to_owned())?
+    };
+    if canonical != response.body().as_slice() {
+        return Err("QueuePlan outcome-unknown envelope bytes are not canonical".to_owned());
+    }
+    Ok(envelope)
+}
+fn classify_queue_plan_outcome_unknown_response(
+    response: &Response<Vec<u8>>,
+    expected: &QueuePlanOutcomeUnknownIdentity,
+) -> Result<Option<QueuePlanOutcomeUnknownIdentity>, String> {
+    let envelope = decode_canonical_queue_plan_error_envelope(response);
+    // Claim detection is deliberately more permissive than evidence acceptance. A proxy that
+    // damages the content type, byte canonicality, or one identity field still cannot turn an
+    // indeterminate admission into a definite rejection that callers may safely resubmit.
+    let claimed_envelope = decode_from_bytes::<ErrorEnvelope>(response.body())
+        .ok()
+        .or_else(|| norito::json::from_slice::<ErrorEnvelope>(response.body()).ok());
+    let envelope_claims_outcome_unknown = claimed_envelope.as_ref().is_some_and(|envelope| {
+        envelope.code() == QUEUE_PLAN_OUTCOME_UNKNOWN_ENVELOPE_CODE
+            || envelope.details.as_ref().is_some_and(|details| {
+                details.reject_code.as_deref() == Some(QUEUE_PLAN_OUTCOME_UNKNOWN_REJECT_CODE)
+            })
+    });
+    let body_claims_outcome_unknown = [
+        QUEUE_PLAN_OUTCOME_UNKNOWN_ENVELOPE_CODE,
+        QUEUE_PLAN_OUTCOME_UNKNOWN_REJECT_CODE,
+    ]
+    .into_iter()
+    .any(|claim| {
+        response
+            .body()
+            .windows(claim.len())
+            .any(|window| window == claim.as_bytes())
+    });
+    let reject_headers = response
+        .headers()
+        .get_all("x-iroha-reject-code")
+        .iter()
+        .collect::<Vec<_>>();
+    let header_claims_outcome_unknown = reject_headers.iter().any(|value| {
+        value.to_str().is_ok_and(|value| {
+            value == QUEUE_PLAN_OUTCOME_UNKNOWN_REJECT_CODE
+                || value == QUEUE_PLAN_OUTCOME_UNKNOWN_ENVELOPE_CODE
+        })
+    });
+    // Successful QueuePlan responses legitimately carry both identity headers. On a rejection,
+    // those headers are reserved for outcome-unknown, so even damaged code/body evidence must
+    // keep the locally computed identity ambiguous.
+    let rejection_identity_headers_claim_outcome_unknown =
+        !matches!(response.status(), StatusCode::OK | StatusCode::ACCEPTED)
+            && (response
+                .headers()
+                .contains_key(TRANSACTION_ENTRYPOINT_HASH_HEADER)
+                || response
+                    .headers()
+                    .contains_key(SIGNED_TRANSACTION_HASH_HEADER));
+    if !envelope_claims_outcome_unknown
+        && !body_claims_outcome_unknown
+        && !header_claims_outcome_unknown
+        && !rejection_identity_headers_claim_outcome_unknown
+    {
+        return Ok(None);
+    }
+    if response.status() != StatusCode::SERVICE_UNAVAILABLE {
+        return Err(
+            "QueuePlan outcome-unknown evidence did not use 503 Service Unavailable".to_owned(),
+        );
+    }
+    if reject_headers.len() != 1
+        || !reject_headers[0]
+            .to_str()
+            .is_ok_and(|value| value == QUEUE_PLAN_OUTCOME_UNKNOWN_REJECT_CODE)
+    {
+        return Err(
+            "QueuePlan outcome-unknown reject-code header is missing, duplicated, or invalid"
+                .to_owned(),
+        );
+    }
+    let envelope = envelope?;
+    if envelope.code() != QUEUE_PLAN_OUTCOME_UNKNOWN_ENVELOPE_CODE {
+        return Err("QueuePlan outcome-unknown envelope code is invalid".to_owned());
+    }
+    let details = envelope
+        .details
+        .as_ref()
+        .ok_or_else(|| "QueuePlan outcome-unknown envelope is missing details".to_owned())?;
+    if details.reject_code.as_deref() != Some(QUEUE_PLAN_OUTCOME_UNKNOWN_REJECT_CODE) {
+        return Err("QueuePlan outcome-unknown envelope reject code is invalid".to_owned());
+    }
+    let expected_entrypoint_hash = expected.entrypoint_hash.to_string();
+    let entrypoint_hash_header = exact_single_response_header(
+        response,
+        TRANSACTION_ENTRYPOINT_HASH_HEADER,
+    )
+    .map_err(|_| {
+        "QueuePlan outcome-unknown entrypoint header is missing, duplicated, or invalid".to_owned()
+    })?;
+    if entrypoint_hash_header != expected_entrypoint_hash {
+        return Err(
+            "QueuePlan outcome-unknown entrypoint header does not match the submitted transaction"
+                .to_owned(),
+        );
+    }
+    if details.entrypoint_hash.as_deref() != Some(expected_entrypoint_hash.as_str()) {
+        return Err(
+            "QueuePlan outcome-unknown entrypoint identity is missing or does not match the submitted transaction"
+                .to_owned(),
+        );
+    }
+    let expected_signed_transaction_hash = expected.signed_transaction_hash.to_string();
+    let signed_transaction_hash_header =
+        exact_single_response_header(response, SIGNED_TRANSACTION_HASH_HEADER).map_err(|_| {
+            "QueuePlan outcome-unknown signed-transaction header is missing, duplicated, or invalid"
+                .to_owned()
+        })?;
+    if signed_transaction_hash_header != expected_signed_transaction_hash {
+        return Err(
+            "QueuePlan outcome-unknown signed-transaction header does not match the submitted transaction"
+                .to_owned(),
+        );
+    }
+    if details.tx_hash.as_deref() != Some(expected_signed_transaction_hash.as_str()) {
+        return Err(
+            "QueuePlan outcome-unknown signed-transaction identity is missing or does not match the submitted transaction"
+                .to_owned(),
+        );
+    }
+    Ok(Some(expected.clone()))
+}
+fn decode_norito_error_body(response: &Response<Vec<u8>>) -> Option<String> {
+    if !response_has_norito_error_content_type(response) {
         return None;
     }
     let body = response.body();
@@ -13448,18 +13750,7 @@ fn decode_norito_error_body(response: &Response<Vec<u8>>) -> Option<String> {
     None
 }
 fn decode_json_error_body(response: &Response<Vec<u8>>) -> Option<String> {
-    let is_json = response
-        .headers()
-        .get(http::header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|ct| {
-            let media_type = ct.split(';').next().map(str::trim).unwrap_or_default();
-            let media_type_lower = media_type.to_ascii_lowercase();
-            media_type.eq_ignore_ascii_case(APPLICATION_JSON)
-                || (media_type_lower.starts_with("application/")
-                    && media_type_lower.ends_with("+json"))
-        });
-    if !is_json {
+    if !response_has_json_error_content_type(response) {
         return None;
     }
     norito::json::from_slice::<ErrorEnvelope>(response.body())
@@ -13667,10 +13958,25 @@ pub struct TransactionWaitOutcome {
 #[derive(Debug)]
 struct TxConfirmationFinalError {
     report: eyre::Report,
+    resolution: TxConfirmationErrorResolution,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TxConfirmationErrorResolution {
+    Terminal,
+    Unresolved,
 }
 impl TxConfirmationFinalError {
     fn new(report: eyre::Report) -> Self {
-        Self { report }
+        Self {
+            report,
+            resolution: TxConfirmationErrorResolution::Terminal,
+        }
+    }
+    fn unresolved(report: eyre::Report) -> Self {
+        Self {
+            report,
+            resolution: TxConfirmationErrorResolution::Unresolved,
+        }
     }
 }
 impl fmt::Display for TxConfirmationFinalError {
@@ -13686,9 +13992,84 @@ impl std::error::Error for TxConfirmationFinalError {
 fn tx_confirmation_final_report(report: eyre::Report) -> eyre::Report {
     TxConfirmationFinalError::new(report).into()
 }
+fn tx_confirmation_unresolved_final_report(report: eyre::Report) -> eyre::Report {
+    TxConfirmationFinalError::unresolved(report).into()
+}
+/// QueuePlan admission may have crossed its durability boundary, but the client could not
+/// determine whether the submitted transaction was applied, rejected, or expired.
+///
+/// Callers must reconcile the returned identities and must not automatically resubmit or create
+/// a replacement transaction while this error remains unresolved.
+#[derive(Debug)]
+pub struct QueuePlanOutcomeUnknownError {
+    identity: QueuePlanOutcomeUnknownIdentity,
+    cause: eyre::Report,
+}
+impl QueuePlanOutcomeUnknownError {
+    /// Returns the locally computed canonical entrypoint hash for reconciliation.
+    #[must_use]
+    pub fn entrypoint_hash(&self) -> &HashOf<TransactionEntrypoint> {
+        &self.identity.entrypoint_hash
+    }
+    /// Returns the locally computed canonical signed-transaction hash for reconciliation.
+    #[must_use]
+    pub fn signed_transaction_hash(&self) -> &HashOf<SignedTransaction> {
+        &self.identity.signed_transaction_hash
+    }
+}
+impl fmt::Display for QueuePlanOutcomeUnknownError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "QueuePlanSynced transaction admission remains ambiguous; entrypoint_hash={}; signed_transaction_hash={}; reconcile authoritative global status and do not automatically resubmit or create a replacement transaction",
+            self.identity.entrypoint_hash, self.identity.signed_transaction_hash
+        )
+    }
+}
+impl std::error::Error for QueuePlanOutcomeUnknownError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.cause.as_ref())
+    }
+}
+fn queue_plan_outcome_unknown_ambiguity_report(
+    context: &QueuePlanOutcomeUnknownContext,
+    mut cause: eyre::Report,
+) -> eyre::Report {
+    if let Some(diagnostic) = context.diagnostic.as_ref() {
+        cause = cause.wrap_err(diagnostic.clone());
+    }
+    QueuePlanOutcomeUnknownError {
+        identity: context.identity.clone(),
+        cause,
+    }
+    .into()
+}
+fn unresolved_tx_confirmation_report(
+    report: eyre::Report,
+    outcome_unknown: Option<&QueuePlanOutcomeUnknownContext>,
+) -> eyre::Report {
+    if report.chain().any(|cause| {
+        cause
+            .downcast_ref::<QueuePlanOutcomeUnknownError>()
+            .is_some()
+    }) {
+        return report;
+    }
+    match outcome_unknown {
+        Some(identity) => queue_plan_outcome_unknown_ambiguity_report(identity, report),
+        None => report,
+    }
+}
 fn is_final_tx_confirmation_error(err: &eyre::Report) -> bool {
     err.chain()
         .any(|cause| cause.downcast_ref::<TxConfirmationFinalError>().is_some())
+}
+fn is_unresolved_tx_confirmation_error(err: &eyre::Report) -> bool {
+    err.chain().any(|cause| {
+        cause
+            .downcast_ref::<TxConfirmationFinalError>()
+            .is_some_and(|error| error.resolution == TxConfirmationErrorResolution::Unresolved)
+    })
 }
 fn should_fallback_after_confirmation_error(err: &eyre::Report) -> bool {
     !is_final_tx_confirmation_error(err)
@@ -13715,6 +14096,53 @@ fn unwrap_final_tx_confirmation_error(err: eyre::Report) -> eyre::Report {
             }
         }
         Err(err) => err,
+    }
+}
+fn finalize_transaction_confirmation_error(
+    err: eyre::Report,
+    outcome_unknown: Option<&QueuePlanOutcomeUnknownContext>,
+) -> eyre::Report {
+    let unresolved =
+        !is_final_tx_confirmation_error(&err) || is_unresolved_tx_confirmation_error(&err);
+    let err = unwrap_final_tx_confirmation_error(err);
+    if unresolved {
+        unresolved_tx_confirmation_report(err, outcome_unknown)
+    } else {
+        err
+    }
+}
+
+fn queue_plan_post_dispatch_disposition(
+    expected: Option<&QueuePlanOutcomeUnknownIdentity>,
+    error: eyre::Report,
+) -> Result<TransactionSubmissionDisposition> {
+    let Some(identity) = expected else {
+        return Err(error);
+    };
+    Ok(TransactionSubmissionDisposition::QueuePlanOutcomeUnknown(
+        QueuePlanOutcomeUnknownContext::with_diagnostic(
+            identity.clone(),
+            format!(
+                "QueuePlan transaction transport became indeterminate during or after dispatch: {error:#}"
+            ),
+        ),
+    ))
+}
+
+fn finish_nonblocking_transaction_submission(
+    disposition: TransactionSubmissionDisposition,
+    hash: HashOf<SignedTransaction>,
+) -> Result<HashOf<SignedTransaction>> {
+    match disposition {
+        TransactionSubmissionDisposition::Accepted => Ok(hash),
+        TransactionSubmissionDisposition::QueuePlanOutcomeUnknown(context) => {
+            Err(queue_plan_outcome_unknown_ambiguity_report(
+                &context,
+                eyre!(
+                    "nonblocking submission returned before authoritative global status could resolve admission"
+                ),
+            ))
+        }
     }
 }
 #[cfg(test)]
@@ -14763,6 +15191,9 @@ impl Client {
     /// submit compatibility advert is missing or incompatible. On HTTP 200, the node must
     /// advertise both `data_model_version` and `signed_transaction_schema_hash_hex`. Any
     /// non-successful or malformed capability response aborts before transaction bytes are sent.
+    /// QueuePlan transport ambiguity or claimed outcome-unknown responses return a downcastable
+    /// [`QueuePlanOutcomeUnknownError`]; callers must reconcile its identities and must not retry
+    /// automatically.
     pub fn submit_transaction(
         &self,
         transaction: &SignedTransaction,
@@ -14771,32 +15202,65 @@ impl Client {
         iroha_logger::trace!(tx=?transaction, "Submitting");
         let payload = Self::prepare_transaction_payload(transaction);
         let hash = payload.hash();
-        let req = self.prepare_transaction_payload_request(&payload);
-        let response = req
-            .build()?
-            .send()
-            .wrap_err_with(|| format!("Failed to send transaction with hash {hash:?}"))?;
-        TransactionResponseHandler::handle(&response)?;
-        Ok(hash)
+        let expected = QueuePlanOutcomeUnknownIdentity::for_transaction(transaction);
+        let request = self.prepare_transaction_payload_request(&payload).build()?;
+        let disposition = match request.send() {
+            Ok(response) => {
+                TransactionResponseHandler::handle_for_confirmation(&response, transaction)
+            }
+            Err(error) => queue_plan_post_dispatch_disposition(
+                expected.as_ref(),
+                error.wrap_err(format!("Failed to send transaction with hash {hash:?}")),
+            ),
+        }?;
+        finish_nonblocking_transaction_submission(disposition, hash)
+    }
+    fn submit_transaction_for_confirmation(
+        &self,
+        transaction: &SignedTransaction,
+    ) -> Result<TransactionSubmissionDisposition> {
+        self.ensure_transaction_submit_compatibility()?;
+        iroha_logger::trace!(tx=?transaction, "Submitting for blocking confirmation");
+        let payload = Self::prepare_transaction_payload(transaction);
+        let hash = payload.hash();
+        let expected = QueuePlanOutcomeUnknownIdentity::for_transaction(transaction);
+        let request = self.prepare_transaction_payload_request(&payload).build()?;
+        match request.send() {
+            Ok(response) => {
+                TransactionResponseHandler::handle_for_confirmation(&response, transaction)
+            }
+            Err(error) => queue_plan_post_dispatch_disposition(
+                expected.as_ref(),
+                error.wrap_err(format!("Failed to send transaction with hash {hash:?}")),
+            ),
+        }
     }
     /// Submit an already encoded transaction payload.
     ///
     /// # Errors
     /// Fails if sending the transaction to the peer fails, if Torii returns a non-success
-    /// response, or if the submit compatibility advert is missing or incompatible.
+    /// response, or if the submit compatibility advert is missing or incompatible. QueuePlan
+    /// ambiguity returns a downcastable [`QueuePlanOutcomeUnknownError`] with both local
+    /// identities and must not be retried automatically.
     pub fn submit_prepared_transaction_payload(
         &self,
         payload: &PreparedTransactionPayload,
     ) -> Result<HashOf<SignedTransaction>> {
         self.ensure_transaction_submit_compatibility()?;
+        let expected = QueuePlanOutcomeUnknownIdentity::for_prepared_payload(payload)?;
         let hash = payload.hash();
-        let response = self
-            .prepare_transaction_payload_request(payload)
-            .build()?
-            .send()
-            .wrap_err_with(|| format!("Failed to send transaction with hash {hash:?}"))?;
-        TransactionResponseHandler::handle(&response)?;
-        Ok(hash)
+        let request = self.prepare_transaction_payload_request(payload).build()?;
+        let disposition = match request.send() {
+            Ok(response) => TransactionResponseHandler::handle_with_queue_plan_identity(
+                &response,
+                expected.as_ref(),
+            ),
+            Err(error) => queue_plan_post_dispatch_disposition(
+                expected.as_ref(),
+                error.wrap_err(format!("Failed to send transaction with hash {hash:?}")),
+            ),
+        }?;
+        finish_nonblocking_transaction_submission(disposition, hash)
     }
     /// Submit one exact Kagemusha lifecycle archive through its dedicated durable route.
     ///
@@ -14863,7 +15327,9 @@ impl Client {
     ///
     /// # Errors
     /// Fails if sending the transaction to the peer fails, if Torii returns a non-success
-    /// response, or if the submit compatibility advert is missing or incompatible.
+    /// response, or if the submit compatibility advert is missing or incompatible. QueuePlan
+    /// ambiguity returns a downcastable [`QueuePlanOutcomeUnknownError`] with both local
+    /// identities and must not be retried automatically.
     pub async fn submit_transaction_async(
         &self,
         transaction: &SignedTransaction,
@@ -14878,12 +15344,15 @@ impl Client {
     ///
     /// # Errors
     /// Fails if sending the transaction to the peer fails, if Torii returns a non-success
-    /// response, or if the submit compatibility advert is missing or incompatible.
+    /// response, or if the submit compatibility advert is missing or incompatible. QueuePlan
+    /// ambiguity returns a downcastable [`QueuePlanOutcomeUnknownError`] with both local
+    /// identities and must not be retried automatically.
     pub async fn submit_prepared_transaction_payload_async(
         &self,
         payload: &PreparedTransactionPayload,
     ) -> Result<HashOf<SignedTransaction>> {
         self.ensure_transaction_submit_compatibility()?;
+        let expected = QueuePlanOutcomeUnknownIdentity::for_prepared_payload(payload)?;
         let hash = payload.hash();
         iroha_logger::trace!(%hash, "Submitting prepared transaction payload");
         let mut request = bounded_async_response::client()
@@ -14894,18 +15363,45 @@ impl Client {
         for (name, value) in self.transaction_headers_without_content_type() {
             request = request.header(name, value);
         }
-        let response = request
-            .body(payload.bytes.clone())
-            .send()
-            .await
-            .wrap_err_with(|| format!("Failed to send transaction with hash {hash:?}"))?;
-        let response = bounded_async_response::into_response(
+        let response = match request.body(payload.bytes.clone()).send().await {
+            Ok(response) => response,
+            Err(error) => {
+                let disposition = queue_plan_post_dispatch_disposition(
+                    expected.as_ref(),
+                    eyre::Report::new(error)
+                        .wrap_err(format!("Failed to send transaction with hash {hash:?}")),
+                )?;
+                return finish_nonblocking_transaction_submission(disposition, hash);
+            }
+        };
+        let retained_headers = expected
+            .as_ref()
+            .map(|_| retain_queue_plan_response_headers(response.headers()));
+        let mut response = match bounded_async_response::into_response(
             response,
             TRANSACTION_SUBMISSION_RESPONSE_MAX_BYTES,
         )
-        .await?;
-        TransactionResponseHandler::handle(&response)?;
-        Ok(hash)
+        .await
+        {
+            Ok(response) => response,
+            Err(error) => {
+                let disposition = queue_plan_post_dispatch_disposition(
+                    expected.as_ref(),
+                    error.wrap_err(format!(
+                        "Failed to read transaction response for hash {hash:?}"
+                    )),
+                )?;
+                return finish_nonblocking_transaction_submission(disposition, hash);
+            }
+        };
+        if let Some(retained_headers) = retained_headers {
+            restore_queue_plan_response_headers(&mut response, retained_headers);
+        }
+        let disposition = TransactionResponseHandler::handle_with_queue_plan_identity(
+            &response,
+            expected.as_ref(),
+        )?;
+        finish_nonblocking_transaction_submission(disposition, hash)
     }
     /// Submit already encoded transaction payloads with the asynchronous batched transport.
     ///
@@ -14982,7 +15478,9 @@ impl Client {
     ) -> Result<HashOf<SignedTransaction>> {
         let (init_sender, init_receiver) = tokio::sync::oneshot::channel();
         let (submit_result_sender, submit_result_receiver) =
-            tokio::sync::oneshot::channel::<Result<(), eyre::Report>>();
+            tokio::sync::oneshot::channel::<Result<TransactionSubmissionDisposition>>();
+        let outcome_unknown = Arc::new(OnceLock::new());
+        let submitter_outcome_unknown = Arc::clone(&outcome_unknown);
         let hash = transaction.hash();
         tracing::debug!(%hash, ?transaction, "Submitting transaction");
         thread::scope(|spawner| {
@@ -14990,13 +15488,24 @@ impl Client {
                 // Wait for the listener connection attempt so we don't miss early
                 // events, but still proceed even if setup fails.
                 let _ = init_receiver.blocking_recv();
-                let result = self.submit_transaction(transaction).map(|_| ());
+                let result = self.submit_transaction_for_confirmation(transaction);
+                if let Ok(TransactionSubmissionDisposition::QueuePlanOutcomeUnknown(context)) =
+                    &result
+                {
+                    let _ = submitter_outcome_unknown.set(context.clone());
+                }
                 let _ = submit_result_sender.send(result);
             });
-            let confirmation_res =
-                self.listen_for_tx_confirmation(init_sender, submit_result_receiver, hash);
+            let confirmation_res = self.listen_for_tx_confirmation(
+                init_sender,
+                submit_result_receiver,
+                hash,
+                Arc::clone(&outcome_unknown),
+            );
             match submitter_handle.join() {
-                Ok(()) => confirmation_res,
+                Ok(()) => confirmation_res.map_err(|error| {
+                    finalize_transaction_confirmation_error(error, outcome_unknown.get())
+                }),
                 Err(_) => Err(eyre!("Transaction submitter thread panicked")),
             }
         })
@@ -15016,8 +15525,11 @@ impl Client {
     fn listen_for_tx_confirmation(
         &self,
         init_sender: tokio::sync::oneshot::Sender<bool>,
-        submit_result_receiver: tokio::sync::oneshot::Receiver<Result<(), eyre::Report>>,
+        submit_result_receiver: tokio::sync::oneshot::Receiver<
+            Result<TransactionSubmissionDisposition>,
+        >,
         hash: HashOf<SignedTransaction>,
+        outcome_unknown: Arc<OnceLock<QueuePlanOutcomeUnknownContext>>,
     ) -> Result<HashOf<SignedTransaction>> {
         debug!(
             %hash,
@@ -15122,7 +15634,7 @@ impl Client {
                                     Ok(ok) => Ok(ok),
                                     Err(err) => {
                                         if !should_fallback_after_confirmation_error(&err) {
-                                            return Err(unwrap_final_tx_confirmation_error(err));
+                                            return Err(err);
                                         }
                                         let err = err.wrap_err(timeout_err());
                                         warn!(
@@ -15137,6 +15649,7 @@ impl Client {
                                         3,
                                         "transaction confirmation stream failed; fallback status check failed",
                                         err,
+                                        outcome_unknown.get(),
                                     )
                                     .await
                                 }
@@ -15153,6 +15666,7 @@ impl Client {
                                     3,
                                     "transaction confirmation timed out; fallback status check failed",
                                     timeout_err(),
+                                    outcome_unknown.get(),
                                 )
                                 .await
                             }
@@ -15168,7 +15682,9 @@ impl Client {
         hash: HashOf<SignedTransaction>,
         max_queued_duration: Duration,
         poll_interval: Duration,
-        submit_result_receiver: Option<tokio::sync::oneshot::Receiver<Result<(), eyre::Report>>>,
+        submit_result_receiver: Option<
+            tokio::sync::oneshot::Receiver<Result<TransactionSubmissionDisposition>>,
+        >,
         status_check: F,
     ) -> Result<HashOf<SignedTransaction>>
     where
@@ -15234,27 +15750,44 @@ impl Client {
         retries: usize,
         context: &'static str,
         fallback_err: eyre::Report,
+        outcome_unknown: Option<&QueuePlanOutcomeUnknownContext>,
     ) -> Result<HashOf<SignedTransaction>>
     where
         F: FnMut() -> Result<Option<TxConfirmationStatus>>,
     {
-        let outcome = Self::retry_transaction_final_status(check, delay, retries)
-            .await
-            .wrap_err(context)?;
+        let outcome = match Self::retry_transaction_final_status(check, delay, retries).await {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                return Err(unresolved_tx_confirmation_report(
+                    error.wrap_err(context),
+                    outcome_unknown,
+                ));
+            }
+        };
         outcome.map_or_else(
-            || Err(fallback_err),
+            || {
+                Err(unresolved_tx_confirmation_report(
+                    fallback_err,
+                    outcome_unknown,
+                ))
+            },
             |result| match result {
                 TxConfirmationStatus::Applied => Ok(hash),
-                TxConfirmationStatus::Rejected(Some(reason)) => {
-                    Err(tx_rejection_to_report(&reason))
+                TxConfirmationStatus::Rejected(Some(reason)) => Err(tx_confirmation_final_report(
+                    tx_rejection_to_report(&reason),
+                )),
+                TxConfirmationStatus::Rejected(None) => {
+                    Err(tx_confirmation_final_report(eyre!("Transaction rejected")))
                 }
-                TxConfirmationStatus::Rejected(None) => Err(eyre!("Transaction rejected")),
-                TxConfirmationStatus::Expired => Err(eyre!("Transaction expired")),
+                TxConfirmationStatus::Expired => {
+                    Err(tx_confirmation_final_report(eyre!("Transaction expired")))
+                }
                 TxConfirmationStatus::Committed
                 | TxConfirmationStatus::Queued
-                | TxConfirmationStatus::Approved(_) => {
-                    Err(eyre!("Transaction status not finalized"))
-                }
+                | TxConfirmationStatus::Approved(_) => Err(unresolved_tx_confirmation_report(
+                    eyre!("Transaction status not finalized"),
+                    outcome_unknown,
+                )),
             },
         )
     }
@@ -22343,13 +22876,35 @@ fn validate_global_pipeline_status_response(
 fn elapsed_ms_u64(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
+fn authoritative_tx_confirmation_result(
+    status: TxConfirmationStatus,
+    hash: HashOf<SignedTransaction>,
+) -> Option<Result<HashOf<SignedTransaction>>> {
+    match status {
+        TxConfirmationStatus::Applied => Some(Ok(hash)),
+        TxConfirmationStatus::Rejected(Some(reason)) => Some(Err(tx_confirmation_final_report(
+            tx_rejection_to_report(&reason),
+        ))),
+        TxConfirmationStatus::Rejected(None) => Some(Err(tx_confirmation_final_report(eyre!(
+            "Transaction rejected"
+        )))),
+        TxConfirmationStatus::Expired => Some(Err(tx_confirmation_final_report(eyre!(
+            "Transaction expired"
+        )))),
+        TxConfirmationStatus::Queued
+        | TxConfirmationStatus::Approved(_)
+        | TxConfirmationStatus::Committed => None,
+    }
+}
 #[allow(clippy::too_many_lines)]
 async fn listen_for_tx_confirmation_stream_with_status_check<S, F>(
     event_iterator: &mut S,
     hash: HashOf<SignedTransaction>,
     max_queued_duration: Duration,
     poll_interval: Duration,
-    submit_result_receiver: Option<tokio::sync::oneshot::Receiver<Result<(), eyre::Report>>>,
+    submit_result_receiver: Option<
+        tokio::sync::oneshot::Receiver<Result<TransactionSubmissionDisposition>>,
+    >,
     mut status_check: F,
 ) -> Result<HashOf<SignedTransaction>>
 where
@@ -22381,8 +22936,16 @@ where
                     .await
             }, if submit_result_receiver.is_some() => {
                 match submit_outcome {
-                    Ok(Ok(())) => {
+                    Ok(Ok(TransactionSubmissionDisposition::Accepted)) => {
                         debug!(%hash, "transaction submission acknowledged; awaiting terminal status");
+                        submit_result_receiver = None;
+                    }
+                    Ok(Ok(TransactionSubmissionDisposition::QueuePlanOutcomeUnknown(context))) => {
+                        debug!(
+                            %hash,
+                            entrypoint_hash = %context.identity.entrypoint_hash,
+                            "QueuePlanSynced admission outcome is unknown; reconciling through authoritative status polling"
+                        );
                         submit_result_receiver = None;
                     }
                     Ok(Err(err)) => {
@@ -22402,7 +22965,7 @@ where
                     .map(|queued_at| queued_at.elapsed())
                     .unwrap_or_default();
                 warn!(%hash, ?elapsed, "transaction remained queued");
-                return Err(tx_confirmation_final_report(eyre!(
+                return Err(tx_confirmation_unresolved_final_report(eyre!(
                     "transaction queued for too long"
                 )));
             }
@@ -22414,7 +22977,7 @@ where
                                 let elapsed = first.elapsed();
                                 if elapsed >= max_queued_duration {
                                     warn!(%hash, ?elapsed, "transaction remained queued");
-                                    return Err(tx_confirmation_final_report(eyre!(
+                                    return Err(tx_confirmation_unresolved_final_report(eyre!(
                                         "transaction queued for too long"
                                     )));
                                 }
@@ -22464,9 +23027,11 @@ where
                                         let elapsed = first.elapsed();
                                         if elapsed >= max_queued_duration {
                                             warn!(%hash, ?elapsed, "transaction remained queued");
-                                            return Some(Err(tx_confirmation_final_report(eyre!(
-                                                "transaction queued for too long"
-                                            ))));
+                                            return Some(Err(
+                                                tx_confirmation_unresolved_final_report(eyre!(
+                                                    "transaction queued for too long"
+                                                )),
+                                            ));
                                         }
                                         // Duplicate queued notifications are possible; keep waiting.
                                     } else {
@@ -22484,16 +23049,44 @@ where
                                     block_height = next_height;
                                 }
                                 TransactionStatus::Rejected(reason) => {
-                                    warn!(%hash, ?reason, "transaction rejected during confirmation stream");
-                                    return Some(Err(tx_confirmation_final_report(
-                                        tx_rejection_to_report(reason),
-                                    )));
+                                    warn!(%hash, ?reason, "peer-local transaction rejection observed; awaiting authoritative global status");
+                                    match status_check() {
+                                        Ok(Some(status)) => {
+                                            if let Some(result) =
+                                                authoritative_tx_confirmation_result(status, hash)
+                                            {
+                                                return Some(result);
+                                            }
+                                        }
+                                        Ok(None) => {}
+                                        Err(err) => {
+                                            debug!(
+                                                %hash,
+                                                ?err,
+                                                "global status check failed after peer-local rejection; waiting"
+                                            );
+                                        }
+                                    }
                                 }
                                 TransactionStatus::Expired => {
-                                    warn!(%hash, "transaction expired during confirmation stream");
-                                    return Some(Err(tx_confirmation_final_report(eyre!(
-                                        "Transaction expired"
-                                    ))));
+                                    warn!(%hash, "peer-local transaction expiry observed; awaiting authoritative global status");
+                                    match status_check() {
+                                        Ok(Some(status)) => {
+                                            if let Some(result) =
+                                                authoritative_tx_confirmation_result(status, hash)
+                                            {
+                                                return Some(result);
+                                            }
+                                        }
+                                        Ok(None) => {}
+                                        Err(err) => {
+                                            debug!(
+                                                %hash,
+                                                ?err,
+                                                "global status check failed after peer-local expiry; waiting"
+                                            );
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -22507,9 +23100,11 @@ where
                                                 let elapsed = first.elapsed();
                                                 if elapsed >= max_queued_duration {
                                                     warn!(%hash, ?elapsed, "transaction remained queued");
-                                                    return Some(Err(tx_confirmation_final_report(eyre!(
-                                                        "transaction queued for too long"
-                                                    ))));
+                                                    return Some(Err(
+                                                        tx_confirmation_unresolved_final_report(
+                                                            eyre!("transaction queued for too long"),
+                                                        ),
+                                                    ));
                                                 }
                                             } else {
                                                 queued_at = Some(tokio::time::Instant::now());
@@ -22665,10 +23260,20 @@ mod subscription_http_tests {
 mod tx_hash_tests {
     use crate::{
         crypto::{Hash, HashOf},
-        data_model::transaction::SignedTransaction,
+        data_model::transaction::{SignedTransaction, TransactionEntrypoint},
     };
     use eyre::eyre;
     use std::time::Duration;
+    fn outcome_unknown_identity(seed: u8) -> super::QueuePlanOutcomeUnknownIdentity {
+        super::QueuePlanOutcomeUnknownIdentity {
+            entrypoint_hash: HashOf::<TransactionEntrypoint>::from_untyped_unchecked(
+                Hash::prehashed([seed; Hash::LENGTH]),
+            ),
+            signed_transaction_hash: HashOf::<SignedTransaction>::from_untyped_unchecked(
+                Hash::prehashed([seed.wrapping_add(1); Hash::LENGTH]),
+            ),
+        }
+    }
     #[tokio::test]
     async fn retry_transaction_final_status_retries_and_succeeds() {
         use std::sync::{
@@ -22843,6 +23448,7 @@ mod tx_hash_tests {
             0,
             "fallback context",
             eyre!("fallback error"),
+            None,
         )
         .await
         .expect("expected fallback to resolve");
@@ -22854,6 +23460,7 @@ mod tx_hash_tests {
             0,
             "fallback context",
             eyre!("fallback error"),
+            None,
         )
         .await
         .expect_err("expected fallback error");
@@ -22861,6 +23468,102 @@ mod tx_hash_tests {
             err.to_string().contains("fallback error"),
             "unexpected error: {err:?}"
         );
+    }
+    #[tokio::test]
+    async fn unresolved_outcome_unknown_fallback_preserves_both_identities() {
+        let hash: HashOf<SignedTransaction> =
+            HashOf::from_untyped_unchecked(Hash::prehashed([5_u8; Hash::LENGTH]));
+        let identity = outcome_unknown_identity(0x35);
+        let context = super::QueuePlanOutcomeUnknownContext::exact(identity.clone());
+        let err = super::Client::resolve_global_status_fallback(
+            || Ok(None),
+            hash,
+            Duration::ZERO,
+            0,
+            "fallback context",
+            eyre!("confirmation deadline elapsed"),
+            Some(&context),
+        )
+        .await
+        .expect_err("an unresolved outcome-unknown admission must remain ambiguous");
+        let ambiguity = err
+            .downcast_ref::<super::QueuePlanOutcomeUnknownError>()
+            .expect("ambiguity error should preserve structured identities");
+        assert_eq!(ambiguity.entrypoint_hash(), &identity.entrypoint_hash);
+        assert_eq!(
+            ambiguity.signed_transaction_hash(),
+            &identity.signed_transaction_hash
+        );
+        let report = format!("{err:#}");
+        assert!(
+            report.contains("admission remains ambiguous"),
+            "unexpected error: {err:?}"
+        );
+        assert!(
+            report.contains(&identity.entrypoint_hash.to_string()),
+            "missing entrypoint identity: {err:?}"
+        );
+        assert!(
+            report.contains(&identity.signed_transaction_hash.to_string()),
+            "missing signed-transaction identity: {err:?}"
+        );
+        assert!(
+            report.contains("confirmation deadline elapsed"),
+            "missing original timeout cause: {err:?}"
+        );
+    }
+    #[test]
+    fn late_outcome_unknown_is_merged_after_an_unresolved_fallback() {
+        use std::{
+            sync::{Arc, OnceLock, mpsc},
+            thread,
+        };
+
+        let identity = outcome_unknown_identity(0x37);
+        let context = super::QueuePlanOutcomeUnknownContext::exact(identity.clone());
+        let expected_entrypoint_hash = identity.entrypoint_hash.to_string();
+        let expected_signed_transaction_hash = identity.signed_transaction_hash.to_string();
+        let outcome_unknown = Arc::new(OnceLock::new());
+        let submitter_outcome_unknown = Arc::clone(&outcome_unknown);
+        let (fallback_started_sender, fallback_started_receiver) = mpsc::sync_channel(0);
+        let submitter = thread::spawn(move || {
+            fallback_started_receiver
+                .recv()
+                .expect("fallback-start signal");
+            submitter_outcome_unknown
+                .set(context)
+                .expect("set late outcome-unknown evidence");
+        });
+
+        let fallback_result: eyre::Result<()> = Err(eyre!("confirmation deadline elapsed"));
+        assert!(
+            outcome_unknown.get().is_none(),
+            "the fallback must initially observe no submission result"
+        );
+        fallback_started_sender
+            .send(())
+            .expect("release delayed submit result");
+        submitter.join().expect("submitter join");
+        let err = fallback_result
+            .map_err(|error| {
+                super::finalize_transaction_confirmation_error(error, outcome_unknown.get())
+            })
+            .expect_err("the unresolved fallback must preserve late ambiguity evidence");
+        let report = format!("{err:#}");
+        assert!(report.contains("admission remains ambiguous"));
+        assert!(report.contains(&expected_entrypoint_hash));
+        assert!(report.contains(&expected_signed_transaction_hash));
+        assert!(report.contains("confirmation deadline elapsed"));
+    }
+    #[test]
+    fn authoritative_terminal_error_is_not_reclassified_as_ambiguous() {
+        let identity = outcome_unknown_identity(0x39);
+        let context = super::QueuePlanOutcomeUnknownContext::exact(identity);
+        let terminal = super::tx_confirmation_final_report(eyre!("Transaction expired"));
+        let err = super::finalize_transaction_confirmation_error(terminal, Some(&context));
+        let report = format!("{err:#}");
+        assert!(report.contains("Transaction expired"));
+        assert!(!report.contains("admission remains ambiguous"));
     }
     #[test]
     fn tx_confirmation_status_from_pipeline_response_keeps_rejection_private() {
@@ -22983,8 +23686,8 @@ mod tx_confirmation_stream_tests {
                 },
             },
             nexus::{DataSpaceId, LaneId},
-            transaction::SignedTransaction,
             transaction::error::TransactionRejectionReason,
+            transaction::{SignedTransaction, TransactionEntrypoint},
         },
     };
     use eyre::eyre;
@@ -23024,6 +23727,16 @@ mod tx_confirmation_stream_tests {
             dataspace_id: DataSpaceId::UNIVERSAL,
             status,
         }))
+    }
+    fn outcome_unknown_identity(seed: u8) -> super::QueuePlanOutcomeUnknownIdentity {
+        super::QueuePlanOutcomeUnknownIdentity {
+            entrypoint_hash: HashOf::<TransactionEntrypoint>::from_untyped_unchecked(
+                Hash::prehashed([seed; Hash::LENGTH]),
+            ),
+            signed_transaction_hash: HashOf::<SignedTransaction>::from_untyped_unchecked(
+                Hash::prehashed([seed.wrapping_add(1); Hash::LENGTH]),
+            ),
+        }
     }
     #[tokio::test]
     async fn close_tx_confirmation_stream_timeout_is_bounded() {
@@ -23312,6 +24025,214 @@ mod tx_confirmation_stream_tests {
             err.to_string()
                 .contains("missing gas limit in fee payment intent")
         );
+    }
+    #[tokio::test]
+    async fn outcome_unknown_submission_continues_until_authoritative_applied_status() {
+        let hash: HashOf<SignedTransaction> =
+            HashOf::from_untyped_unchecked(Hash::prehashed([19_u8; Hash::LENGTH]));
+        let identity = outcome_unknown_identity(0x51);
+        let mut events = stream::pending::<Result<EventBox, eyre::Report>>();
+        let (submit_result_sender, submit_result_receiver) = oneshot::channel();
+        submit_result_sender
+            .send(Ok(
+                super::TransactionSubmissionDisposition::QueuePlanOutcomeUnknown(identity.into()),
+            ))
+            .expect("submit result receiver should be open");
+        let mut status_checks = 0_u8;
+        let result = tokio::time::timeout(
+            Duration::from_millis(100),
+            listen_for_tx_confirmation_stream_with_status_check(
+                &mut events,
+                hash,
+                Duration::from_secs(1),
+                Duration::from_millis(1),
+                Some(submit_result_receiver),
+                || {
+                    status_checks = status_checks.saturating_add(1);
+                    Ok(Some(super::TxConfirmationStatus::Applied))
+                },
+            ),
+        )
+        .await
+        .expect("authoritative status polling should complete")
+        .expect("an applied status should resolve the ambiguous admission");
+        assert_eq!(result, hash);
+        assert!(status_checks > 0);
+    }
+    #[tokio::test]
+    async fn peer_local_terminal_event_racing_before_outcome_unknown_waits_for_global_status() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, AtomicUsize, Ordering},
+        };
+
+        let hash: HashOf<SignedTransaction> =
+            HashOf::from_untyped_unchecked(Hash::prehashed([23_u8; Hash::LENGTH]));
+        let identity = outcome_unknown_identity(0x59);
+        let rejection = TransactionRejectionReason::Validation(ValidationFail::InternalError(
+            "peer-local rejection must not terminate reconciliation".to_owned(),
+        ));
+        let (event_sender, event_receiver) =
+            mpsc::unbounded_channel::<Result<EventBox, eyre::Report>>();
+        event_sender
+            .send(Ok(transaction_event(
+                hash,
+                None,
+                TransactionStatus::Rejected(Box::new(rejection)),
+            )))
+            .expect("queue peer-local rejection before submission result");
+        let mut events = UnboundedReceiverStream::new(event_receiver);
+        let (submit_result_sender, submit_result_receiver) = oneshot::channel();
+        let first_global_check = Arc::new(tokio::sync::Notify::new());
+        let globally_applied = Arc::new(AtomicBool::new(false));
+        let status_checks = Arc::new(AtomicUsize::new(0));
+        let producer = {
+            let first_global_check = Arc::clone(&first_global_check);
+            let globally_applied = Arc::clone(&globally_applied);
+            tokio::spawn(async move {
+                first_global_check.notified().await;
+                submit_result_sender
+                    .send(Ok(
+                        super::TransactionSubmissionDisposition::QueuePlanOutcomeUnknown(
+                            identity.into(),
+                        ),
+                    ))
+                    .expect("publish outcome-unknown after the local rejection");
+                globally_applied.store(true, Ordering::SeqCst);
+                event_sender
+                    .send(Ok(transaction_event(
+                        hash,
+                        None,
+                        TransactionStatus::Expired,
+                    )))
+                    .expect("wake reconciliation with a peer-local expiry");
+            })
+        };
+        let result = tokio::time::timeout(
+            Duration::from_millis(200),
+            listen_for_tx_confirmation_stream_with_status_check(
+                &mut events,
+                hash,
+                Duration::from_secs(1),
+                Duration::from_secs(1),
+                Some(submit_result_receiver),
+                || {
+                    status_checks.fetch_add(1, Ordering::SeqCst);
+                    if globally_applied.load(Ordering::SeqCst) {
+                        Ok(Some(super::TxConfirmationStatus::Applied))
+                    } else {
+                        first_global_check.notify_one();
+                        Ok(None)
+                    }
+                },
+            ),
+        )
+        .await
+        .expect("global reconciliation should be bounded")
+        .expect("state-resolved Applied must override peer-local terminal events");
+        producer.await.expect("event producer");
+        assert_eq!(result, hash);
+        assert!(
+            status_checks.load(Ordering::SeqCst) >= 2,
+            "both peer-local terminal events must be checked against global state"
+        );
+    }
+    #[tokio::test]
+    async fn outcome_unknown_submission_honors_authoritative_rejection() {
+        let hash: HashOf<SignedTransaction> =
+            HashOf::from_untyped_unchecked(Hash::prehashed([20_u8; Hash::LENGTH]));
+        let identity = outcome_unknown_identity(0x53);
+        let mut events = stream::pending::<Result<EventBox, eyre::Report>>();
+        let (submit_result_sender, submit_result_receiver) = oneshot::channel();
+        submit_result_sender
+            .send(Ok(
+                super::TransactionSubmissionDisposition::QueuePlanOutcomeUnknown(identity.into()),
+            ))
+            .expect("submit result receiver should be open");
+        let rejection = TransactionRejectionReason::Validation(ValidationFail::InternalError(
+            "authoritatively rejected".to_owned(),
+        ));
+        let err = listen_for_tx_confirmation_stream_with_status_check(
+            &mut events,
+            hash,
+            Duration::from_secs(1),
+            Duration::from_millis(1),
+            Some(submit_result_receiver),
+            || {
+                Ok(Some(super::TxConfirmationStatus::Rejected(Some(
+                    rejection.clone(),
+                ))))
+            },
+        )
+        .await
+        .expect_err("an authoritative rejection must remain terminal");
+        let report = format!("{err:#}");
+        assert!(report.contains("authoritatively rejected"));
+        assert!(!report.contains("admission remains ambiguous"));
+    }
+    #[tokio::test]
+    async fn outcome_unknown_submission_honors_authoritative_expiry() {
+        let hash: HashOf<SignedTransaction> =
+            HashOf::from_untyped_unchecked(Hash::prehashed([21_u8; Hash::LENGTH]));
+        let identity = outcome_unknown_identity(0x55);
+        let mut events = stream::pending::<Result<EventBox, eyre::Report>>();
+        let (submit_result_sender, submit_result_receiver) = oneshot::channel();
+        submit_result_sender
+            .send(Ok(
+                super::TransactionSubmissionDisposition::QueuePlanOutcomeUnknown(identity.into()),
+            ))
+            .expect("submit result receiver should be open");
+        let err = listen_for_tx_confirmation_stream_with_status_check(
+            &mut events,
+            hash,
+            Duration::from_secs(1),
+            Duration::from_millis(1),
+            Some(submit_result_receiver),
+            || Ok(Some(super::TxConfirmationStatus::Expired)),
+        )
+        .await
+        .expect_err("an authoritative expiry must remain terminal");
+        let report = format!("{err:#}");
+        assert!(report.contains("Transaction expired"));
+        assert!(!report.contains("admission remains ambiguous"));
+    }
+    #[tokio::test]
+    async fn unresolved_outcome_unknown_queue_timeout_preserves_both_identities() {
+        let hash: HashOf<SignedTransaction> =
+            HashOf::from_untyped_unchecked(Hash::prehashed([22_u8; Hash::LENGTH]));
+        let identity = outcome_unknown_identity(0x57);
+        let expected_entrypoint_hash = identity.entrypoint_hash.to_string();
+        let expected_signed_transaction_hash = identity.signed_transaction_hash.to_string();
+        let mut events = stream::pending::<Result<EventBox, eyre::Report>>();
+        let (submit_result_sender, submit_result_receiver) = oneshot::channel();
+        submit_result_sender
+            .send(Ok(
+                super::TransactionSubmissionDisposition::QueuePlanOutcomeUnknown(
+                    identity.clone().into(),
+                ),
+            ))
+            .expect("submit result receiver should be open");
+        let err = tokio::time::timeout(
+            Duration::from_millis(100),
+            listen_for_tx_confirmation_stream_with_status_check(
+                &mut events,
+                hash,
+                Duration::from_millis(2),
+                Duration::from_millis(1),
+                Some(submit_result_receiver),
+                || Ok(Some(super::TxConfirmationStatus::Queued)),
+            ),
+        )
+        .await
+        .expect("queue deadline should be bounded")
+        .expect_err("an unresolved queued admission must remain ambiguous");
+        let context = super::QueuePlanOutcomeUnknownContext::exact(identity);
+        let err = super::finalize_transaction_confirmation_error(err, Some(&context));
+        let report = format!("{err:#}");
+        assert!(report.contains("admission remains ambiguous"));
+        assert!(report.contains(&expected_entrypoint_hash));
+        assert!(report.contains(&expected_signed_transaction_hash));
+        assert!(report.contains("transaction queued for too long"));
     }
     #[tokio::test]
     async fn pending_submit_failure_preempts_first_status_poll() {
@@ -23930,13 +24851,13 @@ mod tests {
         evidence_http_tests::{
             SnapshotStore, assert_signed_headers, assert_signed_json_headers,
             assert_single_accept_header, base_url, capability_gated_responder, capture_request,
-            capture_requests, client_with_base_url, empty_response, json_response, respond_with,
-            with_mock_http, with_mock_sorafs_fetch,
+            capture_requests, client_with_base_url, empty_response, json_response,
+            mark_data_model_compatible, respond_with, with_mock_http, with_mock_sorafs_fetch,
         },
         *,
     };
     use crate::http::ws::conn_flow::Events as _;
-    use crate::http_default::RequestSnapshot;
+    use crate::http_default::{RequestSnapshot, with_real_http};
     use crate::{
         config::{BasicAuth, Config},
         da::PDP_COMMITMENT_HEADER,
@@ -30605,6 +31526,114 @@ mod tests {
             Metadata::default(),
         )
     }
+    fn exact_queue_plan_outcome_unknown_response(
+        identity: &QueuePlanOutcomeUnknownIdentity,
+    ) -> HttpResponse<Vec<u8>> {
+        let envelope = ErrorEnvelope::new(
+            QUEUE_PLAN_OUTCOME_UNKNOWN_ENVELOPE_CODE,
+            "transaction admission outcome is unknown",
+        )
+        .with_details(iroha_torii_shared::ErrorDetails {
+            reject_code: Some(QUEUE_PLAN_OUTCOME_UNKNOWN_REJECT_CODE.to_owned()),
+            entrypoint_hash: Some(identity.entrypoint_hash.to_string()),
+            tx_hash: Some(identity.signed_transaction_hash.to_string()),
+            ..Default::default()
+        });
+        HttpResponse::builder()
+            .status(StatusCode::SERVICE_UNAVAILABLE)
+            .header("content-type", APPLICATION_NORITO)
+            .header(
+                "x-iroha-reject-code",
+                QUEUE_PLAN_OUTCOME_UNKNOWN_REJECT_CODE,
+            )
+            .header(
+                TRANSACTION_ENTRYPOINT_HASH_HEADER,
+                identity.entrypoint_hash.to_string(),
+            )
+            .header(
+                SIGNED_TRANSACTION_HASH_HEADER,
+                identity.signed_transaction_hash.to_string(),
+            )
+            .body(norito::to_bytes(&envelope).expect("encode outcome-unknown envelope"))
+            .expect("outcome-unknown response")
+    }
+    fn raw_queue_plan_outcome_unknown_response(
+        identity: &QueuePlanOutcomeUnknownIdentity,
+        signed_transaction_hash_header: &str,
+    ) -> Vec<u8> {
+        raw_queue_plan_outcome_unknown_response_with_additional_headers(
+            identity,
+            signed_transaction_hash_header,
+            &[],
+        )
+    }
+    fn raw_queue_plan_outcome_unknown_response_with_additional_headers(
+        identity: &QueuePlanOutcomeUnknownIdentity,
+        signed_transaction_hash_header: &str,
+        additional_headers: &[(&str, String)],
+    ) -> Vec<u8> {
+        let response = exact_queue_plan_outcome_unknown_response(identity);
+        let body = response.body();
+        let additional_headers = additional_headers
+            .iter()
+            .map(|(name, value)| format!("{name}: {value}\r\n"))
+            .collect::<String>();
+        let mut raw = format!(
+            "HTTP/1.1 503 Service Unavailable\r\nContent-Type: {APPLICATION_NORITO}\r\nx-iroha-reject-code: {QUEUE_PLAN_OUTCOME_UNKNOWN_REJECT_CODE}\r\n{TRANSACTION_ENTRYPOINT_HASH_HEADER}: {}\r\n{SIGNED_TRANSACTION_HASH_HEADER}: {signed_transaction_hash_header}\r\n{additional_headers}Content-Length: {}\r\nConnection: close\r\n\r\n",
+            identity.entrypoint_hash,
+            body.len(),
+        )
+        .into_bytes();
+        raw.extend_from_slice(body);
+        raw
+    }
+    fn serve_one_raw_transaction_response(
+        response: Vec<u8>,
+    ) -> (Url, std::thread::JoinHandle<bool>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("raw transaction test listener");
+        let address = listener.local_addr().expect("raw transaction test address");
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("raw transaction request");
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .expect("set raw transaction request read timeout");
+            let mut request = [0_u8; 8 * 1024];
+            let request_len = stream
+                .read(&mut request)
+                .expect("read raw transaction request");
+            let expected_request_line = format!("POST {} HTTP/1.1\r\n", torii_uri::TRANSACTION);
+            assert!(
+                request[..request_len].starts_with(expected_request_line.as_bytes()),
+                "unexpected raw transaction request: {}",
+                String::from_utf8_lossy(&request[..request_len])
+            );
+            stream
+                .write_all(&response)
+                .expect("write raw transaction response");
+            drop(stream);
+
+            listener
+                .set_nonblocking(true)
+                .expect("set raw retry listener nonblocking");
+            let deadline = Instant::now() + Duration::from_millis(300);
+            loop {
+                match listener.accept() {
+                    Ok((_stream, _)) => return true,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        if Instant::now() >= deadline {
+                            return false;
+                        }
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(error) => panic!("raw retry listener failed: {error}"),
+                }
+            }
+        });
+        (
+            Url::parse(&format!("http://{address}/")).expect("raw transaction test URL"),
+            server,
+        )
+    }
     #[test]
     fn fresh_submit_compatibility_probe_replaces_cached_failures() {
         let stale_states = [
@@ -30976,6 +32005,317 @@ mod tests {
         });
     }
     #[test]
+    fn nonblocking_queue_plan_exact_outcome_unknown_is_structured_and_never_retried() {
+        let client = client_with_base_url(base_url());
+        mark_data_model_compatible(&client);
+        let transaction = empty_transaction(&client);
+        let identity = QueuePlanOutcomeUnknownIdentity::for_transaction(&transaction)
+            .expect("client transaction must use QueuePlanSynced admission");
+        let response = exact_queue_plan_outcome_unknown_response(&identity);
+        let (result, snapshots) =
+            capture_requests(response, || client.submit_transaction(&transaction));
+        let error = result.expect_err("nonblocking admission must remain ambiguous");
+        let ambiguity = error
+            .downcast_ref::<QueuePlanOutcomeUnknownError>()
+            .expect("exact outcome-unknown must be a structured public error");
+        assert_eq!(ambiguity.entrypoint_hash(), &identity.entrypoint_hash);
+        assert_eq!(
+            ambiguity.signed_transaction_hash(),
+            &identity.signed_transaction_hash
+        );
+        assert_eq!(snapshots.len(), 1, "the client must never auto-resubmit");
+        assert_eq!(snapshots[0].url.path(), torii_uri::TRANSACTION);
+    }
+    #[test]
+    fn nonblocking_prepared_queue_plan_exact_outcome_unknown_uses_local_identity() {
+        let client = client_with_base_url(base_url());
+        mark_data_model_compatible(&client);
+        let transaction = empty_transaction(&client);
+        let payload = Client::prepare_transaction_payload(&transaction);
+        let identity = QueuePlanOutcomeUnknownIdentity::for_transaction(&transaction)
+            .expect("client transaction must use QueuePlanSynced admission");
+        let response = exact_queue_plan_outcome_unknown_response(&identity);
+        let (result, snapshots) = capture_requests(response, || {
+            client.submit_prepared_transaction_payload(&payload)
+        });
+        let error = result.expect_err("prepared admission must remain ambiguous");
+        let ambiguity = error
+            .downcast_ref::<QueuePlanOutcomeUnknownError>()
+            .expect("prepared outcome-unknown must be a structured public error");
+        assert_eq!(ambiguity.entrypoint_hash(), &identity.entrypoint_hash);
+        assert_eq!(
+            ambiguity.signed_transaction_hash(),
+            &identity.signed_transaction_hash
+        );
+        assert_eq!(snapshots.len(), 1, "the client must never auto-resubmit");
+    }
+    #[test]
+    fn nonblocking_queue_plan_claimed_invalid_evidence_remains_ambiguous() {
+        let client = client_with_base_url(base_url());
+        mark_data_model_compatible(&client);
+        let transaction = empty_transaction(&client);
+        let identity = QueuePlanOutcomeUnknownIdentity::for_transaction(&transaction)
+            .expect("client transaction must use QueuePlanSynced admission");
+        let mut response = exact_queue_plan_outcome_unknown_response(&identity);
+        response.headers_mut().insert(
+            SIGNED_TRANSACTION_HASH_HEADER,
+            "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+                .parse()
+                .expect("forged hash header"),
+        );
+        let (result, snapshots) =
+            capture_requests(response, || client.submit_transaction(&transaction));
+        let error = result.expect_err("invalid claimed evidence cannot prove non-admission");
+        let ambiguity = error
+            .downcast_ref::<QueuePlanOutcomeUnknownError>()
+            .expect("claimed-invalid evidence must preserve structured ambiguity");
+        assert_eq!(ambiguity.entrypoint_hash(), &identity.entrypoint_hash);
+        assert_eq!(
+            ambiguity.signed_transaction_hash(),
+            &identity.signed_transaction_hash
+        );
+        let report = format!("{error:#}");
+        assert!(report.contains("invalid evidence"));
+        assert!(report.contains("does not match the submitted transaction"));
+        assert_eq!(snapshots.len(), 1, "the client must never auto-resubmit");
+    }
+    #[test]
+    fn nonblocking_queue_plan_post_dispatch_transport_error_remains_ambiguous() {
+        let client = client_with_base_url(base_url());
+        mark_data_model_compatible(&client);
+        let transaction = empty_transaction(&client);
+        let identity = QueuePlanOutcomeUnknownIdentity::for_transaction(&transaction)
+            .expect("client transaction must use QueuePlanSynced admission");
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let responder = {
+            let snapshots = Arc::clone(&snapshots);
+            move |snapshot: RequestSnapshot| {
+                snapshots.lock().expect("snapshot lock").push(snapshot);
+                Err(eyre!(
+                    "connection reset after the transaction request was written"
+                ))
+            }
+        };
+        let error = with_mock_http(responder, || client.submit_transaction(&transaction))
+            .expect_err("post-dispatch transport failure must remain ambiguous");
+        let ambiguity = error
+            .downcast_ref::<QueuePlanOutcomeUnknownError>()
+            .expect("transport ambiguity must be a structured public error");
+        assert_eq!(ambiguity.entrypoint_hash(), &identity.entrypoint_hash);
+        assert_eq!(
+            ambiguity.signed_transaction_hash(),
+            &identity.signed_transaction_hash
+        );
+        assert!(format!("{error:#}").contains("connection reset after"));
+        let snapshots = snapshots.lock().expect("snapshot lock");
+        assert_eq!(snapshots.len(), 1, "the client must never auto-resubmit");
+        assert_eq!(snapshots[0].url.path(), torii_uri::TRANSACTION);
+    }
+    #[tokio::test]
+    async fn async_nonblocking_queue_plan_ambiguities_are_structured_and_never_retried() {
+        for scenario in ["exact", "claimed-invalid", "truncated"] {
+            let mut client = client_with_base_url(base_url());
+            let transaction = empty_transaction(&client);
+            let identity = QueuePlanOutcomeUnknownIdentity::for_transaction(&transaction)
+                .expect("client transaction must use QueuePlanSynced admission");
+            let response = match scenario {
+                "exact" => raw_queue_plan_outcome_unknown_response(
+                    &identity,
+                    &identity.signed_transaction_hash.to_string(),
+                ),
+                "claimed-invalid" => raw_queue_plan_outcome_unknown_response(
+                    &identity,
+                    "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+                ),
+                "truncated" => {
+                    b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/x-norito\r\nContent-Length: 64\r\nConnection: close\r\n\r\ntruncated"
+                        .to_vec()
+                }
+                _ => unreachable!(),
+            };
+            let (url, server) = serve_one_raw_transaction_response(response);
+            client.torii_url = url;
+            client.torii_request_timeout = Duration::from_secs(2);
+            mark_data_model_compatible(&client);
+
+            let error = client
+                .submit_transaction_async(&transaction)
+                .await
+                .expect_err("QueuePlan ambiguity must not be reported as definite admission");
+            let ambiguity = error
+                .downcast_ref::<QueuePlanOutcomeUnknownError>()
+                .expect("async QueuePlan ambiguity must use the public structured error");
+            assert_eq!(ambiguity.entrypoint_hash(), &identity.entrypoint_hash);
+            assert_eq!(
+                ambiguity.signed_transaction_hash(),
+                &identity.signed_transaction_hash
+            );
+            if scenario == "claimed-invalid" {
+                assert!(format!("{error:#}").contains("invalid evidence"));
+            }
+            if scenario == "truncated" {
+                assert!(format!("{error:#}").contains("Failed to read transaction response"));
+            }
+            assert!(
+                !server.join().expect("async transaction response server"),
+                "async {scenario} ambiguity must not auto-resubmit"
+            );
+        }
+    }
+    #[test]
+    fn synchronous_queue_plan_duplicate_wire_headers_remain_ambiguous() {
+        let cases = [
+            (
+                "content-type",
+                "Content-Type",
+                APPLICATION_NORITO.to_owned(),
+                "content-type header is missing or duplicated",
+            ),
+            (
+                "reject-code",
+                "x-iroha-reject-code",
+                QUEUE_PLAN_OUTCOME_UNKNOWN_REJECT_CODE.to_owned(),
+                "reject-code header is missing, duplicated, or invalid",
+            ),
+            (
+                "entrypoint identity",
+                TRANSACTION_ENTRYPOINT_HASH_HEADER,
+                String::new(),
+                "entrypoint header is missing, duplicated, or invalid",
+            ),
+            (
+                "signed-transaction identity",
+                SIGNED_TRANSACTION_HASH_HEADER,
+                String::new(),
+                "signed-transaction header is missing, duplicated, or invalid",
+            ),
+        ];
+        for (scenario, header_name, mut header_value, expected_diagnostic) in cases {
+            let mut client = client_with_base_url(base_url());
+            let transaction = empty_transaction(&client);
+            let identity = QueuePlanOutcomeUnknownIdentity::for_transaction(&transaction)
+                .expect("client transaction must use QueuePlanSynced admission");
+            if header_value.is_empty() {
+                header_value = if header_name == TRANSACTION_ENTRYPOINT_HASH_HEADER {
+                    identity.entrypoint_hash.to_string()
+                } else {
+                    identity.signed_transaction_hash.to_string()
+                };
+            }
+            let response = raw_queue_plan_outcome_unknown_response_with_additional_headers(
+                &identity,
+                &identity.signed_transaction_hash.to_string(),
+                &[(header_name, header_value)],
+            );
+            let (url, server) = serve_one_raw_transaction_response(response);
+            client.torii_url = url;
+            client.torii_request_timeout = Duration::from_secs(2);
+            mark_data_model_compatible(&client);
+
+            let (error, retried) = with_real_http(|| {
+                let error = client
+                    .submit_transaction(&transaction)
+                    .expect_err("duplicate QueuePlan evidence cannot be exact");
+                let retried = server.join().expect("raw transaction response server");
+                (error, retried)
+            });
+            let ambiguity = error
+                .downcast_ref::<QueuePlanOutcomeUnknownError>()
+                .expect("duplicate QueuePlan evidence must remain a structured ambiguity");
+            assert_eq!(ambiguity.entrypoint_hash(), &identity.entrypoint_hash);
+            assert_eq!(
+                ambiguity.signed_transaction_hash(),
+                &identity.signed_transaction_hash
+            );
+            let report = format!("{error:#}");
+            assert!(
+                report.contains("invalid evidence") && report.contains(expected_diagnostic),
+                "{scenario} duplicate was lost before singleton validation: {report}"
+            );
+            assert!(
+                !retried,
+                "synchronous {scenario} ambiguity must not auto-resubmit"
+            );
+        }
+    }
+    #[test]
+    fn blocking_queue_plan_transport_ambiguity_resolves_only_from_global_state() {
+        let mut client = client_with_base_url(
+            Url::parse("http://127.0.0.1:1/").expect("unreachable loopback URL"),
+        );
+        mark_data_model_compatible(&client);
+        client.transaction_status_timeout = Duration::from_secs(1);
+        let transaction = empty_transaction(&client);
+        let hash = transaction.hash();
+        let status = PipelineTransactionStatusResponse::new(
+            hash.to_string(),
+            iroha_torii_shared::PipelineTransactionStatus {
+                kind: "Applied".to_owned(),
+                block_height: Some(7),
+            },
+            "global".to_owned(),
+            "state".to_owned(),
+        );
+        let status_body = norito::json::to_string(&status).expect("encode global status");
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let responder = {
+            let snapshots = Arc::clone(&snapshots);
+            move |snapshot: RequestSnapshot| {
+                let path = snapshot.url.path().to_owned();
+                snapshots.lock().expect("snapshot lock").push(snapshot);
+                if path == torii_uri::TRANSACTION {
+                    Err(eyre!("connection reset after dispatch"))
+                } else if path == "/v1/pipeline/transactions/status" {
+                    Ok(json_response(StatusCode::OK, &status_body))
+                } else {
+                    panic!("unexpected request path: {path}");
+                }
+            }
+        };
+        let resolved = with_mock_http(responder, || {
+            client.submit_transaction_blocking(&transaction)
+        })
+        .expect("state-resolved global Applied must resolve transport ambiguity");
+        assert_eq!(resolved, hash);
+        let snapshots = snapshots.lock().expect("snapshot lock");
+        assert_eq!(
+            snapshots
+                .iter()
+                .filter(|snapshot| snapshot.url.path() == torii_uri::TRANSACTION)
+                .count(),
+            1,
+            "blocking reconciliation must never auto-resubmit"
+        );
+        assert!(snapshots.iter().any(|snapshot| {
+            snapshot.url.path() == "/v1/pipeline/transactions/status"
+                && snapshot
+                    .url
+                    .query()
+                    .is_some_and(|query| query.contains("scope=global"))
+        }));
+    }
+    #[test]
+    fn nonblocking_queue_plan_definite_http_rejection_stays_terminal() {
+        let client = client_with_base_url(base_url());
+        mark_data_model_compatible(&client);
+        let transaction = empty_transaction(&client);
+        let response = json_response(
+            StatusCode::BAD_REQUEST,
+            r#"{"code":"transaction_rejected","message":"definite pre-admission rejection"}"#,
+        );
+        let (result, snapshots) =
+            capture_requests(response, || client.submit_transaction(&transaction));
+        let error = result.expect_err("definite rejection must fail immediately");
+        assert!(
+            error
+                .downcast_ref::<QueuePlanOutcomeUnknownError>()
+                .is_none(),
+            "a generic definite rejection must not be reclassified as ambiguous"
+        );
+        assert!(format!("{error:#}").contains("definite pre-admission rejection"));
+        assert_eq!(snapshots.len(), 1, "the client must never auto-resubmit");
+    }
+    #[test]
     fn compatibility_cache_is_scoped_by_exact_network_id() {
         let config = config_factory();
         let local = data_model_compatibility_cache_key(
@@ -31154,67 +32494,6 @@ mod tests {
         assert_operator_signature_headers(&snapshot);
     }
     #[test]
-    fn sumeragi_operator_endpoints_include_signature_headers_when_key_configured() {
-        type SumeragiEndpointCase = (&'static str, fn(&Client) -> Result<norito::json::Value>);
-        let cases: [SumeragiEndpointCase; 1] = [(
-            "/v1/sumeragi/pacemaker",
-            Client::get_sumeragi_pacemaker_json,
-        )];
-        for (path, request) in cases {
-            let mut client = client_with_base_url(base_url());
-            let operator_key_pair = checked_random_keypair();
-            client.set_operator_key_pair(operator_key_pair.clone());
-            let (result, snapshot) =
-                capture_request(empty_response(StatusCode::UNAUTHORIZED), || {
-                    request(&client)
-                });
-            let _ = result.expect_err("mocked unauthorized response should fail");
-            assert_sumeragi_json_request(&snapshot, path);
-            assert_operator_signature_headers(&snapshot);
-            let headers: HashMap<_, _> = snapshot.headers.iter().cloned().collect();
-            let timestamp_ms = headers[HEADER_OPERATOR_TIMESTAMP_MS]
-                .parse::<u64>()
-                .expect("operator timestamp header");
-            let nonce = &headers[HEADER_OPERATOR_NONCE];
-            let signature_bytes = base64::engine::general_purpose::STANDARD
-                .decode(headers[HEADER_OPERATOR_SIGNATURE].as_bytes())
-                .expect("operator signature header should decode");
-            let signature = Signature::try_from_bytes(&signature_bytes)
-                .expect("operator signature header must pass checked admission");
-            let local_message = Client::operator_network_request_message(
-                &client.network_id,
-                &snapshot.method,
-                &snapshot.url,
-                &snapshot.body,
-                timestamp_ms,
-                nonce,
-            )
-            .expect("bounded local operator message");
-            signature
-                .verify(operator_key_pair.public_key(), &local_message)
-                .expect("operator signature must bind the client's exact network");
-            let foreign_network =
-                NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
-                    Hash::prehashed([0xFD; Hash::LENGTH]),
-                ));
-            let foreign_message = Client::operator_network_request_message(
-                &foreign_network,
-                &snapshot.method,
-                &snapshot.url,
-                &snapshot.body,
-                timestamp_ms,
-                nonce,
-            )
-            .expect("bounded foreign operator message");
-            assert!(
-                signature
-                    .verify(operator_key_pair.public_key(), &foreign_message)
-                    .is_err(),
-                "same endpoint on another genesis must not accept the operator signature"
-            );
-        }
-    }
-    #[test]
     fn sumeragi_json_endpoints_request_json() {
         type SumeragiEndpointCase = (&'static str, fn(&Client) -> Result<norito::json::Value>);
         let cases: [SumeragiEndpointCase; 2] = [
@@ -31279,54 +32558,6 @@ mod tests {
         }
     }
     #[test]
-    fn sumeragi_operator_json_endpoints_reject_duplicate_key_payloads() {
-        type SumeragiEndpointCase = (&'static str, fn(&Client) -> Result<norito::json::Value>);
-        let cases: [SumeragiEndpointCase; 1] = [(
-            "/v1/sumeragi/pacemaker",
-            Client::get_sumeragi_pacemaker_json,
-        )];
-        for (path, request) in cases {
-            let mut client = client_with_base_url(base_url());
-            client.set_operator_key_pair(checked_random_keypair());
-            let (result, snapshot) = capture_request(
-                json_response(StatusCode::OK, r#"{"dup":1,"dup":2}"#),
-                || request(&client),
-            );
-            let err = result.expect_err("duplicate-key successful JSON payload should fail");
-            assert!(
-                err.to_string().contains("failed to decode JSON payload"),
-                "{path} returned unexpected error: {err}"
-            );
-            assert_sumeragi_json_request(&snapshot, path);
-            assert_operator_signature_headers(&snapshot);
-        }
-    }
-    #[test]
-    fn sumeragi_operator_json_endpoints_reject_non_ok_responses_with_context() {
-        type SumeragiEndpointCase = (
-            &'static str,
-            &'static str,
-            fn(&Client) -> Result<norito::json::Value>,
-        );
-        let cases: [SumeragiEndpointCase; 1] = [(
-            "/v1/sumeragi/pacemaker",
-            "Failed to get sumeragi pacemaker",
-            Client::get_sumeragi_pacemaker_json,
-        )];
-        for (path, context, request) in cases {
-            let mut client = client_with_base_url(base_url());
-            client.set_operator_key_pair(checked_random_keypair());
-            let (result, snapshot) = capture_request(
-                json_response(StatusCode::FORBIDDEN, "operator key rejected"),
-                || request(&client),
-            );
-            let err = result.expect_err("non-OK operator JSON endpoint response should fail");
-            assert_endpoint_error(&err, path, context, "403", "operator key rejected");
-            assert_sumeragi_json_request(&snapshot, path);
-            assert_operator_signature_headers(&snapshot);
-        }
-    }
-    #[test]
     fn transaction_response_handler_returns_err_on_bad_request() {
         let response = mk_response(StatusCode::BAD_REQUEST, Vec::new(), None);
         assert!(TransactionResponseHandler::handle(&response).is_err());
@@ -31335,6 +32566,59 @@ mod tests {
     fn transaction_response_handler_accepts_accepted() {
         let response = mk_response(StatusCode::ACCEPTED, Vec::new(), None);
         assert!(TransactionResponseHandler::handle(&response).is_ok());
+    }
+    #[test]
+    fn confirmation_handler_preserves_exact_queue_plan_outcome_unknown() {
+        let client = client_with_base_url(base_url());
+        let transaction = empty_transaction(&client);
+        let identity = QueuePlanOutcomeUnknownIdentity::for_transaction(&transaction)
+            .expect("client transactions use QueuePlanSynced admission");
+        let envelope = ErrorEnvelope::new(
+            QUEUE_PLAN_OUTCOME_UNKNOWN_ENVELOPE_CODE,
+            "transaction admission outcome is unknown",
+        )
+        .with_details(iroha_torii_shared::ErrorDetails {
+            reject_code: Some(QUEUE_PLAN_OUTCOME_UNKNOWN_REJECT_CODE.to_owned()),
+            entrypoint_hash: Some(identity.entrypoint_hash.to_string()),
+            tx_hash: Some(identity.signed_transaction_hash.to_string()),
+            ..Default::default()
+        });
+        let mut response = HttpResponse::builder()
+            .status(StatusCode::SERVICE_UNAVAILABLE)
+            .header("content-type", APPLICATION_NORITO)
+            .header(
+                "x-iroha-reject-code",
+                QUEUE_PLAN_OUTCOME_UNKNOWN_REJECT_CODE,
+            )
+            .header(
+                TRANSACTION_ENTRYPOINT_HASH_HEADER,
+                identity.entrypoint_hash.to_string(),
+            )
+            .header(
+                SIGNED_TRANSACTION_HASH_HEADER,
+                identity.signed_transaction_hash.to_string(),
+            )
+            .body(norito::to_bytes(&envelope).expect("encode outcome-unknown envelope"))
+            .expect("outcome-unknown response");
+        assert_eq!(
+            TransactionResponseHandler::handle_for_confirmation(&response, &transaction)
+                .expect("exact outcome-unknown evidence should continue confirmation"),
+            TransactionSubmissionDisposition::QueuePlanOutcomeUnknown(identity.clone().into())
+        );
+        *response.status_mut() = StatusCode::ACCEPTED;
+        let disposition =
+            TransactionResponseHandler::handle_for_confirmation(&response, &transaction)
+                .expect("a contradictory successful status must remain ambiguous");
+        let TransactionSubmissionDisposition::QueuePlanOutcomeUnknown(context) = disposition else {
+            panic!("claimed outcome-unknown must not be treated as accepted");
+        };
+        assert_eq!(context.identity, identity);
+        assert!(
+            context
+                .diagnostic
+                .as_deref()
+                .is_some_and(|diagnostic| diagnostic.contains("did not use 503"))
+        );
     }
     include!("client/status_response_tests.rs");
     #[test]
@@ -31379,7 +32663,6 @@ mod tests {
             teu_dataspace_backlog: Vec::new(),
             dataspace_catalog: Vec::new(),
             nexus: None,
-            sorafs_micropayments: Vec::new(),
             taikai_ingest: Vec::new(),
             taikai_alias_rotations: Vec::new(),
             da_receipt_cursors: Vec::new(),
@@ -35901,6 +37184,204 @@ mod tests {
 #[cfg(test)]
 mod response_report {
     use super::*;
+    fn outcome_unknown_identity(seed: u8) -> QueuePlanOutcomeUnknownIdentity {
+        QueuePlanOutcomeUnknownIdentity {
+            entrypoint_hash: HashOf::from_untyped_unchecked(Hash::prehashed([seed; Hash::LENGTH])),
+            signed_transaction_hash: HashOf::from_untyped_unchecked(Hash::prehashed(
+                [seed.wrapping_add(1); Hash::LENGTH],
+            )),
+        }
+    }
+    fn outcome_unknown_envelope(identity: &QueuePlanOutcomeUnknownIdentity) -> ErrorEnvelope {
+        ErrorEnvelope::new(
+            QUEUE_PLAN_OUTCOME_UNKNOWN_ENVELOPE_CODE,
+            "transaction admission outcome is unknown",
+        )
+        .with_details(iroha_torii_shared::ErrorDetails {
+            reject_code: Some(QUEUE_PLAN_OUTCOME_UNKNOWN_REJECT_CODE.to_owned()),
+            entrypoint_hash: Some(identity.entrypoint_hash.to_string()),
+            tx_hash: Some(identity.signed_transaction_hash.to_string()),
+            ..Default::default()
+        })
+    }
+    fn outcome_unknown_response(
+        identity_headers: &QueuePlanOutcomeUnknownIdentity,
+        envelope: &ErrorEnvelope,
+        content_type: &'static str,
+    ) -> Response<Vec<u8>> {
+        let body = if content_type == APPLICATION_NORITO {
+            to_bytes(envelope).expect("encode canonical Norito error envelope")
+        } else {
+            norito::json::to_vec(envelope).expect("encode canonical JSON error envelope")
+        };
+        Response::builder()
+            .status(StatusCode::SERVICE_UNAVAILABLE)
+            .header(http::header::CONTENT_TYPE, content_type)
+            .header(
+                "x-iroha-reject-code",
+                QUEUE_PLAN_OUTCOME_UNKNOWN_REJECT_CODE,
+            )
+            .header(
+                TRANSACTION_ENTRYPOINT_HASH_HEADER,
+                identity_headers.entrypoint_hash.to_string(),
+            )
+            .header(
+                SIGNED_TRANSACTION_HASH_HEADER,
+                identity_headers.signed_transaction_hash.to_string(),
+            )
+            .body(body)
+            .expect("outcome-unknown response")
+    }
+    #[test]
+    fn queue_plan_outcome_unknown_classifier_accepts_only_exact_bound_evidence() {
+        let identity = outcome_unknown_identity(0x41);
+        let envelope = outcome_unknown_envelope(&identity);
+        for content_type in [APPLICATION_NORITO, APPLICATION_JSON] {
+            let response = outcome_unknown_response(&identity, &envelope, content_type);
+            assert_eq!(
+                classify_queue_plan_outcome_unknown_response(&response, &identity),
+                Ok(Some(identity.clone()))
+            );
+        }
+    }
+    #[test]
+    fn queue_plan_outcome_unknown_classifier_rejects_missing_or_mismatched_identity() {
+        let identity = outcome_unknown_identity(0x43);
+        let mut missing_envelope = outcome_unknown_envelope(&identity);
+        missing_envelope.details.as_mut().expect("details").tx_hash = None;
+        let missing = outcome_unknown_response(&identity, &missing_envelope, APPLICATION_NORITO);
+        assert!(
+            classify_queue_plan_outcome_unknown_response(&missing, &identity)
+                .expect_err("missing signed identity must fail closed")
+                .contains("signed-transaction identity")
+        );
+
+        let forged = outcome_unknown_identity(0x45);
+        let mismatched = outcome_unknown_response(
+            &forged,
+            &outcome_unknown_envelope(&forged),
+            APPLICATION_NORITO,
+        );
+        assert!(
+            classify_queue_plan_outcome_unknown_response(&mismatched, &identity)
+                .expect_err("mismatched identities must fail closed")
+                .contains("entrypoint header")
+        );
+
+        let mut missing_header = outcome_unknown_response(
+            &identity,
+            &outcome_unknown_envelope(&identity),
+            APPLICATION_NORITO,
+        );
+        missing_header
+            .headers_mut()
+            .remove(SIGNED_TRANSACTION_HASH_HEADER);
+        assert!(
+            classify_queue_plan_outcome_unknown_response(&missing_header, &identity)
+                .expect_err("missing signed identity header must fail closed")
+                .contains("signed-transaction header")
+        );
+    }
+    #[test]
+    fn queue_plan_outcome_unknown_classifier_rejects_noncanonical_transport_evidence() {
+        let identity = outcome_unknown_identity(0x47);
+        let envelope = outcome_unknown_envelope(&identity);
+        let mut missing_content_type =
+            outcome_unknown_response(&identity, &envelope, APPLICATION_NORITO);
+        missing_content_type
+            .headers_mut()
+            .remove(http::header::CONTENT_TYPE);
+        assert!(
+            classify_queue_plan_outcome_unknown_response(&missing_content_type, &identity)
+                .expect_err("missing content type must fail closed")
+                .contains("content-type")
+        );
+
+        let mut body_only_claim =
+            outcome_unknown_response(&identity, &envelope, APPLICATION_NORITO);
+        body_only_claim
+            .headers_mut()
+            .remove(http::header::CONTENT_TYPE);
+        body_only_claim.headers_mut().remove("x-iroha-reject-code");
+        assert!(
+            classify_queue_plan_outcome_unknown_response(&body_only_claim, &identity)
+                .expect_err("a decodable body claim must remain ambiguous without claim headers")
+                .contains("reject-code header")
+        );
+
+        let malformed_body_claim = Response::builder()
+            .status(StatusCode::SERVICE_UNAVAILABLE)
+            .header(http::header::CONTENT_TYPE, APPLICATION_JSON)
+            .body(format!(r#"{{"code":"{QUEUE_PLAN_OUTCOME_UNKNOWN_ENVELOPE_CODE}""#).into_bytes())
+            .expect("malformed body-only claim response");
+        assert!(
+            classify_queue_plan_outcome_unknown_response(&malformed_body_claim, &identity)
+                .expect_err("a malformed body claim must remain ambiguous")
+                .contains("reject-code header")
+        );
+
+        let mut noncanonical = outcome_unknown_response(&identity, &envelope, APPLICATION_JSON);
+        noncanonical.body_mut().push(b' ');
+        assert!(
+            classify_queue_plan_outcome_unknown_response(&noncanonical, &identity)
+                .expect_err("noncanonical envelope bytes must fail closed")
+                .contains("not canonical")
+        );
+
+        let mut duplicate_content_type =
+            outcome_unknown_response(&identity, &envelope, APPLICATION_NORITO);
+        duplicate_content_type.headers_mut().append(
+            http::header::CONTENT_TYPE,
+            ::http::HeaderValue::from_static(APPLICATION_NORITO),
+        );
+        assert!(
+            classify_queue_plan_outcome_unknown_response(&duplicate_content_type, &identity)
+                .expect_err("duplicate content type must fail closed")
+                .contains("content-type")
+        );
+
+        let mut duplicate_entrypoint_header =
+            outcome_unknown_response(&identity, &envelope, APPLICATION_NORITO);
+        duplicate_entrypoint_header.headers_mut().append(
+            TRANSACTION_ENTRYPOINT_HASH_HEADER,
+            ::http::HeaderValue::from_str(&identity.entrypoint_hash.to_string())
+                .expect("hash header"),
+        );
+        assert!(
+            classify_queue_plan_outcome_unknown_response(&duplicate_entrypoint_header, &identity)
+                .expect_err("duplicate entrypoint identity must fail closed")
+                .contains("entrypoint header")
+        );
+
+        let mut duplicate_signed_header =
+            outcome_unknown_response(&identity, &envelope, APPLICATION_NORITO);
+        duplicate_signed_header.headers_mut().append(
+            SIGNED_TRANSACTION_HASH_HEADER,
+            ::http::HeaderValue::from_str(&identity.signed_transaction_hash.to_string())
+                .expect("hash header"),
+        );
+        assert!(
+            classify_queue_plan_outcome_unknown_response(&duplicate_signed_header, &identity)
+                .expect_err("duplicate signed-transaction identity must fail closed")
+                .contains("signed-transaction header")
+        );
+    }
+    #[test]
+    fn queue_plan_outcome_unknown_classifier_leaves_generic_rejections_terminal() {
+        let identity = outcome_unknown_identity(0x49);
+        let envelope = ErrorEnvelope::new("transaction_rejected", "invalid transaction");
+        let body = norito::json::to_vec(&envelope).expect("encode generic rejection");
+        let response = Response::builder()
+            .status(StatusCode::BAD_REQUEST)
+            .header(http::header::CONTENT_TYPE, APPLICATION_JSON)
+            .header("x-iroha-reject-code", "transaction_rejected")
+            .body(body)
+            .expect("generic rejection response");
+        assert_eq!(
+            classify_queue_plan_outcome_unknown_response(&response, &identity),
+            Ok(None)
+        );
+    }
     #[test]
     fn json_media_types_are_limited_to_application_types() {
         assert!(Client::is_json_content_type("application/json"));

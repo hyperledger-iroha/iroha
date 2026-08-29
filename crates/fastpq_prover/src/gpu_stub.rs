@@ -33,14 +33,14 @@ impl fmt::Display for GpuError {
     }
 }
 impl std::error::Error for GpuError {}
-/// Placeholder column dispatch returned when GPU support is disabled.
+/// CPU-only column dispatch handle used when GPU support is disabled.
 #[derive(Debug)]
 pub struct ColumnDispatch<'a> {
     outcome: Result<(), GpuError>,
     _lifetime: PhantomData<&'a mut ()>,
 }
 impl<'a> ColumnDispatch<'a> {
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     pub(crate) fn ready() -> ColumnDispatch<'a> {
         Self {
             outcome: Ok(()),
@@ -51,13 +51,13 @@ impl<'a> ColumnDispatch<'a> {
         self.outcome
     }
 }
-/// Placeholder LDE dispatch for CPU-only builds.
+/// CPU-only LDE dispatch handle used when GPU support is disabled.
 #[derive(Debug)]
 pub struct LdeDispatch {
     outcome: Result<Option<Vec<Vec<u64>>>, GpuError>,
 }
 impl LdeDispatch {
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     pub(crate) fn ready(result: Option<Vec<Vec<u64>>>) -> Self {
         Self {
             outcome: Ok(result),

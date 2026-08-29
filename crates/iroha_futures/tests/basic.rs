@@ -16,8 +16,32 @@ async fn sleep(times: Vec<Duration>) -> i32 {
     // Just random result
     10_i32
 }
+
+#[allow(dead_code, improper_ctypes_definitions, unsafe_code)]
+#[iroha_futures::telemetry_future]
+async unsafe extern "C" fn qualified_abi(value: u32) -> u32 {
+    value
+}
+
+#[allow(dead_code)]
+#[iroha_futures::telemetry_future]
+async fn qualified_generic<T>(value: T) -> T
+where
+    T: Send,
+{
+    value
+}
+
 fn almost_equal(a: Duration, b: Duration) -> bool {
     a.abs_diff(b) < (b / 9)
+}
+
+#[tokio::test]
+#[allow(unsafe_code)]
+async fn telemetry_attribute_preserves_function_qualifiers() {
+    // SAFETY: the test function has no unsafe preconditions.
+    assert_eq!(unsafe { qualified_abi(7) }.await, 7);
+    assert_eq!(qualified_generic("value").await, "value");
 }
 #[tokio::test(flavor = "multi_thread")]
 async fn test_sleep() {

@@ -8,7 +8,7 @@ def test_release_inventory_constants_match_current_source_seal(
     module = load_checker()
     assert module._PRODUCTION_LIVENESS_RELEASE_COUNT == 863
     assert module._PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 == (
-        "2c27cdd44bc6b62d5e7798c0ed2694f5caaf86546dbb9daf30abf920381da444"
+        "42509872b04f64962dc8edc09ca9f007bafffe402c4e0847255dc937a105888c"
     )
     assert module._PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 == (
         "8eb88b75df56deaf2ff6684425b864a09269b8bb014346c336e5fac515f50c74"
@@ -22,7 +22,7 @@ def test_release_inventory_constants_match_current_source_seal(
     assert module._PRODUCTION_MULTILANE_FOCUS_TEST_COUNT == 518
     assert module._PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT == 519
     assert module._PRODUCTION_MULTILANE_FOCUS_INVENTORY_SHA256 == (
-        "b3bcc3655b1362819c0a01ea7a9acab3eaa303b58ec28866cc4d42315c4240b7"
+        "3d2c93cab0528cb668d977642eecfe78e9c20378e887a0b7db4198ffd220eb29"
     )
     assert module._PRODUCTION_LIFECYCLE_INGRESS_PUBLICATION_FENCE_ITEM_SHA256 == {
         "PreparedFairIngressQueueWitness::lock_exact_dequeue_retaining": (
@@ -2367,7 +2367,7 @@ kura.claim_autonomous_lifecycle_process_generation(
         "kura::tests::progress_witness_durability::"
         "bound_progress_recovery_handles_crash_phases_without_path_escape",
         "kura::tests::progress_witness_durability::"
-        "direct_receipt_snapshot_preserves_sparse_and_mixed_format_entries",
+        "application_receipt_snapshot_preserves_sparse_entries",
         "kura::tests::progress_witness_durability::"
         "initial_preindex_data_sync_failure_rolls_back_payload_before_retry",
         "kura::tests::progress_witness_durability::"

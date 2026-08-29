@@ -780,7 +780,7 @@ mod tests {
         .execute(&authority, &mut tx)
         .expect("publish manifest");
         tx.apply();
-        block.commit().unwrap();
+        block.commit_world_overlay_for_testing().unwrap();
         let view = state.view();
         let stored = view
             .world()
@@ -819,7 +819,7 @@ mod tests {
         .execute(&grantee, &mut tx)
         .expect("cross-account direct grant should authorize publish");
         tx.apply();
-        block.commit().unwrap();
+        block.commit_world_overlay_for_testing().unwrap();
         let view = state.view();
         let stored = view
             .world()
@@ -869,7 +869,7 @@ mod tests {
         .execute(&authority, &mut tx)
         .expect("replace manifest");
         tx.apply();
-        block.commit().unwrap();
+        block.commit_world_overlay_for_testing().unwrap();
         let view = state.view();
         let set = view
             .world()

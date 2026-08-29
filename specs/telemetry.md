@@ -4,12 +4,11 @@ Iroha exports Prometheus-format metrics and a JSON status summary. This page lis
 
 Endpoints
 - `/metrics`: Prometheus exposition text. Hidden when telemetry is disabled or the profile does not allow expensive metrics.
-- `/status`: JSON status (hidden when telemetry is disabled). Includes top-level gauges (peers, blocks, queue active count), a `crypto { sm_helpers_available, sm_openssl_preview_enabled, halo2: { enabled, curve, backend, max_k, verifier_budget_ms, verifier_max_batch } }` snapshot, the `sumeragi { leader_index, highest_qc_height, locked_qc_height, locked_qc_view, gossip_fallback_total, view_change_proof_accepted_total, view_change_proof_stale_total, view_change_proof_rejected_total, block_created_dropped_by_lock_total, block_created_hint_mismatch_total, block_created_proposal_mismatch_total, pacemaker_backpressure_deferrals_total, tx_queue_depth, tx_queue_capacity, tx_queue_retained_bytes, tx_queue_max_retained_bytes, tx_queue_saturated, tx_queue_saturated_by_count, tx_queue_saturated_by_bytes, tx_queue_saturated_by_age, tx_queue_oldest_queued_age_ms, epoch_length_blocks, epoch_commit_deadline_offset, epoch_reveal_deadline_offset, prf_epoch_seed (hex), prf_height, prf_view }` view (highest/locked QC heights), a `governance` snapshot, and (when available) `sorafs_micropayments` — the most recent SoraFS micropayment sample per provider including credit counters and ticket totals.
+- `/status`: JSON status (hidden when telemetry is disabled). Includes top-level gauges (peers, blocks, queue active count), a `crypto { sm_helpers_available, sm_openssl_preview_enabled, halo2: { enabled, curve, backend, max_k, verifier_budget_ms, verifier_max_batch } }` snapshot, the `sumeragi { leader_index, highest_qc_height, locked_qc_height, locked_qc_view, view_change_proof_accepted_total, view_change_proof_stale_total, view_change_proof_rejected_total, block_created_dropped_by_lock_total, block_created_hint_mismatch_total, block_created_proposal_mismatch_total, tx_queue_depth, tx_queue_capacity, tx_queue_retained_bytes, tx_queue_max_retained_bytes, tx_queue_saturated, tx_queue_saturated_by_count, tx_queue_saturated_by_bytes, tx_queue_saturated_by_age, tx_queue_oldest_queued_age_ms, epoch_length_blocks, epoch_commit_deadline_offset, epoch_reveal_deadline_offset, prf_epoch_seed (hex), prf_height, prf_view }` view, and a `governance` snapshot.
 - `/v1/sumeragi/status` (Norito by default): authoritative protocol-v2 reducer status. JSON flattens the reducer fields (protocol and fingerprints, height context, height/view/phase/leader, QC and timeout references, body/persistence state, and the latest durable commit) and appends `safety_halt`, bounded lane settlement/relay/ownership/committed/session arrays, `local_peer_removed`, and `operator { view_change_install_total, busy_deferral_total, adapter_queues, tx_queue }`. Norito carries the same information as typed `SumeragiV2StatusResponse`, with reducer state under `authoritative`.
 - `/v1/sumeragi/status/sse` (SSE): periodic stream (≈1s) emitting the same JSON payload as `/v1/sumeragi/status` for dashboards.
 - Nexus lane/dataspace status is present for every first-release deployment,
   including the canonical one-lane topology.
-- `/v1/sumeragi/pacemaker` (JSON): non-authoritative legacy-labeled gauge snapshot. Its backoff/RTT/jitter fields are not revision-4 timer configuration; revision 4 derives deadlines from the signed cadence as described in `specs/sumeragi_pacemaker.md`.
 - `/v1/sumeragi/qc` (Norito by default): canonical `SumeragiV2QcResponse` with required nullable `highest_prepare_qc` and `locked_prepare_qc` slots. Each non-null value is a full context-bound `QuorumCertificateRef`; JSON uses the identical schema and encodes unavailable references as explicit `null`.
 - `/v1/sumeragi/leader` (JSON): leader index snapshot; includes PRF context `{ height, view, epoch_seed }` in NPoS mode when available.
 - `/v1/soranet/privacy/{event,share}` (Norito): bounded privacy telemetry mutation ingress for relay/collector signals. Before decoding, Torii verifies the four exact NetworkId-bound `X-Iroha-Operator-*` headers over the method, target, body, timestamp, and fresh nonce, then requires `torii.soranet_privacy_ingest.enabled = true` and a CIDR allow-list entry (empty list denies). Rate limits come from `rate_per_sec`/`burst` and are keyed by authenticated operator public key. DTOs reject unknown fields and overlong/control-bearing labels; live bucket admission rejects future or expired timestamps, bounds incomplete windows, and rejects conflicting or already-finalized collector shares. The share route also derives a full 256-bit BLAKE3 collector ID from the authenticated operator key and rejects caller identity mismatches. Retired collector/API bearer headers are rejected; failures surface `400/401/403/429` plus `soranet_privacy_ingest_reject_total{endpoint,reason}`.
@@ -64,21 +63,20 @@ Runbook guidance
 - If `enforcement_mode = "reject"`, admission blocks time-sensitive instructions while unhealthy. Switch to `warn` only for temporary operational relief.
 
 Configuration
-- `telemetry_enabled` (default: true): Master kill switch. When set to false, the daemon skips telemetry worker startup, Torii hides `/metrics` and `/status`, and runtime instrumentation is bypassed regardless of profile.
-- `telemetry_profile` (default: `operator`): Capability bundle wiring both Torii routing and runtime sinks. Profiles toggle three capability flags — `metrics`, `expensive_metrics`, and `developer_outputs`. When `telemetry_enabled = false`, the effective profile is forced to `disabled`.
+- `telemetry_profile` (default: `operator`): The sole telemetry switch and capability bundle wiring both Torii routing and runtime sinks. `disabled` skips telemetry workers, exporters, and expensive hardware probes, hides `/metrics` and `/status`, and makes state-telemetry recording paths return without updating observations; a configured sink is rejected instead of being silently ignored. The other profiles select lightweight metrics, costly probes/timings, and developer outputs directly.
 - `torii.peer_telemetry_urls` (default: empty): Optional list of Torii base URLs used to fetch peer telemetry metadata. When unset, peer telemetry discovery is disabled to avoid probing P2P ports.
 - Peer-monitor HTTP bodies are streamed under first-release caps before JSON decoding: 4 MiB for `/v1/configuration`, 1 MiB for `/v1/peers`, 64 KiB for `/status`, and 16 KiB for the fixed-field geo response. Both an oversized `Content-Length` and chunked/decompressed growth past the applicable cap fail closed without retaining the remainder.
-- Telegram alert metric sampling never materializes the complete Prometheus response: it examines at most 8 MiB per poll, retains at most one 16 KiB line, and stores only the four scalar values used by alert rendering. Declared or streamed overflow fails that sample closed.
+- Telegram bot key and chat ID are an all-or-none pair of bounded ASCII identifiers. Alert settings without credentials are rejected, and the daemon rejects credentials when the binary/profile cannot run that sink. Telegram API requests use bounded connect/request deadlines, reject redirects and non-success statuses, and remove credential-bearing URLs from diagnostics. When `telegram_include_metrics = true`, each retained, rate-admitted alert requests the core telemetry actor's bounded checked refresh and then reads the four scalar values used by alert rendering from the shared in-process registry; a failed refresh omits the optional snapshot instead of publishing stale values. The first release has no Telegram HTTP metrics sampler: it performs no self-request to `/metrics`, cannot be blocked by Torii profile/auth policy, and rejects the retired `telegram_metrics_url` and `telegram_metrics_period_ms` settings.
+- WebSocket collector URLs must use `ws` or `wss`, reconnect delays are clamped to at least 100 ms, the backoff exponent is capped at 16, and TLS support is part of the exporter feature itself. Exported records carry only the timestamp, tracing `target`, payload, and optional integrity chain; the retired constant `id: 0` field is not emitted. Collector input is control-only: Ping, Pong, and Close are accepted under a 1 KiB frame/message ceiling; Text, Binary, oversized, or malformed inbound frames disconnect the collector.
 - `torii.peer_geo.enabled` (default: false): Enable peer geo lookups for Torii telemetry (opt-in; requires network access to the configured endpoint).
 - `torii.peer_geo.endpoint` (default: unset): Required HTTPS ip-api compatible endpoint used for peer geo lookups when `torii.peer_geo.enabled = true`; when unset, Torii skips geo lookup and logs a warning.
-- Build-time ISI instrumentation: `#[metrics]` counters (`isi{kind="total|success"}`) and timing histograms (`isi_times`) require building `irohad` with `--features expensive-telemetry` (or `iroha_core` `expensive-telemetry`). The runtime still respects `telemetry_enabled` and `telemetry_profile` for exposure.
+- Build-time ISI instrumentation: `#[metrics]` counters (`isi{kind="total|success"}`) and timing histograms (`isi_times`) require building `irohad` with `--features expensive-telemetry` (or `iroha_core` `expensive-telemetry`). Runtime exposure still follows `telemetry_profile`.
 
 Telemetry redaction and integrity
-- Redaction is mandatory for `operator`, `extended`, and `full` profiles; startup rejects configs where `telemetry_redaction.mode` is not `strict` or the build lacks the `log-obfuscation` feature.
-- Field-name normalization is case-insensitive and splits punctuation/camelCase/acronyms into snake_case segments for taxonomy and allow-list checks.
+- Redaction is unconditional in every build and telemetry profile. The retired `[telemetry_redaction]` configuration section, runtime bypasses, and build-time redaction feature are rejected or absent.
+- Field-name normalization is case-insensitive and splits punctuation/camelCase/acronyms into snake_case segments for taxonomy checks. Multi-segment keywords match at segment boundaries inside longer field names.
 - Sensitive taxonomy is defined by explicit prefixes and keywords (kept in sync with guardrails below).
-- Redacted values are replaced with `[REDACTED]`; string payloads longer than 2048 bytes are truncated and suffixed with `...(truncated)` for deterministic export.
-- `telemetry_redaction.mode` options: `strict` (always redact), `allowlist` (allow-listed entries bypass keyword redaction but explicit prefixes still redact), `disabled` (developer-only). `telemetry_redaction.allowlist` must be a subset of the approved policy below.
+- Redacted values are replaced with `[REDACTED]`; sensitive debug values and error chains are classified before formatting, so their plaintext is not needlessly materialized. String payloads longer than 2048 bytes are truncated and suffixed with `...(truncated)` for deterministic export. Error source chains retain at most 16 linked errors and append `[error chain truncated]`, preventing cyclic or hostile `Error::source` implementations from blocking the logger.
 
 Telemetry redaction prefixes:
 <!-- TELEMETRY_REDACTION_PREFIXES_START -->
@@ -110,25 +108,22 @@ bearer
 api_key
 api_key_hash
 apikey
+bot_key
 private_key
 privkey
+signing_key
 mnemonic
 seed
 ```
 <!-- TELEMETRY_REDACTION_KEYWORDS_END -->
 
-Approved telemetry redaction allowlist (normalized field names):
-<!-- TELEMETRY_REDACTION_ALLOWLIST_START -->
-```text
-(none)
-```
-<!-- TELEMETRY_REDACTION_ALLOWLIST_END -->
-
-- Redaction audit metrics: `telemetry_redaction_total{reason="keyword|explicit"}`, `telemetry_redaction_skipped_total{reason="allowlist|disabled|unsupported"}`, and `telemetry_truncation_total`.
-- Tamper-evident exports: when `telemetry_integrity.enabled = true`, websocket telemetry and dev-telemetry JSON lines include a `chain` object (`seq`, `prev_hash`, `hash`, optional `signature`, `key_id`). `hash` is `blake3(prev_hash || seq || payload_json)` where `payload_json` is the Norito JSON serialization of the record. `signature` is a keyed Blake3 hash when `telemetry_integrity.signing_key_hex` (32-byte hex) is set. Without a persisted state file the chain restarts at sequence 1 on startup.
-- To persist continuity across restarts, set `telemetry_integrity.state_dir` to a writable directory. Each sink writes its own state file (for example, `telemetry_integrity_ws.json` and `telemetry_integrity_dev.json`).
+- Tamper-evident exports: when `telemetry_integrity.enabled = true`, websocket telemetry and dev-telemetry JSON lines include a `chain` object (`seq`, `prev_hash`, `hash`, optional `signature`, `key_id`). `hash` is `blake3("iroha.telemetry.record.v1" || prev_hash || seq_be || payload_json)` where `payload_json` is the Norito JSON serialization of the record. `signature` is a keyed Blake3 hash when `telemetry_integrity.signing_key_hex` is set; the key must be exactly 64 hex characters with no prefix or surrounding whitespace. `signing_key_id` is bounded to 128 printable ASCII bytes and is invalid without that key. The exact serialized record is retained in memory before output and, when `state_dir` is configured, journaled before output. The checkpoint also stores a domain-separated BLAKE3 fingerprint of the sink kind and configured destination, so a pending record or established chain cannot silently move to another collector/output file. The development sink advances only after the file data and checkpoint are synced; the WebSocket sink advances after its local send operation succeeds and the checkpoint is synced. WebSocket has no application acknowledgement, so this does not prove remote collector acceptance: ambiguous local failures and restarts resend identical bytes, and collectors should deduplicate by `seq` plus `hash`. Development-file recovery deduplicates a complete tail or replaces a torn matching tail before advancing the chain.
+- Persisted integrity state is supported only on Unix, where custody and directory sync can be enforced. `telemetry_integrity.state_dir` is created owner-only and must remain owned by the process user with no group/other access. Each sink holds an exclusive lock and writes mode-0600, single-link regular lock/state files (for example, `telemetry_integrity_ws.json` and `telemetry_integrity_dev.json`) through a bounded, atomically replaced, fsynced checkpoint. A second writer, unsafe permissions/links, destination mismatch, invalid schema, unreadable data, or oversized state refuses that optional exporter instead of silently replacing the chain; the daemon logs the error and continues serving consensus. Configuring persisted state on another platform fails closed. Without a state directory the in-memory chain restarts at sequence 1 after process restart.
+- Developer telemetry output resolves its parent once, requires the directory to be owned by the process user and not group/other-writable, refuses symlink final components, requires an owner-held mode-0600 single-link regular file, and holds an exclusive file lock for the worker lifetime. This prevents two nodes from interleaving or crash-tail recovery from truncating an unrelated file.
+- The bounded logger channel reserves capacity before formatting, normalizing, or redacting an event. When the channel is full the event is intentionally dropped without paying those allocations; downstream broadcast lag remains explicit in exporter diagnostics.
 
 Build-time instrumentation
+- `iroha_telemetry/event-exporter` compiles the WebSocket event sink and its durable integrity journal. The daemon's `telemetry` feature enables it; metrics/privacy-only consumers do not compile the exporter stack. `iroha_telemetry/dev-telemetry` is independent and compiles only the developer file sink plus the shared integrity primitives, without WebSocket or TLS dependencies.
 - `iroha_core/expensive-telemetry` (enables `iroha_telemetry/metric-instrumentation`) compiles the `#[metrics]` attribute into Prometheus counters and timing histograms.
 - Without it, `#[metrics(+"...")]` still parses but timing histograms are a no-op; runtime `telemetry_profile` still controls exposure.
 
@@ -363,8 +358,8 @@ When the alert triggers:
    status) before blaming the admission tier.
 4. Confirm the authenticated revision-4 `(height, view)` and TimeoutCertificate
    progress in `/v1/sumeragi/status`. Correlate repeated view changes with
-   backpressure reasons and responsive committee membership; legacy
-   backoff/RTT gauges do not drive revision-4 deadlines.
+   backpressure reasons and responsive committee membership; revision-4
+   certificate progress is the authoritative deadline signal.
 5. If latency remains elevated after clearing backlog, throttle the offending
    lane by raising `iroha_config.torii.transaction_lane.max_inflight` or
    redirecting traffic to a healthy lane using the orchestrator/CLI routing
@@ -382,11 +377,10 @@ Operators monitoring proposal health should import
 - `Highest vs Locked QC Height` — gauges `sumeragi_highest_qc_height` and
   `sumeragi_locked_qc_height` so you can spot stalled view changes or peers
   lagging behind the canonical highest/locked certificates.
-- `Proposal Drop Rates (5m)` — visualises
-  `increase(sumeragi_gossip_fallback_total[5m])` alongside the BlockCreated drop
-  counters (`block_created_dropped_by_lock_total`, `block_created_hint_mismatch_total`,
-  `block_created_proposal_mismatch_total`) to highlight misbehaving leaders and
-  collectors.
+- `Proposal Drop Rates (5m)` — visualises the BlockCreated drop counters
+  (`block_created_dropped_by_lock_total`, `block_created_hint_mismatch_total`,
+  `block_created_proposal_mismatch_total`) to highlight invalid or stale
+  proposals.
 - `Proposal Drop Totals` — a stat panel over the cumulative counters for quick
   summarisation in NOC dashboards.
 
@@ -459,8 +453,8 @@ exhaustion.
 
 Torii integration
 
-- `Torii::new_with_handle` accepts a `routing::MaybeTelemetry` gate that pairs the runtime `Telemetry` handle with the active `TelemetryProfile`. Use `routing::MaybeTelemetry::from_profile(runtime_handle, profile)` to construct the gate, or `routing::MaybeTelemetry::disabled()` when telemetry is unavailable.
-- `Torii::new` (when the `telemetry` feature is enabled) remains as a convenience wrapper; it now forwards to `new_with_handle` with an operator profile by default. Tests can use `routing::MaybeTelemetry::for_tests()` to obtain an in-process telemetry handle.
+- `Torii::new_with_handle` accepts a `routing::MaybeTelemetry` value that pairs the runtime `Telemetry` handle with the active `TelemetryProfile`. Use `routing::MaybeTelemetry::from_profile(runtime_handle, profile)` to construct it, or `routing::MaybeTelemetry::disabled()` when telemetry is unavailable.
+- `Torii::new` has one feature-independent, telemetry-disabled signature. Embeddings that collect telemetry use `new_with_handle` explicitly. Tests can use `routing::MaybeTelemetry::for_tests()` to obtain an in-process telemetry handle.
 
 - `torii_address_invalid_total{endpoint,reason}` increments whenever HTTP routes reject an account identifier (invalid I105 payloads, checksum failures, selector-prefixed bytes, and other strict-parser failures). Keep the `<0.1%` SLO by watching the dedicated Grafana board in `dashboards/grafana/address_ingest.json`.
 
@@ -497,8 +491,8 @@ P2P metrics (selected)
 
 Sumeragi metrics
 - Counters: `sumeragi_tail_votes_total`, `sumeragi_widen_before_rotate_total`, `sumeragi_view_change_suggest_total`, `sumeragi_view_change_install_total`; histogram: `sumeragi_cert_size` (signatures per committed block).
-- Commit quorum/certificate: `sumeragi_commit_signatures_present`, `sumeragi_commit_signatures_counted`, `sumeragi_commit_signatures_set_b`, `sumeragi_commit_signatures_required` track the last commit tally; `sumeragi_commit_certificate_height`, `sumeragi_commit_certificate_view`, `sumeragi_commit_certificate_epoch`, `sumeragi_commit_certificate_signatures_total`, `sumeragi_commit_certificate_validator_set_len` summarize the latest commit certificate.
-- Queue health: `sumeragi_tx_queue_depth`/`sumeragi_tx_queue_capacity` gauge the live mempool size and effective ceiling, while `sumeragi_tx_queue_retained_bytes`/`sumeragi_tx_queue_max_retained_bytes` gauge retained queue memory. `sumeragi_tx_queue_saturated_by_count`, `sumeragi_tx_queue_saturated_by_bytes`, `sumeragi_tx_queue_saturated_by_age`, and `sumeragi_tx_queue_oldest_queued_age_ms` distinguish the pressure cause; `sumeragi_tx_queue_saturated` flips to `1` when any cause is active. Count or retained-byte saturation signals that redundant collector fan-out is temporarily suppressed.
+- Commit quorum/certificate: `sumeragi_commit_signatures_present`, `sumeragi_commit_signatures_counted`, `sumeragi_commit_signatures_set_b`, `sumeragi_commit_signatures_required` track the last commit tally; `sumeragi_commit_qc_height`, `sumeragi_commit_qc_view`, `sumeragi_commit_qc_epoch`, `sumeragi_commit_qc_signatures_total`, and `sumeragi_commit_qc_validator_set_len` summarize the latest commit certificate.
+- Queue health: `sumeragi_tx_queue_depth`/`sumeragi_tx_queue_capacity` gauge the live mempool size and effective ceiling, while `sumeragi_tx_queue_retained_bytes`/`sumeragi_tx_queue_max_retained_bytes` gauge retained queue memory. `sumeragi_tx_queue_saturated_by_count`, `sumeragi_tx_queue_saturated_by_bytes`, `sumeragi_tx_queue_saturated_by_age`, and `sumeragi_tx_queue_oldest_queued_age_ms` distinguish the pressure cause; `sumeragi_tx_queue_saturated` flips to `1` when any cause is active.
 - Pending blocks: `sumeragi_pending_blocks_total` counts pending blocks tracked by the local node; `sumeragi_pending_blocks_blocking` isolates those that gate proposal/view-change progress; `sumeragi_commit_inflight_queue_depth` shows whether the commit pipeline is busy (0/1).
 - Proposal gaps: `sumeragi_proposal_gap_total` counts view-change rotations triggered because no proposal was observed before the cutoff.
 - Retired consensus-VRF series: `sumeragi_vrf_*` metrics are not registered or
@@ -506,8 +500,6 @@ Sumeragi metrics
   participation penalty, and exposes no consensus-VRF randomness-health or
   release signals. Current randomness is the finalized global threshold-beacon
   pulse.
-- Collector fan-out: `sumeragi_redundant_sends_total` (aggregate), `sumeragi_redundant_sends_by_peer{peer="…"}`, and `sumeragi_redundant_sends_by_collector{idx="…"}` highlight redundant collector sends; investigate sustained spikes to locate congested collectors or unhealthy peers.
-- Collector targeting: `sumeragi_collectors_targeted_current` (gauge) tracks the in-flight collector count for the current block; `sumeragi_collectors_targeted_per_block` histogram (`*_bucket`) records how many collectors were targeted per committed block.
 - Signed DA availability: use `sumeragi_da_gate_block_total{reason="missing_local_data"}` for missing local payloads and the `sumeragi_da_manifest_*`/`sumeragi_da_spool_*` families for revision-4 manifest and chunk-spool handling. Retired global-RBC INIT/READY/DELIVER counters are not exported.
 - Channel pressure: `sumeragi_dropped_block_messages_total` and `sumeragi_dropped_control_messages_total` partition channel drops; `dropped_messages` remains the aggregate counter for existing dashboards.
 
@@ -523,19 +515,16 @@ Sumeragi additions (new series)
 - `sumeragi_bg_post_queue_depth` (gauge) — global background-post queue depth.
 - `sumeragi_bg_post_queue_depth_by_peer{peer}` (gauge) — per-collector background-post queue depth.
 
-Sumeragi deadline telemetry
+Sumeragi deadlines
 
 - Revision 4 derives its view-zero deadline as ten signed cadence intervals,
   retransmits every one fifth of that deadline, and applies linear
   view-indexed backoff capped at ten view-zero deadlines. Validate cadence and
   the shared configuration fingerprint through authenticated
   `/v1/sumeragi/status`.
-- `sumeragi_pacemaker_backpressure_deferrals_total` and its reason-labelled
-  variants remain useful finite-queue observations. They do not configure or
-  report an adaptive timer.
-- The catalog still registers legacy-labeled backoff, RTT, EMA, and jitter
-  gauges. Do not use them for revision-4 alerts or rollout decisions;
-  they may remain zero until that telemetry ABI is retired separately.
+- First-release telemetry does not expose adaptive backoff, RTT, EMA, jitter,
+  or pacemaker-deferral series. Use the authenticated status plus transaction,
+  adapter, ingress, and P2P queue metrics for finite-queue diagnosis.
 
 NEW_VIEW receipts
 - GaugeVec:
@@ -565,13 +554,6 @@ Example PromQL
  - rate(sumeragi_view_change_install_total[5m])
 - Certificate size P90 (signatures):
   - histogram_quantile(0.9, sum(rate(sumeragi_cert_size_bucket[5m])) by (le))
-- Collector targeting distribution:
-  - sum by (le) (rate(sumeragi_collectors_targeted_per_block_bucket[5m]))
-  - histogram_quantile(0.95, sum by (le) (rate(sumeragi_collectors_targeted_per_block_bucket[5m])))
-- Redundant send spikes / top offenders:
-  - rate(sumeragi_redundant_sends_total[5m])
-  - topk(5, sum by (peer) (rate(sumeragi_redundant_sends_by_peer[5m])))
-  - sum by (idx) (rate(sumeragi_redundant_sends_by_collector[5m]))
 - Channel drop alerts:
   - rate(sumeragi_dropped_block_messages_total[5m])
   - rate(sumeragi_dropped_control_messages_total[5m])
@@ -581,28 +563,9 @@ Alert snippets
 - Hint mismatch burst: `increase(block_created_hint_mismatch_total[5m]) > 0`
 - Proposal mismatch burst: `increase(block_created_proposal_mismatch_total[5m]) > 0`
 - Locked QC gate drop spike: `increase(block_created_dropped_by_lock_total[5m]) > 0`
-- Pacemaker deferrals under sustained load: `increase(sumeragi_pacemaker_backpressure_deferrals_total[5m]) > 0`
-- Pacemaker deferrals by reason: `increase(sumeragi_pacemaker_backpressure_deferrals_by_reason_total[5m]) > 0`
-
-Sumeragi pacemaker (example)
-- Endpoint: `GET /v1/sumeragi/pacemaker`
-- Shape: `{ backoff_ms, rtt_floor_ms, jitter_ms, backoff_multiplier, rtt_floor_multiplier, max_backoff_ms, jitter_frac_permille, round_elapsed_ms, view_timeout_target_ms, view_timeout_remaining_ms }`
-
-Example response
-```json
-{
-  "backoff_ms": 500,
-  "rtt_floor_ms": 120,
-  "jitter_ms": 15,
-  "backoff_multiplier": 2,
-  "rtt_floor_multiplier": 2,
-  "max_backoff_ms": 60000,
-  "jitter_frac_permille": 50,
-  "round_elapsed_ms": 340,
-  "view_timeout_target_ms": 1000,
-  "view_timeout_remaining_ms": 660
-}
-```
+- Transaction queue saturation: `max_over_time(sumeragi_tx_queue_saturated[5m]) > 0`
+- Transaction queue count pressure: `max_over_time(sumeragi_tx_queue_saturated_by_count[5m]) > 0`
+- Transaction queue byte pressure: `max_over_time(sumeragi_tx_queue_saturated_by_bytes[5m]) > 0`
 
 Sumeragi v2 PrepareQC response
 - Endpoint: `GET /v1/sumeragi/qc`
@@ -669,7 +632,7 @@ Layer widths and utilization
   - rate(pipeline_overlay_bytes[5m])
 
 Configuration
-- Telemetry master switch: when disabled in `iroha_config`, Torii hides `/metrics` and `/status`, no telemetry outputs are started, and all observations are skipped. Gauges/counters remain unchanged while disabled.
+- Telemetry kill switch: when `telemetry_profile = "disabled"`, Torii hides `/metrics` and `/status`, no telemetry outputs are started, and all observations are skipped. Gauges/counters remain unchanged while disabled.
 - Halo2 verifier gauges:
   - `iroha_zk_halo2_enabled`: 0/1 flag indicating whether Halo2 verification is active.
   - `iroha_zk_halo2_curve_id`: numeric identifier for the selected curve (`0=Pallas`, `1=Pasta`, `2=Goldilocks`, `3=Bn254`).
@@ -692,17 +655,15 @@ Revision-4 Sumeragi context and diagnostics
   `min(v + 1, 10)` deadline multiplier. RTT samples, EMA values, jitter, and
   local wall clock tuning never change these deadlines.
 
-Prometheus series whose names include `rbc`, `da`, or `pacemaker` report
-node-local transport and backpressure observations. They are not signed
-protocol evidence and do not imply configurable V1 subprotocols. Pacemaker-
-named backpressure counters report producer deferral around finite queues; they
-do not report an adaptive timer policy.
+Prometheus series whose names include `rbc` or `da` report node-local transport
+and availability observations. They are not signed protocol evidence and do
+not imply configurable V1 subprotocols.
 
 ### Troubleshooting consensus transport and backpressure
 
 1. **Capture authenticated snapshots.** Use `iroha_cli --operator-private-key-file /absolute/runtime/operator.key --output-format text ops sumeragi status`; preserve the shared configuration fingerprint, signed height context, queue depths, and the active `(height, view)`. Capture `/metrics` separately for node-local transport observations.
 2. **Check context agreement first.** A mode, cadence, roster, quorum, DA-layout, or shared-limit mismatch must be repaired through the signed genesis/height rollout or consistent validator configuration. Do not add a local bypass.
-3. **Inspect finite queues.** Correlate `sumeragi_pacemaker_backpressure_deferrals_total`, its reason-labelled variants, transaction saturation gauges, body/chunk ingress depth, and P2P queue/drop metrics. If a node-local limit is too small, change the corresponding current `sumeragi.block`, `sumeragi.queues`, or `sumeragi.limits` field consistently across validators.
+3. **Inspect finite queues.** Correlate transaction queue depth/capacity/saturation gauges, body/chunk ingress depth, and P2P queue/drop metrics. If a node-local limit is too small, change the corresponding current `sumeragi.block`, `sumeragi.queues`, or `sumeragi.limits` field consistently across validators.
 4. **Inspect transport health.** Repeated retransmission, incomplete reconstruction, or block-sync recovery should be correlated with authenticated consensus-message logs and `consensus_ingress_drop_total`. Provision bandwidth or reduce admission load before changing finite limits.
 5. **Escalate persistent stalls.** Freeze new client submissions, preserve status/telemetry and signed context evidence, and verify that at least `2f + 1` committee members remain responsive. A local RBC/DA/pacemaker knob is not a recovery mechanism in revision 4.
 
@@ -772,7 +733,7 @@ updates the process metric. It counts every release bound to a non-selectable
 archive, including yanked and Parliament-taken-down releases, because it measures
 replication exposure rather than fresh resolver eligibility.
 Torii records structurally invalid cursors, while Core's public `Expired` query
-error remains wire-compatible. For the six paged Musubi queries, an in-process
+error retains its canonical shape. For the six paged Musubi queries, an in-process
 typed error preserves the exact failure through the Core boundary so Torii
 exports `FinalizedAnchorMismatch` as `stale_anchor`, `IndexRevisionMismatch` as
 `stale_revision`, `QueryMismatch` as `wrong_query`, `CallerMismatch` as
@@ -1169,18 +1130,13 @@ the Nexus cut-over. All metrics back the Grafana board stored in
 - Runbooks: use `specs/runbooks/nexus_lane_finality.md` for finality/oracle procedures and `ops/runbooks/da-quorum.md` for DA-specific mitigations. Both documents call out the metrics above plus evidence requirements.
 - Release gates: ensure `status.md` entries link to the latest NX-18 slot bundle and Grafana captures whenever preparing a release candidate; the roadmap requires signed artefacts before multi-lane code paths are enabled by default.
 
-Environment variables provide the same knobs (`OTEL_BLRP_MAX_EXPORT_BATCH_SIZE`
-and `OTEL_METRIC_EXPORT_INTERVAL`). Set both to `256` and `5s` respectively
-during Nexus rehearsals, then archive the resulting `otlp.ndjson` inside the
-telemetry pack before running the validation script above.
-
 #### Routed-trace audit outcomes
 
 - `telemetry` log `nexus.audit.outcome` — emitted via `Telemetry::record_audit_outcome` whenever a routed-trace checkpoint completes. The Norito payload includes `trace_id`, `slot_height`, `reviewer`, `status` (for example `pass`, `fail`, `mitigated`), and an optional `mitigation_url`.
 - Prometheus surfaces `nexus_audit_outcome_total{trace_id,status}` and `nexus_audit_outcome_last_timestamp_seconds{trace_id}` so dashboards and alert rules can track routed-trace health.
 
 Operator workflow:
-1. During `TRACE-*` rehearsals, tail the telemetry stream (`journalctl -u irohad -o json` or OTLP bridge) and confirm an event appears for each scheduled audit window.
+1. During `TRACE-*` rehearsals, tail the telemetry stream (`journalctl -u irohad -o json` or the bounded structured-event sink) and confirm an event appears for each scheduled audit window.
 2. Archive the JSON payload alongside the audit artefacts so reviewers can trace the verdict and mitigation link.
 3. Run `scripts/telemetry/check_nexus_audit_outcome.py` against the telemetry log (for example, `--trace-id TRACE-TELEMETRY-BRIDGE --window-start <ISO time> --window-minutes 30`). The helper enforces that a matching payload exists, fails the run if a disallowed status (default `fail`) is observed, and stores the JSON artefact under `fixtures/documentation/nexus_audit_outcomes/` for audit records.
 4. Alert when `status="fail"` or if no event is observed within 30 minutes of the expected audit slot; the Prometheus rule `dashboards/alerts/nexus_audit_rules.yml` fires on failing statuses, while CI should integrate the script above to gate the “missing outcome” requirement.

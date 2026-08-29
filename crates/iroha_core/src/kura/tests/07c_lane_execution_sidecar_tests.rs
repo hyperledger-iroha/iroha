@@ -181,23 +181,13 @@ fn lane_execution_sidecars_validate_without_recursive_prune_repair() {
                 )
                 .ok_or_else(|| "read execution input after persistence".to_owned())?;
             let state_hash = Some(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
-                b"missing lane artifact direct application state",
+                b"missing lane artifact preflight state",
             )));
             let result =
                 TransactionResult::new(TransactionResultInner::Ok(DataTriggerSequence::new()));
             worker_kura
                 .persist_lane_block_execution_preflight(&input, 7, state_hash, vec![result])
                 .map_err(|error| format!("persist execution preflight: {error:?}"))?;
-            let preflight = worker_kura
-                .read_lane_block_execution_preflight_with_repair_policy(
-                    lane_id,
-                    lane_block_height,
-                    false,
-                )
-                .ok_or_else(|| "read execution preflight after persistence".to_owned())?;
-            worker_kura
-                .persist_direct_lane_block_application_receipt(&input, &preflight)
-                .map_err(|error| format!("persist direct receipt: {error:?}"))?;
             Ok(())
         })();
         done_tx.send(outcome).expect("report sidecar outcome");
@@ -212,11 +202,8 @@ fn lane_execution_sidecars_validate_without_recursive_prune_repair() {
             .is_none(),
         "validation under prune_lock must not repair the missing lane artifact sidecar",
     );
-    let receipt = kura
-        .read_active_lane_block_application_receipt_structural(lane_id, lane_block_height, false)
-        .expect("read direct receipt without sidecar repair");
     let state_hash = Some(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
-        b"missing lane artifact direct application state",
+        b"missing lane artifact preflight state",
     )));
     let status_revision = kura.committed_lane_status_revision();
     for _ in 0..2 {
@@ -247,17 +234,17 @@ fn lane_execution_sidecars_validate_without_recursive_prune_repair() {
                 7,
                 state_hash,
             )
-            .is_none(),
-            "an existing application receipt must close the preflighted-input stage",
+            .is_some(),
+            "a clean preflight without a canonical receipt remains ready for application",
         );
         assert_eq!(
             kura.read_lane_block_application_receipt_without_sidecar_repair(
                 lane_id,
                 lane_block_height,
             ),
-            Some(receipt.clone()),
+            None,
         );
-        assert!(kura.lane_block_application_receipt_available_without_sidecar_repair(&proposal),);
+        assert!(!kura.lane_block_application_receipt_available_without_sidecar_repair(&proposal),);
         assert!(
             !kura.lane_block_application_receipt_conflicts_with_preflight_without_sidecar_repair(
                 &proposal,
@@ -275,18 +262,9 @@ fn lane_execution_sidecars_validate_without_recursive_prune_repair() {
         "passive evidence reads must not publish a Kura status revision",
     );
     assert!(
-        kura.lane_block_application_receipt_matches_available_evidence(&receipt, false),
-        "execution input, preflight, and direct receipt must remain usable without repair",
-    );
-    assert!(
         kura.read_lane_block_artifact(lane_id, lane_block_height)
             .is_none(),
         "nonrepair evidence validation must leave the missing lane artifact absent",
-    );
-    assert_eq!(
-        kura.read_lane_block_application_receipt(lane_id, lane_block_height),
-        Some(receipt),
-        "the public repair-enabled receipt reader must retain valid evidence",
     );
     assert!(
         kura.read_lane_block_artifact(lane_id, lane_block_height)

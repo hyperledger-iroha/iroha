@@ -37,7 +37,7 @@ Notes:
 
 ### Telemetry
 
-When telemetry is enabled (`telemetry_enabled=true`):
+When telemetry is enabled (`telemetry_profile` is not `disabled`):
 
 - `torii_query_snapshot_requests_total{mode}`: total count of snapshot-lane queries by mode.
 - `torii_query_snapshot_first_batch_ms{mode}`: first-batch latency histogram by mode (ms).

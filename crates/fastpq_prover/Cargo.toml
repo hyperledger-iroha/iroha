@@ -64,7 +64,7 @@ required-features = ["dev-tools"]
 
 [[test]]
 name = "transcript_replay"
-required-features = ["dev-tools", "fastpq-gpu"]
+required-features = ["dev-tools"]
 
 [[test]]
 name = "fastpq_integration"

@@ -1142,9 +1142,10 @@ after canonical Kura/WSV commit.
 **Closure condition.** Every peer deterministically re-executes the exact
 certified batch on the committed base WSV and atomically commits canonical
 Kura/WSV state. Staging requires no pending block hash or transaction-height
-row; pre-vote validation requires no pending block hash and one exact empty row
-at the carrier height; final application requires that same row plus the exact
-singleton finalized carrier hash. The move-only WSV authorization retains the
+row; pre-vote validation requires no pending block hash and one canonical row
+containing exactly the certified merge entrypoints at the carrier height; final
+application requires that same row plus the exact singleton finalized carrier
+hash. The move-only WSV authorization retains the
 exact encoded autonomous external-event prefix and its event count. Pre-vote
 validation proves that prefix unchanged, reconstructs the certified root from
 only those retained autonomous bytes, and separately binds the complete
@@ -1167,16 +1168,16 @@ result attempt, tampered results/write set/post state, duplicate ordinary/merge
 membership, Kura-before-WSV and WSV-before-queue crash boundaries, each
 Commit/ForgetCommit boundary, repeated reconciliation, losing/future/stale
 proposal, timeout, reconfiguration, retirement, release-order restoration,
-pre-vote absence/wrong-height/non-empty carrier rows, a premature pending
+pre-vote absence/wrong-height/extra carrier membership, a premature pending
 carrier hash, a mismatched finalized carrier hash, and unbound finality-time
 event-surface drift.
 The focused inventory names
 `state::tests::finalized_merge_execution_commit_surface_borrows_exact_carrier_hash`,
 `state::tests::autonomous_execution_commit_rejects_post_publication_event_surface_drift`,
 `state::tests::autonomous_execution_pre_vote_rejects_due_start_of_block_effect`,
-`state::tests::autonomous_execution_pre_vote_requires_exact_empty_carrier_membership`,
+`state::tests::autonomous_execution_pre_vote_requires_exact_merge_carrier_membership`,
 `state::tests::autonomous_execution_pre_vote_rejects_wrong_carrier_membership_height`,
-`state::tests::autonomous_execution_pre_vote_rejects_non_empty_carrier_membership`,
+`state::tests::autonomous_execution_pre_vote_rejects_extra_carrier_membership`,
 `state::tests::autonomous_execution_pre_vote_rejects_premature_pending_carrier_hash`,
 and
 `state::tests::autonomous_execution_finality_rejects_unbound_event_surface_drift`.
@@ -1189,7 +1190,7 @@ Assert exactly one history/query inclusion result.
 that each accepted reservation has one of three terminal outcomes: globally
 applied once, released once in FIFO position, or durably retained by one live
 certified owner. `MLCarrierCommitSurfaceExact` additionally preserves the
-ordered pristine, exact-empty post-block/pre-vote, and exact finalized-carrier
+ordered pristine, exact merge-only post-block/pre-vote, and exact finalized-carrier
 surfaces, including the exact autonomous event prefix, separately bound full
 carrier publication vector, and drained final live buffer. Mutation
 `ML-MUT-AUT-05` advances queue state before
@@ -1743,12 +1744,12 @@ corpus includes
 The harness and source-bound release inventory both require that exact count.
 The source inventories now require OpenAPI 7, Python 63, JavaScript 61, Swift
 5, Kotlin 7, and Java 6 tests. The current recursive mutable-tree closure
-  contains exactly 1,400 grouped and 1,402 diagnostics records. Its grouped and
+  contains exactly 1,442 grouped and 1,444 diagnostics records. Its grouped and
 diagnostics
 suite-source SHA-256 values are
-  `fdc4c3fb9192277bc6a80018ecb62ed096f12cb41a4c40bde0681ee8f6478577`
+  `d7bd6e6aa1f97e267677560226a3d1bb6d8a3983e1802d7081e6a53ab8dbf64e`
 and
-  `f2e7d3b79dd311b93f9ade26a846940dcd12b636c551a70800f63817a10bfa4c`.
+  `ea4417cea240e24420ffd3622055e03cad1b597f117b8313f4b61707e73ac1f7`.
 The checked-in grouped fixture has SHA-256
 `e4fb62addba3c3b8aecdbff55840e21620c770ab96d346ca55b156cf0239942b`.
 The diagnostics closure directly includes the 48-line wire fixture whose
@@ -2056,11 +2057,11 @@ browser JavaScript distribution, SoraFS orderbook JavaScript implementation
 and types, the standalone Python orderbook module, Kotlin/Java Native models,
 grouped JSON, and wire TSV. Its record totals and suite-source digests must be
 derived and receipt-bound from the exact immutable candidate. The current
-  mutable-tree closure contains exactly 1,400 grouped and 1,402 diagnostics
+  mutable-tree closure contains exactly 1,442 grouped and 1,444 diagnostics
 records, with grouped and diagnostics suite-source SHA-256 values
-  `fdc4c3fb9192277bc6a80018ecb62ed096f12cb41a4c40bde0681ee8f6478577`
+  `d7bd6e6aa1f97e267677560226a3d1bb6d8a3983e1802d7081e6a53ab8dbf64e`
 and
-  `f2e7d3b79dd311b93f9ade26a846940dcd12b636c551a70800f63817a10bfa4c`.
+  `ea4417cea240e24420ffd3622055e03cad1b597f117b8313f4b61707e73ac1f7`.
 The current grouped JSON and wire TSV SHA-256 values are
 `e4fb62addba3c3b8aecdbff55840e21620c770ab96d346ca55b156cf0239942b`
 and

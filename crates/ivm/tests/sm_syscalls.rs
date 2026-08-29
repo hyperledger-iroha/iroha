@@ -2,9 +2,8 @@ use hex::decode;
 use iroha_crypto::{Sm2PrivateKey, Sm2PublicKey, Sm2Signature, Sm3Digest};
 use ivm::{
     CoreHost, Memory, PointerType, VMError, encoding, instruction,
-    mock_wsv::{AccountId, AssetDefinitionId, MockWorldStateView, WsvHost},
+    mock_wsv::{AccountId, MockWorldStateView, WsvHost},
 };
-use std::collections::HashMap;
 const TEST_CALLER_ID: &str = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
 fn test_caller_account() -> AccountId {
     AccountId::parse_encoded(TEST_CALLER_ID)
@@ -30,21 +29,8 @@ fn make_blob_tlv(payload: &[u8]) -> Vec<u8> {
 fn core_host_with_sm(enable: bool) -> CoreHost {
     CoreHost::new().with_sm_enabled(enable)
 }
-fn wsv_host_with_subject_map(
-    caller: AccountId,
-    accounts: HashMap<u64, AccountId>,
-    assets: HashMap<u64, AssetDefinitionId>,
-) -> WsvHost {
-    let subject_accounts = accounts
-        .into_iter()
-        .map(|(index, account)| (index, account.clone()))
-        .collect();
-    WsvHost::new_with_subject_map(
-        MockWorldStateView::new(),
-        caller.clone(),
-        subject_accounts,
-        assets,
-    )
+fn wsv_host(caller: AccountId) -> WsvHost {
+    WsvHost::new_with_subject(MockWorldStateView::new(), caller)
 }
 #[test]
 fn syscall_sm3_hash_returns_digest_blob() {
@@ -124,10 +110,7 @@ fn mock_wsv_sm3_hash_returns_digest_blob() {
     let message = b"mockwsv-sm3";
     let expected = Sm3Digest::hash(message);
     let caller: AccountId = test_caller_account();
-    let mut accounts: HashMap<u64, AccountId> = HashMap::new();
-    accounts.insert(1, caller.clone());
-    let assets: HashMap<u64, AssetDefinitionId> = HashMap::new();
-    let host = wsv_host_with_subject_map(caller, accounts, assets).with_sm_enabled(true);
+    let host = wsv_host(caller).with_sm_enabled(true);
     let payload = run_sm3_with_host(host, message);
     assert_eq!(payload.as_slice(), expected.as_bytes());
 }
@@ -140,10 +123,7 @@ fn wsv_host_sm2_verify_succeeds_when_enabled() {
     let message = b"wsv-sm2-enabled";
     let signature = private.sign(message).to_bytes();
     let caller: AccountId = test_caller_account();
-    let mut accounts: HashMap<u64, AccountId> = HashMap::new();
-    accounts.insert(1, caller.clone());
-    let assets: HashMap<u64, AssetDefinitionId> = HashMap::new();
-    let host = wsv_host_with_subject_map(caller, accounts, assets).with_sm_enabled(true);
+    let host = wsv_host(caller).with_sm_enabled(true);
     let mut vm = IVM::new(10_000);
     vm.set_host(host);
     let mut offset = 0u64;
@@ -230,10 +210,7 @@ fn wsv_host_sm3_hash_requires_enable_flag() {
     let message = b"wsv-sm3-disabled";
     let tlv = make_blob_tlv(message);
     let caller: AccountId = test_caller_account();
-    let mut accounts: HashMap<u64, AccountId> = HashMap::new();
-    accounts.insert(1, caller.clone());
-    let assets: HashMap<u64, AssetDefinitionId> = HashMap::new();
-    let host = wsv_host_with_subject_map(caller, accounts, assets);
+    let host = wsv_host(caller);
     let mut vm = IVM::new(10_000);
     vm.set_host(host);
     vm.memory
@@ -1075,10 +1052,7 @@ fn wsv_host_sm2_verify_requires_enable_flag() {
     let message = b"ivm-sm2-wsvhost-disabled";
     let signature = private.sign(message).to_bytes();
     let caller: AccountId = test_caller_account();
-    let mut accounts: HashMap<u64, AccountId> = HashMap::new();
-    accounts.insert(1, caller.clone());
-    let assets: HashMap<u64, AssetDefinitionId> = HashMap::new();
-    let host = wsv_host_with_subject_map(caller, accounts, assets);
+    let host = wsv_host(caller);
     let mut vm = IVM::new(10_000);
     vm.set_host(host);
     let mut offset = 0u64;
@@ -1115,10 +1089,7 @@ fn wsv_host_sm4_gcm_seal_matches_vector_when_enabled() {
     let expected_cipher = decode("6468017fde4979a107326ee77d8a265c").expect("hex cipher");
     let expected_tag = decode("cadf422b1af7ec6df46004dc8d3ba855").expect("hex tag");
     let caller: AccountId = test_caller_account();
-    let mut accounts: HashMap<u64, AccountId> = HashMap::new();
-    accounts.insert(1, caller.clone());
-    let assets: HashMap<u64, AssetDefinitionId> = HashMap::new();
-    let host = wsv_host_with_subject_map(caller, accounts, assets).with_sm_enabled(true);
+    let host = wsv_host(caller).with_sm_enabled(true);
     let mut vm = IVM::new(10_000);
     vm.set_host(host);
     let mut offset = 0u64;
@@ -1167,10 +1138,7 @@ fn wsv_host_sm4_gcm_seal_returns_byte_counted_gas_when_enabled() {
     let aad = b"aad";
     let plaintext = b"plaintext";
     let caller: AccountId = test_caller_account();
-    let mut accounts: HashMap<u64, AccountId> = HashMap::new();
-    accounts.insert(1, caller.clone());
-    let assets: HashMap<u64, AssetDefinitionId> = HashMap::new();
-    let mut host = wsv_host_with_subject_map(caller, accounts, assets).with_sm_enabled(true);
+    let mut host = wsv_host(caller).with_sm_enabled(true);
     let mut vm = IVM::new(10_000);
     let mut offset = 0u64;
     let p_key = preload_blob(&mut vm, &mut offset, &key);
@@ -1196,10 +1164,7 @@ fn wsv_host_sm4_gcm_seal_requires_enable_flag() {
     let nonce = [0x22u8; 12];
     let plaintext = [0x33u8; 16];
     let caller: AccountId = test_caller_account();
-    let mut accounts: HashMap<u64, AccountId> = HashMap::new();
-    accounts.insert(1, caller.clone());
-    let assets: HashMap<u64, AssetDefinitionId> = HashMap::new();
-    let host = wsv_host_with_subject_map(caller, accounts, assets);
+    let host = wsv_host(caller);
     let mut vm = IVM::new(10_000);
     vm.set_host(host);
     let mut offset = 0u64;

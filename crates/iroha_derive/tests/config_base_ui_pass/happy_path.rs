@@ -15,10 +15,13 @@ struct Test {
     nested: Nested,
     #[config(env = "TEST", default = "true")]
     with_default_expr_and_env: bool,
-    #[config(key = "canonical_parameter")]
-    renamed_parameter: u64,
-    #[config(nested, key = "canonical_nested")]
-    renamed_nested: Nested,
+    named_parameter: u64,
+    #[config(nested)]
+    named_nested: Nested,
+    #[config(default)]
+    __reader: bool,
+    #[config(default)]
+    after_reader: bool,
 }
 #[derive(ReadConfig)]
 struct Nested {

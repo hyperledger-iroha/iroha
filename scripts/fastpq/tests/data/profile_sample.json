@@ -20,10 +20,9 @@
     },
     "poseidon_pipeline": {
       "batches": 6,
-      "chunk_columns": 128,
+      "columns": 128,
       "enabled": true,
-      "fallbacks": 1,
-      "pipe_depth": 2
+      "fallbacks": 1
     }
   },
   "column_staging": {

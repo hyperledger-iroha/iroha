@@ -4023,6 +4023,12 @@ fn native_instruction_ds_effect_disposition(
         iroha_data_model::isi::privacy::RegisterPrivacyZkAcePolicyV1,
         iroha_data_model::isi::privacy::RotatePrivacyZkAcePolicyV1,
         iroha_data_model::isi::privacy::RevokePrivacyZkAcePolicyV1,
+        iroha_data_model::isi::private_settlement::ActivatePrivateSettlementPoolV1,
+        iroha_data_model::isi::private_settlement::AbortAtomicPrivateSettlementV1,
+        // The global private-settlement carrier mutates only opaque roots,
+        // nullifiers, commitments, ciphertexts, and its receipt. Its public
+        // network fee is charged by the ordinary signed fee path.
+        iroha_data_model::isi::private_settlement::FinalizeAtomicPrivateSettlementV1,
         // Kaigi only mutates domain metadata and emits diagnostic summaries;
         // its billing fields do not move assets or change supply.
         iroha_data_model::isi::kaigi::CreateKaigi,

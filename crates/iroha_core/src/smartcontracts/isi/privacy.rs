@@ -7542,7 +7542,7 @@ mod tests {
             transaction.apply();
         }
         block
-            .commit()
+            .commit_world_overlay_for_testing()
             .expect("commit Bootle/Lantern registration and rotation block");
         let next_header = BlockHeader::new(
             NonZeroU64::new(TEST_BLOCK_HEIGHT + 1).expect("non-zero height"),
@@ -8097,7 +8097,7 @@ mod tests {
         }
         remove_vega_candidate_activation_before_commit_for_test(&mut block);
         block
-            .commit()
+            .commit_world_overlay_for_testing()
             .expect("commit the canonical Vega origin and rotation within the block action cap");
         let mut block = state.block(BlockHeader::new(
             NonZeroU64::new(TEST_BLOCK_HEIGHT + 1).expect("successor height"),
@@ -8219,7 +8219,7 @@ mod tests {
         }
         remove_vega_candidate_activation_before_commit_for_test(&mut block);
         block
-            .commit()
+            .commit_world_overlay_for_testing()
             .expect("commit both canonical Vega key owners");
         let mut block = state.block(BlockHeader::new(
             NonZeroU64::new(TEST_BLOCK_HEIGHT + 1).expect("successor height"),
@@ -8382,7 +8382,7 @@ mod tests {
         }
         remove_vega_candidate_activation_before_commit_for_test(&mut block);
         block
-            .commit()
+            .commit_world_overlay_for_testing()
             .expect("commit the origin and canonical Vega key rotation");
         let mut block = state.block(BlockHeader::new(
             NonZeroU64::new(TEST_BLOCK_HEIGHT + 1).expect("successor height"),
@@ -8777,7 +8777,7 @@ mod tests {
         );
         transaction.apply();
         block
-            .commit()
+            .commit_world_overlay_for_testing()
             .expect("commit ZK-AMS batch and provisioning transactions");
         let replay_height = fixture
             .current_height

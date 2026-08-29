@@ -404,25 +404,43 @@ fn nts_parse_rejects_unsafe_bounds() {
     }
 }
 #[test]
-fn telemetry_clamps_zero_telegram_metrics_period() {
+fn telemetry_rejects_retired_telegram_http_sampler_fields() {
+    for (field, value) in [
+        (
+            "telegram_metrics_url",
+            Value::String("http://localhost:8180/metrics".to_owned()),
+        ),
+        ("telegram_metrics_period_ms", Value::Integer(1_000)),
+    ] {
+        let mut table = base_table();
+        let mut telemetry = Table::new();
+        telemetry.insert(
+            "url".into(),
+            Value::String("ws://localhost:8180".to_owned()),
+        );
+        telemetry.insert(field.into(), value);
+        table.insert("telemetry".into(), Value::Table(telemetry));
+        let error = actual::Root::from_toml_source(TomlSource::inline(table))
+            .expect_err("Telegram metrics snapshots come from the internal registry");
+        let report = format!("{error:?}");
+        assert!(
+            report.contains(field) && (report.contains("unknown") || report.contains("unexpected")),
+            "retired sampler field must be rejected: {report}"
+        );
+    }
+}
+
+#[test]
+fn telemetry_rejects_retired_enabled_switch() {
     let mut table = base_table();
-    let mut telemetry = Table::new();
-    telemetry.insert("name".into(), Value::String("ops".to_string()));
-    telemetry.insert(
-        "url".into(),
-        Value::String("http://localhost:8180".to_string()),
-    );
-    telemetry.insert(
-        "telegram_metrics_url".into(),
-        Value::String("http://localhost:8180/metrics".to_string()),
-    );
-    telemetry.insert("telegram_metrics_period_ms".into(), Value::Integer(0));
-    table.insert("telemetry".into(), Value::Table(telemetry));
-    let actual = load_root(table);
-    let telemetry = actual.telemetry.expect("telemetry configured");
-    assert_eq!(
-        telemetry.telegram_metrics_period,
-        Some(StdDuration::from_millis(100))
+    table.insert("telemetry_enabled".into(), Value::Boolean(false));
+    let error = actual::Root::from_toml_source(TomlSource::inline(table))
+        .expect_err("telemetry_profile is the only first-release telemetry switch");
+    let report = format!("{error:?}");
+    assert!(
+        report.contains("telemetry_enabled")
+            && (report.contains("unknown") || report.contains("unexpected")),
+        "retired switch must be reported as an unknown field: {report}"
     );
 }
 

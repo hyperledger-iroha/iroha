@@ -170,7 +170,9 @@ fn transact(
     let mut transaction = block.transaction();
     operation(&mut transaction)?;
     transaction.apply();
-    block.commit().expect("commit reserve test block");
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit reserve test block");
     state.push_block_hash_for_testing(iroha_crypto::HashOf::new(&header));
     Ok(())
 }
@@ -778,7 +780,9 @@ fn committed_record_queries_enforce_limits_budgets_and_corruption_checks() {
             );
         }
         transaction.apply();
-        block.commit().expect("commit maximum provider page");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit maximum provider page");
         maximum_page.push_block_hash_for_testing(iroha_crypto::HashOf::new(&header));
     }
     let maximum = FindSorafsReserveProviders::new(None, None, RESERVE_QUERY_MAX_ITEMS_V1)
@@ -834,7 +838,9 @@ fn committed_record_queries_enforce_limits_budgets_and_corruption_checks() {
                 .expect("encode mismatched provider"),
         );
         transaction.apply();
-        block.commit().expect("commit mismatched provider key");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit mismatched provider key");
         mismatched_key.push_block_hash_for_testing(iroha_crypto::HashOf::new(&header));
     }
     assert!(matches!(
@@ -851,7 +857,9 @@ fn committed_record_queries_enforce_limits_budgets_and_corruption_checks() {
             vec![0xFF; RESERVE_QUERY_MAX_RECORD_BYTES_V1 + 1],
         );
         transaction.apply();
-        block.commit().expect("commit oversized provider record");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit oversized provider record");
         oversized_record.push_block_hash_for_testing(iroha_crypto::HashOf::new(&header));
     }
     assert!(matches!(
@@ -1316,7 +1324,9 @@ fn committed_event_query_accepts_maximum_page_with_full_metering() {
             .expect("encode maximum-page reserve state"),
     );
     transaction.apply();
-    block.commit().expect("commit maximum-page fixture");
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit maximum-page fixture");
     state.push_block_hash_for_testing(iroha_crypto::HashOf::new(&header));
     let view = state.view();
     let prefix = FindSorafsReserveEvents::new(None, None, 2)
@@ -1369,7 +1379,9 @@ fn committed_event_queries_fail_closed_on_corruption_and_resource_exhaustion() {
                 .expect("encode corrupt reserve state"),
         );
         transaction.apply();
-        block.commit().expect("commit missing-head corruption");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit missing-head corruption");
         missing_head.push_block_hash_for_testing(iroha_crypto::HashOf::new(&header));
     }
     assert!(matches!(
@@ -1386,7 +1398,9 @@ fn committed_event_queries_fail_closed_on_corruption_and_resource_exhaustion() {
             vec![0xFF; RESERVE_COMMITTED_EVENT_MAX_BYTES_V1 + 1],
         );
         transaction.apply();
-        block.commit().expect("commit oversized-event corruption");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit oversized-event corruption");
         oversized.push_block_hash_for_testing(iroha_crypto::HashOf::new(&header));
     }
     assert!(matches!(
@@ -1409,7 +1423,9 @@ fn committed_event_queries_fail_closed_on_corruption_and_resource_exhaustion() {
             encode_state(&record, "orphan event").expect("encode orphan reserve event"),
         );
         transaction.apply();
-        block.commit().expect("commit orphan-event corruption");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit orphan-event corruption");
         orphan.push_block_hash_for_testing(iroha_crypto::HashOf::new(&header));
     }
     assert!(matches!(

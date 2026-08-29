@@ -20,7 +20,9 @@ fn proof_test_helpers_seed_records() {
         .proofs_by_tag_mut_for_testing()
         .insert(*b"TAG1", vec![proof_id.clone()]);
     stx.apply();
-    block.commit().expect("commit seeded proofs");
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit seeded proofs");
     let view = state.view();
     let world = &view.world;
     assert_eq!(world.proofs().get(&proof_id), Some(&record));
@@ -153,7 +155,7 @@ state_test! { sync deterministic_pipeline_block_approved_trigger_executes
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
     stx.apply();
-    state_block.commit().unwrap();
+    state_block.commit_world_overlay_for_testing().unwrap();
     let_row! { block2 = new_dummy_block_with_payload(|h| { h.set_height(NonZeroU64::new(2).unwrap()); }) };
     let mut state_block = state.block(block2.as_ref().header());
     let mut stx = state_block.transaction();
@@ -163,7 +165,7 @@ state_test! { sync deterministic_pipeline_block_approved_trigger_executes
     })])
     .expect("pipeline trigger should execute");
     stx.apply();
-    state_block.commit().unwrap();
+    state_block.commit_world_overlay_for_testing().unwrap();
     let view = state.view();
     let account = view.world.account(&ALICE_ID).expect("alice account");
     assert_eq!(
@@ -187,7 +189,7 @@ state_test! { sync constrained_pipeline_block_trigger_ignores_wrong_height_appro
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
     stx.apply();
-    state_block.commit().unwrap();
+    state_block.commit_world_overlay_for_testing().unwrap();
     let_row! { block2 = new_dummy_block_with_payload(|h| { h.set_height(NonZeroU64::new(2).unwrap()); }) };
     let mut state_block = state.block(block2.as_ref().header());
     let mut stx = state_block.transaction();
@@ -197,7 +199,7 @@ state_test! { sync constrained_pipeline_block_trigger_ignores_wrong_height_appro
     })])
     .expect("wrong-height approved event should be ignored");
     stx.apply();
-    state_block.commit().unwrap();
+    state_block.commit_world_overlay_for_testing().unwrap();
     let view = state.view();
     let account = view.world.account(&ALICE_ID).expect("alice account");
     assert!(
@@ -219,7 +221,7 @@ state_test! { sync one_shot_pipeline_trigger_executes_once_for_multiple_matching
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
     stx.apply();
-    state_block.commit().unwrap();
+    state_block.commit_world_overlay_for_testing().unwrap();
     let_row! { block2 = new_dummy_block_with_payload(|h| { h.set_height(NonZeroU64::new(2).unwrap()); }) };
     let_row! { block3 = new_dummy_block_with_payload(|h| { h.set_height(NonZeroU64::new(3).unwrap()); }) };
     let mut state_block = state.block(block2.as_ref().header());
@@ -231,7 +233,7 @@ state_test! { sync one_shot_pipeline_trigger_executes_once_for_multiple_matching
         "one-shot trigger must not execute twice in the same batch"
     );
     stx.apply();
-    state_block.commit().unwrap();
+    state_block.commit_world_overlay_for_testing().unwrap();
     let view = state.view();
     let account = view.world.account(&ALICE_ID).expect("alice account");
     assert_eq!(
@@ -256,7 +258,7 @@ state_test! { sync one_shot_pipeline_transaction_trigger_executes_once_for_dupli
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
     stx.apply();
-    state_block.commit().unwrap();
+    state_block.commit_world_overlay_for_testing().unwrap();
     let_row! { block2 = new_dummy_block_with_payload(|h| { h.set_height(NonZeroU64::new(2).unwrap()); }) };
     let tx_hash_a = HashOf::from_untyped_unchecked(Hash::prehashed([0xA1; Hash::LENGTH]));
     let tx_hash_b = HashOf::from_untyped_unchecked(Hash::prehashed([0xB2; Hash::LENGTH]));
@@ -269,7 +271,7 @@ state_test! { sync one_shot_pipeline_transaction_trigger_executes_once_for_dupli
         "one-shot transaction trigger must not execute twice in the same batch"
     );
     stx.apply();
-    state_block.commit().unwrap();
+    state_block.commit_world_overlay_for_testing().unwrap();
     let view = state.view();
     let account = view.world.account(&ALICE_ID).expect("alice account");
     assert_eq!(
@@ -310,7 +312,7 @@ state_test! { sync deterministic_pipeline_transaction_approved_and_rejected_trig
             .unwrap();
     }
     stx.apply();
-    state_block.commit().unwrap();
+    state_block.commit_world_overlay_for_testing().unwrap();
     let_row! { block2 = new_dummy_block_with_payload(|h| { h.set_height(NonZeroU64::new(2).unwrap()); }) };
     let tx_hash_a = HashOf::from_untyped_unchecked(Hash::prehashed([0xA5; Hash::LENGTH]));
     let tx_hash_b = HashOf::from_untyped_unchecked(Hash::prehashed([0x5A; Hash::LENGTH]));
@@ -334,7 +336,7 @@ state_test! { sync deterministic_pipeline_transaction_approved_and_rejected_trig
     ])
     .expect("deterministic transaction pipeline triggers should execute");
     stx.apply();
-    state_block.commit().unwrap();
+    state_block.commit_world_overlay_for_testing().unwrap();
     let view = state.view();
     let account = view.world.account(&ALICE_ID).expect("alice account");
     assert_eq!(
@@ -379,7 +381,7 @@ state_test! { sync malformed_enabled_pipeline_trigger_does_not_execute_or_decrem
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
     stx.apply();
-    state_block.commit().unwrap();
+    state_block.commit_world_overlay_for_testing().unwrap();
     let_row! { block2 = new_dummy_block_with_payload(|h| { h.set_height(NonZeroU64::new(2).unwrap()); }) };
     let mut state_block = state.block(block2.as_ref().header());
     let mut stx = state_block.transaction();
@@ -389,7 +391,7 @@ state_test! { sync malformed_enabled_pipeline_trigger_does_not_execute_or_decrem
     })])
     .expect("malformed enabled metadata should fail closed without erroring");
     stx.apply();
-    state_block.commit().unwrap();
+    state_block.commit_world_overlay_for_testing().unwrap();
     let view = state.view();
     let account = view.world.account(&ALICE_ID).expect("alice account");
     assert!(
@@ -426,7 +428,7 @@ state_test! { sync numeric_zero_enabled_pipeline_trigger_does_not_execute_or_dec
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
     stx.apply();
-    state_block.commit().unwrap();
+    state_block.commit_world_overlay_for_testing().unwrap();
     let_row! { block2 = new_dummy_block_with_payload(|h| { h.set_height(NonZeroU64::new(2).unwrap()); }) };
     let mut state_block = state.block(block2.as_ref().header());
     let mut stx = state_block.transaction();
@@ -436,7 +438,7 @@ state_test! { sync numeric_zero_enabled_pipeline_trigger_does_not_execute_or_dec
     })])
     .expect("numeric zero enabled metadata should disable without erroring");
     stx.apply();
-    state_block.commit().unwrap();
+    state_block.commit_world_overlay_for_testing().unwrap();
     let view = state.view();
     let account = view.world.account(&ALICE_ID).expect("alice account");
     assert!(
@@ -470,7 +472,7 @@ state_test! { sync constrained_pipeline_transaction_trigger_ignores_near_miss_ev
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
     stx.apply();
-    state_block.commit().unwrap();
+    state_block.commit_world_overlay_for_testing().unwrap();
     let_row! { block2 = new_dummy_block_with_payload(|h| { h.set_height(NonZeroU64::new(2).unwrap()); }) };
     let mut state_block = state.block(block2.as_ref().header());
     let mut stx = state_block.transaction();
@@ -492,7 +494,7 @@ state_test! { sync constrained_pipeline_transaction_trigger_ignores_near_miss_ev
     ])
     .expect("non-matching deterministic events should be ignored");
     stx.apply();
-    state_block.commit().unwrap();
+    state_block.commit_world_overlay_for_testing().unwrap();
     let view = state.view();
     let account = view.world.account(&ALICE_ID).expect("alice account");
     assert!(
@@ -518,7 +520,7 @@ state_test! { sync pipeline_trigger_fails_closed_on_missing_bytecode
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
     stx.apply();
-    state_block.commit().unwrap();
+    state_block.commit_world_overlay_for_testing().unwrap();
     assert!(
         state.world.triggers.remove_contract_for_test(blob_hash),
         "contract entry should be removed for test setup"
@@ -533,7 +535,7 @@ state_test! { sync pipeline_trigger_fails_closed_on_missing_bytecode
         "unexpected error: {err_debug}"
     );
     drop(stx);
-    state_block.commit().unwrap();
+    state_block.commit_world_overlay_for_testing().unwrap();
     let view = state.view();
     let_row! { trigger = view .world .triggers() .pipeline_triggers() .get(&trigger_id) .expect("failed pipeline trigger should remain for storage repair") };
     assert_eq!(trigger.repeats(), &Repeats::Exactly(1));
@@ -586,7 +588,7 @@ state_test! { sync isolated_pipeline_failure_rolls_back_disables_and_allows_heal
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
     stx.apply();
-    state_block.commit().unwrap();
+    state_block.commit_world_overlay_for_testing().unwrap();
 
     let_row! { block2 = new_dummy_block_with_payload(|h| {
         h.set_height(NonZeroU64::new(2).unwrap());
@@ -601,7 +603,7 @@ state_test! { sync isolated_pipeline_failure_rolls_back_disables_and_allows_heal
     assert_eq!(outcomes.len(), 2);
     assert!(outcomes[0].1.is_err(), "bad trigger must report failure");
     assert!(outcomes[1].1.is_ok(), "healthy sibling must still execute");
-    state_block.commit().unwrap();
+    state_block.commit_world_overlay_for_testing().unwrap();
 
     let view = state.view();
     let account = view.world.account(&ALICE_ID).expect("alice account");
@@ -670,7 +672,7 @@ state_test! { sync pipeline_trigger_replacement_keeps_its_own_repeat_budget
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
     stx.apply();
-    state_block.commit().unwrap();
+    state_block.commit_world_overlay_for_testing().unwrap();
 
     let_row! { block2 = new_dummy_block_with_payload(|h| {
         h.set_height(NonZeroU64::new(2).unwrap());
@@ -684,7 +686,7 @@ state_test! { sync pipeline_trigger_replacement_keeps_its_own_repeat_budget
     ]);
     assert_eq!(outcomes.len(), 1);
     assert!(outcomes[0].1.is_ok());
-    state_block.commit().unwrap();
+    state_block.commit_world_overlay_for_testing().unwrap();
 
     let view = state.view();
     let replacement = view
@@ -747,7 +749,7 @@ state_test! { sync pipeline_trigger_revalidates_a_sibling_replaced_after_matchin
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
     stx.apply();
-    state_block.commit().unwrap();
+    state_block.commit_world_overlay_for_testing().unwrap();
 
     let_row! { block2 = new_dummy_block_with_payload(|h| {
         h.set_height(NonZeroU64::new(2).unwrap());
@@ -768,7 +770,7 @@ state_test! { sync pipeline_trigger_revalidates_a_sibling_replaced_after_matchin
         fragments_before.saturating_add(1),
         "a skipped stale match must not commit a phantom empty fragment",
     );
-    state_block.commit().unwrap();
+    state_block.commit_world_overlay_for_testing().unwrap();
 
     {
         let view = state.view();
@@ -798,7 +800,7 @@ state_test! { sync pipeline_trigger_revalidates_a_sibling_replaced_after_matchin
     ]);
     assert_eq!(outcomes.len(), 1);
     assert!(outcomes[0].1.is_ok());
-    state_block.commit().unwrap();
+    state_block.commit_world_overlay_for_testing().unwrap();
 
     let view = state.view();
     let account = view.world.account(&ALICE_ID).expect("alice account");
@@ -870,7 +872,7 @@ state_test! { sync data_trigger_revalidates_the_captured_incarnation_and_event
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
     stx.apply();
-    state_block.commit().unwrap();
+    state_block.commit_world_overlay_for_testing().unwrap();
 
     let_row! { block2 = new_dummy_block_with_payload(|h| {
         h.set_height(NonZeroU64::new(2).unwrap());
@@ -927,7 +929,7 @@ state_test! { sync pipeline_trigger_instruction_failure_rolls_back_and_preserves
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
     stx.apply();
-    state_block.commit().unwrap();
+    state_block.commit_world_overlay_for_testing().unwrap();
     let_row! { block2 = new_dummy_block_with_payload(|h| { h.set_height(NonZeroU64::new(2).unwrap()); }) };
     let mut state_block = state.block(block2.as_ref().header());
     let mut stx = state_block.transaction();
@@ -937,7 +939,7 @@ state_test! { sync pipeline_trigger_instruction_failure_rolls_back_and_preserves
     })])
     .expect_err("failing pipeline instruction must reject trigger execution");
     drop(stx);
-    state_block.commit().unwrap();
+    state_block.commit_world_overlay_for_testing().unwrap();
     let view = state.view();
     let_row! { trigger = view .world .triggers() .pipeline_triggers() .get(&trigger_id) .expect("failed pipeline trigger should remain") };
     assert_eq!(trigger.repeats(), &Repeats::Exactly(1));
@@ -969,7 +971,7 @@ state_test! { sync pipeline_trigger_chained_data_failure_rolls_back_and_preserve
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
     stx.apply();
-    state_block.commit().unwrap();
+    state_block.commit_world_overlay_for_testing().unwrap();
     let_row! { block2 = new_dummy_block_with_payload(|h| { h.set_height(NonZeroU64::new(2).unwrap()); }) };
     let mut state_block = state.block(block2.as_ref().header());
     let mut stx = state_block.transaction();
@@ -979,7 +981,7 @@ state_test! { sync pipeline_trigger_chained_data_failure_rolls_back_and_preserve
     })])
     .expect_err("chained data trigger failure must reject pipeline execution");
     drop(stx);
-    state_block.commit().unwrap();
+    state_block.commit_world_overlay_for_testing().unwrap();
     let view = state.view();
     assert!(
         view.world.asset(&asset_id).is_err(),
@@ -1012,7 +1014,7 @@ state_test! { sync by_call_chained_data_trigger_failure_rolls_back_and_preserves
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
     stx.apply();
-    state_block.commit().unwrap();
+    state_block.commit_world_overlay_for_testing().unwrap();
     let_row! { block2 = new_dummy_block_with_payload(|h| { h.set_height(NonZeroU64::new(2).unwrap()); }) };
     let mut state_block = state.block(block2.as_ref().header());
     let mut stx = state_block.transaction();
@@ -1020,7 +1022,7 @@ state_test! { sync by_call_chained_data_trigger_failure_rolls_back_and_preserves
     stx.execute_called_trigger(&by_call_id, &event)
         .expect_err("chained data trigger failure must reject by-call execution");
     drop(stx);
-    state_block.commit().unwrap();
+    state_block.commit_world_overlay_for_testing().unwrap();
     let view = state.view();
     assert!(
         view.world.asset(&asset_id).is_err(),

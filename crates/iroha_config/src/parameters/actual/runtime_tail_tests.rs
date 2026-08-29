@@ -84,28 +84,30 @@ fn many_trusted_peers() {
     assert!(value.contains_other_trusted_peers());
 }
 #[test]
-fn telemetry_profile_capabilities_match_expectations() {
-    let disabled = TelemetryProfile::Disabled.capabilities();
-    assert!(!disabled.metrics_enabled());
-    assert!(!disabled.expensive_metrics_enabled());
-    assert!(!disabled.developer_outputs_enabled());
-    let operator = TelemetryProfile::Operator.capabilities();
-    assert!(operator.metrics_enabled());
-    assert!(!operator.expensive_metrics_enabled());
-    assert!(!operator.developer_outputs_enabled());
-    let full = TelemetryProfile::Full.capabilities();
-    assert!(full.metrics_enabled());
-    assert!(full.expensive_metrics_enabled());
-    assert!(full.developer_outputs_enabled());
-    let combined = TelemetryCapabilities::from(TelemetryProfile::Developer)
-        .union(TelemetryCapabilities::from(TelemetryProfile::Extended));
-    assert!(combined.metrics_enabled());
-    assert!(combined.expensive_metrics_enabled());
-    assert!(combined.developer_outputs_enabled());
+fn telemetry_profile_predicates_match_expectations() {
+    assert!(!TelemetryProfile::Disabled.metrics_enabled());
+    assert!(!TelemetryProfile::Disabled.expensive_metrics_enabled());
+    assert!(!TelemetryProfile::Disabled.developer_outputs_enabled());
+    assert!(TelemetryProfile::Operator.metrics_enabled());
+    assert!(!TelemetryProfile::Operator.expensive_metrics_enabled());
+    assert!(!TelemetryProfile::Operator.developer_outputs_enabled());
+    assert!(TelemetryProfile::Extended.metrics_enabled());
+    assert!(TelemetryProfile::Extended.expensive_metrics_enabled());
+    assert!(!TelemetryProfile::Extended.developer_outputs_enabled());
+    assert!(TelemetryProfile::Developer.metrics_enabled());
+    assert!(!TelemetryProfile::Developer.expensive_metrics_enabled());
+    assert!(TelemetryProfile::Developer.developer_outputs_enabled());
+    assert!(TelemetryProfile::Full.metrics_enabled());
+    assert!(TelemetryProfile::Full.expensive_metrics_enabled());
+    assert!(TelemetryProfile::Full.developer_outputs_enabled());
 }
 #[test]
 fn telemetry_profile_from_user_enum_round_trips() {
     use super::user;
+    assert_eq!(
+        TelemetryProfile::from(user::TelemetryProfile::Disabled),
+        TelemetryProfile::Disabled
+    );
     assert_eq!(
         TelemetryProfile::from(user::TelemetryProfile::Operator),
         TelemetryProfile::Operator

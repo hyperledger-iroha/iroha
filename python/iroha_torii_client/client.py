@@ -121,7 +121,6 @@ from .client_status_models import (
     SumeragiInvalidProposalEvidenceRecord,
     SumeragiInvalidQcEvidenceRecord,
     SumeragiLeaderSnapshot,
-    SumeragiPacemakerSnapshot,
     SumeragiParamsSnapshot,
     SumeragiPrfContext,
     SumeragiV2BlockSubject,
@@ -981,7 +980,6 @@ __all__ = [
     "SubscriptionListPage",
     "SubscriptionActionResult",
     "SubscriptionUsageDraft",
-    "SumeragiPacemakerSnapshot",
     "SumeragiPrfContext",
     "SumeragiLeaderSnapshot",
     "SumeragiParamsSnapshot",
@@ -8634,7 +8632,6 @@ class _SumeragiV2StatusParser:
                 "payload_recovered_awaiting_state_application",
                 "payload_preflighted_awaiting_state_application",
                 "state_applied_by_canonical_block",
-                "state_applied_by_direct_execution",
             }
             allowed_statuses = executable_statuses | {
                 "awaiting_executable_payload",
@@ -11495,15 +11492,6 @@ class ToriiClient(
             highest_prepare_qc=highest,
             locked_prepare_qc=locked,
         )
-
-    def get_sumeragi_pacemaker(self) -> SumeragiPacemakerSnapshot:
-        """Fetch pacemaker configuration snapshot (`GET /v1/sumeragi/pacemaker`)."""
-
-        payload = self._ensure_mapping(
-            self._request("GET", "/v1/sumeragi/pacemaker").json(),
-            "sumeragi pacemaker",
-        )
-        return self._parse_sumeragi_pacemaker(payload, context="sumeragi pacemaker")
 
     def get_sumeragi_leader(self) -> SumeragiLeaderSnapshot:
         """Fetch leader/PRF state (`GET /v1/sumeragi/leader`)."""
@@ -17476,28 +17464,6 @@ class ToriiClient(
                     f"{context}.{field} must equal the saturated domain total"
                 )
         return snapshot
-
-    @staticmethod
-    def _parse_sumeragi_pacemaker(payload: Mapping[str, Any], *, context: str) -> SumeragiPacemakerSnapshot:
-        record = ToriiClient._ensure_mapping(payload, context)
-
-        def require_unsigned(key: str) -> int:
-            if key not in record:
-                raise RuntimeError(f"{context} missing `{key}`")
-            return ToriiClient._coerce_unsigned(record.get(key), f"{context}.{key}")
-
-        return SumeragiPacemakerSnapshot(
-            backoff_ms=require_unsigned("backoff_ms"),
-            rtt_floor_ms=require_unsigned("rtt_floor_ms"),
-            jitter_ms=require_unsigned("jitter_ms"),
-            backoff_multiplier=require_unsigned("backoff_multiplier"),
-            rtt_floor_multiplier=require_unsigned("rtt_floor_multiplier"),
-            max_backoff_ms=require_unsigned("max_backoff_ms"),
-            jitter_frac_permille=require_unsigned("jitter_frac_permille"),
-            round_elapsed_ms=require_unsigned("round_elapsed_ms"),
-            view_timeout_target_ms=require_unsigned("view_timeout_target_ms"),
-            view_timeout_remaining_ms=require_unsigned("view_timeout_remaining_ms"),
-        )
 
     @staticmethod
     def _parse_sumeragi_prf(payload: Any, *, context: str) -> SumeragiPrfContext:

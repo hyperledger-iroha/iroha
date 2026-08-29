@@ -3641,7 +3641,6 @@ function parseSumeragiCommittedLaneBlocks(value) {
       "payload_recovered_awaiting_state_application",
       "payload_preflighted_awaiting_state_application",
       "state_applied_by_canonical_block",
-      "state_applied_by_direct_execution",
     ]);
     if (
       (!unavailableStatuses.has(executionStatus) && !availableStatuses.has(executionStatus)) ||

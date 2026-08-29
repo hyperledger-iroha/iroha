@@ -115,7 +115,9 @@ fn zk_ballot_rejected_when_referendum_absent_or_out_of_window() {
             "unexpected error: {err_closed}"
         );
         stx.apply();
-        sblock.commit().expect("commit block at H=1");
+        sblock
+            .commit_empty_block_for_testing()
+            .expect("commit block at H=1");
     }
     // Outside window
     let header_late = BlockHeader::new(nonzero!(10_u64), None, None, None, 0, 0);
@@ -161,5 +163,7 @@ fn zk_ballot_rejected_when_referendum_absent_or_out_of_window() {
         "unexpected error: {err_late}"
     );
     stx_late.apply();
-    sblock_late.commit().expect("commit block at H=10");
+    sblock_late
+        .commit_world_overlay_for_testing()
+        .expect("commit block at H=10");
 }

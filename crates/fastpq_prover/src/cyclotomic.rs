@@ -3,7 +3,6 @@
 //! This module provides minimal FFT primitives needed for the FASTPQ prover. Implementations are
 //! intentionally straightforward; they can be replaced with a production-grade backend (e.g.,
 //! hedgehog/dasher) once those crates land in the workspace.
-#![allow(dead_code)]
 use crate::poseidon::FIELD_MODULUS as GOLDILOCKS_MODULUS;
 use rayon::prelude::*;
 const PARALLEL_THRESHOLD: usize = 1 << 12;
@@ -15,9 +14,6 @@ pub struct Domain {
 impl Domain {
     pub fn size(&self) -> usize {
         1usize << self.log_size
-    }
-    pub fn element(&self, index: usize) -> u64 {
-        pow_mod(self.generator, index)
     }
 }
 pub fn fft(values: &mut [u64], domain: Domain) {

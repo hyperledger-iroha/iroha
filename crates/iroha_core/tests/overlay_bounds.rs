@@ -189,7 +189,8 @@ fn expired_transaction_is_rejected_during_stateless_prepass() {
         .execute(&authority_id, &mut stx)
         .expect("set require_height_ttl");
         stx.apply();
-        blk.commit().expect("commit param block");
+        blk.commit_world_overlay_for_testing()
+            .expect("commit param block");
     }
     // tx_expired: creation time far in the past with short TTL → should be rejected
     let tx_expired = TransactionBuilder::new(

@@ -46,9 +46,8 @@ mod tests_queue_metadata {
     }
     #[test]
     fn queue_plan_journal_outcome_unknown_has_stable_code_and_exact_hash() {
-        let entrypoint_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::new(
-            b"outcome-unknown",
-        ));
+        let entrypoint_hash =
+            HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::new(b"outcome-unknown"));
         let signed_transaction_hash =
             HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::new(b"signed-transaction"));
         let error = queue::Error::PlanJournalDurabilityIndeterminate {
@@ -72,7 +71,7 @@ mod tests_queue_metadata {
             StatusCode::SERVICE_UNAVAILABLE
         );
         let envelope =
-            super::Error::queue_error_envelope(&error, queue::BackpressureState::default());
+            super::Error::queue_error_envelope(&error, Some(queue::BackpressureState::default()));
         let details = envelope.details.expect("outcome-unknown details");
         let expected_entrypoint_hash = entrypoint_hash.to_string();
         let expected_signed_hash = signed_transaction_hash.to_string();
@@ -80,7 +79,10 @@ mod tests_queue_metadata {
             details.entrypoint_hash.as_deref(),
             Some(expected_entrypoint_hash.as_str())
         );
-        assert_eq!(details.tx_hash.as_deref(), Some(expected_signed_hash.as_str()));
+        assert_eq!(
+            details.tx_hash.as_deref(),
+            Some(expected_signed_hash.as_str())
+        );
         assert!(
             details
                 .hint
@@ -95,7 +97,7 @@ mod tests_queue_metadata {
         };
         let envelope = super::Error::queue_error_envelope(
             &error_without_signed_hash,
-            queue::BackpressureState::default(),
+            Some(queue::BackpressureState::default()),
         );
         let details = envelope.details.expect("entrypoint-only outcome details");
         assert_eq!(

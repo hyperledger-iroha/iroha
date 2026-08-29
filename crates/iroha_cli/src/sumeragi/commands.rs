@@ -1,4 +1,4 @@
-use super::{evidence, status, telemetry};
+use super::{evidence, status};
 use crate::{Run, RunContext};
 use clap::ValueEnum;
 use eyre::Result;
@@ -14,8 +14,6 @@ pub enum Command {
     Params(ParamsArgs),
     /// Show HighestQC/LockedQC snapshot
     Qc(QcArgs),
-    /// Show pacemaker timers/config snapshot
-    Pacemaker(PacemakerArgs),
     /// Evidence audit helpers (list/count)
     #[command(subcommand)]
     Evidence(EvidenceCommand),
@@ -63,8 +61,6 @@ impl EvidenceKindArg {
 }
 #[derive(clap::Args, Debug)]
 pub struct QcArgs {}
-#[derive(clap::Args, Debug)]
-pub struct PacemakerArgs {}
 impl Run for Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -73,7 +69,6 @@ impl Run for Command {
             Command::Leader(args) => status::leader(context, args),
             Command::Params(args) => status::params(context, args),
             Command::Qc(args) => status::qc(context, args),
-            Command::Pacemaker(args) => telemetry::pacemaker(context, args),
             Command::Evidence(cmd) => cmd.run(context),
         }
     }
@@ -98,11 +93,11 @@ mod tests {
     }
 
     #[test]
-    fn legacy_vrf_operator_commands_are_retired() {
-        for command in ["vrf-penalties", "vrf-epoch"] {
+    fn retired_operator_commands_do_not_parse() {
+        for command in ["vrf-penalties", "vrf-epoch", "pacemaker"] {
             let error =
                 SumeragiCommandFixture::try_parse_from(["sumeragi", command, "--epoch", "1"])
-                    .expect_err("legacy consensus-VRF command must not parse");
+                    .expect_err("retired operator command must not parse");
             assert_eq!(error.kind(), clap::error::ErrorKind::InvalidSubcommand);
         }
         assert!(SumeragiCommandFixture::try_parse_from(["sumeragi", "status"]).is_ok());

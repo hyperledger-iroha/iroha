@@ -176,7 +176,6 @@ impl Default for MockToriiData {
             teu_dataspace_backlog: Vec::new(),
             dataspace_catalog: Vec::new(),
             tx_gossip: TxGossipSnapshot::default(),
-            sorafs_micropayments: Vec::new(),
             taikai_ingest: Vec::new(),
             taikai_alias_rotations: Vec::new(),
             da_receipt_cursors: Vec::new(),

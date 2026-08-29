@@ -119,7 +119,7 @@ async fn privacy_event_endpoint_rejects_when_disabled() {
 }
 #[tokio::test]
 async fn privacy_event_endpoint_accepts_payload() {
-    let telemetry = MaybeTelemetry::for_tests().map_gate(TelemetryProfile::Full);
+    let telemetry = MaybeTelemetry::for_tests().with_profile(TelemetryProfile::Full);
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("system clock must be after UNIX epoch")
@@ -157,7 +157,7 @@ async fn privacy_event_endpoint_accepts_payload() {
 }
 #[tokio::test]
 async fn privacy_event_endpoint_rejects_out_of_window_timestamp() {
-    let telemetry = MaybeTelemetry::for_tests().map_gate(TelemetryProfile::Full);
+    let telemetry = MaybeTelemetry::for_tests().with_profile(TelemetryProfile::Full);
     let config = telemetry
         .telemetry()
         .expect("test telemetry")
@@ -189,7 +189,7 @@ async fn privacy_event_endpoint_rejects_out_of_window_timestamp() {
 }
 #[tokio::test]
 async fn privacy_event_endpoint_rejects_unsafe_source_label() {
-    let telemetry = MaybeTelemetry::for_tests().map_gate(TelemetryProfile::Full);
+    let telemetry = MaybeTelemetry::for_tests().with_profile(TelemetryProfile::Full);
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("system clock must be after UNIX epoch")
@@ -232,7 +232,7 @@ fn make_share(
 }
 #[tokio::test]
 async fn privacy_share_endpoint_combines_shares() {
-    let telemetry = MaybeTelemetry::for_tests().map_gate(TelemetryProfile::Full);
+    let telemetry = MaybeTelemetry::for_tests().with_profile(TelemetryProfile::Full);
     let privacy_config = telemetry.telemetry().unwrap().soranet_privacy().config();
     let bucket_secs =
         u32::try_from(privacy_config.bucket_secs).expect("bucket duration fits within u32");

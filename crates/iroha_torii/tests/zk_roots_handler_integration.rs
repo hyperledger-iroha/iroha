@@ -49,7 +49,6 @@ fn zk_config_with_tree_roots_history_len(
             metal_threadgroup_width: None,
             metal_trace: iroha_config::parameters::defaults::zk::fastpq::METAL_TRACE,
             metal_debug_enum: iroha_config::parameters::defaults::zk::fastpq::METAL_DEBUG_ENUM,
-            metal_debug_fused: iroha_config::parameters::defaults::zk::fastpq::METAL_DEBUG_FUSED,
         },
         stark: iroha_config::parameters::actual::Stark::default(),
         sccp: iroha_config::parameters::actual::Sccp::default(),

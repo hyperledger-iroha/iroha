@@ -255,7 +255,7 @@ evidence remain external release inputs.
 | Price feed collectors | Fetch primary/secondary/tertiary feeds and normalize them into signed price payloads. | Not shipped for SoraFS hedging. |
 | Billing aggregator | Consume settlement, rent, egress, fee, and penalty events and produce account accruals. | The local service consumes typed finalized storage, orderbook-settlement, reserve/rent, egress, orchestrator-fee, incentive, penalty, and governance-adjustment events; it durably projects accruals and deterministic fixed-period governed statements. The production finalized-query and journal-verifier implementations remain external. |
 | Statement publisher | Store, sign, publish, notify, and track acknowledgements for statements. | The local delivery state machine persists signing claims, signed statements, ambiguous publication state, immutable receipts, acknowledgements, retry limits, and dead letters. Private-key-free runtime interfaces and opaque identity bindings are shipped; the external software signer, immutable publisher, and acknowledgement service are deployment-owned. |
-| Alerting service | Monitor feed divergence, escrow runway, exposure limits, and statement failures. | Checked-in Grafana/Prometheus alert fixtures and payload-free runtime metrics cover feed/reference state plus worker readiness, dependency health, finalized progress, signing/publication/acknowledgement backlogs, dead letters, and hedge intents. Production scrapes, alert routing, and response evidence remain open. |
+| Alerting service | Monitor committed runtime health and finalized projection freshness. | Checked-in Grafana/Prometheus alert fixtures cover successful-tick freshness plus finalized projection availability and lag. The runtime also exposes bounded dependency, delivery, dead-letter, and hedge-intent status for deployment-owned extensions. Production scrapes, alert routing, and response evidence remain open. |
 
 ## Target Price Feeds And Decisions
 - Primary feed: governance-approved on-chain XOR/USD or XOR/stablecoin TWAP.
@@ -345,9 +345,8 @@ selectors and receive the canonical reference-validator JSON outcome.
 The checked-in SFM-5 observability pack includes
 `dashboards/grafana/sorafs_hedging_billing.json`,
 `dashboards/alerts/sorafs_hedging_billing_rules.yml`, and
-`dashboards/alerts/tests/sorafs_hedging_billing_rules.test.yml`. The governed
-committed runtime emits feed/reference metrics, and the supervised billing
-worker emits bounded status for readiness, external dependency health,
+`dashboards/alerts/tests/sorafs_hedging_billing_rules.test.yml`. The supervised
+billing worker emits bounded status for readiness, external dependency health,
 finalized height/sequence, statement signing/publication/acknowledgement state,
 dead letters, retained hedge intents, automatic-execution state, and tick
 results. Runtime status can report `ready=true` only when its latest successful
@@ -364,25 +363,23 @@ before returning. Acknowledgement additionally rechecks that exact head before
 the authoritative record and immediately before the local durable checkpoint
 store write, so an in-flight head change cannot mutate the served projection.
 
-- XOR/USD reference price and feed lag.
-- Feed divergence and exposure drift.
-- Statement generation count, failures, and overdue acknowledgements.
-- Escrow runway by account type.
+- Successful runtime-tick freshness.
+- Finalized projection availability and maximum accepted lag.
+- Finalized ledger head and projected heights.
 
-Additional public-service metrics, including decision result counters,
-statement latency, venue inventory, and billing line items by category, still
-require the deployment-owned collector and publisher plus deployed scrape and
-service integration.
+Price/feed, exposure, statement generation/failure, acknowledgement backlog,
+escrow runway, decision result, statement latency, venue inventory, and billing
+line-item metrics require deployment-owned collectors and publishers plus
+deployed scrape and service integration.
 
-The alert pack covers feed divergence, primary feed staleness, exposure drift,
-statement generation failure, acknowledgement backlog, and escrow runway below
-warning/critical thresholds. The Prometheus rule test pins both firing and
-non-firing cases for those conditions.
+The alert pack covers a stale successful tick, an unavailable finalized
+projection, and finalized projection lag above the committed bound. The
+Prometheus rule test pins firing and non-firing cases for those conditions.
 
 The rollout evidence gate expects the deployed dashboard/alert canary to prove
-the presence of the XOR/USD reference price, feed lag, statement generation,
-statement failure, and escrow runway metric families while reporting no firing
-critical alerts.
+the presence of successful-tick freshness, finalized-projection readiness and
+lag, and finalized head/projected height metric families while reporting no
+firing critical alerts.
 
 ## Security & Governance Requirements
 - Price-feed and statement payloads must be signed and replayable.

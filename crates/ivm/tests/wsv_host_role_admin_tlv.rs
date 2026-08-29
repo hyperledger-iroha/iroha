@@ -6,7 +6,6 @@ use ivm::{
     syscalls,
 };
 use norito::to_bytes;
-use std::collections::HashMap;
 mod common;
 use common::assemble_syscalls;
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
@@ -68,7 +67,7 @@ fn create_role_grant_and_revoke_affects_permissions() {
     wsv.grant_permission(&alice, PermissionToken::RegisterAssetDefinition);
     wsv.grant_permission(&alice, PermissionToken::ManageRoles);
     // Note: No direct MintAsset permission for alice; the role will grant it.
-    let host = WsvHost::new_with_subject(wsv, alice.clone(), HashMap::new());
+    let host = WsvHost::new_with_subject(wsv, alice.clone());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
     // Register domain wonder
@@ -198,7 +197,7 @@ fn create_role_with_permissions_key_then_mint() {
     wsv.grant_permission(&alice, PermissionToken::RegisterAccount);
     wsv.grant_permission(&alice, PermissionToken::RegisterAssetDefinition);
     wsv.grant_permission(&alice, PermissionToken::ManageRoles);
-    let host = WsvHost::new_with_subject(wsv, alice.clone(), HashMap::new());
+    let host = WsvHost::new_with_subject(wsv, alice.clone());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
     // Bootstrap domain/account/asset

@@ -8,7 +8,6 @@ use ivm::{
     syscalls,
 };
 use norito::to_bytes;
-use std::collections::HashMap;
 mod common;
 use common::assemble_syscalls;
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
@@ -84,7 +83,7 @@ fn unregister_flow_with_opaque_asset_definition_dependencies() {
     wsv.grant_permission(&alice, PermissionToken::RegisterAssetDefinition);
     wsv.grant_permission(&alice, PermissionToken::MintAsset(rose.clone()));
     wsv.grant_permission(&alice, PermissionToken::BurnAsset(rose.clone()));
-    let host = WsvHost::new_with_subject(wsv, alice.clone(), HashMap::new());
+    let host = WsvHost::new_with_subject(wsv, alice.clone());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
     // Register domain wonder

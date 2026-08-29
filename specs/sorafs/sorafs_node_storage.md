@@ -675,7 +675,7 @@ The persisted storage boundary is fail-closed in v1:
 - **Client SDKs**: expose the new storage config (disk limits, alias) so
   management tooling can bootstrap nodes programmatically.
 - **Telemetry**: storage scheduler metrics now export through the existing
-  Prometheus/OpenTelemetry stack, including byte usage, queue depth, fetch
+  Prometheus registry, including byte usage, queue depth, fetch
   throughput, and PoR sample counters.
 - **Security**: run the storage module inside a dedicated async task pool with
   back-pressure and consider sandboxing chunk reads via io_uring or tokio's

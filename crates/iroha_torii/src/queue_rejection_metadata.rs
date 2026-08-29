@@ -93,10 +93,9 @@ impl Error {
     }
     fn queue_error_envelope(
         err: &queue::Error,
-        backpressure: queue::BackpressureState,
+        backpressure: Option<queue::BackpressureState>,
     ) -> ErrorEnvelope {
         let (code, message) = Self::queue_error_summary(err);
-        let saturated = backpressure.is_saturated();
         let retry_after_seconds = match err {
             queue::Error::Full
             | queue::Error::LatencySaturated
@@ -143,15 +142,18 @@ impl Error {
         };
         ErrorEnvelope::new(code, message).with_details(ErrorDetails {
             reject_code: Some(reject_code.to_owned()),
-            queue: Some(QueueErrorSnapshot {
-                state: if saturated {
-                    "saturated".to_owned()
-                } else {
-                    "healthy".to_owned()
-                },
-                queued: backpressure.queued() as u64,
-                capacity: backpressure.capacity().get() as u64,
-                saturated,
+            queue: backpressure.map(|backpressure| {
+                let saturated = backpressure.is_saturated();
+                QueueErrorSnapshot {
+                    state: if saturated {
+                        "saturated".to_owned()
+                    } else {
+                        "healthy".to_owned()
+                    },
+                    queued: backpressure.queued() as u64,
+                    capacity: backpressure.capacity().get() as u64,
+                    saturated,
+                }
             }),
             retry_after_seconds,
             fee,

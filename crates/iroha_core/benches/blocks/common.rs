@@ -370,7 +370,7 @@ pub fn seed_benchmark_domains(state: &mut State, domains: &[DomainId], owner_id:
     }
     state_transaction.apply();
     state_block
-        .commit()
+        .commit_world_overlay_for_testing()
         .expect("commit synthetic benchmark domains");
 }
 fn construct_domain_id(i: usize) -> DomainId {

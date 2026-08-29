@@ -5,7 +5,7 @@ use axum::{http::StatusCode, response::IntoResponse};
 use iroha_config::parameters::actual::{LaneRoutingPolicy, TelemetryProfile};
 use iroha_core::telemetry::Telemetry;
 use iroha_telemetry::metrics::Metrics;
-use iroha_torii::{MaybeTelemetry, handle_metrics, handle_status, handle_v1_sumeragi_pacemaker};
+use iroha_torii::{MaybeTelemetry, handle_metrics, handle_status};
 use std::sync::Arc;
 #[path = "fixtures.rs"]
 mod fixtures;
@@ -84,22 +84,8 @@ async fn extended_profile_exposes_prometheus_metrics() {
     );
 }
 #[tokio::test]
-async fn developer_profile_allows_developer_routes_only() {
-    let operator = telemetry_for(TelemetryProfile::Operator, |_| {});
-    let operator_status = match handle_v1_sumeragi_pacemaker(&operator, None).await {
-        Err(err) => err.into_response().status(),
-        Ok(_) => panic!("developer endpoints should be gated for operator profile"),
-    };
-    assert_eq!(operator_status, StatusCode::SERVICE_UNAVAILABLE);
-    let developer = telemetry_for(TelemetryProfile::Developer, |metrics| {
-        metrics.sumeragi_pacemaker_backoff_ms.set(250);
-        metrics.sumeragi_pacemaker_rtt_floor_ms.set(100);
-        metrics.sumeragi_pacemaker_max_backoff_ms.set(1_000);
-    });
-    let response = handle_v1_sumeragi_pacemaker(&developer, None)
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
+async fn developer_profile_hides_prometheus_metrics() {
+    let developer = telemetry_for(TelemetryProfile::Developer, |_| {});
     let metrics_err = handle_metrics(&developer).await.unwrap_err();
     assert_eq!(
         metrics_err.into_response().status(),
@@ -109,15 +95,19 @@ async fn developer_profile_allows_developer_routes_only() {
 #[tokio::test]
 async fn full_profile_combines_all_capabilities() {
     let telemetry = telemetry_for(TelemetryProfile::Full, |metrics| {
-        metrics.block_height.inc_by(21);
-        metrics.sumeragi_pacemaker_backoff_ms.set(300);
-        metrics.sumeragi_pacemaker_rtt_floor_ms.set(120);
-        metrics.sumeragi_pacemaker_max_backoff_ms.set(5_000);
+        metrics.sumeragi_new_view_publish_total.inc();
     });
+    let status = handle_status(
+        &telemetry,
+        None,
+        None,
+        LaneRoutingPolicy::default(),
+        0,
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(status.status(), StatusCode::OK);
     let prometheus = handle_metrics(&telemetry).await.unwrap();
-    assert!(prometheus.contains("sumeragi_pacemaker_backoff_ms"));
-    let response = handle_v1_sumeragi_pacemaker(&telemetry, None)
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
+    assert!(prometheus.contains("sumeragi_new_view_publish_total"));
 }
