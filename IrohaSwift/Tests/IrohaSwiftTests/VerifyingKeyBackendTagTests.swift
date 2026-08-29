@@ -78,10 +78,7 @@ final class VerifyingKeyBackendTagTests: XCTestCase {
             "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
             "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
             "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
-            "stark/fri",
-            "stark/fri/sha256-goldilocks",
-            "stark/fri/poseidon2-goldilocks",
-            "stark/fri/sha256_goldilocks.v1"
+            "stark/fri/poseidon-x7-goldilocks-6x64-v1"
         ]
 
         for label in supported {
@@ -107,8 +104,11 @@ final class VerifyingKeyBackendTagTests: XCTestCase {
             "halo2/ipa:ivm-execution-v1",
             "halo2/ipa::ivm-execution-v1",
             "stark",
+            "stark/fri",
             "STARK/FRI",
             "stark/fri/",
+            "stark/fri/poseidon2-goldilocks",
+            "stark/fri/sha256_goldilocks.v1",
             "stark/fri/latest",
             "stark/fri/sha512-goldilocks",
             "halo2/bn254",
@@ -121,7 +121,7 @@ final class VerifyingKeyBackendTagTests: XCTestCase {
             "silent-threshold-anoncred",
             "aztec-plonkish-private-kernel",
             "penumbra-masp",
-            "stark/fri/sha256-goldilocks\u{0}",
+            "stark/fri/poseidon-x7-goldilocks-6x64-v1\u{0}",
             "st\u{0430}rk/fri",
             "stark\u{FF0F}fri",
             "stark/fri/\u{200B}sha256-goldilocks"
@@ -172,7 +172,12 @@ final class VerifyingKeyBackendTagTests: XCTestCase {
     }
 
     func testCatalogClassifierAcceptsOnlyExactProductionLabels() {
-        for label in ["halo2-ipa-pasta", "stark", "halo2/ipa", "stark/fri"] {
+        for label in [
+            "halo2-ipa-pasta",
+            "stark",
+            "halo2/ipa",
+            "stark/fri/poseidon-x7-goldilocks-6x64-v1",
+        ] {
             XCTAssertEqual(VerifierBackendCatalogTag(catalogLabel: label), .production)
         }
         for label in ["HALO2/IPA", " halo2/ipa", "halo2/ipa ", "Stark"] {

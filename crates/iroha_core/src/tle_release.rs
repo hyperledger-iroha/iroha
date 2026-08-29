@@ -200,7 +200,7 @@ impl ValidatedTleKeySessionV1 {
     ) -> Result<Self, TleReleaseAdapterError> {
         let parameters = AdaptiveThresholdBlsParameters::derive(&session)?;
         let transcript = AdaptiveThresholdBlsPublicTranscript::from_qualified_dealers(
-            parameters,
+            &parameters,
             validated_dealers,
             qualified_dealers,
             dkg_event_hash,
@@ -280,7 +280,7 @@ impl ValidatedTleKeySessionV1 {
             })
             .collect::<Result<Vec<_>, _>>()?;
         let transcript = AdaptiveThresholdBlsPublicTranscript::from_qualified_dealers(
-            parameters,
+            &parameters,
             &validated_dealers,
             &state.qualified_dealers,
             state.dkg_event_hash,
@@ -921,24 +921,19 @@ pub enum TleReleaseAuthorizationErrorV1 {
 pub trait TlePartialReleaseSignerV1: Send + Sync {
     /// Attest non-secret custody for one exact public session and participant seat.
     ///
-    /// The default is deliberately unsupported so legacy signing-only providers
-    /// remain source compatible but cannot satisfy validator startup readiness.
-    /// Implementations must perform a live lookup in the same custody object
-    /// later used by [`Self::sign_partial_release`]; constructing an attestation
-    /// from public state alone is not proof of custody.
+    /// Implementations must perform a live lookup in the same custody object later
+    /// used by [`Self::sign_partial_release`]; constructing an attestation from
+    /// public state alone is not proof of custody.
     ///
     /// # Errors
     ///
     /// Returns a closed capability error when the provider cannot perform the
-    /// lookup, does not own the exact session and seat, or does not implement
-    /// readiness attestation.
+    /// lookup or does not own the exact session and seat.
     fn attest_partial_release_capability(
         &self,
-        _session: &ValidatedTleKeySessionV1,
-        _expected_participant_index: u16,
-    ) -> Result<TlePartialReleaseCapabilityAttestationV1, TlePartialReleaseCapabilityErrorV1> {
-        Err(TlePartialReleaseCapabilityErrorV1::Unsupported)
-    }
+        session: &ValidatedTleKeySessionV1,
+        expected_participant_index: u16,
+    ) -> Result<TlePartialReleaseCapabilityAttestationV1, TlePartialReleaseCapabilityErrorV1>;
 
     /// Sign the exact Core-authorized committed future identity.
     ///
@@ -1023,9 +1018,6 @@ impl TlePartialReleaseCapabilityAttestationV1 {
 /// Closed failure classes for non-signing Parliament TLE custody attestation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum TlePartialReleaseCapabilityErrorV1 {
-    /// The provider predates or deliberately omits capability attestation.
-    #[error("Parliament TLE release capability attestation is unsupported")]
-    Unsupported,
     /// The secure runtime or authenticated lookup is temporarily unavailable.
     #[error("Parliament TLE release capability attestation is unavailable")]
     Unavailable,
@@ -1361,11 +1353,6 @@ pub(crate) mod tests {
 
     fn fixture_for_key(key_byte: u8) -> Fixture {
         fixture_for_binding(binding(1), key_byte, binding(3))
-    }
-
-    /// Build one deterministic, proof-valid public TLE key session for cross-module tests.
-    pub(crate) fn public_key_session_fixture_v1(key_byte: u8) -> TleKeySessionPublicStateV1 {
-        fixture_for_key(key_byte).validated.public_state().clone()
     }
 
     /// Build a deterministic public TLE session bound to an exact consensus context.
@@ -1923,6 +1910,15 @@ pub(crate) mod tests {
         struct FailingSigner;
 
         impl TlePartialReleaseSignerV1 for FailingSigner {
+            fn attest_partial_release_capability(
+                &self,
+                _session: &ValidatedTleKeySessionV1,
+                _expected_participant_index: u16,
+            ) -> Result<TlePartialReleaseCapabilityAttestationV1, TlePartialReleaseCapabilityErrorV1>
+            {
+                Err(TlePartialReleaseCapabilityErrorV1::NotOwned)
+            }
+
             fn sign_partial_release(
                 &self,
                 _context: &AuthorizedTleReleaseContextV1,
@@ -1934,6 +1930,15 @@ pub(crate) mod tests {
         struct InvalidSigner(TlePartialReleaseShareV1);
 
         impl TlePartialReleaseSignerV1 for InvalidSigner {
+            fn attest_partial_release_capability(
+                &self,
+                _session: &ValidatedTleKeySessionV1,
+                _expected_participant_index: u16,
+            ) -> Result<TlePartialReleaseCapabilityAttestationV1, TlePartialReleaseCapabilityErrorV1>
+            {
+                Err(TlePartialReleaseCapabilityErrorV1::NotOwned)
+            }
+
             fn sign_partial_release(
                 &self,
                 _context: &AuthorizedTleReleaseContextV1,

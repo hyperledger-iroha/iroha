@@ -107,7 +107,7 @@ fn validate_namespace_v1(
         .map_err(|_| ProofManagedAccumulatorErrorV1::Namespace)?;
     if !matches!(
         namespace.protocol_id(),
-        PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1 | PrivacyProtocolIdV1::PqMaspStarkV0
+        PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1 | PrivacyProtocolIdV1::PqMaspStarkV1
     ) {
         return Err(ProofManagedAccumulatorErrorV1::Namespace);
     }
@@ -366,7 +366,7 @@ mod tests {
     }
     fn pq_namespace() -> PrivacyNamespaceV1 {
         PrivacyNamespaceV1::new(
-            PrivacyProtocolIdV1::PqMaspStarkV0,
+            PrivacyProtocolIdV1::PqMaspStarkV1,
             PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 {
                 pool_id: PrivacyPoolIdV1::new([0x31; 32]),
             }),
@@ -484,7 +484,7 @@ mod tests {
             build_proof_managed_frontier_v1(ivm_namespace(), &commitments).expect("IVM frontier");
         assert_ne!(pq.root, ivm.root);
         let other_pq = PrivacyNamespaceV1::new(
-            PrivacyProtocolIdV1::PqMaspStarkV0,
+            PrivacyProtocolIdV1::PqMaspStarkV1,
             PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 {
                 pool_id: PrivacyPoolIdV1::new([0x32; 32]),
             }),

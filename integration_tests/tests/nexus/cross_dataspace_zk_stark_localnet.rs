@@ -80,9 +80,11 @@ const STATUS_WAIT_TIMEOUT: Duration = Duration::from_secs(45);
 const STATUS_POLL_INTERVAL: Duration = Duration::from_millis(200);
 const ROUTE_PROBE_SSE_HANDSHAKE_DELAY: Duration = Duration::from_millis(100);
 const PROOF_FETCH_HTTP_TIMEOUT: Duration = Duration::from_secs(2);
-const STARK_BACKEND: &str = "stark/fri/sha256-goldilocks-v1";
-const CIRCUIT_ID_VALID: &str = "stark/fri/sha256-goldilocks-v1:cross-dataspace-verifyproof-v1";
-const CIRCUIT_ID_MISMATCH: &str = "stark/fri/sha256-goldilocks-v1:cross-dataspace-verifyproof-v2";
+const STARK_BACKEND: &str = "stark/fri/poseidon-x7-goldilocks-6x64-v1-v1";
+const CIRCUIT_ID_VALID: &str =
+    "stark/fri/poseidon-x7-goldilocks-6x64-v1-v1:cross-dataspace-verifyproof-v1";
+const CIRCUIT_ID_MISMATCH: &str =
+    "stark/fri/poseidon-x7-goldilocks-6x64-v1-v1:cross-dataspace-verifyproof-v2";
 const SCHEMA_VALID: &[u8] = b"nexus:cross-dataspace:verifyproof:schema:v1";
 const SCHEMA_MISMATCH: &[u8] = b"nexus:cross-dataspace:verifyproof:schema:v2";
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
@@ -791,11 +793,10 @@ fn sample_stark_vk_box(circuit_id: &str, n_log2: u8) -> VerifyingKeyBox {
         version: 1,
         circuit_id: circuit_id.to_owned(),
         n_log2,
-        blowup_log2: iroha_core::zk_stark::ZK_ACE_STARK_FRI_PRODUCTION_MIN_BLOWUP_LOG2,
+        blowup_log2: iroha_core::zk_stark::STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
         fold_arity: 2,
-        queries: iroha_core::zk_stark::ZK_ACE_STARK_FRI_PRODUCTION_MIN_QUERIES,
+        queries: iroha_core::zk_stark::STARK_FRI_CONSENSUS_MIN_QUERIES,
         merkle_arity: 2,
-        hash_fn: iroha_core::zk_stark::STARK_HASH_SHA256_V1,
     };
     let bytes = norito::to_bytes(&vk_payload).expect("encode stark vk payload");
     VerifyingKeyBox::new(STARK_BACKEND.to_owned(), bytes)
@@ -1215,7 +1216,7 @@ async fn stark_cross_dataspace_verifyproof_validity_without_payload_leak() -> Re
     let valid_vk_id = VerifyingKeyId::new(STARK_BACKEND, "cross_ds_stark_verifyproof_ok");
     let valid_vk_box = sample_stark_vk_box(
         CIRCUIT_ID_VALID,
-        iroha_core::zk_stark::ZK_ACE_STARK_FRI_PRODUCTION_MIN_N_LOG2,
+        iroha_core::zk_stark::STARK_FRI_CONSENSUS_MIN_N_LOG2,
     );
     register_stark_vk(
         &alice,
@@ -1338,7 +1339,7 @@ async fn stark_cross_dataspace_verifyproof_validity_ds2_submission_without_paylo
     let valid_vk_id = VerifyingKeyId::new(STARK_BACKEND, "cross_ds_stark_verifyproof_ok");
     let valid_vk_box = sample_stark_vk_box(
         CIRCUIT_ID_VALID,
-        iroha_core::zk_stark::ZK_ACE_STARK_FRI_PRODUCTION_MIN_N_LOG2,
+        iroha_core::zk_stark::STARK_FRI_CONSENSUS_MIN_N_LOG2,
     );
     register_stark_vk(
         &alice,
@@ -1460,7 +1461,7 @@ async fn stark_cross_dataspace_verifyproof_rejection_without_payload_leak() -> R
     let valid_vk_id = VerifyingKeyId::new(STARK_BACKEND, "cross_ds_stark_verifyproof_ok");
     let valid_vk_box = sample_stark_vk_box(
         CIRCUIT_ID_VALID,
-        iroha_core::zk_stark::ZK_ACE_STARK_FRI_PRODUCTION_MIN_N_LOG2,
+        iroha_core::zk_stark::STARK_FRI_CONSENSUS_MIN_N_LOG2,
     );
     register_stark_vk(
         &alice,
@@ -1473,7 +1474,7 @@ async fn stark_cross_dataspace_verifyproof_rejection_without_payload_leak() -> R
     let mismatch_vk_id = VerifyingKeyId::new(STARK_BACKEND, "cross_ds_stark_verifyproof_bad");
     let mismatch_vk_box = sample_stark_vk_box(
         CIRCUIT_ID_MISMATCH,
-        iroha_core::zk_stark::ZK_ACE_STARK_FRI_PRODUCTION_MIN_N_LOG2 + 1,
+        iroha_core::zk_stark::STARK_FRI_CONSENSUS_MIN_N_LOG2 + 1,
     );
     register_stark_vk(
         &alice,
@@ -1608,7 +1609,7 @@ async fn stark_cross_dataspace_verifyproof_tampered_payload_rejected_without_pay
     let valid_vk_id = VerifyingKeyId::new(STARK_BACKEND, "cross_ds_stark_verifyproof_ok");
     let valid_vk_box = sample_stark_vk_box(
         CIRCUIT_ID_VALID,
-        iroha_core::zk_stark::ZK_ACE_STARK_FRI_PRODUCTION_MIN_N_LOG2,
+        iroha_core::zk_stark::STARK_FRI_CONSENSUS_MIN_N_LOG2,
     );
     register_stark_vk(
         &alice,

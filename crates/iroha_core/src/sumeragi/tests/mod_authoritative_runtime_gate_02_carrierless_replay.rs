@@ -224,7 +224,7 @@ fn durable_view_cut_retires_carrierless_leader_wire_without_exact_retry() {
                     fixture.message,
                     fixture.validator.clone(),
                 )),
-            Err(super::FairV2IngressPushError::Rejected(_))
+            Ok(super::FairV2IngressPushDisposition::Coalesced)
         ));
         assert!(matches!(
             fixture

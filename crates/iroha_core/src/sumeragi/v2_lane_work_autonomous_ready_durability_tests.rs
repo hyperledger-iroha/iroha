@@ -133,6 +133,9 @@ fn enqueue_autonomous_test_transactions(
                 AccountId::new(key.public_key().clone()),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
+            .with_admission_intent(
+                iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
+            )
             .with_instructions([Log::new(
                 Level::INFO,
                 format!("autonomous lane fixture {index}"),
@@ -229,7 +232,7 @@ fn autonomous_route_quota_for_test(
 #[test]
 fn autonomous_ready_crosses_payload_and_certificate_durability_before_commit_vote() {
     let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
-    let (block, proposal) = planned_lane_candidate_block_at_view(&adapter, &keys, 0);
+    let (block, proposal) = planned_autonomous_lane_candidate_block_at_view(&adapter, &keys, 0);
     let entrypoint = block
         .external_entrypoints_cloned()
         .next()
@@ -795,7 +798,7 @@ fn autonomous_ready_crosses_payload_and_certificate_durability_before_commit_vot
 #[test]
 fn authorized_ready_session_without_one_shot_token_fails_stop() {
     let (mut adapter, keys) = fixture(wire::ConsensusMode::Npos);
-    let (block, proposal) = planned_lane_candidate_block_at_view(&adapter, &keys, 0);
+    let (block, proposal) = planned_autonomous_lane_candidate_block_at_view(&adapter, &keys, 0);
     let entrypoint = block
         .external_entrypoints_cloned()
         .next()
@@ -887,6 +890,219 @@ fn single_custom_lane_still_produces_autonomous_payload() {
     assert_eq!(payload.producer, adapter.local_peer);
     assert_eq!(queue.live_lane_reservations(), payload.reservation_keys);
 }
+
+#[test]
+fn autonomous_producer_retries_after_predecessor_application_receipt_arrives() {
+    use super::super::lane_planner::AutonomousLaneReservationSlotPlanError;
+
+    let lane_id = LaneId::new(1);
+    let dataspace_id = DataSpaceId::new(7);
+    let kura =
+        locked_lane_work_test_kura(iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY);
+    let (mut parent, keys) = fixture_at_height_inner_with_kura_and_local_index(
+        wire::ConsensusMode::Permissioned,
+        1,
+        true,
+        Arc::clone(&kura),
+        None,
+        false,
+    );
+    enable_single_custom_lane_nexus(&mut parent, &keys, lane_id, dataspace_id);
+    let (mut predecessor_block, provisional_proposal) =
+        planned_lane_candidate_block_for_route_at_view(&parent, &keys, 0, lane_id, dataspace_id);
+    let predecessor_ownership = ownership_from_proposal(&provisional_proposal);
+    let entrypoint_hashes = predecessor_block
+        .external_entrypoints_cloned()
+        .map(|entrypoint| entrypoint.hash())
+        .collect::<Vec<_>>();
+    assert_eq!(entrypoint_hashes.len(), 1);
+    predecessor_block
+        .set_transaction_results(
+            Vec::new(),
+            &entrypoint_hashes,
+            vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
+        )
+        .expect("attach the predecessor's canonical transaction result");
+    let leader_index =
+        usize::try_from(parent.context.leader(0)).expect("predecessor leader index fits usize");
+    let signature = SignatureOf::try_from_hash(
+        keys[leader_index].private_key(),
+        predecessor_block.header().hash(),
+    )
+    .expect("sign the result-bearing predecessor");
+    predecessor_block
+        .replace_signatures(
+            [BlockSignature::new(
+                u64::try_from(leader_index).expect("predecessor leader index fits u64"),
+                signature,
+            )]
+            .into_iter()
+            .collect(),
+        )
+        .expect("replace the predecessor signature after attaching results");
+    let predecessor_proposal =
+        proposal_from_ownership(&predecessor_ownership, predecessor_block.hash())
+            .expect("bind the exact result-bearing predecessor");
+    parent
+        .kura
+        .store_block(predecessor_block.clone())
+        .expect("persist the raw canonical predecessor");
+    let committed_predecessor =
+        ValidBlock::committed_from_replay_signed_block(predecessor_block.clone());
+    commit_test_block_to_state(
+        parent.state.as_ref(),
+        &committed_predecessor,
+        &parent.context,
+    );
+    assert_eq!(
+        parent
+            .state
+            .unapplied_lane_block_artifact_heights_snapshot_cached()
+            .get(&(lane_id, dataspace_id)),
+        Some(&predecessor_proposal.descriptor.lane_block_height),
+        "the raw predecessor must block a successor reservation until its exact receipt exists"
+    );
+    assert!(
+        !parent
+            .kura
+            .lane_block_application_receipt_available(&predecessor_proposal)
+    );
+
+    let successor_context = successor_context_for_parent(&parent, &predecessor_block);
+    let validator_set = parent
+        .state
+        .resolve_lane_committee_at_height(
+            crate::state::LaneAuthorityRoute::new(lane_id, dataspace_id),
+            successor_context.height,
+        )
+        .expect("successor lane committee remains active")
+        .into_validators();
+    let successor_lane_height = predecessor_proposal
+        .descriptor
+        .lane_block_height
+        .checked_add(1)
+        .expect("successor lane height fits u64");
+    let producer = deterministic_lane_author(&validator_set, successor_lane_height)
+        .expect("successor lane has a deterministic producer")
+        .clone();
+    let producer_key = keys
+        .iter()
+        .find(|key| key.public_key() == producer.public_key())
+        .expect("fixture owns the successor producer key")
+        .clone();
+    let state = Arc::clone(&parent.state);
+    let limits = parent.limits;
+    drop(parent);
+    let mut adapter = V2LaneWorkAdapter::new_with_output_guard(
+        successor_context,
+        producer.clone(),
+        producer_key,
+        true,
+        Arc::clone(&state),
+        Arc::clone(&kura),
+        limits,
+        None,
+        None,
+        ConsensusOutputGuard::isolated(),
+    )
+    .expect("open the autonomous successor while its predecessor remains unapplied");
+    let journal_dir = tempfile::tempdir().expect("retry reservation journal directory");
+    let journal_path = journal_dir.path().join("lane-reservations.norito");
+    let queue = install_autonomous_test_queue(&mut adapter, lane_id, dataspace_id, &journal_path);
+    enqueue_autonomous_test_transactions(&adapter, &queue, lane_id, dataspace_id, 1);
+    let fifo_before = queue.fifo_snapshot_for_test();
+    let route = (lane_id, dataspace_id);
+    assert!(matches!(
+        plan_autonomous_lane_reservation_slot(
+            adapter.state.as_ref(),
+            adapter.kura.as_ref(),
+            &adapter.context,
+            lane_id,
+            dataspace_id,
+        ),
+        Err(AutonomousLaneReservationSlotPlanError::BlockedPredecessor {
+            lane_id: blocked_lane,
+            dataspace_id: blocked_dataspace,
+        }) if blocked_lane == lane_id && blocked_dataspace == dataspace_id
+    ));
+
+    adapter.next_autonomous_producer_tick = Instant::now();
+    adapter
+        .schedule_autonomous_lane_production(0, autonomous_test_candidate_limits(1, 1))
+        .expect("the blocked producer tick remains non-fatal");
+    assert!(
+        !adapter
+            .autonomous_production_attempted_routes
+            .contains(&route),
+        "a transient predecessor wait must not terminally suppress the route"
+    );
+    assert_eq!(queue.fifo_snapshot_for_test(), fifo_before);
+    assert!(queue.live_lane_reservations().is_empty());
+    assert!(adapter.pending_autonomous_anchor_payloads.is_empty());
+
+    let predecessor_session = committed_lane_session(&predecessor_proposal, &keys);
+    let predecessor_pops = adapter.pops_for_lane_session(&predecessor_session);
+    adapter
+        .kura
+        .persist_committed_lane_block_session(&predecessor_session, &predecessor_pops)
+        .expect("persist the predecessor's exact certificate");
+    assert!(
+        adapter
+            .kura
+            .persist_lane_block_application_receipt_if_ready(&predecessor_proposal)
+            .expect("persist the predecessor's exact application receipt")
+    );
+    assert!(
+        !adapter
+            .state
+            .unapplied_lane_block_artifact_heights_snapshot_cached()
+            .contains_key(&route)
+    );
+    let recovered_slot = plan_autonomous_lane_reservation_slot(
+        adapter.state.as_ref(),
+        adapter.kura.as_ref(),
+        &adapter.context,
+        lane_id,
+        dataspace_id,
+    )
+    .expect("the exact predecessor receipt unblocks reservation planning");
+    assert_eq!(recovered_slot.lane_block_height, successor_lane_height);
+    assert_eq!(recovered_slot.author, producer);
+
+    adapter.next_autonomous_producer_tick = Instant::now();
+    adapter
+        .schedule_autonomous_lane_production(0, autonomous_test_candidate_limits(1, 1))
+        .expect("the next producer tick retries the recovered route");
+    let payload = adapter
+        .pending_autonomous_anchor_payloads
+        .values()
+        .find(|payload| {
+            payload.origin_proposal.descriptor.lane_id == lane_id
+                && payload.origin_proposal.descriptor.dataspace_id == dataspace_id
+        })
+        .expect("the recovered route publishes its hint-free payload");
+    assert_eq!(
+        payload.origin_proposal.descriptor.lane_block_height,
+        successor_lane_height
+    );
+    assert!(
+        adapter
+            .autonomous_production_attempted_routes
+            .contains(&route)
+    );
+    assert_eq!(queue.live_lane_reservations(), payload.reservation_keys);
+    assert!(queue.fifo_snapshot_for_test().is_empty());
+    assert!(adapter.effects.iter().any(|effect| {
+        matches!(
+            effect,
+            V2LaneWorkEffect::PostLaneBlock {
+                message: BlockMessage::LaneExecutablePayload(posted),
+                ..
+            } if posted.payload_hash == payload.payload_hash
+        )
+    }));
+}
+
 #[test]
 fn autonomous_local_author_reserves_fifo_before_durable_hint_free_publication() {
     let (mut adapter, keys) = autonomous_test_fixture(wire::ConsensusMode::Permissioned, true);
@@ -1240,13 +1456,14 @@ fn remote_hint_free_loser_without_queue_reservation_binds_empty_winner() {
         let queue =
             install_autonomous_test_queue(&mut adapter, lane_id, dataspace_id, &journal_path);
 
-        let (source_block, mut proposal) = planned_lane_candidate_block_for_route_at_view(
-            &adapter,
-            &keys,
-            0,
-            lane_id,
-            dataspace_id,
-        );
+        let (source_block, mut proposal) =
+            planned_autonomous_lane_candidate_block_for_route_at_view(
+                &adapter,
+                &keys,
+                0,
+                lane_id,
+                dataspace_id,
+            );
         proposal.payload_block_hint = None;
         proposal.proposal_hash = proposal.computed_proposal_hash();
         let entrypoint = source_block
@@ -1702,7 +1919,8 @@ pub(in crate::sumeragi) struct HistoricalAutonomousLaneCertificateFixture {
 pub(in crate::sumeragi) fn historical_autonomous_lane_certificate_fixture()
 -> HistoricalAutonomousLaneCertificateFixture {
     let (adapter, keys) = fixture_at_height_inner(wire::ConsensusMode::Permissioned, 2, true);
-    let (source_block, mut proposal) = planned_lane_candidate_block_at_view(&adapter, &keys, 0);
+    let (source_block, mut proposal) =
+        planned_autonomous_lane_candidate_block_at_view(&adapter, &keys, 0);
     proposal.payload_block_hint = None;
     let entrypoint = source_block
         .external_entrypoints_cloned()
@@ -1831,7 +2049,8 @@ fn exercise_canonical_autonomous_carrier_after_direct_decision(
     } else {
         &keys[1..]
     };
-    let (source_block, mut proposal) = planned_lane_candidate_block_at_view(&adapter, &keys, 0);
+    let (source_block, mut proposal) =
+        planned_autonomous_lane_candidate_block_at_view(&adapter, &keys, 0);
     proposal.payload_block_hint = None;
     proposal.proposal_hash = proposal.computed_proposal_hash();
     let entrypoint = source_block
@@ -2086,7 +2305,8 @@ fn canonical_autonomous_carrier_binds_after_direct_four_validator_decision() {
 #[test]
 fn recovered_autonomous_certificate_repairs_ready_before_certified_publication() {
     let (mut adapter, keys) = fixture_at_height_inner(wire::ConsensusMode::Permissioned, 2, true);
-    let (source_block, mut proposal) = planned_lane_candidate_block_at_view(&adapter, &keys, 0);
+    let (source_block, mut proposal) =
+        planned_autonomous_lane_candidate_block_at_view(&adapter, &keys, 0);
     proposal.payload_block_hint = None;
     let entrypoint = source_block
         .external_entrypoints_cloned()
@@ -2388,6 +2608,39 @@ fn repeated_non_empty_retries_never_make_autonomous_routes_ordinary_eligible() {
         let unavailable = provider
             .prepare(&context, 0, &[candidate])
             .expect_err("autonomous route must remain unavailable to ordinary execution");
+        assert_eq!(unavailable.indices(), &BTreeSet::from([0]));
+        assert_eq!(
+            unavailable.reason(),
+            "waiting for deterministic autonomous lane authors to publish durable FIFO reservations"
+        );
+    }
+
+    // QueuePlan-synchronized ownership remains autonomous even when the
+    // topology exposes only one route and the broader multi-lane exclusion is
+    // therefore disabled.
+    let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
+    enable_single_custom_lane_nexus(&mut adapter, &keys, lane_id, dataspace_id);
+    let transaction_key = KeyPair::try_from_seed(vec![0xB7; 32], Algorithm::Ed25519)
+        .expect("deterministic single-lane QueuePlan transaction key");
+    let transaction = TransactionBuilder::new(
+        adapter.context.network_id,
+        AccountId::new(transaction_key.public_key().clone()),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_admission_intent(
+        iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
+    )
+    .sign(transaction_key.private_key());
+    let accepted =
+        crate::tx::AcceptedTransaction::new_unchecked(std::borrow::Cow::Owned(transaction));
+    let routing_plan = RoutingPlan::single(RoutingDecision::new(lane_id, dataspace_id));
+    let candidate = CandidateDescriptor::new(&accepted, &routing_plan);
+    let context = adapter.context.clone();
+    let mut provider = &mut adapter;
+    for _ in 0..3 {
+        let unavailable = provider
+            .prepare(&context, 0, &[candidate])
+            .expect_err("single-route QueuePlan work must remain autonomous");
         assert_eq!(unavailable.indices(), &BTreeSet::from([0]));
         assert_eq!(
             unavailable.reason(),

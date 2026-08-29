@@ -1676,13 +1676,43 @@ int32_t connect_norito_encode_control_pong(
     uint64_t nonce,
     uint8_t** out_ptr, unsigned long* out_len);
 
-int32_t connect_norito_encode_confidential_encrypted_payload(
-    const uint8_t* ephemeral_pubkey,
-    unsigned long ephemeral_len,
-    const uint8_t* nonce,
-    unsigned long nonce_len,
-    const uint8_t* ciphertext,
-    unsigned long ciphertext_len,
+// Validate and canonicalize one bare ConfidentialMemoEnvelopeV1 wire.
+// Returns -1 for null pointers, -2 when the capped wire is too large, and -3
+// for any malformed, non-canonical, legacy, truncated, or trailing bytes.
+int32_t connect_norito_validate_confidential_memo_envelope_v1(
+    const uint8_t* envelope,
+    unsigned long envelope_len,
+    uint8_t** out_ptr, unsigned long* out_len);
+
+// Generate one ML-KEM-768 (suite 0) or ML-KEM-1024 (suite 1) memo keypair.
+int32_t connect_norito_generate_confidential_memo_keypair_v1(
+    uint8_t suite_tag,
+    uint8_t** public_key_out, unsigned long* public_key_len_out,
+    uint8_t** secret_key_out, unsigned long* secret_key_len_out);
+
+// Zeroizes and releases a secret-key or opened-plaintext output from the memo
+// functions. The original returned length is mandatory.
+void connect_norito_confidential_memo_secret_free_v1(
+    uint8_t* secret_key, unsigned long secret_key_len);
+
+// Seal plaintext for 1..8 same-suite recipient public keys. The packed key
+// length must equal recipient_count times the suite's exact public-key length.
+int32_t connect_norito_seal_confidential_memo_v1(
+    uint8_t suite_tag,
+    const uint8_t* recipient_public_keys,
+    unsigned long recipient_public_keys_len,
+    uint8_t recipient_count,
+    const uint8_t* plaintext,
+    unsigned long plaintext_len,
+    uint8_t** out_ptr, unsigned long* out_len);
+
+// Open one canonical bare memo wire for an exact-suite recipient secret key.
+int32_t connect_norito_open_confidential_memo_v1(
+    uint8_t suite_tag,
+    const uint8_t* recipient_secret_key,
+    unsigned long recipient_secret_key_len,
+    const uint8_t* envelope,
+    unsigned long envelope_len,
     uint8_t** out_ptr, unsigned long* out_len);
 
 // Transaction encoder error codes:

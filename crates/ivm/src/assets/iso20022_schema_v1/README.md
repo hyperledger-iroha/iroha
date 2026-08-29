@@ -7,6 +7,6 @@ members, and alias order byte for byte. The build script validates the complete
 inventory before emitting the same private static `MessageSchema` values into
 `OUT_DIR`; validation remains allocation-free after compilation.
 
-The repository compile-time asset checker pins the asset and the exact
-historical Rust span from which it was projected. A focused standard-library
-Python test independently reconstructs every record from that preimage.
+The repository compile-time asset checker pins the asset and its sole current
+Rust `include_str!` consumer. A focused standard-library Python test verifies
+the closed record inventory and the reviewed PACS009 canonical alias targets.

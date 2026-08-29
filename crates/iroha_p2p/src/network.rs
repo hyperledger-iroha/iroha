@@ -126,7 +126,7 @@ struct PendingReplySourceAuthority {
     topology: Option<UpdateTopology>,
     validator_dial_roster: Option<message::UpdateValidatorDialRoster>,
     trusted: Option<UpdateTrustedPeers>,
-    acl: Option<message::UpdateAcl>,
+    acl: Option<ValidatedAclUpdate>,
     consensus_caps: Option<ConsensusCapsSnapshot>,
 }
 impl PendingReplySourceAuthority {
@@ -351,6 +351,34 @@ mod admission;
 #[path = "network/tcp_listener_bind_tests.rs"]
 mod tcp_listener_bind_tests;
 use admission::*;
+#[derive(Clone, Debug)]
+struct ValidatedAclUpdate {
+    allowlist_only: bool,
+    allow_keys: Vec<iroha_crypto::PublicKey>,
+    deny_keys: Vec<iroha_crypto::PublicKey>,
+    allow_nets: Vec<IpNet>,
+    deny_nets: Vec<IpNet>,
+}
+impl ValidatedAclUpdate {
+    fn parse(
+        message::UpdateAcl {
+            allowlist_only,
+            allow_keys,
+            deny_keys,
+            allow_cidrs,
+            deny_cidrs,
+        }: message::UpdateAcl,
+    ) -> Result<Self, String> {
+        let (allow_nets, deny_nets) = parse_acl_cidrs(&allow_cidrs, &deny_cidrs)?;
+        Ok(Self {
+            allowlist_only,
+            allow_keys,
+            deny_keys,
+            allow_nets,
+            deny_nets,
+        })
+    }
+}
 fn relay_role_from_mode(mode: iroha_config::parameters::actual::RelayMode) -> RelayRole {
     match mode {
         iroha_config::parameters::actual::RelayMode::Hub => RelayRole::Hub,
@@ -3598,6 +3626,7 @@ impl Drop for NetworkActorAdmissionTicket {
 #[derive(Clone, Debug)]
 pub struct NetworkActorAdmissionTicketTestFixture {
     budget: Arc<NetworkActorProgressBudget>,
+    topology_membership: Option<Arc<ReliableProgressMembership>>,
 }
 #[cfg(any(test, feature = "test-fixtures"))]
 impl NetworkActorAdmissionTicketTestFixture {
@@ -3622,13 +3651,19 @@ impl NetworkActorAdmissionTicketTestFixture {
         let canonical = NetworkMessage::Post(canonical_post);
         let class = ActorProgressClass::for_route(topic, subscriber_route)
             .expect("reliable test topology route must have an actor class");
+        let membership = Arc::new(ReliableProgressMembership {
+            peer_id: post.peer_id.clone(),
+            generation: 1,
+            active: AtomicBool::new(true),
+        });
+        let authority = ProgressDeliveryAuthority::Topology(Arc::clone(&membership));
         let shape = ProgressTicketShape {
             topic,
             stream_wire_bytes,
             broadcast: false,
             reply_writer_timeout_attempt: None,
             request_digest: progress_ticket_request_digest(&canonical),
-            authority: None,
+            authority: Some(authority.identity()),
         };
         let source = ActorProgressSource {
             target: Some(post.peer_id.clone()),
@@ -3637,12 +3672,15 @@ impl NetworkActorAdmissionTicketTestFixture {
         let fixture = Self {
             budget: NetworkActorProgressBudget::new(stream_wire_bytes, 1, 1)
                 .expect("test actor admission geometry must fit"),
+            topology_membership: Some(membership),
         };
-        let ProgressLeaseAttempt::Ready { lease, ticket } =
-            fixture
-                .budget
-                .try_reserve_for_source(stream_wire_bytes, shape, source, None, None)
-        else {
+        let ProgressLeaseAttempt::Ready { lease, ticket } = fixture.budget.try_reserve_for_source(
+            stream_wire_bytes,
+            shape,
+            source,
+            Some(&authority),
+            None,
+        ) else {
             panic!("fresh test actor admission ticket must own rank one");
         };
         // Model an actor queue which filled after budget reservation. The
@@ -3712,6 +3750,7 @@ impl NetworkActorAdmissionTicketTestFixture {
         let fixture = Self {
             budget: NetworkActorProgressBudget::new(stream_wire_bytes, 1, 1)
                 .expect("test actor admission geometry must fit"),
+            topology_membership: None,
         };
         let ProgressLeaseAttempt::Ready { lease, ticket } = fixture.budget.try_reserve_for_source(
             stream_wire_bytes,
@@ -3737,6 +3776,19 @@ impl NetworkActorAdmissionTicketTestFixture {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .waiter_count
+    }
+    /// Cancel the exact topology tenure retained by [`Self::for_topology`].
+    ///
+    /// This mirrors actor topology reconciliation: the membership becomes
+    /// inactive before every waiter bound to that generation is removed.
+    #[must_use]
+    pub fn cancel_topology_membership(&self) -> usize {
+        let membership = self
+            .topology_membership
+            .as_ref()
+            .expect("only a topology ticket fixture owns topology membership");
+        membership.cancel();
+        self.budget.cancel_membership(membership, false)
     }
     /// Return the number of exact waiters removed by admission-ticket drop.
     #[must_use]
@@ -5989,6 +6041,37 @@ struct ConfiguredPeerState {
     peer_ids: Vec<PeerId>,
 }
 
+/// Test-only capability for replacing one closed handle's configured-peer snapshot.
+///
+/// The capability is created only alongside
+/// [`NetworkBaseHandle::closed_for_tests_with_configured_peer_snapshot`], so it
+/// cannot mutate a live network actor's published topology.
+#[cfg(any(test, feature = "test-fixtures"))]
+#[derive(Debug)]
+pub struct ConfiguredPeerSnapshotTestFixture {
+    state: Arc<Mutex<ConfiguredPeerState>>,
+}
+
+#[cfg(any(test, feature = "test-fixtures"))]
+impl ConfiguredPeerSnapshotTestFixture {
+    /// Replace the isolated configured-peer generation with one canonical snapshot.
+    pub fn replace(&self, mut peer_ids: Vec<PeerId>) {
+        peer_ids.sort();
+        peer_ids.dedup();
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if state.peer_ids != peer_ids {
+            state.generation = state
+                .generation
+                .checked_add(1)
+                .expect("test configured-peer generation space exhausted");
+            state.peer_ids = peer_ids;
+        }
+    }
+}
+
 /// One bounded, rotating view of the configured logical peers.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConfiguredPeerBatch {
@@ -6153,6 +6236,39 @@ fn validate_shipping_quic_datagram_policy(configured: bool) -> Result<bool, Erro
         ));
     }
     Ok(false)
+}
+
+fn validate_quic_configuration(
+    quic_enabled: bool,
+    quic_datagrams_enabled: bool,
+    datagram_max_payload_bytes: usize,
+    datagram_receive_buffer_bytes: usize,
+    datagram_send_buffer_bytes: usize,
+) -> Result<(), Error> {
+    if quic_datagrams_enabled && !quic_enabled {
+        return Err(invalid_transport_geometry(
+            "network.quic_datagrams_enabled=true requires network.quic_enabled=true",
+        ));
+    }
+    if quic_datagrams_enabled {
+        // The dormant quinn-proto 0.11.17 requalification path charges
+        // `size_of::<Datagram>()`; that private frame contains exactly one
+        // `Bytes`, so mirror the fixed entry charge without depending on a
+        // private Quinn type.
+        let minimum_buffer = datagram_max_payload_bytes
+            .checked_add(core::mem::size_of::<bytes::Bytes>())
+            .ok_or_else(|| {
+                invalid_transport_geometry("QUIC DATAGRAM buffer geometry overflows usize")
+            })?;
+        if datagram_receive_buffer_bytes < minimum_buffer
+            || datagram_send_buffer_bytes < minimum_buffer
+        {
+            return Err(invalid_transport_geometry(format!(
+                "network QUIC DATAGRAM receive and send buffers must each be at least {minimum_buffer} bytes for a {datagram_max_payload_bytes}-byte payload limit"
+            )));
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -6647,6 +6763,20 @@ impl<T: Pload + message::ClassifyTopic + Sync, E: Enc + Sync> NetworkBaseHandle<
             _encryptor: core::marker::PhantomData::<E>,
         }
     }
+    /// Construct a closed handle and the sole capability for its configured-peer snapshot.
+    ///
+    /// This is available only to tests and never exposes a mutation capability
+    /// for a live actor-owned handle.
+    #[cfg(any(test, feature = "test-fixtures"))]
+    #[must_use]
+    pub fn closed_for_tests_with_configured_peer_snapshot()
+    -> (Self, ConfiguredPeerSnapshotTestFixture) {
+        let handle = Self::closed_for_tests();
+        let fixture = ConfiguredPeerSnapshotTestFixture {
+            state: Arc::clone(&handle.configured_peer_ids),
+        };
+        (handle, fixture)
+    }
     /// Launch the P2P runtime with pluggable handshake capability overrides.
     ///
     /// Use this entrypoint when tests or specialised deployments need to force
@@ -6839,8 +6969,21 @@ impl<T: Pload + message::ClassifyTopic + Sync, E: Enc + Sync> NetworkBaseHandle<
         let quic_enabled = validate_shipping_quic_policy(quic_enabled)?;
         let quic_datagrams_enabled =
             validate_shipping_quic_datagram_policy(quic_datagrams_enabled)?;
+        validate_quic_configuration(
+            quic_enabled,
+            quic_datagrams_enabled,
+            quic_datagram_max_payload_bytes,
+            quic_datagram_receive_buffer_bytes,
+            quic_datagram_send_buffer_bytes,
+        )?;
         let (allow_nets, deny_nets) =
             parse_acl_cidrs(&allow_cidrs, &deny_cidrs).map_err(invalid_transport_geometry)?;
+        validate_accept_throttle_geometry(
+            accept_rate_per_prefix_per_sec.is_some(),
+            accept_rate_per_ip_per_sec.is_some(),
+            max_accept_buckets.get(),
+        )
+        .map_err(invalid_transport_geometry)?;
         let P2pIdentityKeys {
             node: key_pair,
             soranet_transport,
@@ -9020,6 +9163,41 @@ mod accept_stream_tests {
         assert!(!validate_shipping_quic_policy(false).unwrap());
     }
     #[test]
+    fn dormant_quic_datagram_geometry_is_bounded() {
+        let payload = 1_200;
+        let minimum_buffer = payload + core::mem::size_of::<bytes::Bytes>();
+        validate_quic_configuration(false, false, payload, 0, 0).expect("TCP-only configuration");
+        validate_quic_configuration(true, false, payload, 0, 0)
+            .expect("stream-only QUIC configuration");
+        validate_quic_configuration(true, true, payload, minimum_buffer, minimum_buffer)
+            .expect("bounded QUIC DATAGRAM configuration");
+        let error =
+            validate_quic_configuration(false, true, payload, minimum_buffer, minimum_buffer)
+                .expect_err("DATAGRAM without QUIC must fail before binding sockets");
+        let Error::Io(error) = error else {
+            panic!("unexpected error: {error:?}");
+        };
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+        assert!(
+            error
+                .to_string()
+                .contains("requires network.quic_enabled=true")
+        );
+
+        for (receive, send) in [
+            (minimum_buffer - 1, minimum_buffer),
+            (minimum_buffer, minimum_buffer - 1),
+        ] {
+            let error = validate_quic_configuration(true, true, payload, receive, send)
+                .expect_err("a buffer smaller than payload plus fixed entry overhead must fail");
+            let Error::Io(error) = error else {
+                panic!("unexpected error: {error:?}");
+            };
+            assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+            assert!(error.to_string().contains(&minimum_buffer.to_string()));
+        }
+    }
+    #[test]
     fn network_actor_budget_uses_exact_encrypted_stream_geometry() {
         let control_plaintext = 4096;
         let safety_charge = crate::frame_queue_charge(control_plaintext)
@@ -9217,6 +9395,41 @@ mod accept_stream_tests {
         let mut cfg = base_cfg();
         cfg.outbound_dial_deny_cidrs = vec!["192.0.2.0/33".to_owned()];
         assert_start_invalid_input(key_pair, cfg).await;
+    }
+    #[tokio::test(flavor = "current_thread")]
+    async fn start_rejects_malformed_inbound_acl_before_listener_binding() {
+        let blocker = match std::net::TcpListener::bind("127.0.0.1:0") {
+            Ok(listener) => listener,
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => return,
+            Err(error) => panic!("TCP blocker bind failed: {error:?}"),
+        };
+        let blocked_addr: iroha_primitives::addr::SocketAddr =
+            blocker.local_addr().expect("blocked TCP address").into();
+        let mut cfg = base_cfg();
+        cfg.address = iroha_config_base::WithOrigin::inline(blocked_addr.clone());
+        cfg.public_address = iroha_config_base::WithOrigin::inline(blocked_addr);
+        cfg.deny_cidrs = vec!["192.0.2.0/33".to_owned()];
+
+        let started = start_test_network(
+            test_node_key_pair(),
+            cfg,
+            iroha_futures::supervisor::ShutdownSignal::new(),
+        )
+        .await;
+        assert!(
+            matches!(started, Err(Error::Io(error))
+                if error.kind() == std::io::ErrorKind::InvalidInput
+                    && error.to_string().contains("network.deny_cidrs")),
+            "malformed inbound ACL must fail closed before reaching the occupied listener"
+        );
+    }
+    #[tokio::test(flavor = "current_thread")]
+    async fn start_rejects_accept_cap_below_enabled_dimensions() {
+        let mut cfg = base_cfg();
+        cfg.accept_rate_per_prefix_per_sec = core::num::NonZeroU32::new(1);
+        cfg.accept_rate_per_ip_per_sec = core::num::NonZeroU32::new(1);
+        cfg.max_accept_buckets = core::num::NonZeroUsize::new(1).unwrap();
+        assert_start_invalid_input(test_node_key_pair(), cfg).await;
     }
     #[tokio::test(flavor = "current_thread")]
     async fn start_rejects_malformed_outbound_dial_dns_suffix_before_binding() {
@@ -12525,17 +12738,17 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
             "committed source projection must remain representable"
         );
     }
-    fn set_reply_source_acl(&mut self, acl: message::UpdateAcl) {
-        if let Err(error) = parse_acl_cidrs(&acl.allow_cidrs, &acl.deny_cidrs) {
-            iroha_logger::error!(
-                %error,
-                "Rejected malformed runtime ACL update; retaining applied policy"
-            );
-            return;
-        }
+    fn set_reply_source_acl(&mut self, acl: message::UpdateAcl) -> bool {
+        let acl = match ValidatedAclUpdate::parse(acl) {
+            Ok(acl) => acl,
+            Err(error) => {
+                iroha_logger::error!(%error, "Rejected invalid runtime network ACL");
+                return false;
+            }
+        };
         let prior = self.pending_reply_source_authority.clone();
         self.pending_reply_source_authority.acl = Some(acl);
-        self.accept_staged_reply_source_authority(prior, "ACL update");
+        self.accept_staged_reply_source_authority(prior, "ACL update")
     }
     fn set_reply_source_consensus_caps(&mut self, consensus_caps: ConsensusCapsSnapshot) {
         let prior = self.pending_reply_source_authority.clone();
@@ -12587,16 +12800,17 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
         }
         self.accept_staged_reply_source_authority(prior, transition);
     }
-    fn apply_reply_source_acl(&mut self, acl: message::UpdateAcl) {
-        let Ok((allow_nets, deny_nets)) = parse_acl_cidrs(&acl.allow_cidrs, &acl.deny_cidrs) else {
-            iroha_logger::error!(
-                "Refused to apply malformed staged runtime ACL; retaining applied policy"
-            );
-            return;
-        };
-        self.allowlist_only = acl.allowlist_only;
-        self.allow_keys = acl.allow_keys.into_iter().collect();
-        self.deny_keys = acl.deny_keys.into_iter().collect();
+    fn apply_reply_source_acl(&mut self, acl: ValidatedAclUpdate) {
+        let ValidatedAclUpdate {
+            allowlist_only,
+            allow_keys,
+            deny_keys,
+            allow_nets,
+            deny_nets,
+        } = acl;
+        self.allowlist_only = allowlist_only;
+        self.allow_keys = allow_keys.into_iter().collect();
+        self.deny_keys = deny_keys.into_iter().collect();
         self.allow_nets = allow_nets;
         self.deny_nets = deny_nets;
         self.requested_topology.retain(|peer_id| {
@@ -23094,10 +23308,13 @@ mod tests {
             acl_revoked.clone(),
             random_peer_id(),
         ])));
-        network.pending_reply_source_authority.acl = Some(message::UpdateAcl {
-            deny_keys: vec![acl_revoked.public_key().clone()],
-            ..message::UpdateAcl::default()
-        });
+        network.pending_reply_source_authority.acl = Some(
+            ValidatedAclUpdate::parse(message::UpdateAcl {
+                deny_keys: vec![acl_revoked.public_key().clone()],
+                ..message::UpdateAcl::default()
+            })
+            .expect("test ACL is valid"),
+        );
 
         let _ = network.reconcile_reliable_progress_topologies();
         let state = network
@@ -24700,15 +24917,48 @@ mod tests {
         );
     }
     #[test]
+    fn malformed_runtime_acl_is_rejected_before_staging() {
+        let_test_network!(network);
+        let allowed_peer = random_peer_id();
+        assert!(network.set_reply_source_acl(message::UpdateAcl {
+            allowlist_only: true,
+            allow_keys: vec![allowed_peer.public_key().clone()],
+            allow_cidrs: vec!["10.0.0.0/8".to_owned()],
+            ..message::UpdateAcl::default()
+        }));
+        assert!(network.pending_reply_source_authority.is_empty());
+        assert!(network.projected_reply_source_acl_allows(&allowed_peer));
+        assert_eq!(network.allow_nets.len(), 1);
+
+        assert!(!network.set_reply_source_acl(message::UpdateAcl {
+            deny_keys: vec![allowed_peer.public_key().clone()],
+            allow_cidrs: vec!["10.0.0.0/33".to_owned()],
+            ..message::UpdateAcl::default()
+        }));
+
+        assert!(
+            network.pending_reply_source_authority.is_empty(),
+            "a malformed update must not enter the pending authority state"
+        );
+        assert!(network.allowlist_only);
+        assert!(network.allow_keys.contains(allowed_peer.public_key()));
+        assert!(network.deny_keys.is_empty());
+        assert_eq!(network.allow_nets.len(), 1);
+        assert!(network.projected_reply_source_acl_allows(&allowed_peer));
+    }
+    #[test]
     fn acl_revoked_hub_address_cannot_recreate_a_dial_candidate() {
         let_test_network!(network);
         network.relay_mode = iroha_config::parameters::actual::RelayMode::Assist;
         let hub = test_peer(socket_addr!(127.0.0.1:45710));
         network.relay_hub_addresses.push(hub.address().clone());
-        network.apply_reply_source_acl(message::UpdateAcl {
-            deny_keys: vec![hub.id().public_key().clone()],
-            ..message::UpdateAcl::default()
-        });
+        network.apply_reply_source_acl(
+            ValidatedAclUpdate::parse(message::UpdateAcl {
+                deny_keys: vec![hub.id().public_key().clone()],
+                ..message::UpdateAcl::default()
+            })
+            .expect("test ACL is valid"),
+        );
 
         network.set_current_peers_addresses(UpdatePeers(vec![(
             hub.id().clone(),
@@ -24724,7 +24974,9 @@ mod tests {
                 .all(|(_, candidate)| candidate.id() != hub.id())
         );
 
-        network.apply_reply_source_acl(message::UpdateAcl::default());
+        network.apply_reply_source_acl(
+            ValidatedAclUpdate::parse(message::UpdateAcl::default()).expect("default ACL is valid"),
+        );
 
         assert!(
             network.relay_hub_candidates.contains(hub.id()),
@@ -25008,10 +25260,37 @@ mod tests {
         );
     }
     #[test]
+    fn malformed_runtime_acl_update_preserves_the_installed_policy() {
+        let_test_network!(network);
+        network.apply_reply_source_acl(
+            ValidatedAclUpdate::parse(message::UpdateAcl {
+                deny_cidrs: vec!["10.0.0.0/8".to_owned()],
+                ..message::UpdateAcl::default()
+            })
+            .expect("test ACL is valid"),
+        );
+        assert!(!network.allow_ip(IpAddr::from([10, 4, 3, 2])));
+        assert!(network.allow_ip(IpAddr::from([192, 0, 2, 1])));
+
+        network.set_reply_source_acl(message::UpdateAcl {
+            allow_cidrs: vec!["not-a-cidr".to_owned()],
+            ..message::UpdateAcl::default()
+        });
+
+        assert!(
+            !network.allow_ip(IpAddr::from([10, 4, 3, 2])),
+            "invalid hot reload must retain the prior deny network"
+        );
+        assert!(
+            network.allow_ip(IpAddr::from([192, 0, 2, 1])),
+            "invalid hot reload must not partially install its allow dimension"
+        );
+    }
+    #[test]
     fn cidr_allowlist_enforced_when_present() {
         let ip = IpAddr::from([10, 0, 0, 1]);
         let other = IpAddr::from([10, 0, 1, 1]);
-        let allow = parse_cidrs(&vec!["10.0.0.0/24".to_string()]).expect("valid IPv4 CIDR");
+        let allow = parse_cidrs(&["10.0.0.0/24".to_string()]).expect("valid IPv4 CIDR");
         let mut prefix = HashMap::new();
         let mut ip_buckets = HashMap::new();
         assert!(
@@ -25041,7 +25320,7 @@ mod tests {
     }
     #[test]
     fn ipv6_cidr_byte_boundary_is_respected() {
-        let allow = parse_cidrs(&vec!["2001:db8::/64".to_string()]).expect("valid IPv6 CIDR");
+        let allow = parse_cidrs(&["2001:db8::/64".to_string()]).expect("valid IPv6 CIDR");
         let inside: IpAddr = "2001:db8::1".parse().expect("valid IPv6");
         let outside: IpAddr = "2001:db8:0:1::1".parse().expect("valid IPv6");
         let mut prefix = HashMap::new();
@@ -25135,7 +25414,7 @@ mod tests {
     }
     #[test]
     fn allowlist_bypasses_throttle_state() {
-        let allow = parse_cidrs(&vec!["10.1.0.0/24".to_string()]).expect("valid IPv4 CIDR");
+        let allow = parse_cidrs(&["10.1.0.0/24".to_string()]).expect("valid IPv4 CIDR");
         let ip = IpAddr::from([10, 1, 0, 9]);
         let mut prefix = HashMap::new();
         let mut ip_buckets = HashMap::new();

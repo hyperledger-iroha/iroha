@@ -379,6 +379,7 @@ class _MockState:
                 "message_bundle_path": "/v1/sccp/proofs/message/{message_id}",
                 "proof_request_path": "/v1/sccp/proof-requests/{message_id}",
                 "recent_messages_path": "/v1/sccp/messages/recent",
+                "sora_outbound_material_path": "/v1/sccp/routes/{source_profile}/{route_id}/{asset_key}/{revision}/sora-outbound-material",
                 "registry_limits": {
                     "max_governed_lanes": 16,
                     "max_live_governed_routes": 64,
@@ -581,13 +582,18 @@ class _MockState:
             required = "destination_proof_b64"
             configured = self.sccp_bridge_proof_response
         else:
-            allowed = common | {"native_proof_b64"}
-            required = "native_proof_b64"
+            allowed = common | {"native_proof_b64", "replay_witness_b64"}
+            required = "native_proof_b64 and replay_witness_b64"
             configured = self.sccp_bridge_message_response
         unknown = next((field for field in payload if field not in allowed), None)
         if unknown is not None:
             raise ValueError(f"unknown or retired bridge submit field `{unknown}`")
-        if "authority" not in payload or "fee_payment" not in payload or required not in payload:
+        missing_artifact = (
+            "destination_proof_b64" not in payload
+            if endpoint == "proof"
+            else "native_proof_b64" not in payload or "replay_witness_b64" not in payload
+        )
+        if "authority" not in payload or "fee_payment" not in payload or missing_artifact:
             raise ValueError(f"authority, fee_payment, and {required} are required")
         from .client import ToriiClient
 

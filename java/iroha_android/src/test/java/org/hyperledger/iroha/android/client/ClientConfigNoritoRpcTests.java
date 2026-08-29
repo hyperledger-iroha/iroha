@@ -77,7 +77,8 @@ public final class ClientConfigNoritoRpcTests {
             .addObserver(observer)
             .build();
     final StubExecutor executor = new StubExecutor();
-    executor.setResponse(new TransportResponse(204, new byte[0], "", java.util.Map.of()));
+    executor.setResponse(
+        new TransportResponse(204, new byte[0], "", java.util.Map.of(), null, false));
     final NoritoRpcClient client = config.toNoritoRpcClient(executor);
     final byte[] response =
         client.call("/v1/pipeline/transactions", new byte[0]);

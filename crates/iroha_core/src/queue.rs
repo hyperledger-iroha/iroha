@@ -6589,13 +6589,19 @@ impl Queue {
     ///   mutate the durable FIFO owner; or
     /// - every key is exhaustively absent from all Queue ownership indexes.
     ///
+    /// An exact ordinary FIFO transaction may retain its admission-time fee
+    /// capacity hold. Replica terminalization observes but never consumes that
+    /// hold; the canonical transaction cleanup remains its sole release path.
+    ///
     /// A partial group, a mixture of FIFO and absent members, or any foreign or
     /// incomplete owner fails closed. The returned move-only authorization
     /// retains every per-key durability transition until Kura consumes it.
     ///
     /// # Errors
-    /// Returns an exact cursor, actor, group, journal, Queue-owner, or
-    /// concurrent-transition error without minting terminalization authority.
+    /// Returns an exact cursor, actor, group, journal, or Queue-owner error
+    /// without minting terminalization authority. A pre-existing durability
+    /// transition for the same hashes is temporary: Queue waits for it and then
+    /// revalidates the complete physical disposition under its mutation lock.
     pub(crate) fn authorize_autonomous_lane_replica_queue_disposition<'queue>(
         &'queue self,
         cursor_read: &AutonomousLifecycleCursorRead,
@@ -6680,8 +6686,26 @@ impl Queue {
             ));
         }
         let reservation_group = lifecycle.reservation_group;
+        let transition_hashes = ordered_keys
+            .iter()
+            .map(|key| key.entrypoint_hash)
+            .collect::<Vec<_>>();
         let _reservation_transition_guard = self.lane_reservation_transition_lock.lock();
-        let queue_guard = self.push_remove_lock.lock();
+        // Admission and canonical cleanup can temporarily own an exact hash
+        // while this replica is closing its durable payload custody. That
+        // transition is not a competing Queue disposition. Wait without the
+        // mutation lock, then close the check/publication race exactly as the
+        // canonical carrier cleanup path does before classifying FIFO/absence.
+        self.wait_for_durability_transitions(&transition_hashes);
+        let mut queue_guard = self.push_remove_lock.lock();
+        while transition_hashes
+            .iter()
+            .any(|hash| self.durability_transition_active(hash))
+        {
+            drop(queue_guard);
+            self.wait_for_durability_transitions(&transition_hashes);
+            queue_guard = self.push_remove_lock.lock();
+        }
         if self.transaction_selection_durability_faulted() {
             return Err(LaneQueueReservationError::DurabilityFault);
         }
@@ -6709,7 +6733,7 @@ impl Queue {
             }
         }
         let reservation_transition = self
-            .begin_durability_transition_locked(ordered_keys.iter().map(|key| key.entrypoint_hash))
+            .begin_durability_transition_locked(transition_hashes)
             .map_err(|hash| LaneQueueReservationError::Conflict { hash })?;
         let store = self.lane_reservations.lock();
         let global_selection_owners = self.global_selection_owners.lock();
@@ -8186,11 +8210,15 @@ impl Queue {
     ) -> Result<(), LaneQueueReservationError> {
         let guard = self.plan_journal.lock();
         let Some(journal) = guard.as_ref() else {
+            if !preflight.replica_keys.is_empty() {
+                return Err(LaneQueueReservationError::JournalNotInstalled);
+            }
             return Ok(());
         };
-        let _receipt = journal.observe_startup_replay_receipt_with_finalized_absence(
+        let _receipt = journal.observe_startup_replay_receipt_with_terminal_cuts(
             &preflight.active_phases,
             &preflight.finalized_keys,
+            &preflight.replica_keys,
         )?;
         Ok(())
     }
@@ -13627,6 +13655,20 @@ impl Queue {
             return None;
         }
         let live_reservations = self.lane_reservations.lock().live_hashes();
+        // A durable autonomous reservation is deliberately absent from the
+        // physical FIFO while retaining its immutable ordinal. Preserve that
+        // ordinal as a virtual FIFO cut so ordinary work admitted later cannot
+        // overtake the reserved QueuePlan entrypoint.
+        let mut live_reservation_fifo_cut = None;
+        for hash in &live_reservations {
+            let order = self.fifo_order_by_hash.get(hash)?;
+            order.value().validate().ok()?;
+            live_reservation_fifo_cut = Some(
+                live_reservation_fifo_cut.map_or(order.value().ordinal, |cut: u64| {
+                    cut.min(order.value().ordinal)
+                }),
+            );
+        }
         let mut global_owners = self.global_selection_owners.lock();
         let mut age_ring = self.queued_age_ring.lock();
         if self.transaction_selection_durability_faulted()
@@ -13667,12 +13709,26 @@ impl Queue {
                     .queued_tx_enqueued_at_ms
                     .get(hash)
                     .is_some_and(|entry| *entry.value() == *enqueued_at_ms);
-                if !is_current
-                    || !seen.insert(*hash)
-                    || self.removed_hashes.contains_key(hash)
-                    || live_reservations.contains(hash)
-                    || global_owners.contains_key(hash)
-                {
+                if !is_current || !seen.insert(*hash) || self.removed_hashes.contains_key(hash) {
+                    return None;
+                }
+                if live_reservations.contains(hash) || global_owners.contains_key(hash) {
+                    // An exact owner at this FIFO position is still live. It
+                    // may be omitted from this lease, but no follower may pass
+                    // it in the same snapshot.
+                    blocked_by_fifo_predecessor = true;
+                    return None;
+                }
+                let Some(fifo_order) = self.fifo_order_by_hash.get(hash) else {
+                    blocked_by_fifo_predecessor = true;
+                    pending_status_fault.get_or_insert((
+                        *hash,
+                        "queued transaction is missing its immutable FIFO order".to_owned(),
+                    ));
+                    return None;
+                };
+                if live_reservation_fifo_cut.is_some_and(|cut| fifo_order.value().ordinal >= cut) {
+                    blocked_by_fifo_predecessor = true;
                     return None;
                 }
                 if self.durability_transition_active(hash) {
@@ -27911,13 +27967,15 @@ pub mod tests {
     fn push_wakes_sumeragi_when_configured() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = State::new(world_with_test_domains(), kura, query_handle);
+        let mut state = State::new(world_with_test_domains(), kura, query_handle);
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let queue = Queue::test(config_factory(), &time_source);
         let (wake_tx, wake_rx) = std::sync::mpsc::sync_channel(1);
         queue.set_sumeragi_wake(wake_tx);
+        let transaction = accepted_tx_by_someone(&time_source);
+        register_accepted_tx_authority_for_queue_test(&mut state, &transaction);
         queue
-            .push(accepted_tx_by_someone(&time_source), state.view())
+            .push(transaction, state.view())
             .expect("push should succeed");
         assert!(matches!(wake_rx.try_recv(), Ok(())));
     }

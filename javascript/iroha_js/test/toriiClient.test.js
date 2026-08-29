@@ -1747,7 +1747,7 @@ function createPipelineRecoveryFastpqProofsPayload(overrides = {}) {
       {
         entry_hash: fakeHashHex(0x22),
         batch_index: 0,
-        parameter: "fastpq-lane-balanced",
+        parameter: "fastpq-state-transition-stark-v1",
         transition_count: 2,
         trace_commitment: fakeHashHex(0x33),
         proof_digest: fakeHashHex(0x44),
@@ -10185,7 +10185,7 @@ test("getPipelineRecoveryFastpqProofsTyped normalises proof snapshots", async ()
   const proof = {
     entry_hash: fakeHashHex(0x55),
     batch_index: 3,
-    parameter: "fastpq-lane-balanced",
+    parameter: "fastpq-state-transition-stark-v1",
     transition_count: 5,
     trace_commitment: fakeHashHex(0x66),
     proof_digest: fakeHashHex(0x77),
@@ -10215,7 +10215,7 @@ test("getPipelineRecoveryFastpqProofsTyped normalises proof snapshots", async ()
       {
         entryHash: proof.entry_hash.toLowerCase(),
         batchIndex: 3,
-        parameter: "fastpq-lane-balanced",
+        parameter: "fastpq-state-transition-stark-v1",
         transitionCount: 5,
         traceCommitment: proof.trace_commitment.toLowerCase(),
         proofDigest: proof.proof_digest.toLowerCase(),
@@ -17828,7 +17828,7 @@ test("streamEvents rejects unsupported production backend event filters before f
     "stark/fri/security-review-passed",
     "stark/fri/S.e.c.u.r.i.t.yReviewPassed",
     "stark/fri/a-u-d-i-t-c-l-a-i-m",
-    "stark/fri/sha256-goldilocks ",
+    "stark/fri/poseidon-x7-goldilocks-6x64-v1 ",
     "halo2/ipa/orchard",
     "halo2/kzg",
     "halo2/ipa\0",

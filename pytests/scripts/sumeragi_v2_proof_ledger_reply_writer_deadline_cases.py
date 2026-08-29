@@ -91,29 +91,31 @@ def test_reply_writer_deadline_selects_flush_fixture_methods_by_context(
         ),
         (
             "crates/iroha_config/src/parameters/user.rs",
-            "let reply_writer_flush_timeout = reply_writer_flush_timeout.get().max(min_interval);",
-            "let reply_writer_flush_timeout = reply_writer_flush_timeout.get();",
-            "must be clamped to the 100ms timer floor",
+            "let preauth_timeout = preauth_timeout.get().max(min_interval);\n"
+            "        let reply_writer_flush_timeout = reply_writer_flush_timeout.get().max(min_interval);",
+            "let preauth_timeout = preauth_timeout.get();\n"
+            "        let reply_writer_flush_timeout = reply_writer_flush_timeout.get();",
+            "pre-authentication and exact-reply writer deadlines must be clamped",
         ),
         (
-            "crates/iroha_p2p/src/network.rs",
-            "struct PendingWriterFlush {\n"
-            "    receiver: tokio::sync::oneshot::Receiver<()>,\n"
+            "crates/iroha_p2p/src/network/reliable_actor.rs",
+            "pub(super) struct PendingWriterFlush {\n"
+            "    pub(super) receiver: tokio::sync::oneshot::Receiver<()>,\n"
             "}",
-            "struct PendingWriterFlush {\n"
-            "    receiver: tokio::sync::oneshot::Receiver<()>,\n"
+            "pub(super) struct PendingWriterFlush {\n"
+            "    pub(super) receiver: tokio::sync::oneshot::Receiver<()>,\n"
             "    deadline: tokio::time::Instant,\n"
             "}",
             "must retain only its flush receiver",
         ),
         (
-            "crates/iroha_p2p/src/network.rs",
-            "struct ExactReplyWriterDeadline {\n"
-            "    admitted_at: tokio::time::Instant,\n"
-            "    timeout: Duration,\n"
+            "crates/iroha_p2p/src/network/reliable_actor.rs",
+            "pub(super) struct ExactReplyWriterDeadline {\n"
+            "    pub(super) admitted_at: tokio::time::Instant,\n"
+            "    pub(super) timeout: Duration,\n"
             "}",
-            "struct ExactReplyWriterDeadline {\n"
-            "    admitted_at: tokio::time::Instant,\n"
+            "pub(super) struct ExactReplyWriterDeadline {\n"
+            "    pub(super) admitted_at: tokio::time::Instant,\n"
             "}",
             "must retain its first-dispatch instant and scaled timeout",
         ),
@@ -129,7 +131,7 @@ def test_reply_writer_deadline_selects_flush_fixture_methods_by_context(
             "may explicitly publish only successful flush or timeout",
         ),
         (
-            "crates/iroha_p2p/src/network.rs",
+            "crates/iroha_p2p/src/network/reliable_actor.rs",
             "impl<T> Drop for ReliableActorPending<T> {\n"
             "    fn drop(&mut self) {\n"
             "        let _ = self.release_all_with_terminal_fence();\n"
@@ -174,7 +176,7 @@ def test_reply_writer_deadline_production_global_source_mutations_fail_closed(
     ("relative_path", "item_name", "old", "new", "error_fragment"),
     (
         (
-            "crates/iroha_p2p/src/network.rs",
+            "crates/iroha_p2p/src/network/reliable_actor.rs",
             "scaled_reply_writer_flush_timeout",
             "timeout.checked_mul(2)",
             "timeout.checked_mul(1)",
@@ -239,32 +241,18 @@ def test_reply_writer_deadline_production_global_source_mutations_fail_closed(
             "ready exact receipt must publish Flushed",
         ),
         (
-            "crates/iroha_p2p/src/network.rs",
-            "dispatch_reliable_actor_message_inner",
-            "let frame = RelayMessage::new_signed(\n"
-            "                        &self.key_pair,\n"
-            "                        RelayTarget::Direct(post.peer_id.clone()),\n"
-            "                        self.relay_ttl,\n"
-            "                        post.priority,",
-            "let frame = RelayMessage::new(\n"
-            "                        RelayTarget::Direct(post.peer_id.clone()),\n"
-            "                        self.relay_ttl,\n"
-            "                        post.priority,",
-            "exact direct reply dispatch must retain the authenticated relay origin",
+            "crates/iroha_p2p/src/network/reliable_actor.rs",
+            "materialize",
+            "RelayTarget::Direct(post.peer_id),",
+            "RelayTarget::Broadcast,",
+            "materialization must authenticate each unsigned target",
         ),
         (
-            "crates/iroha_p2p/src/network.rs",
-            "dispatch_reliable_actor_message_inner",
-            "let frame = RelayMessage::new_signed(\n"
-            "                            &self.key_pair,\n"
-            "                            RelayTarget::Broadcast,\n"
-            "                            self.relay_ttl,\n"
-            "                            broadcast.priority,",
-            "let frame = RelayMessage::new(\n"
-            "                            RelayTarget::Broadcast,\n"
-            "                            self.relay_ttl,\n"
-            "                            broadcast.priority,",
-            "reliable broadcast dispatch must retain the authenticated relay origin",
+            "crates/iroha_p2p/src/network/reliable_actor.rs",
+            "materialize",
+            "RelayTarget::Broadcast,",
+            "RelayTarget::Direct(broadcast.peer_id),",
+            "materialization must authenticate each unsigned target",
         ),
         (
             "crates/iroha_p2p/src/network.rs",
@@ -281,7 +269,7 @@ def test_reply_writer_deadline_production_global_source_mutations_fail_closed(
             "must publish TimedOut rather than fabricate a flush",
         ),
         (
-            "crates/iroha_p2p/src/network.rs",
+            "crates/iroha_p2p/src/network/reliable_actor.rs",
             "exact_reply_flush_wins_terminal_fence",
             "pending.receiver.close();",
             "let _ = &pending.receiver;",
@@ -295,14 +283,14 @@ def test_reply_writer_deadline_production_global_source_mutations_fail_closed(
             "deterministic test seam must run exactly after",
         ),
         (
-            "crates/iroha_p2p/src/network.rs",
+            "crates/iroha_p2p/src/network/reliable_actor.rs",
             "release_cancelled_targets",
             "entry.publish_ready_exact_reply_before_terminal_drop();",
             "let _ = &entry.pending_flush_acks;",
             "inactive pending cleanup must fence",
         ),
         (
-            "crates/iroha_p2p/src/network.rs",
+            "crates/iroha_p2p/src/network/reliable_actor.rs",
             "release_all_with_terminal_fence",
             "entry.publish_ready_exact_reply_before_terminal_drop();",
             "let _ = &entry.pending_flush_acks;",
@@ -330,7 +318,7 @@ def test_reply_writer_deadline_production_global_source_mutations_fail_closed(
             "terminal reply-flush outcome classifier",
         ),
         (
-            "crates/iroha_p2p/src/network.rs",
+            "crates/iroha_p2p/src/network/reliable_actor.rs",
             "new_targeted_broadcast",
             "reply_writer_deadline: None,",
             "reply_writer_deadline: Some(ExactReplyWriterDeadline {\n"
@@ -340,7 +328,7 @@ def test_reply_writer_deadline_production_global_source_mutations_fail_closed(
             "topology actor-item constructor",
         ),
         (
-            "crates/iroha_p2p/src/network.rs",
+            "crates/iroha_p2p/src/network/reliable_actor.rs",
             "retain_after_dispatch_attempt",
             "reply_writer_deadline,\n"
             "            reply_flush_ack,\n"

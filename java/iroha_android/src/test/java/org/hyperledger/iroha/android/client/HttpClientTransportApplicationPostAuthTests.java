@@ -30,7 +30,7 @@ final class HttpClientTransportApplicationPostAuthTests {
         request -> {
           requests.add(request);
           return CompletableFuture.completedFuture(
-              new TransportResponse(404, new byte[0], "not found", Map.of()));
+              new TransportResponse(404, new byte[0], "not found", Map.of(), null, false));
         };
     final ToriiCanonicalRequestAuth auth = applicationAuth();
     final List<NetworkId> networks =

@@ -148,10 +148,10 @@ pub struct PrivacyReleaseIvmPrivateNoteNetworkActionV1 {
     /// Exact public statement carried by `transaction`.
     pub statement: IrohaIvmPrivateNoteStarkStatementV1,
 }
-/// Candidate governed ZK-ACE transfer shape retained for fail-closed evidence.
+/// Final governed ZK-ACE transfer shape retained for fail-closed evidence.
 ///
-/// Production builders cannot currently return this type because ZK-ACE has
-/// no activatable compiled profile.
+/// Production builders cannot return this type until the independent qROM
+/// reduction and implementation review are registered.
 #[derive(Clone, Debug)]
 pub struct PrivacyReleaseZkAceNetworkActionV1 {
     /// Ordinary signed transaction carrying exactly one ZK-ACE proof.
@@ -215,6 +215,8 @@ fn placeholder_envelope_v1(
     proof: PrivacyProofV1,
 ) -> PrivacyProofEnvelopeV1 {
     PrivacyProofEnvelopeV1 {
+        wire_magic: Default::default(),
+        catalog_commitment: Default::default(),
         protocol_id: profile.protocol_id,
         proof_system_id: profile.proof_system_id,
         engine_id: profile.engine_id,
@@ -237,6 +239,8 @@ fn final_envelope_v1(
         .digest()
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
     Ok(PrivacyProofEnvelopeV1 {
+        wire_magic: Default::default(),
+        catalog_commitment: Default::default(),
         protocol_id: profile.protocol_id,
         proof_system_id: profile.proof_system_id,
         engine_id: profile.engine_id,
@@ -267,11 +271,11 @@ fn secret_scalar_v1(
     );
     SecretScalarV1::from_bytes(bytes).map_err(|_| evidence_error())
 }
-/// Reject a governed ZK-ACE candidate before constructing a proof.
+/// Reject a governed ZK-ACE transfer before constructing a proof.
 ///
 /// Otherwise-valid inputs return
-/// [`PrivacyReleaseEvidenceErrorClassV1::ProtocolUnavailable`] while the
-/// compiled ZK-ACE profile is fail-closed.
+/// [`PrivacyReleaseEvidenceErrorClassV1::ProtocolUnavailable`] while qROM
+/// qualification remains incomplete.
 pub fn build_privacy_release_zk_ace_network_action_v1(
     transaction_context: PrivacyReleaseTransactionContextV1,
     source: AccountId,
@@ -287,7 +291,7 @@ pub fn build_privacy_release_zk_ace_network_action_v1(
         return Err(evidence_error());
     }
     let profile = compiled_privacy_profile_v1(
-        iroha_data_model::privacy::PrivacyProtocolIdV1::ZkAcePqAuthorizationV0,
+        iroha_data_model::privacy::PrivacyProtocolIdV1::ZkAcePqAuthorizationV1,
     )
     .map_err(|error| match error {
         crate::privacy_profiles::CompiledPrivacyProfileErrorV1::EngineUnavailable { .. } => {
@@ -325,14 +329,14 @@ pub fn build_privacy_release_zk_ace_network_action_v1(
         public_balance_scope: iroha_data_model::asset::AssetBalanceScope::Global,
         amount,
         authorization_epoch: policy.authorization_epoch,
-        replay_nullifier: iroha_data_model::privacy::PrivacyNullifierV1::new([0; 32]),
+        replay_nullifier: Default::default(),
     };
     let intent = draft_intent_v1(
         &transaction_context,
         placeholder_envelope_v1(
             profile,
-            PrivacyStatementV1::ZkAcePqAuthorizationV0(statement.clone()),
-            PrivacyProofV1::ZkAcePqAuthorizationV0(PrivacyProofBytesV1::new(Vec::new())),
+            PrivacyStatementV1::ZkAcePqAuthorizationV1(statement.clone()),
+            PrivacyProofV1::ZkAcePqAuthorizationV1(PrivacyProofBytesV1::new(Vec::new())),
         ),
     )?;
     statement.context.transaction_intent_digest = intent;
@@ -349,8 +353,8 @@ pub fn build_privacy_release_zk_ace_network_action_v1(
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::NativeProverRejected)?;
     let envelope = final_envelope_v1(
         profile,
-        PrivacyStatementV1::ZkAcePqAuthorizationV0(statement.clone()),
-        PrivacyProofV1::ZkAcePqAuthorizationV0(PrivacyProofBytesV1::new(proof)),
+        PrivacyStatementV1::ZkAcePqAuthorizationV1(statement.clone()),
+        PrivacyProofV1::ZkAcePqAuthorizationV1(PrivacyProofBytesV1::new(proof)),
     )?;
     let transaction = finish_transaction_v1(&transaction_context, envelope, intent, private_key)?;
     Ok(PrivacyReleaseZkAceNetworkActionV1 {
@@ -1333,7 +1337,7 @@ mod tests {
                 valid.authority.clone(),
                 AccountId::new(
                     KeyPair::try_from_seed(vec![0x23; 32], Algorithm::Ed25519)
-                        .expect("fail-closed destination keypair")
+                        .expect("destination keypair")
                         .public_key()
                         .clone(),
                 ),
@@ -1343,7 +1347,7 @@ mod tests {
                 [0x54; 32],
                 key_pair.private_key(),
             )
-            .expect_err("otherwise valid ZK-ACE builder must remain unavailable"),
+            .expect_err("ZK-ACE must remain unavailable without qROM qualification"),
             PrivacyReleaseEvidenceErrorClassV1::ProtocolUnavailable
         );
         let mut zero_genesis = valid.clone();

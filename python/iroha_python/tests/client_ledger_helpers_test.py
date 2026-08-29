@@ -1835,13 +1835,10 @@ def test_privacy_verifier_registry_is_closed_exact_and_engine_typed() -> None:
             "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
             "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
             "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
-            "stark/fri",
-            "stark/fri/sha256-goldilocks",
-            "stark/fri/poseidon2-goldilocks",
-            "stark/fri/sha256_goldilocks.v1",
+            "stark/fri/poseidon-x7-goldilocks-6x64-v1",
         }
     )
-    assert len(expected) == 12
+    assert len(expected) == 9
     assert _VERIFIER_BACKEND_REGISTRY_LABELS_V1 == expected
     for backend in expected:
         expected_tag = "halo2-ipa-pasta" if backend.startswith("halo2/") else "stark"
@@ -1870,6 +1867,9 @@ def test_privacy_verifier_registry_rejects_aliases_retired_and_hostile_labels() 
         "halo2/ipa\0",
         "HALO2/IPA",
         "stark/FRI",
+        "stark/fri",
+        "stark/fri/poseidon2-goldilocks",
+        "stark/fri/sha256_goldilocks.v1",
         "halo2/ipa::ivm-execution-v1",
         "halo2//ipa",
         "halo2/ipa:",
@@ -2843,8 +2843,8 @@ def test_zk_verifying_key_registration_rejects_unsupported_backends_before_reque
         "stark/fri/replace-before-mainnet",
         "stark/fri/not-production-ready",
         "stark/fri/placeholder",
-        " stark/fri/sha256-goldilocks",
-        "stark/fri/sha256-goldilocks ",
+        " stark/fri/poseidon-x7-goldilocks-6x64-v1",
+        "stark/fri/poseidon-x7-goldilocks-6x64-v1 ",
         "halo2/ipa/orchard",
         "halo2/kzg",
         "halo2/ipa\0",
@@ -3485,8 +3485,8 @@ def test_zk_verifying_key_read_helpers_reject_unsupported_backends_before_reques
         "stark/fri/replace-before-mainnet",
         "stark/fri/not-production-ready",
         "stark/fri/placeholder",
-        " stark/fri/sha256-goldilocks",
-        "stark/fri/sha256-goldilocks ",
+        " stark/fri/poseidon-x7-goldilocks-6x64-v1",
+        "stark/fri/poseidon-x7-goldilocks-6x64-v1 ",
         "halo2/ipa/orchard",
         "halo2/kzg",
         "halo2/ipa\0",
@@ -3598,8 +3598,8 @@ def test_zk_event_filters_reject_unsupported_backends_before_request() -> None:
         "stark/fri/replace-before-mainnet",
         "stark/fri/not-production-ready",
         "stark/fri/placeholder",
-        " stark/fri/sha256-goldilocks",
-        "stark/fri/sha256-goldilocks ",
+        " stark/fri/poseidon-x7-goldilocks-6x64-v1",
+        "stark/fri/poseidon-x7-goldilocks-6x64-v1 ",
         "halo2/ipa/orchard",
         "halo2/kzg",
         "halo2/ipa\0",

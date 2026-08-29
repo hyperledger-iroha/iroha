@@ -1502,7 +1502,7 @@ mod tests {
     }
     fn test_fastpq_binding(source_dsid: DataSpaceId, effect_type: &str) -> AxtFastpqBinding {
         AxtFastpqBinding {
-            parameter: "fastpq-lane-balanced".to_owned(),
+            parameter: "fastpq-state-transition-stark-v1".to_owned(),
             source_dsid: source_dsid.as_u64(),
             source_dataspace: format!("ds-{}", source_dsid.as_u64()),
             source_receipt_id: "relay-receipt".to_owned(),

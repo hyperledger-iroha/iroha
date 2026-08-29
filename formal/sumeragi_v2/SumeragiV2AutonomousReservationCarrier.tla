@@ -277,10 +277,12 @@ recoveryVars ==
     recoveryWireLengthExact, localQueueReservationGroupExact,
     networkIngressStartupFenced, queueOwnerQuarantinePending>>
 
+\* @type: <<Bool, Bool, Bool>>;
 canonicalTerminalBatchVars ==
   <<canonicalOutcomeSetComplete, canonicalCarrierBatchPreflighted,
     partialCanonicalCleanup>>
 
+\* @type: <<Bool, Bool, Bool, Bool, Bool, Bool, Bool, Bool, Bool, Bool>>;
 startupTerminalUnitVars ==
   <<queueOwnershipSnapshotReceiptValid,
     canonicalGroupAQueueOwned, canonicalGroupBQueueOwned,
@@ -295,7 +297,7 @@ terminalVars ==
     queueTerminalPhysical, positiveQueueTerminalEvidence,
     terminalStartupGateClosed, terminalSweepStarted,
     terminalSweepCompleted, queueOwnershipSnapshotTaken,
-    canonicalTerminalBatchVars, startupTerminalUnitVars>>
+    canonicalOutcomeSetComplete, canonicalCarrierBatchPreflighted, partialCanonicalCleanup, queueOwnershipSnapshotReceiptValid, canonicalGroupAQueueOwned, canonicalGroupBQueueOwned, snapshotGroupAQueueOwned, snapshotGroupBQueueOwned, canonicalGroupATerminalPublished, canonicalGroupBTerminalPublished, canonicalCarrierUnitDeferred, deferredCarrierPlannedFromSnapshot, normalCarrierApplyCompleted>>
 
 vars ==
   <<stage, reservationIdentity, carrierIdentity, incarnation, claimState,
@@ -418,7 +420,8 @@ ReserveFifoTransaction ==
   /\ durableStageRank' =
        IF Mode = "ReserveBeforeDurable" THEN 0 ELSE 1
   /\ UNCHANGED <<executionCount, recreated, carrierCommitSurface>>
-  /\ UNCHANGED <<diagnosticStageRank, diagnosticsAuthorizeState>>
+  /\ UNCHANGED <<diagnosticStageRank, diagnosticIdentityExact,
+                 diagnosticsAuthorizeState>>
   /\ UNCHANGED recoveryVars
   /\ UNCHANGED terminalVars
 
@@ -440,7 +443,8 @@ AnchorAutonomousControl ==
                  releaseAfterApply, recreated, staleRelease,
                  reservationDurable, mergeCandidateExact,
                  canonicalReexecuted, carrierCommitSurface>>
-  /\ UNCHANGED <<diagnosticStageRank, diagnosticsAuthorizeState>>
+  /\ UNCHANGED <<diagnosticStageRank, diagnosticIdentityExact,
+                 diagnosticsAuthorizeState>>
   /\ UNCHANGED recoveryVars
   /\ UNCHANGED terminalVars
 
@@ -461,7 +465,8 @@ CertifyAutonomousBundle ==
                  releaseCompletion, released, releaseAfterApply, recreated,
                  staleRelease, reservationDurable, mergeCandidateExact,
                  canonicalReexecuted, carrierCommitSurface>>
-  /\ UNCHANGED <<diagnosticStageRank, diagnosticsAuthorizeState>>
+  /\ UNCHANGED <<diagnosticStageRank, diagnosticIdentityExact,
+                 diagnosticsAuthorizeState>>
   /\ UNCHANGED recoveryVars
   /\ UNCHANGED terminalVars
 
@@ -478,7 +483,8 @@ PersistFullMergeCandidate ==
                  releaseCompletion, released, releaseAfterApply, recreated,
                  staleRelease, reservationDurable, mergeCandidateExact,
                  canonicalReexecuted, carrierCommitSurface>>
-  /\ UNCHANGED <<diagnosticStageRank, diagnosticsAuthorizeState>>
+  /\ UNCHANGED <<diagnosticStageRank, diagnosticIdentityExact,
+                 diagnosticsAuthorizeState>>
   /\ UNCHANGED recoveryVars
   /\ UNCHANGED terminalVars
 
@@ -503,7 +509,8 @@ AuthorizeExactMergeCandidate ==
                  slotRetired, releaseBarrier, releaseCompletion, released,
                  releaseAfterApply, recreated, staleRelease,
                  reservationDurable, canonicalReexecuted>>
-  /\ UNCHANGED <<diagnosticStageRank, diagnosticsAuthorizeState>>
+  /\ UNCHANGED <<diagnosticStageRank, diagnosticIdentityExact,
+                 diagnosticsAuthorizeState>>
   /\ UNCHANGED recoveryVars
   /\ UNCHANGED terminalVars
 
@@ -591,7 +598,8 @@ ApplyCanonicalCarrier ==
                  releaseAfterApply, recreated, staleRelease,
                  reservationDurable, mergeCandidateExact,
                  carrierCommitSurface>>
-  /\ UNCHANGED <<diagnosticStageRank, diagnosticsAuthorizeState>>
+  /\ UNCHANGED <<diagnosticStageRank, diagnosticIdentityExact,
+                 diagnosticsAuthorizeState>>
   /\ UNCHANGED recoveryVars
   /\ UNCHANGED terminalVars
 
@@ -635,7 +643,8 @@ PersistCanonicalTerminalOutcomePending ==
   /\ UNCHANGED <<releaseFinalizationAuthorized,
                  terminalStartupGateClosed, terminalSweepStarted,
                  terminalSweepCompleted, queueOwnershipSnapshotTaken>>
-  /\ UNCHANGED <<diagnosticStageRank, diagnosticsAuthorizeState>>
+  /\ UNCHANGED <<diagnosticStageRank, diagnosticIdentityExact,
+                 diagnosticsAuthorizeState>>
   /\ UNCHANGED recoveryVars
 
 \* A crash may interrupt the per-attempt Pending fsync loop. Before Queue is
@@ -656,7 +665,7 @@ ReconstructCompleteCanonicalTerminalOutcomeSet ==
                  queueOwnershipSnapshotTaken,
                  canonicalCarrierBatchPreflighted,
                  partialCanonicalCleanup>>
-  /\ UNCHANGED startupTerminalUnitVars
+  /\ UNCHANGED <<queueOwnershipSnapshotReceiptValid, canonicalGroupAQueueOwned, canonicalGroupBQueueOwned, snapshotGroupAQueueOwned, snapshotGroupBQueueOwned, canonicalGroupATerminalPublished, canonicalGroupBTerminalPublished, canonicalCarrierUnitDeferred, deferredCarrierPlannedFromSnapshot, normalCarrierApplyCompleted>>
 
 \* The checked ApplyCarrier capability is reconstructed independently from
 \* the committed merge entry, carrier block, State membership, exact source
@@ -673,8 +682,8 @@ ReconstructCanonicalCarrierCleanupAuthorization ==
                  positiveQueueTerminalEvidence, terminalStartupGateClosed,
                  terminalSweepStarted, terminalSweepCompleted,
                  queueOwnershipSnapshotTaken>>
-  /\ UNCHANGED canonicalTerminalBatchVars
-  /\ UNCHANGED startupTerminalUnitVars
+  /\ UNCHANGED <<canonicalOutcomeSetComplete, canonicalCarrierBatchPreflighted, partialCanonicalCleanup>>
+  /\ UNCHANGED <<queueOwnershipSnapshotReceiptValid, canonicalGroupAQueueOwned, canonicalGroupBQueueOwned, snapshotGroupAQueueOwned, snapshotGroupBQueueOwned, canonicalGroupATerminalPublished, canonicalGroupBTerminalPublished, canonicalCarrierUnitDeferred, deferredCarrierPlannedFromSnapshot, normalCarrierApplyCompleted>>
 
 \* Every independently authenticated ApplyCarrier group enters one Queue
 \* all-group preflight. No group cleanup is visible before this succeeds.
@@ -693,7 +702,7 @@ PreflightCanonicalCarrierTerminalBatch ==
                  terminalSweepStarted, terminalSweepCompleted,
                  queueOwnershipSnapshotTaken, canonicalOutcomeSetComplete,
                  partialCanonicalCleanup>>
-  /\ UNCHANGED startupTerminalUnitVars
+  /\ UNCHANGED <<queueOwnershipSnapshotReceiptValid, canonicalGroupAQueueOwned, canonicalGroupBQueueOwned, snapshotGroupAQueueOwned, snapshotGroupBQueueOwned, canonicalGroupATerminalPublished, canonicalGroupBTerminalPublished, canonicalCarrierUnitDeferred, deferredCarrierPlannedFromSnapshot, normalCarrierApplyCompleted>>
 
 \* Queue either completes a live/partial exact owner or reauthenticates an
 \* already-empty physical terminal after restart. Only the independently
@@ -735,7 +744,7 @@ PublishCanonicalQueueTerminalEvidence ==
   /\ canonicalGroupATerminalPublished' = TRUE
   /\ canonicalGroupBTerminalPublished' = TRUE
   /\ normalCarrierApplyCompleted' =
-       normalCarrierApplyCompleted \/ canonicalCarrierUnitDeferred
+       (normalCarrierApplyCompleted \/ canonicalCarrierUnitDeferred)
   /\ UNCHANGED <<reservationIdentity, carrierIdentity, incarnation,
                  queueOwns, laneOwns, mergeOwns, releaseOwns,
                  executionCount, controlOnlyAnchor, candidateBodyDurable,
@@ -748,12 +757,13 @@ PublishCanonicalQueueTerminalEvidence ==
                  releaseFinalizationAuthorized, terminalStartupGateClosed,
                  terminalSweepStarted, terminalSweepCompleted,
                  queueOwnershipSnapshotTaken>>
-  /\ UNCHANGED canonicalTerminalBatchVars
+  /\ UNCHANGED <<canonicalOutcomeSetComplete, canonicalCarrierBatchPreflighted, partialCanonicalCleanup>>
   /\ UNCHANGED <<queueOwnershipSnapshotReceiptValid,
                  snapshotGroupAQueueOwned, snapshotGroupBQueueOwned,
                  canonicalCarrierUnitDeferred,
                  deferredCarrierPlannedFromSnapshot>>
-  /\ UNCHANGED <<diagnosticStageRank, diagnosticsAuthorizeState>>
+  /\ UNCHANGED <<diagnosticStageRank, diagnosticIdentityExact,
+                 diagnosticsAuthorizeState>>
   /\ UNCHANGED recoveryVars
 
 \* Kura may replace Pending with Complete only after consuming Queue's
@@ -770,8 +780,8 @@ PromoteTerminalOutcomeComplete ==
                  positiveQueueTerminalEvidence, terminalStartupGateClosed,
                  terminalSweepStarted, terminalSweepCompleted,
                  queueOwnershipSnapshotTaken>>
-  /\ UNCHANGED canonicalTerminalBatchVars
-  /\ UNCHANGED startupTerminalUnitVars
+  /\ UNCHANGED <<canonicalOutcomeSetComplete, canonicalCarrierBatchPreflighted, partialCanonicalCleanup>>
+  /\ UNCHANGED <<queueOwnershipSnapshotReceiptValid, canonicalGroupAQueueOwned, canonicalGroupBQueueOwned, snapshotGroupAQueueOwned, snapshotGroupBQueueOwned, canonicalGroupATerminalPublished, canonicalGroupBTerminalPublished, canonicalCarrierUnitDeferred, deferredCarrierPlannedFromSnapshot, normalCarrierApplyCompleted>>
 
 BeginLosingSlotRetirement ==
   /\ stage \in {"Reserved", "Anchored", "Certified", "CandidateDurable"}
@@ -856,8 +866,8 @@ AuthorizeExactReleaseFinalization ==
                  positiveQueueTerminalEvidence, terminalStartupGateClosed,
                  terminalSweepStarted, terminalSweepCompleted,
                  queueOwnershipSnapshotTaken>>
-  /\ UNCHANGED canonicalTerminalBatchVars
-  /\ UNCHANGED startupTerminalUnitVars
+  /\ UNCHANGED <<canonicalOutcomeSetComplete, canonicalCarrierBatchPreflighted, partialCanonicalCleanup>>
+  /\ UNCHANGED <<queueOwnershipSnapshotReceiptValid, canonicalGroupAQueueOwned, canonicalGroupBQueueOwned, snapshotGroupAQueueOwned, snapshotGroupBQueueOwned, canonicalGroupATerminalPublished, canonicalGroupBTerminalPublished, canonicalCarrierUnitDeferred, deferredCarrierPlannedFromSnapshot, normalCarrierApplyCompleted>>
 
 PersistReleaseTerminalOutcomePending ==
   /\ stage = "Released"
@@ -874,8 +884,8 @@ PersistReleaseTerminalOutcomePending ==
                  releaseFinalizationAuthorized, terminalStartupGateClosed,
                  terminalSweepStarted, terminalSweepCompleted,
                  queueOwnershipSnapshotTaken>>
-  /\ UNCHANGED canonicalTerminalBatchVars
-  /\ UNCHANGED startupTerminalUnitVars
+  /\ UNCHANGED <<canonicalOutcomeSetComplete, canonicalCarrierBatchPreflighted, partialCanonicalCleanup>>
+  /\ UNCHANGED <<queueOwnershipSnapshotReceiptValid, canonicalGroupAQueueOwned, canonicalGroupBQueueOwned, snapshotGroupAQueueOwned, snapshotGroupBQueueOwned, canonicalGroupATerminalPublished, canonicalGroupBTerminalPublished, canonicalCarrierUnitDeferred, deferredCarrierPlannedFromSnapshot, normalCarrierApplyCompleted>>
 
 CompleteQueueRelease ==
   /\ terminalOutcomeStage = "Pending"
@@ -907,10 +917,10 @@ CompleteQueueRelease ==
                  releaseFinalizationAuthorized, terminalStartupGateClosed,
                  terminalSweepStarted, terminalSweepCompleted,
                  queueOwnershipSnapshotTaken>>
-  /\ UNCHANGED canonicalTerminalBatchVars
+  /\ UNCHANGED <<canonicalOutcomeSetComplete, canonicalCarrierBatchPreflighted, partialCanonicalCleanup>>
   /\ UNCHANGED diagnosticVars
   /\ UNCHANGED recoveryVars
-  /\ UNCHANGED startupTerminalUnitVars
+  /\ UNCHANGED <<queueOwnershipSnapshotReceiptValid, canonicalGroupAQueueOwned, canonicalGroupBQueueOwned, snapshotGroupAQueueOwned, snapshotGroupBQueueOwned, canonicalGroupATerminalPublished, canonicalGroupBTerminalPublished, canonicalCarrierUnitDeferred, deferredCarrierPlannedFromSnapshot, normalCarrierApplyCompleted>>
 
 ReserveRecreatedIncarnation ==
   /\ stage = "Queued"
@@ -947,6 +957,7 @@ ReserveRecreatedIncarnation ==
   /\ canonicalReexecuted' = FALSE
   /\ durableStageRank' = 1
   /\ diagnosticStageRank' = 0
+  /\ diagnosticIdentityExact' = TRUE
   /\ diagnosticsAuthorizeState' = FALSE
   /\ terminalOutcomeStage' = "None"
   /\ terminalOutcomeSource' = "None"
@@ -1052,7 +1063,8 @@ RestartWithPendingTerminalOutcome ==
   /\ queueGateOpen
   /\ ~terminalStartupGateClosed
   /\ queueGateOpen' = FALSE
-  /\ canonicalCarrierCleanupAuthorized' = FALSE
+  /\ canonicalCarrierCleanupAuthorized' =
+       IF queueTerminalPhysical THEN canonicalCarrierCleanupAuthorized ELSE FALSE
   /\ releaseFinalizationAuthorized' = FALSE
   /\ positiveQueueTerminalEvidence' = FALSE
   /\ canonicalCarrierBatchPreflighted' =
@@ -1098,7 +1110,7 @@ TakeInitialQueueOwnershipSnapshot ==
                  positiveQueueTerminalEvidence,
                  terminalStartupGateClosed, terminalSweepStarted,
                  terminalSweepCompleted>>
-  /\ UNCHANGED canonicalTerminalBatchVars
+  /\ UNCHANGED <<canonicalOutcomeSetComplete, canonicalCarrierBatchPreflighted, partialCanonicalCleanup>>
   /\ UNCHANGED <<canonicalGroupAQueueOwned, canonicalGroupBQueueOwned,
                  canonicalGroupATerminalPublished,
                  canonicalGroupBTerminalPublished,
@@ -1121,8 +1133,8 @@ BeginTerminalOutcomeStartupSweep ==
                  positiveQueueTerminalEvidence,
                  terminalStartupGateClosed, terminalSweepCompleted,
                  queueOwnershipSnapshotTaken>>
-  /\ UNCHANGED canonicalTerminalBatchVars
-  /\ UNCHANGED startupTerminalUnitVars
+  /\ UNCHANGED <<canonicalOutcomeSetComplete, canonicalCarrierBatchPreflighted, partialCanonicalCleanup>>
+  /\ UNCHANGED <<queueOwnershipSnapshotReceiptValid, canonicalGroupAQueueOwned, canonicalGroupBQueueOwned, snapshotGroupAQueueOwned, snapshotGroupBQueueOwned, canonicalGroupATerminalPublished, canonicalGroupBTerminalPublished, canonicalCarrierUnitDeferred, deferredCarrierPlannedFromSnapshot, normalCarrierApplyCompleted>>
 
 \* Pre-sweep classifies the complete canonical unit with an ANY-owned
 \* predicate. A Queue owner on A therefore defers A+B together even though B
@@ -1151,7 +1163,7 @@ DeferCanonicalTerminalUnitWithQueueOwner ==
                  positiveQueueTerminalEvidence, terminalStartupGateClosed,
                  terminalSweepStarted, terminalSweepCompleted,
                  queueOwnershipSnapshotTaken>>
-  /\ UNCHANGED canonicalTerminalBatchVars
+  /\ UNCHANGED <<canonicalOutcomeSetComplete, canonicalCarrierBatchPreflighted, partialCanonicalCleanup>>
   /\ UNCHANGED <<queueOwnershipSnapshotReceiptValid,
                  canonicalGroupAQueueOwned, canonicalGroupBQueueOwned,
                  snapshotGroupAQueueOwned, snapshotGroupBQueueOwned,
@@ -1182,8 +1194,8 @@ FinishTerminalOutcomeStartupSweep ==
                  positiveQueueTerminalEvidence,
                  terminalStartupGateClosed, terminalSweepStarted,
                  queueOwnershipSnapshotTaken>>
-  /\ UNCHANGED canonicalTerminalBatchVars
-  /\ UNCHANGED startupTerminalUnitVars
+  /\ UNCHANGED <<canonicalOutcomeSetComplete, canonicalCarrierBatchPreflighted, partialCanonicalCleanup>>
+  /\ UNCHANGED <<queueOwnershipSnapshotReceiptValid, canonicalGroupAQueueOwned, canonicalGroupBQueueOwned, snapshotGroupAQueueOwned, snapshotGroupBQueueOwned, canonicalGroupATerminalPublished, canonicalGroupBTerminalPublished, canonicalCarrierUnitDeferred, deferredCarrierPlannedFromSnapshot, normalCarrierApplyCompleted>>
 
 \* The ordinary planner receives the deferred unit and the exact first
 \* reconciliation receipt. This does not retake Queue state or weaken the
@@ -1206,7 +1218,7 @@ PlanDeferredCanonicalCarrierFromInitialSnapshot ==
                  positiveQueueTerminalEvidence,
                  terminalStartupGateClosed, terminalSweepStarted,
                  terminalSweepCompleted, queueOwnershipSnapshotTaken>>
-  /\ UNCHANGED canonicalTerminalBatchVars
+  /\ UNCHANGED <<canonicalOutcomeSetComplete, canonicalCarrierBatchPreflighted, partialCanonicalCleanup>>
   /\ UNCHANGED <<queueOwnershipSnapshotReceiptValid,
                  canonicalGroupAQueueOwned, canonicalGroupBQueueOwned,
                  snapshotGroupAQueueOwned, snapshotGroupBQueueOwned,
@@ -1240,8 +1252,8 @@ OpenQueueAfterTerminalOutcomePlanning ==
                  releaseFinalizationAuthorized, queueTerminalPhysical,
                  positiveQueueTerminalEvidence,
                  queueOwnershipSnapshotTaken>>
-  /\ UNCHANGED canonicalTerminalBatchVars
-  /\ UNCHANGED startupTerminalUnitVars
+  /\ UNCHANGED <<canonicalOutcomeSetComplete, canonicalCarrierBatchPreflighted, partialCanonicalCleanup>>
+  /\ UNCHANGED <<queueOwnershipSnapshotReceiptValid, canonicalGroupAQueueOwned, canonicalGroupBQueueOwned, snapshotGroupAQueueOwned, snapshotGroupBQueueOwned, canonicalGroupATerminalPublished, canonicalGroupBTerminalPublished, canonicalCarrierUnitDeferred, deferredCarrierPlannedFromSnapshot, normalCarrierApplyCompleted>>
 
 \* Pending is wrongly treated as the second ApplyCarrier capability and Queue
 \* publishes canonical terminality without an independent authorization.
@@ -1279,7 +1291,8 @@ PendingOnlyCanonicalTerminalMutation ==
                  releaseFinalizationAuthorized, terminalStartupGateClosed,
                  terminalSweepStarted, terminalSweepCompleted,
                  queueOwnershipSnapshotTaken>>
-  /\ UNCHANGED <<diagnosticStageRank, diagnosticsAuthorizeState>>
+  /\ UNCHANGED <<diagnosticStageRank, diagnosticIdentityExact,
+                 diagnosticsAuthorizeState>>
   /\ UNCHANGED recoveryVars
   /\ UNCHANGED <<queueOwnershipSnapshotReceiptValid,
                  snapshotGroupAQueueOwned, snapshotGroupBQueueOwned,
@@ -1363,8 +1376,8 @@ ReleaseWithoutFinalizationAuthorityMutation ==
                  queueOwnershipSnapshotTaken>>
   /\ UNCHANGED diagnosticVars
   /\ UNCHANGED recoveryVars
-  /\ UNCHANGED canonicalTerminalBatchVars
-  /\ UNCHANGED startupTerminalUnitVars
+  /\ UNCHANGED <<canonicalOutcomeSetComplete, canonicalCarrierBatchPreflighted, partialCanonicalCleanup>>
+  /\ UNCHANGED <<queueOwnershipSnapshotReceiptValid, canonicalGroupAQueueOwned, canonicalGroupBQueueOwned, snapshotGroupAQueueOwned, snapshotGroupBQueueOwned, canonicalGroupATerminalPublished, canonicalGroupBTerminalPublished, canonicalCarrierUnitDeferred, deferredCarrierPlannedFromSnapshot, normalCarrierApplyCompleted>>
 
 CompleteWithoutQueueEvidenceMutation ==
   /\ Mode = "CompleteWithoutQueueEvidence"
@@ -1378,8 +1391,8 @@ CompleteWithoutQueueEvidenceMutation ==
                  positiveQueueTerminalEvidence, terminalStartupGateClosed,
                  terminalSweepStarted, terminalSweepCompleted,
                  queueOwnershipSnapshotTaken>>
-  /\ UNCHANGED canonicalTerminalBatchVars
-  /\ UNCHANGED startupTerminalUnitVars
+  /\ UNCHANGED <<canonicalOutcomeSetComplete, canonicalCarrierBatchPreflighted, partialCanonicalCleanup>>
+  /\ UNCHANGED <<queueOwnershipSnapshotReceiptValid, canonicalGroupAQueueOwned, canonicalGroupBQueueOwned, snapshotGroupAQueueOwned, snapshotGroupBQueueOwned, canonicalGroupATerminalPublished, canonicalGroupBTerminalPublished, canonicalCarrierUnitDeferred, deferredCarrierPlannedFromSnapshot, normalCarrierApplyCompleted>>
 
 \* ML-MUT-AUT-14a: Queue ownership is changed after the first receipt and
 \* before the deferred carrier is planned from that receipt. The persisted
@@ -1461,8 +1474,8 @@ OpenQueueBeforeDeferredCarrierApplyMutation ==
                  positiveQueueTerminalEvidence,
                  terminalSweepStarted, terminalSweepCompleted,
                  queueOwnershipSnapshotTaken>>
-  /\ UNCHANGED canonicalTerminalBatchVars
-  /\ UNCHANGED startupTerminalUnitVars
+  /\ UNCHANGED <<canonicalOutcomeSetComplete, canonicalCarrierBatchPreflighted, partialCanonicalCleanup>>
+  /\ UNCHANGED <<queueOwnershipSnapshotReceiptValid, canonicalGroupAQueueOwned, canonicalGroupBQueueOwned, snapshotGroupAQueueOwned, snapshotGroupBQueueOwned, canonicalGroupATerminalPublished, canonicalGroupBTerminalPublished, canonicalCarrierUnitDeferred, deferredCarrierPlannedFromSnapshot, normalCarrierApplyCompleted>>
 
 \* The local producer classification carries exact current Queue ownership
 \* into the closed-gate Crash/Recover cut. This is stronger than Kura payload
@@ -1519,6 +1532,7 @@ CompleteLocalRetainedAttemptRecovery ==
   /\ recoveryStage \in
        {"LocalProducerRecovering", "ObserverKuraRecovering"}
   /\ networkIngressStartupFenced
+  /\ ~terminalStartupGateClosed
   /\ recoveryStage' = "Normal"
   /\ queueGateOpen' = TRUE
   /\ localQueueReservationGroupExact' = FALSE
@@ -1677,7 +1691,8 @@ CertifyInstalledHistoricalAutonomousBundle ==
   /\ UNCHANGED <<queueGateOpen, recoverySignerStable,
                  recoveryWireLengthExact, localQueueReservationGroupExact,
                  networkIngressStartupFenced, queueOwnerQuarantinePending>>
-  /\ UNCHANGED <<diagnosticStageRank, diagnosticsAuthorizeState>>
+  /\ UNCHANGED <<diagnosticStageRank, diagnosticIdentityExact,
+                 diagnosticsAuthorizeState>>
   /\ UNCHANGED terminalVars
 
 \* Diagnostics may catch up to the highest revalidated durable stage for the
@@ -1972,8 +1987,11 @@ MLHistoricalAllGroupsPreflight ==
         /\ laneOwns
         /\ claimState = "Active"
         /\ reservationDurable
-        /\ reservationIdentity = ExactReservationIdentity
-        /\ incarnation = IncarnationA)
+        /\ reservationIdentity =
+             IF recreated
+             THEN RecreatedReservationIdentity
+             ELSE ExactReservationIdentity
+        /\ incarnation = IF recreated THEN IncarnationB ELSE IncarnationA)
 
 \* Crash/Recover for the local producer is reachable only from a retained
 \* attempt carrying its exact current Queue group. The network-ingress startup
@@ -2108,7 +2126,7 @@ MLTerminalStartupSweepOrder ==
         /\ ~canonicalGroupBTerminalPublished)
   /\ (deferredCarrierPlannedFromSnapshot =>
         /\ canonicalCarrierUnitDeferred
-        /\ terminalSweepCompleted
+        /\ (terminalSweepCompleted \/ queueGateOpen)
         /\ queueOwnershipSnapshotTaken
         /\ queueOwnershipSnapshotReceiptValid)
   /\ (normalCarrierApplyCompleted =>

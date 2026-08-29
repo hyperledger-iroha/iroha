@@ -10,7 +10,7 @@ fn namespaces_root_roles_and_publications_are_closed_and_typed() {
         assert_eq!(namespace.protocol_id(), statement.protocol_id());
     }
     let incompatible = PrivacyNamespaceV1::new(
-        PrivacyProtocolIdV1::ZkAcePqAuthorizationV0,
+        PrivacyProtocolIdV1::ZkAcePqAuthorizationV1,
         PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 {
             pool_id: PrivacyPoolIdV1::new(raw(1)),
         }),
@@ -20,7 +20,7 @@ fn namespaces_root_roles_and_publications_are_closed_and_typed() {
         Err(PrivacyNamespaceValidationError::IncompatibleScope { .. })
     ));
     let zero = PrivacyNamespaceV1::new(
-        PrivacyProtocolIdV1::ZkAcePqAuthorizationV0,
+        PrivacyProtocolIdV1::ZkAcePqAuthorizationV1,
         PrivacyNamespaceScopeV1::Policy(PrivacyPolicyNamespaceV1 {
             policy_id: PrivacyPolicyIdV1::new([0; 32]),
         }),
@@ -30,7 +30,7 @@ fn namespaces_root_roles_and_publications_are_closed_and_typed() {
         Err(PrivacyNamespaceValidationError::ZeroComponent { .. })
     ));
     let x509_trust_anchor_namespace = PrivacyNamespaceV1::new(
-        PrivacyProtocolIdV1::IrohaZkX509StarkP256V0,
+        PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
         PrivacyNamespaceScopeV1::TrustAnchor(PrivacyTrustAnchorNamespaceV1 {
             trust_anchor_id: PrivacyIssuerIdV1::new(raw(61)),
         }),
@@ -48,7 +48,7 @@ fn namespaces_root_roles_and_publications_are_closed_and_typed() {
     let decoded_json: PrivacyNamespaceV1 =
         norito::json::from_json(&json).expect("decode trust-anchor namespace JSON");
     assert_eq!(decoded_json, x509_trust_anchor_namespace);
-    let x509_statement = statement_for(PrivacyProtocolIdV1::IrohaZkX509StarkP256V0);
+    let x509_statement = statement_for(PrivacyProtocolIdV1::IrohaZkX509StarkP256V1);
     let x509_policy_namespace = PrivacyNamespaceV1::from_statement(&x509_statement);
     assert!(matches!(
         x509_policy_namespace.scope(),
@@ -80,19 +80,19 @@ fn namespaces_root_roles_and_publications_are_closed_and_typed() {
     ));
     assert!(matches!(
         PrivacyNamespaceV1::new(
-            PrivacyProtocolIdV1::ZkAcePqAuthorizationV0,
+            PrivacyProtocolIdV1::ZkAcePqAuthorizationV1,
             PrivacyNamespaceScopeV1::TrustAnchor(PrivacyTrustAnchorNamespaceV1 {
                 trust_anchor_id: PrivacyIssuerIdV1::new(raw(61)),
             }),
         )
         .validate(),
         Err(PrivacyNamespaceValidationError::IncompatibleScope {
-            protocol_id: PrivacyProtocolIdV1::ZkAcePqAuthorizationV0,
+            protocol_id: PrivacyProtocolIdV1::ZkAcePqAuthorizationV1,
         })
     ));
     assert_eq!(
         PrivacyNamespaceV1::new(
-            PrivacyProtocolIdV1::IrohaZkX509StarkP256V0,
+            PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
             PrivacyNamespaceScopeV1::TrustAnchor(PrivacyTrustAnchorNamespaceV1 {
                 trust_anchor_id: PrivacyIssuerIdV1::new([0; 32]),
             }),
@@ -308,7 +308,7 @@ fn proof_managed_pool_bootstraps_are_closed_bounded_and_self_authenticating() {
                 initial_note_commitments: vec![commitment(3), commitment(4)],
             },
         ),
-        PrivacyProofManagedPoolBootstrapV1::PqMaspStarkV0(PrivacyPqMaspPoolBootstrapV1 {
+        PrivacyProofManagedPoolBootstrapV1::PqMaspStarkV1(PrivacyPqMaspPoolBootstrapV1 {
             pool_id: PrivacyPoolIdV1::new(raw(217)),
             asset_definition_id: asset_definition_id(),
             initial_note_commitments: vec![commitment(5), commitment(6)],
@@ -684,7 +684,7 @@ fn protocol_activation_profiles_reject_zero_and_over_ceiling_values() {
             max_batch_size: ZK_AMS_MAX_BATCH_SIZE_V1,
             max_ring_size: 15,
         }),
-        PrivacyProtocolActivationLimitsV1::IrohaJindoPolynomialCommitmentV0(
+        PrivacyProtocolActivationLimitsV1::IrohaJindoPolynomialCommitmentV1(
             JindoActivationLimitsV1 {
                 max_polynomial_count: IROHA_JINDO_MAX_POLYNOMIALS_V1 + 1,
             },
@@ -702,7 +702,7 @@ fn protocol_activation_profiles_reject_zero_and_over_ceiling_values() {
                 max_output_count: 0,
             },
         ),
-        PrivacyProtocolActivationLimitsV1::PqMaspStarkV0(PqMaspActivationLimitsV1 {
+        PrivacyProtocolActivationLimitsV1::PqMaspStarkV1(PqMaspActivationLimitsV1 {
             max_input_count: PQ_MASP_MAX_INPUTS_V1,
             max_output_count: PQ_MASP_MAX_OUTPUTS_V1 + 1,
         }),
@@ -815,7 +815,7 @@ fn mutate_jindo_statement(
     mutate: impl FnOnce(&mut IrohaJindoPolynomialCommitmentStatementV1),
 ) -> Result<(), PrivacyStatementValidationError> {
     let mut value = base.clone();
-    let PrivacyStatementV1::IrohaJindoPolynomialCommitmentV0(statement) = &mut value else {
+    let PrivacyStatementV1::IrohaJindoPolynomialCommitmentV1(statement) = &mut value else {
         unreachable!()
     };
     mutate(statement);
@@ -933,7 +933,7 @@ fn assert_jindo_coefficient_boundaries(
         IROHA_JINDO_MIN_ROUNDED_COMMITMENT_COEFFICIENT_V1,
     ] {
         let mut value = base.clone();
-        let PrivacyStatementV1::IrohaJindoPolynomialCommitmentV0(statement) = &mut value else {
+        let PrivacyStatementV1::IrohaJindoPolynomialCommitmentV1(statement) = &mut value else {
             unreachable!()
         };
         statement.polynomial_commitments[0].encoding[..4].copy_from_slice(&boundary.to_le_bytes());
@@ -946,7 +946,7 @@ fn assert_jindo_coefficient_boundaries(
         i64::from(IROHA_JINDO_MIN_ROUNDED_COMMITMENT_COEFFICIENT_V1) - 1,
     ] {
         let mut value = base.clone();
-        let PrivacyStatementV1::IrohaJindoPolynomialCommitmentV0(statement) = &mut value else {
+        let PrivacyStatementV1::IrohaJindoPolynomialCommitmentV1(statement) = &mut value else {
             unreachable!()
         };
         statement.polynomial_commitments[0].encoding[..4].copy_from_slice(
@@ -971,11 +971,11 @@ fn assert_jindo_coefficient_boundaries(
 #[test]
 fn jindo_univariate_profile_rejects_noncanonical_and_out_of_bound_values() {
     let limits = PrivacyConsensusLimitsV1::taira_default();
-    let base = statement_for(PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0);
+    let base = statement_for(PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1);
     assert_jindo_field_and_batch_validation(&base, &limits);
     assert_jindo_commitment_encoding_validation(&base, &limits);
     assert_jindo_coefficient_boundaries(&base, &limits);
-    let governed = PrivacyProtocolActivationLimitsV1::IrohaJindoPolynomialCommitmentV0(
+    let governed = PrivacyProtocolActivationLimitsV1::IrohaJindoPolynomialCommitmentV1(
         JindoActivationLimitsV1 {
             max_polynomial_count: 1,
         },
@@ -992,10 +992,10 @@ fn jindo_univariate_profile_rejects_noncanonical_and_out_of_bound_values() {
 #[test]
 fn vega_figure9_public_inputs_are_closed_and_non_degenerate() {
     let limits = PrivacyConsensusLimitsV1::taira_default();
-    let vega = statement_for(PrivacyProtocolIdV1::VegaExistingCredentialZkV0);
+    let vega = statement_for(PrivacyProtocolIdV1::VegaExistingCredentialZkV1);
     let mutate_vega = |f: fn(&mut VegaExistingCredentialStatementV1)| {
         let mut value = vega.clone();
-        let PrivacyStatementV1::VegaExistingCredentialZkV0(statement) = &mut value else {
+        let PrivacyStatementV1::VegaExistingCredentialZkV1(statement) = &mut value else {
             unreachable!()
         };
         f(statement);
@@ -1050,7 +1050,7 @@ fn vega_figure9_public_inputs_are_closed_and_non_degenerate() {
     ));
     for years in [0, VEGA_MDL_MAX_AGE_THRESHOLD_YEARS_V1.saturating_add(1)] {
         let mut value = vega.clone();
-        let PrivacyStatementV1::VegaExistingCredentialZkV0(statement) = &mut value else {
+        let PrivacyStatementV1::VegaExistingCredentialZkV1(statement) = &mut value else {
             unreachable!()
         };
         statement.minimum_age_years = years;
@@ -1183,10 +1183,10 @@ fn vega_issuer_records_are_self_digested_forward_only_and_policy_closed() {
 #[test]
 fn vega_presentation_date_is_strict_proleptic_gregorian() {
     let limits = PrivacyConsensusLimitsV1::taira_default();
-    let vega = statement_for(PrivacyProtocolIdV1::VegaExistingCredentialZkV0);
+    let vega = statement_for(PrivacyProtocolIdV1::VegaExistingCredentialZkV1);
     let mutate_date = |date: PrivacyVegaMdlDateV1| {
         let mut value = vega.clone();
-        let PrivacyStatementV1::VegaExistingCredentialZkV0(statement) = &mut value else {
+        let PrivacyStatementV1::VegaExistingCredentialZkV1(statement) = &mut value else {
             unreachable!()
         };
         statement.presentation_date = date;
@@ -1291,7 +1291,7 @@ fn validate_mutated_x509(
     mutate: fn(&mut IrohaZkX509StarkP256StatementV1),
 ) -> Result<(), PrivacyStatementValidationError> {
     let mut value = base.clone();
-    let PrivacyStatementV1::IrohaZkX509StarkP256V0(statement) = &mut value else {
+    let PrivacyStatementV1::IrohaZkX509StarkP256V1(statement) = &mut value else {
         unreachable!()
     };
     mutate(statement);
@@ -1553,7 +1553,7 @@ fn zk_x509_governance_sha256_frames_match_known_answers() {
 #[test]
 fn x509_rejects_stale_roots_invalid_usage_and_invalid_presentation_windows() {
     let limits = PrivacyConsensusLimitsV1::taira_default();
-    let x509 = statement_for(PrivacyProtocolIdV1::IrohaZkX509StarkP256V0);
+    let x509 = statement_for(PrivacyProtocolIdV1::IrohaZkX509StarkP256V1);
     assert_x509_governance_and_usage_rejections(&x509, &limits);
     assert_x509_disclosure_and_presentation_rejections(&x509, &limits);
 }

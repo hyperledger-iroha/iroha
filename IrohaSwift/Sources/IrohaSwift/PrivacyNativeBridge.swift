@@ -9,71 +9,71 @@ public enum PrivacyProtocolIdParseErrorV1: Error, Equatable, Sendable {
 
 /// Closed first-release privacy protocol identity in canonical Norito order.
 public enum PrivacyProtocolIdV1: String, CaseIterable, Sendable {
-    case zkAcePqAuthorizationV0 = "zk-ace-pq-authorization-v0"
+    case zkAcePqAuthorizationV1 = "zk-ace-pq-authorization-v1"
     case anonymousPgcKOutOfNV1 = "anonymous-pgc-k-out-of-n-v1"
     case veRangeTransparentRangeV1 = "verange-transparent-range-v1"
     case irohaZkAmsV1 = "iroha-zk-ams-v1"
-    case vegaExistingCredentialZkV0 = "vega-existing-credential-zk-v0"
-    case irohaZkX509StarkP256V0 = "iroha-zk-x509-stark-p256-v0"
-    case irohaJindoPolynomialCommitmentV0 = "iroha-jindo-polynomial-commitment-v0"
+    case vegaExistingCredentialZkV1 = "vega-existing-credential-zk-v1"
+    case irohaZkX509StarkP256V1 = "iroha-zk-x509-stark-p256-v1"
+    case irohaJindoPolynomialCommitmentV1 = "iroha-jindo-polynomial-commitment-v1"
     case irohaBootleLanternAnoncredV1 = "iroha-bootle-lantern-anoncred-v1"
     case orchardHalo2ActionsV1 = "orchard-halo2-actions-v1"
     case moneroFcmpPlusPlusV1 = "monero-fcmp-plus-plus-v1"
     case irohaIvmPrivateNoteStarkV1 = "iroha-ivm-private-note-stark-v1"
-    case pqMaspStarkV0 = "pq-masp-stark-v0"
+    case pqMaspStarkV1 = "pq-masp-stark-v1"
 
     /// Exact four-byte Norito enum discriminant.
     public var noritoDiscriminant: UInt32 {
         switch self {
-        case .zkAcePqAuthorizationV0: return 0
+        case .zkAcePqAuthorizationV1: return 0
         case .anonymousPgcKOutOfNV1: return 1
         case .veRangeTransparentRangeV1: return 2
         case .irohaZkAmsV1: return 3
-        case .vegaExistingCredentialZkV0: return 4
-        case .irohaZkX509StarkP256V0: return 5
-        case .irohaJindoPolynomialCommitmentV0: return 6
+        case .vegaExistingCredentialZkV1: return 4
+        case .irohaZkX509StarkP256V1: return 5
+        case .irohaJindoPolynomialCommitmentV1: return 6
         case .irohaBootleLanternAnoncredV1: return 7
         case .orchardHalo2ActionsV1: return 8
         case .moneroFcmpPlusPlusV1: return 9
         case .irohaIvmPrivateNoteStarkV1: return 10
-        case .pqMaspStarkV0: return 11
+        case .pqMaspStarkV1: return 11
         }
     }
 
     /// Exact first-release Norito statement/proof variant label.
     public var canonicalTypedVariantLabel: String {
         switch self {
-        case .zkAcePqAuthorizationV0: return "ZkAcePqAuthorizationV0"
+        case .zkAcePqAuthorizationV1: return "ZkAcePqAuthorizationV1"
         case .anonymousPgcKOutOfNV1: return "AnonymousPgcKOutOfNV1"
         case .veRangeTransparentRangeV1: return "VeRangeTransparentRangeV1"
         case .irohaZkAmsV1: return "IrohaZkAmsV1"
-        case .vegaExistingCredentialZkV0: return "VegaExistingCredentialZkV0"
-        case .irohaZkX509StarkP256V0: return "IrohaZkX509StarkP256V0"
-        case .irohaJindoPolynomialCommitmentV0:
-            return "IrohaJindoPolynomialCommitmentV0"
+        case .vegaExistingCredentialZkV1: return "VegaExistingCredentialZkV1"
+        case .irohaZkX509StarkP256V1: return "IrohaZkX509StarkP256V1"
+        case .irohaJindoPolynomialCommitmentV1:
+            return "IrohaJindoPolynomialCommitmentV1"
         case .irohaBootleLanternAnoncredV1:
             return "IrohaBootleLanternAnoncredV1"
         case .orchardHalo2ActionsV1: return "OrchardHalo2ActionsV1"
         case .moneroFcmpPlusPlusV1: return "MoneroFcmpPlusPlusV1"
         case .irohaIvmPrivateNoteStarkV1: return "IrohaIvmPrivateNoteStarkV1"
-        case .pqMaspStarkV0: return "PqMaspStarkV0"
+        case .pqMaspStarkV1: return "PqMaspStarkV1"
         }
     }
 
     /// Exact proof-system tag required by this protocol.
     public var expectedProofSystem: PrivacyProofSystemIdV1 {
         switch self {
-        case .zkAcePqAuthorizationV0,
-             .irohaZkX509StarkP256V0,
+        case .zkAcePqAuthorizationV1,
+             .irohaZkX509StarkP256V1,
              .irohaIvmPrivateNoteStarkV1,
-             .pqMaspStarkV0:
-            return .starkFriSha256Goldilocks
+             .pqMaspStarkV1:
+            return .starkFriPoseidonX7Goldilocks6x64V1
         case .irohaZkAmsV1:
             return .zkAmsMaskedRelaxedSpartanT256Ristretto255Sha3_512
         case .anonymousPgcKOutOfNV1: return .anonymousPgcP256
         case .veRangeTransparentRangeV1: return .irohaVeRangeP256
-        case .vegaExistingCredentialZkV0: return .vegaNeutronNovaSpartanHyraxT256
-        case .irohaJindoPolynomialCommitmentV0: return .jindoPolynomialCommitment
+        case .vegaExistingCredentialZkV1: return .vegaNeutronNovaSpartanHyraxT256
+        case .irohaJindoPolynomialCommitmentV1: return .jindoPolynomialCommitment
         case .irohaBootleLanternAnoncredV1: return .lanternLnp22ModuleLinearNorm
         case .orchardHalo2ActionsV1: return .halo2IpaPasta
         case .moneroFcmpPlusPlusV1: return .fcmpPlusPlusCurveTreeBulletproofs
@@ -83,17 +83,17 @@ public enum PrivacyProtocolIdV1: String, CaseIterable, Sendable {
     /// Exact native-engine tag required by this protocol.
     public var expectedEngine: PrivacyEngineIdV1 {
         switch self {
-        case .zkAcePqAuthorizationV0,
-             .irohaZkX509StarkP256V0,
+        case .zkAcePqAuthorizationV1,
+             .irohaZkX509StarkP256V1,
              .irohaIvmPrivateNoteStarkV1,
-             .pqMaspStarkV0:
-            return .nativeGoldilocksStarkFri
+             .pqMaspStarkV1:
+            return .nativeGoldilocksPoseidonX7StarkFri6x64V1
         case .irohaZkAmsV1:
             return .nativeZkAmsMaskedRelaxedSpartanT256Ristretto255
         case .anonymousPgcKOutOfNV1: return .nativeAnonymousPgcP256
         case .veRangeTransparentRangeV1: return .nativeVeRangeP256
-        case .vegaExistingCredentialZkV0: return .nativeVega
-        case .irohaJindoPolynomialCommitmentV0: return .nativeJindo
+        case .vegaExistingCredentialZkV1: return .nativeVega
+        case .irohaJindoPolynomialCommitmentV1: return .nativeJindo
         case .irohaBootleLanternAnoncredV1: return .nativeLanternLnp22
         case .orchardHalo2ActionsV1: return .nativeHalo2Orchard
         case .moneroFcmpPlusPlusV1: return .nativeFcmpPlusPlus
@@ -111,18 +111,18 @@ public enum PrivacyProtocolIdV1: String, CaseIterable, Sendable {
     /// Parse one exact four-byte Norito enum discriminant.
     public init(noritoDiscriminant: UInt32) throws {
         switch noritoDiscriminant {
-        case 0: self = .zkAcePqAuthorizationV0
+        case 0: self = .zkAcePqAuthorizationV1
         case 1: self = .anonymousPgcKOutOfNV1
         case 2: self = .veRangeTransparentRangeV1
         case 3: self = .irohaZkAmsV1
-        case 4: self = .vegaExistingCredentialZkV0
-        case 5: self = .irohaZkX509StarkP256V0
-        case 6: self = .irohaJindoPolynomialCommitmentV0
+        case 4: self = .vegaExistingCredentialZkV1
+        case 5: self = .irohaZkX509StarkP256V1
+        case 6: self = .irohaJindoPolynomialCommitmentV1
         case 7: self = .irohaBootleLanternAnoncredV1
         case 8: self = .orchardHalo2ActionsV1
         case 9: self = .moneroFcmpPlusPlusV1
         case 10: self = .irohaIvmPrivateNoteStarkV1
-        case 11: self = .pqMaspStarkV0
+        case 11: self = .pqMaspStarkV1
         default:
             throw PrivacyProtocolIdParseErrorV1.unknownNoritoDiscriminant(
                 noritoDiscriminant
@@ -143,7 +143,7 @@ public enum PrivacyProtocolIdV1: String, CaseIterable, Sendable {
 
 /// Canonical first-release proof-system identity in Norito discriminant order.
 public enum PrivacyProofSystemIdV1: UInt32, CaseIterable, Sendable {
-    case starkFriSha256Goldilocks = 0
+    case starkFriPoseidonX7Goldilocks6x64V1 = 0
     case zkAmsMaskedRelaxedSpartanT256Ristretto255Sha3_512 = 1
     case anonymousPgcP256 = 2
     case irohaVeRangeP256 = 3
@@ -156,7 +156,7 @@ public enum PrivacyProofSystemIdV1: UInt32, CaseIterable, Sendable {
 
 /// Canonical first-release native verifier-engine identity in Norito discriminant order.
 public enum PrivacyEngineIdV1: UInt32, CaseIterable, Sendable {
-    case nativeGoldilocksStarkFri = 0
+    case nativeGoldilocksPoseidonX7StarkFri6x64V1 = 0
     case nativeZkAmsMaskedRelaxedSpartanT256Ristretto255 = 1
     case nativeAnonymousPgcP256 = 2
     case nativeVeRangeP256 = 3

@@ -1,14 +1,15 @@
 //! SCCP payload, proof, and counterparty submission helpers for Iroha bridge flows.
 //!
-//! SCCP V1 supports Ethereum, BSC, Solana testnet, TON, and TRON as complete bidirectional route
-//! families. Solana uses one exact testnet identity and a governed recursive Agave proof; no
-//! domain-wide or mainnet alias is decodable. SCCP will not support Sub&#115;trate/Pol&#107;adot
-//! networks for now; treat that as launch scope, not pending compatibility work.
+//! SCCP V1 supports Ethereum mainnet, BSC mainnet, TRON mainnet, and TON mainnet as complete
+//! bidirectional route families. No testnet or additional external-network profile is decodable.
+//! No other destination family is part of the first-release protocol.
 //!
 //! The crate targets the Rust standard library unconditionally.
 //! BLS verification for Taira and BSC finality is also unconditional so Cargo
 //! feature selection cannot change consensus admission results.
 extern crate alloc;
+mod replay_archive;
+pub use replay_archive::*;
 mod source_identity;
 pub use source_identity::*;
 mod ethereum_native;
@@ -17,8 +18,6 @@ mod ethereum_source;
 pub use ethereum_source::*;
 mod bsc_native;
 pub use bsc_native::*;
-mod solana_native;
-pub use solana_native::*;
 mod tron_native;
 pub use tron_native::*;
 mod ton_native;
@@ -50,7 +49,7 @@ use iroha_crypto::KeyPair;
 #[cfg(test)]
 use iroha_data_model::bridge::{
     SccpGroth16Bn254SemanticCircuitV1, sccp_groth16_bn254_public_signal_schema_hash_v1,
-    sccp_solana_native_verifier_config_hash_v1, sccp_sora_taira_chain_id_hash_v1,
+    sccp_sora_taira_chain_id_hash_v1,
 };
 use iroha_data_model::{
     NetworkId,
@@ -58,17 +57,17 @@ use iroha_data_model::{
     block::BlockHeader,
     bridge::{
         BRIDGE_FINALITY_PROOF_VERSION_V2, BridgeSccpDestinationProofBackendV1,
-        BridgeSccpDestinationProofV1, SCCP_V1_TAIRA_TO_SOLANA_TOKEN_MULTIPLIER,
-        SCCP_V1_TAIRA_TO_TON_TOKEN_MULTIPLIER, SccpBn254G1PointV1, SccpBn254G2PointV1,
-        SccpDestinationDeploymentV1, SccpGovernedRouteV1, SccpGroth16Bls12381VerifyingKeyV1,
-        SccpGroth16Bn254VerifyingKeyV1, SccpOutboundProofPolicyV1, SccpSemanticProofProfileV1,
-        SccpSolanaDestinationDeploymentV1, SccpSoraFinalityAnchorV1, SccpTonAddressV1,
-        SccpTonDestinationDeploymentV1,
+        BridgeSccpDestinationProofV1, SCCP_V1_TAIRA_TO_TON_TOKEN_MULTIPLIER, SCCP_V1_TON_MAX_COINS,
+        SccpBn254G1PointV1, SccpBn254G2PointV1, SccpDestinationDeploymentV1, SccpGovernedRouteV1,
+        SccpGroth16Bls12381VerifyingKeyV1, SccpGroth16Bn254VerifyingKeyV1,
+        SccpOutboundProofPolicyV1, SccpSemanticProofProfileV1, SccpSoraFinalityAnchorV1,
+        SccpSparseMerkleWitnessV1, SccpTonAddressV1, SccpTonDestinationDeploymentV1,
         canonical_sccp_groth16_bls12381_verifying_key_bytes_v1 as canonical_structural_sccp_groth16_bls12381_verifying_key_bytes_v1,
         canonical_sccp_semantic_proof_profile_bytes_v1,
         canonical_sccp_sora_finality_anchor_bytes_v1,
         sccp_groth16_bls12381_public_signal_schema_hash_v1, sccp_semantic_proof_profile_hash_v1,
         sccp_sora_finality_anchor_hash_v1,
+        sccp_ton_groth16_bls12381_proof_profile_commitment_v1 as structural_sccp_ton_groth16_bls12381_proof_profile_commitment_v1,
     },
 };
 use norito::to_bytes;
@@ -181,12 +180,10 @@ pub const SCCP_DOMAIN_SORA: u32 = 0;
 pub const SCCP_DOMAIN_ETH: u32 = 1;
 /// SCCP protocol domain assigned to BNB Smart Chain networks.
 pub const SCCP_DOMAIN_BSC: u32 = 2;
-/// SCCP protocol domain assigned to Solana networks.
-pub const SCCP_DOMAIN_SOLANA: u32 = 3;
 /// SCCP protocol domain assigned to TON networks.
 pub const SCCP_DOMAIN_TON: u32 = 4;
 /// SCCP protocol domain assigned to TRON networks.
-pub const SCCP_DOMAIN_TRON: u32 = 5;
+pub const SCCP_DOMAIN_TRON: u32 = 3;
 /// Public TAIRA chain label retained as SCCP deployment metadata.
 pub const SCCP_TAIRA_CHAIN_ID_V1: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
 /// Canonical checked TAIRA network identity bound into TAIRA-origin SCCP finality proofs.
@@ -201,78 +198,49 @@ pub fn sccp_taira_finality_network_id_v1() -> NetworkId {
 }
 /// Canonical I105 chain discriminant required for every SCCP Taira account literal.
 pub const SCCP_TAIRA_I105_DISCRIMINANT_V1: u16 = 369;
-/// TAIRA SCCP route id used for the initial XOR bridge to TRON Nile.
+/// TAIRA SCCP route id used for the XOR bridge to TRON mainnet.
 pub const SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1: &str = "taira_tron_xor";
-/// TAIRA SCCP route id used for the exact XOR bridge to Ethereum.
+/// TAIRA SCCP route id used for the exact XOR bridge to Ethereum mainnet.
 pub const SCCP_TAIRA_ETH_XOR_ROUTE_ID_V1: &str = "taira_eth_xor";
-/// TAIRA SCCP route id used for the XOR bridge to BSC.
+/// TAIRA SCCP route id used for the XOR bridge to BSC mainnet.
 pub const SCCP_TAIRA_BSC_XOR_ROUTE_ID_V1: &str = "taira_bsc_xor";
-/// TAIRA SCCP route id used for the exact XOR bridge to Solana testnet.
-pub const SCCP_TAIRA_SOL_XOR_ROUTE_ID_V1: &str = "taira_sol_xor";
-/// TAIRA SCCP route id used for the exact XOR bridge to TON.
+/// TAIRA SCCP route id used for the exact XOR bridge to TON mainnet.
 pub const SCCP_TAIRA_TON_XOR_ROUTE_ID_V1: &str = "taira_ton_xor";
 /// TAIRA SCCP asset key for XOR in every exact EVM-family and TRON route.
 pub const SCCP_TAIRA_XOR_ASSET_KEY_V1: &str = "xor";
 /// Exact Solidity/TVM value-moving route entrypoint for Taira finalization.
 pub const SCCP_FINALIZE_FROM_TAIRA_ABI_V1: &str =
-    "finalizeFromTaira(bytes,bytes32[6],bytes32,bytes)";
+    "finalizeFromTaira(bytes,bytes32[6],bytes32,bytes,bytes)";
 /// Keccak-256 selector for [`SCCP_FINALIZE_FROM_TAIRA_ABI_V1`].
-pub const SCCP_FINALIZE_FROM_TAIRA_SELECTOR_V1: [u8; 4] = [0x95, 0xd7, 0x57, 0xc4];
+pub const SCCP_FINALIZE_FROM_TAIRA_SELECTOR_V1: [u8; 4] = [0x7f, 0x4f, 0x9e, 0x5d];
 /// Printable ASCII or an exact canonical I105 account identifier.
-pub const SCCP_CODEC_CANONICAL_TEXT: u8 = 1;
+pub const SCCP_CODEC_CANONICAL_TEXT: u8 = 0;
 /// Raw nonzero 20-byte EVM account address.
-pub const SCCP_CODEC_EVM_ADDRESS20: u8 = 2;
+pub const SCCP_CODEC_EVM_ADDRESS20: u8 = 1;
 /// Raw nonzero TRON account including its mandatory `0x41` network prefix.
-pub const SCCP_CODEC_TRON_ADDRESS21: u8 = 5;
-/// Raw nonzero 32-byte Solana public key.
-///
-/// The wire form is binary. Base58 is a presentation encoding and is never
-/// admitted as a second consensus representation of the same key.
-pub const SCCP_CODEC_SOLANA_PUBKEY32: u8 = 6;
+pub const SCCP_CODEC_TRON_ADDRESS21: u8 = 2;
 /// Raw TON account: signed big-endian `i32` workchain followed by a nonzero
 /// 32-byte account id.
 ///
 /// V1 value-moving routes require workchain `0`; friendly/base64 flags and
 /// checksums are presentation-only and are never admitted as alternate wire
 /// encodings.
-pub const SCCP_CODEC_TON_ACCOUNT36: u8 = 7;
+pub const SCCP_CODEC_TON_ACCOUNT36: u8 = 3;
 /// Maximum byte length of one canonical textual SCCP wire value.
 pub const SCCP_MAX_CANONICAL_TEXT_BYTES_V1: usize = 256;
-/// Seed prefix of the governed Solana verifier-material PDA.
-pub const SCCP_SOLANA_MATERIAL_PDA_SEED_V1: &[u8] = b"sccp-vk-v1";
-/// Seed prefix of one message-specific Solana proof PDA.
-pub const SCCP_SOLANA_PROOF_PDA_SEED_V1: &[u8] = b"sccp-proof-v1";
-/// Exact fixed byte length of canonical SCCP destination public inputs.
-pub const SCCP_SOLANA_DESTINATION_PUBLIC_INPUT_BYTES_V1: usize = 141;
-/// Maximum canonical payload bytes stored in a destination proof account.
-pub const SCCP_SOLANA_DESTINATION_MAX_PAYLOAD_BYTES_V1: usize = 512;
-/// Maximum contiguous upload chunk accepted by the verifier program.
-pub const SCCP_SOLANA_DESTINATION_MAX_PROOF_CHUNK_BYTES_V1: usize = 512;
-/// Exact largest compact proof body: public inputs, statement hash, proof,
-/// payload length, and payload.
-pub const SCCP_SOLANA_DESTINATION_PROOF_BODY_MAX_BYTES_V1: usize =
-    SCCP_SOLANA_DESTINATION_PUBLIC_INPUT_BYTES_V1
-        + 32
-        + SCCP_SOLANA_AGAVE_GROTH16_PROOF_BYTES_V1
-        + 2
-        + SCCP_SOLANA_DESTINATION_MAX_PAYLOAD_BYTES_V1;
-/// V1 compact native-verifier opcode for consuming a sealed proof account.
-pub const SCCP_SOLANA_VERIFY_SEALED_PROOF_OPCODE_V1: u8 = 6;
 /// Closed list of external protocol domains implemented by SCCP V1.
-pub const SCCP_CORE_REMOTE_DOMAINS: [u32; 5] = [
+pub const SCCP_CORE_REMOTE_DOMAINS: [u32; 4] = [
     SCCP_DOMAIN_ETH,
     SCCP_DOMAIN_BSC,
-    SCCP_DOMAIN_SOLANA,
-    SCCP_DOMAIN_TON,
     SCCP_DOMAIN_TRON,
+    SCCP_DOMAIN_TON,
 ];
 /// Remote SCCP domains in the current supported production launch scope.
-pub const SCCP_SUPPORTED_LAUNCH_REMOTE_DOMAINS_V1: [u32; 5] = [
+pub const SCCP_SUPPORTED_LAUNCH_REMOTE_DOMAINS_V1: [u32; 4] = [
     SCCP_DOMAIN_ETH,
     SCCP_DOMAIN_BSC,
-    SCCP_DOMAIN_SOLANA,
-    SCCP_DOMAIN_TON,
     SCCP_DOMAIN_TRON,
+    SCCP_DOMAIN_TON,
 ];
 /// Return whether every key in an account controller is executable by the V1
 /// EVM/TVM destination contracts.
@@ -301,19 +269,17 @@ pub fn sccp_destination_contract_supports_account_v1(account: &AccountId) -> boo
 }
 /// External protocol domains that can safely originate native SCCP messages in V1.
 ///
-pub const SCCP_NATIVE_INBOUND_REMOTE_DOMAINS_V1: [u32; 5] = [
+pub const SCCP_NATIVE_INBOUND_REMOTE_DOMAINS_V1: [u32; 4] = [
     SCCP_DOMAIN_ETH,
     SCCP_DOMAIN_BSC,
-    SCCP_DOMAIN_SOLANA,
     SCCP_DOMAIN_TON,
     SCCP_DOMAIN_TRON,
 ];
 /// External domains with a checked-in value-moving outbound route implementation.
 ///
-pub const SCCP_VALUE_MOVING_OUTBOUND_REMOTE_DOMAINS_V1: [u32; 5] = [
+pub const SCCP_VALUE_MOVING_OUTBOUND_REMOTE_DOMAINS_V1: [u32; 4] = [
     SCCP_DOMAIN_ETH,
     SCCP_DOMAIN_BSC,
-    SCCP_DOMAIN_SOLANA,
     SCCP_DOMAIN_TON,
     SCCP_DOMAIN_TRON,
 ];
@@ -332,8 +298,6 @@ const SCCP_GROTH16_PROOF_RESULT_PREFIX_V1: &[u8] = b"sccp:groth16-bn254:proof-re
 const SCCP_TON_GROTH16_STATEMENT_PREFIX_V1: &[u8] = b"sccp:groth16-bls12381:statement:v1";
 const SCCP_TON_GROTH16_PROOF_REQUEST_PREFIX_V1: &[u8] = b"sccp:groth16-bls12381:proof-request:v1";
 const SCCP_TON_GROTH16_PROOF_RESULT_PREFIX_V1: &[u8] = b"sccp:groth16-bls12381:proof-result:v1";
-const SCCP_TON_GROTH16_PROOF_PROFILE_PREFIX_V1: &[u8] =
-    b"sccp:ton:groth16-bls12381:proof-profile:v1";
 const SCCP_TON_GROTH16_SIGNAL_MESSAGE_ID_V1: &[u8] = b"sccp:groth16-bls12381:signal:message-id:v1";
 const SCCP_TON_GROTH16_SIGNAL_PAYLOAD_HASH_V1: &[u8] =
     b"sccp:groth16-bls12381:signal:payload-hash:v1";
@@ -755,7 +719,7 @@ pub enum SccpPayloadV1 {
     Transfer(TransferPayloadV1),
 }
 impl SccpPayloadV1 {
-    const TRANSFER_DISCRIMINANT: u8 = 2;
+    const TRANSFER_DISCRIMINANT: u8 = 0;
 }
 /// Failure to encode a value in the canonical SCCP V1 payload layout.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -946,7 +910,7 @@ pub struct SccpMessagePublicInputsV1 {
     rename_all = "snake_case",
     deny_unknown_fields
 )]
-/// Exact governed destination contract selected for a verified SCCP call.
+/// Exact governed EVM-family destination contract selected for verified material.
 pub enum SccpDestinationCallTargetV1 {
     /// EVM route contract on the exact governed EVM network.
     Evm {
@@ -964,13 +928,6 @@ pub enum SccpDestinationCallTargetV1 {
         #[norito(with = "json_utils::hex20")]
         route_address: [u8; 20],
     },
-    /// TON route contract on an exact zero-state-bound TON network.
-    Ton {
-        /// Exact destination network.
-        network: SccpNetworkV1,
-        /// Governed raw basechain route-contract address.
-        route_address: SccpTonAddressV1,
-    },
 }
 #[derive(
     Clone,
@@ -983,9 +940,9 @@ pub enum SccpDestinationCallTargetV1 {
     norito::derive::JsonDeserialize,
 )]
 #[norito(deny_unknown_fields)]
-/// State-verified destination call derived from one closed SCCP proof artifact.
-pub struct SccpVerifiedDestinationCallV1 {
-    /// Call schema version. SCCP V1 requires `1`.
+/// State-verified EVM/TRON settlement material derived from one closed BN254 artifact.
+pub struct SccpVerifiedBn254DestinationMaterialV1 {
+    /// Material schema version. SCCP V1 requires `1`.
     pub version: u8,
     /// Closed proof backend selected by the governed destination family.
     pub backend: BridgeSccpDestinationProofBackendV1,
@@ -1009,7 +966,7 @@ pub struct SccpVerifiedDestinationCallV1 {
     /// Domain-separated commitment to [`Self::sora_finality_anchor`].
     #[norito(with = "json_utils::hex32")]
     pub sora_finality_anchor_hash: H256,
-    /// Exact governed route contract that must receive [`Self::calldata`].
+    /// Exact governed route contract that must receive the witness-bound call.
     pub target: SccpDestinationCallTargetV1,
     /// Public statement authenticated by the Groth16 proof.
     pub public_inputs: SccpMessagePublicInputsV1,
@@ -1025,11 +982,81 @@ pub struct SccpVerifiedDestinationCallV1 {
     /// Exact canonical SCCP transfer payload supplied to the destination route.
     #[norito(with = "json_utils::bytes_hex")]
     pub canonical_payload_bytes: Vec<u8>,
-    /// Exact `finalizeFromTaira` calldata derived after all state checks pass.
-    #[norito(with = "json_utils::bytes_hex")]
-    pub calldata: Vec<u8>,
     /// Original SORA message and finality bundle retained for audit and settlement.
     pub bundle: TairaSccpMessageProofV1,
+}
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
+#[norito(
+    tag = "family",
+    content = "material",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+/// Curve- and destination-family-specific material produced by one verified proof.
+pub enum SccpVerifiedDestinationMaterialV1 {
+    /// EVM or TRON material authenticated by the BN254 verifier.
+    EvmOrTron(SccpVerifiedBn254DestinationMaterialV1),
+    /// TON material authenticated by the BLS12-381 verifier.
+    Ton(SccpVerifiedTonDestinationMaterialV1),
+}
+impl SccpVerifiedDestinationMaterialV1 {
+    /// Return the exact public inputs shared by every destination family.
+    #[must_use]
+    pub const fn public_inputs(&self) -> &SccpMessagePublicInputsV1 {
+        match self {
+            Self::EvmOrTron(material) => &material.public_inputs,
+            Self::Ton(material) => &material.public_inputs,
+        }
+    }
+
+    /// Return the original message/finality bundle retained for settlement audit.
+    #[must_use]
+    pub const fn bundle(&self) -> &TairaSccpMessageProofV1 {
+        match self {
+            Self::EvmOrTron(material) => &material.bundle,
+            Self::Ton(material) => &material.bundle,
+        }
+    }
+}
+/// Build exact EVM/TRON `finalizeFromTaira` calldata from verified proof
+/// material and a caller-supplied current-state replay witness.
+///
+/// TON uses [`encode_sccp_ton_verified_destination_body_boc_v1`] because its
+/// mint path spans three independent replay boundaries.
+#[must_use]
+pub fn encode_sccp_verified_destination_calldata_v1(
+    material: &SccpVerifiedDestinationMaterialV1,
+    replay_witness: &SccpSparseMerkleWitnessV1,
+) -> Option<Vec<u8>> {
+    let SccpVerifiedDestinationMaterialV1::EvmOrTron(material) = material else {
+        return None;
+    };
+    match (&material.target, material.backend) {
+        (
+            SccpDestinationCallTargetV1::Evm { .. },
+            BridgeSccpDestinationProofBackendV1::EvmGroth16Bn254,
+        )
+        | (
+            SccpDestinationCallTargetV1::Tron { .. },
+            BridgeSccpDestinationProofBackendV1::TronGroth16Bn254,
+        ) => encode_sccp_finalize_from_taira_calldata_v1(
+            &material.proof_bytes,
+            &material.public_inputs,
+            material.statement_hash,
+            &material.canonical_payload_bytes,
+            replay_witness,
+        ),
+        _ => None,
+    }
 }
 /// Exact eleven BN254 public-signal words consumed by a destination verifier.
 #[derive(
@@ -1115,593 +1142,8 @@ impl From<[H256; 11]> for SccpGroth16Bn254PublicSignalsV1 {
         }
     }
 }
-/// Runtime Solana accounts chosen for one exact destination settlement.
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    PartialEq,
-    Eq,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-    norito::derive::JsonSerialize,
-    norito::derive::JsonDeserialize,
-)]
-#[norito(deny_unknown_fields)]
-pub struct SccpSolanaDestinationRuntimeAccountsV1 {
-    /// Transaction fee payer, signer, SPL-token owner, and payload recipient.
-    #[norito(with = "json_utils::hex32")]
-    pub payer: H256,
-    /// Writable SPL token account receiving the governed mint.
-    #[norito(with = "json_utils::hex32")]
-    pub destination_token_account: H256,
-    /// Native-verifier-owned account staging the canonical proof material.
-    #[norito(with = "json_utils::hex32")]
-    pub proof_account: H256,
-    /// Bridge verifier-authority PDA signing the native-verifier CPI.
-    #[norito(with = "json_utils::hex32")]
-    pub bridge_verifier_authority: H256,
-}
-/// Exact proof-account header committed by `init-proof` and checked at seal.
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    PartialEq,
-    Eq,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-    norito::derive::JsonSerialize,
-    norito::derive::JsonDeserialize,
-)]
-#[norito(deny_unknown_fields)]
-pub struct SccpSolanaDestinationProofHeaderV1 {
-    /// Governed sealed verification-material account.
-    #[norito(with = "json_utils::hex32")]
-    pub material_account: H256,
-    /// Exact compact proof-body byte length.
-    pub body_len: u16,
-    /// SHA-256 of the exact compact proof body.
-    #[norito(with = "json_utils::hex32")]
-    pub body_sha256: H256,
-    /// Exact SCCP message id.
-    #[norito(with = "json_utils::hex32")]
-    pub message_id: H256,
-    /// Exact canonical SCCP payload hash.
-    #[norito(with = "json_utils::hex32")]
-    pub payload_hash: H256,
-    /// Exact typed Groth16 statement hash.
-    #[norito(with = "json_utils::hex32")]
-    pub statement_hash: H256,
-    /// Exact destination SPL token account.
-    #[norito(with = "json_utils::hex32")]
-    pub destination_token_account: H256,
-    /// Proof-account payer, signer, and SPL-token owner.
-    #[norito(with = "json_utils::hex32")]
-    pub payer: H256,
-    /// Positive nine-decimal SPL base-unit amount.
-    #[norito(with = "json_utils::u64_string")]
-    pub amount: u64,
-}
-/// One contiguous proof-account upload chunk.
-#[derive(
-    Clone,
-    Debug,
-    PartialEq,
-    Eq,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-    norito::derive::JsonSerialize,
-    norito::derive::JsonDeserialize,
-)]
-#[norito(deny_unknown_fields)]
-pub struct SccpSolanaDestinationProofChunkV1 {
-    /// Contiguous offset in the compact proof body.
-    pub offset: u16,
-    /// Nonempty bytes; at most 512 bytes.
-    #[norito(with = "json_utils::bytes_hex")]
-    pub bytes: Vec<u8>,
-    /// Exact `[1,4,offset:u16le,len:u16le,chunk]` append wire.
-    #[norito(with = "json_utils::bytes_hex")]
-    pub instruction_data: Vec<u8>,
-}
-/// Canonical contents staged and sealed in one Solana proof account.
-#[derive(
-    Clone,
-    Debug,
-    PartialEq,
-    Eq,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-    norito::derive::JsonSerialize,
-    norito::derive::JsonDeserialize,
-)]
-#[norito(deny_unknown_fields)]
-pub struct SccpSolanaDestinationProofAccountV1 {
-    /// Proof-account schema version. V1 accepts exactly `1`.
-    pub version: u8,
-    /// Exact genesis-bound target network.
-    pub network: SccpNetworkV1,
-    /// Message-specific accounts committed by the sealed proof account.
-    pub runtime_accounts: SccpSolanaDestinationRuntimeAccountsV1,
-    /// Exact governed route, mint, program, state, verifier, and key material.
-    pub deployment: SccpSolanaDestinationDeploymentV1,
-    /// Nonzero immutable governed route revision.
-    pub route_revision: u32,
-    /// Nine-decimal Taira payload amount authenticated by the proof.
-    #[norito(with = "json_utils::u128_string")]
-    pub payload_amount: u128,
-    /// Positive nine-decimal SPL base-unit amount accepted by the verifier.
-    #[norito(with = "json_utils::u64_string")]
-    pub amount: u64,
-    /// Exact governed destination binding.
-    #[norito(with = "json_utils::hex32")]
-    pub destination_binding_hash: H256,
-    /// Exact immutable route-configuration commitment.
-    #[norito(with = "json_utils::hex32")]
-    pub route_configuration_hash: H256,
-    /// Exact audited semantic-proof profile commitment.
-    #[norito(with = "json_utils::hex32")]
-    pub semantic_proof_profile_hash: H256,
-    /// Exact governed Taira-finality-anchor commitment.
-    #[norito(with = "json_utils::hex32")]
-    pub sora_finality_anchor_hash: H256,
-    /// Hash of the typed canonical SCCP proof statement.
-    #[norito(with = "json_utils::hex32")]
-    pub statement_hash: H256,
-    /// Hash of the exact canonical proving request.
-    #[norito(with = "json_utils::hex32")]
-    pub request_hash: H256,
-    /// Public message statement authenticated by the proof.
-    pub public_inputs: SccpMessagePublicInputsV1,
-    /// Canonical fixed-width BN254 Groth16 proof.
-    #[norito(with = "json_utils::bytes_hex")]
-    pub proof_bytes: Vec<u8>,
-    /// Exact canonical SCCP transfer payload.
-    #[norito(with = "json_utils::bytes_hex")]
-    pub canonical_payload_bytes: Vec<u8>,
-    /// Exact compact on-chain body:
-    /// `public_inputs[141] || statement_hash[32] || proof[384] ||
-    /// payload_len:u16le || payload`.
-    #[norito(with = "json_utils::bytes_hex")]
-    pub proof_body: Vec<u8>,
-    /// Header committed by the initialization instruction.
-    pub header: SccpSolanaDestinationProofHeaderV1,
-    /// Exact `[1,3,...]` proof-account initialization wire.
-    #[norito(with = "json_utils::bytes_hex")]
-    pub init_instruction_data: Vec<u8>,
-    /// Contiguous upload plan covering the body exactly once.
-    pub chunks: Vec<SccpSolanaDestinationProofChunkV1>,
-    /// Exact `[1,5]` seal wire.
-    #[norito(with = "json_utils::bytes_hex")]
-    pub seal_instruction_data: Vec<u8>,
-}
-/// Exact seed roles used to derive the sealed verifier-material PDA.
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    PartialEq,
-    Eq,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-    norito::derive::JsonSerialize,
-    norito::derive::JsonDeserialize,
-)]
-#[norito(deny_unknown_fields)]
-pub struct SccpSolanaMaterialPdaSeedsV1 {
-    /// Keccak-256 of the canonical governed BN254 verification key.
-    #[norito(with = "json_utils::hex32")]
-    pub verifier_key_keccak: H256,
-    /// SHA-256 of the governed native-verifier configuration.
-    #[norito(with = "json_utils::hex32")]
-    pub verifier_config_sha256: H256,
-}
-/// Exact seed roles used to derive one message-specific proof PDA.
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    PartialEq,
-    Eq,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-    norito::derive::JsonSerialize,
-    norito::derive::JsonDeserialize,
-)]
-#[norito(deny_unknown_fields)]
-pub struct SccpSolanaProofPdaSeedsV1 {
-    /// Governed sealed verification-material PDA.
-    #[norito(with = "json_utils::hex32")]
-    pub material_account: H256,
-    /// Exact SCCP message id.
-    #[norito(with = "json_utils::hex32")]
-    pub message_id: H256,
-    /// Transaction payer and SPL-token owner.
-    #[norito(with = "json_utils::hex32")]
-    pub payer: H256,
-}
-/// Exact seven-account order of compact opcode `6` verification.
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    PartialEq,
-    Eq,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-    norito::derive::JsonSerialize,
-    norito::derive::JsonDeserialize,
-)]
-#[norito(deny_unknown_fields)]
-pub struct SccpSolanaDestinationVerifyAccountsV1 {
-    /// Writable transaction payer and signer.
-    #[norito(with = "json_utils::hex32")]
-    pub payer: H256,
-    /// Read-only bridge verifier-authority PDA signer.
-    #[norito(with = "json_utils::hex32")]
-    pub bridge_verifier_authority: H256,
-    /// Read-only governed bridge state.
-    #[norito(with = "json_utils::hex32")]
-    pub bridge_state: H256,
-    /// Read-only governed SPL mint.
-    #[norito(with = "json_utils::hex32")]
-    pub mint: H256,
-    /// Read-only destination SPL token account.
-    #[norito(with = "json_utils::hex32")]
-    pub destination_token_account: H256,
-    /// Read-only sealed verifier-material account.
-    #[norito(with = "json_utils::hex32")]
-    pub material_account: H256,
-    /// Read-only sealed message proof account.
-    #[norito(with = "json_utils::hex32")]
-    pub proof_account: H256,
-}
-/// Fully verified, compact Solana settlement call.
-#[derive(
-    Clone,
-    Debug,
-    PartialEq,
-    Eq,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-    norito::derive::JsonSerialize,
-    norito::derive::JsonDeserialize,
-)]
-#[norito(deny_unknown_fields)]
-pub struct SccpVerifiedSolanaDestinationCallV1 {
-    /// Call schema version. V1 accepts exactly `1`.
-    pub version: u8,
-    /// Closed destination backend. V1 accepts only `SolanaGroth16Bn254`.
-    pub backend: BridgeSccpDestinationProofBackendV1,
-    /// Canonical proof-account value to stage before settlement.
-    pub proof_account: SccpSolanaDestinationProofAccountV1,
-    /// Host-side derived public signals; the program recomputes these and does
-    /// not upload or trust them as proof-account bytes.
-    pub public_signals: SccpGroth16Bn254PublicSignalsV1,
-    /// Exact governed material-PDA seed roles.
-    pub material_pda_seeds: SccpSolanaMaterialPdaSeedsV1,
-    /// Exact message-specific proof-PDA seed roles.
-    pub proof_pda_seeds: SccpSolanaProofPdaSeedsV1,
-    /// Exact seven accounts in compact verification order.
-    pub verify_accounts: SccpSolanaDestinationVerifyAccountsV1,
-    /// Exact `[1,6,message_id[32],amount:u64le]` verification wire.
-    #[norito(with = "json_utils::bytes_hex")]
-    pub verify_instruction_data: Vec<u8>,
-    /// Original typed message and finality bundle retained for audit.
-    pub bundle: TairaSccpMessageProofV1,
-}
 fn sha256_bytes(payload: &[u8]) -> H256 {
     Sha256::digest(payload).into()
-}
-fn solana_destination_account_roles_are_valid_v1(
-    runtime: SccpSolanaDestinationRuntimeAccountsV1,
-    deployment: &SccpSolanaDestinationDeploymentV1,
-) -> bool {
-    let accounts = [
-        runtime.payer,
-        runtime.destination_token_account,
-        runtime.proof_account,
-        runtime.bridge_verifier_authority,
-        deployment.token_mint_address,
-        deployment.route_program_id,
-        deployment.route_program_data_address,
-        deployment.route_state_account,
-        deployment.native_verifier_program_id,
-        deployment.native_verifier_program_data_address,
-        deployment.native_verifier_material_account,
-    ];
-    accounts.iter().all(h256_is_nonzero) && !hash_roles_alias(&accounts)
-}
-fn sccp_solana_payload_amount_to_spl_base_units_v1(
-    payload_amount: u128,
-    deployment: &SccpSolanaDestinationDeploymentV1,
-) -> Option<u64> {
-    if deployment.taira_to_token_multiplier != SCCP_V1_TAIRA_TO_SOLANA_TOKEN_MULTIPLIER {
-        return None;
-    }
-    payload_amount
-        .checked_mul(u128::from(deployment.taira_to_token_multiplier))
-        .and_then(|amount| u64::try_from(amount).ok())
-}
-fn solana_destination_proof_body_bytes_v1(
-    account: &SccpSolanaDestinationProofAccountV1,
-) -> Option<Vec<u8>> {
-    let public_inputs = canonical_sccp_message_public_inputs_bytes(&account.public_inputs);
-    if public_inputs.len() != SCCP_SOLANA_DESTINATION_PUBLIC_INPUT_BYTES_V1
-        || account.proof_bytes.len() != SCCP_SOLANA_AGAVE_GROTH16_PROOF_BYTES_V1
-        || account.canonical_payload_bytes.is_empty()
-        || account.canonical_payload_bytes.len() > SCCP_SOLANA_DESTINATION_MAX_PAYLOAD_BYTES_V1
-    {
-        return None;
-    }
-    let payload_len = u16::try_from(account.canonical_payload_bytes.len()).ok()?;
-    let mut body = Vec::with_capacity(
-        public_inputs.len()
-            + 32
-            + account.proof_bytes.len()
-            + 2
-            + account.canonical_payload_bytes.len(),
-    );
-    body.extend_from_slice(&public_inputs);
-    body.extend_from_slice(&account.statement_hash);
-    body.extend_from_slice(&account.proof_bytes);
-    body.extend_from_slice(&payload_len.to_le_bytes());
-    body.extend_from_slice(&account.canonical_payload_bytes);
-    Some(body)
-}
-/// Validate one sealed Solana destination proof-account value.
-#[must_use]
-#[expect(
-    clippy::too_many_lines,
-    reason = "this fail-closed V1 validator keeps the proof-account body, header, chunk, public-input, payload, and deployment bindings in one auditable protocol boundary"
-)]
-pub fn sccp_solana_destination_proof_account_is_well_formed_v1(
-    account: &SccpSolanaDestinationProofAccountV1,
-) -> bool {
-    if account.version != 1
-        || account.network != SccpNetworkV1::SolanaTestnet
-        || account.route_revision == 0
-        || account.payload_amount == 0
-        || account.amount == 0
-        || !solana_destination_account_roles_are_valid_v1(
-            account.runtime_accounts,
-            &account.deployment,
-        )
-        || sccp_groth16_bn254_verifying_key_hash_v1(&account.deployment.verifying_key)
-            != Some(account.deployment.verifier_key_hash)
-        || account
-            .deployment
-            .outbound_proof_policy
-            .semantic_profile_hash()
-            .ok()
-            != Some(account.semantic_proof_profile_hash)
-        || account
-            .deployment
-            .outbound_proof_policy
-            .sora_finality_anchor_hash()
-            .ok()
-            != Some(account.sora_finality_anchor_hash)
-        || account.public_inputs.version != 1
-        || account.public_inputs.target_domain != SCCP_DOMAIN_SOLANA
-        || account.proof_bytes.len() != SCCP_SOLANA_AGAVE_GROTH16_PROOF_BYTES_V1
-        || account.canonical_payload_bytes.is_empty()
-        || account.canonical_payload_bytes.len() > SCCP_SOLANA_DESTINATION_MAX_PAYLOAD_BYTES_V1
-        || [
-            account.destination_binding_hash,
-            account.route_configuration_hash,
-            account.semantic_proof_profile_hash,
-            account.sora_finality_anchor_hash,
-            account.statement_hash,
-            account.request_hash,
-        ]
-        .iter()
-        .any(|hash| !h256_is_nonzero(hash))
-        || hash_roles_alias(&[
-            account.destination_binding_hash,
-            account.route_configuration_hash,
-            account.semantic_proof_profile_hash,
-            account.sora_finality_anchor_hash,
-            account.statement_hash,
-            account.request_hash,
-        ])
-    {
-        return false;
-    }
-    if sccp_solana_payload_amount_to_spl_base_units_v1(account.payload_amount, &account.deployment)
-        != Some(account.amount)
-    {
-        return false;
-    }
-    let Some(payload) = decode_canonical_sccp_payload_bytes(&account.canonical_payload_bytes)
-    else {
-        return false;
-    };
-    let SccpPayloadV1::Transfer(transfer) = &payload;
-    let payload_amount_matches_transfer = transfer.amount == account.payload_amount;
-    if canonical_sccp_payload_bytes(&payload).ok().as_deref()
-        != Some(account.canonical_payload_bytes.as_slice())
-        || !sccp_payload_matches_exact_xor_destination_route_v1(&payload, SCCP_DOMAIN_SOLANA)
-        || !payload_amount_matches_transfer
-        || transfer.route_revision != account.route_revision
-        || transfer.recipient.as_slice() != account.runtime_accounts.payer
-        || payload_hash(&account.canonical_payload_bytes) != account.public_inputs.payload_hash
-    {
-        return false;
-    }
-    let Some(expected_body) = solana_destination_proof_body_bytes_v1(account) else {
-        return false;
-    };
-    let body_sha256 = sha256_bytes(&expected_body);
-    let expected_header = SccpSolanaDestinationProofHeaderV1 {
-        material_account: account.deployment.native_verifier_material_account,
-        body_len: u16::try_from(expected_body.len()).expect("bounded compact proof body"),
-        body_sha256,
-        message_id: account.public_inputs.message_id,
-        payload_hash: account.public_inputs.payload_hash,
-        statement_hash: account.statement_hash,
-        destination_token_account: account.runtime_accounts.destination_token_account,
-        payer: account.runtime_accounts.payer,
-        amount: account.amount,
-    };
-    if account.proof_body != expected_body
-        || account.header != expected_header
-        || account.init_instruction_data
-            != encode_sccp_solana_init_proof_instruction_v1(&expected_header)
-        || account.chunks != build_sccp_solana_destination_proof_chunks_v1(&expected_body)
-        || account.seal_instruction_data != [1, 5]
-    {
-        return false;
-    }
-    let proof = decode_sccp_evm_groth16_bn254_proof_bytes(&account.proof_bytes);
-    proof.is_some_and(|proof| {
-        proof.version == 1
-            && proof.message_id == account.public_inputs.message_id
-            && proof.source_domain == SCCP_DOMAIN_SORA
-            && proof.commitment_root == account.public_inputs.commitment_root
-            && encode_sccp_evm_groth16_bn254_proof_bytes(&proof) == account.proof_bytes
-    })
-}
-/// Encode the exact bounded V1 bytes sealed into a Solana proof account.
-///
-/// The body is exactly `public_inputs[141] || statement_hash[32] ||
-/// groth16_proof[384] || payload_len:u16le || canonical_payload`. Account,
-/// deployment, and payer roles are bound by the initialization header, PDA
-/// seeds, and instruction accounts rather than duplicated in the body.
-#[must_use]
-pub fn canonical_sccp_solana_destination_proof_account_bytes_v1(
-    account: &SccpSolanaDestinationProofAccountV1,
-) -> Option<Vec<u8>> {
-    if !sccp_solana_destination_proof_account_is_well_formed_v1(account) {
-        return None;
-    }
-    Some(account.proof_body.clone())
-}
-/// Hash the exact compact proof body with Solana's native SHA-256 primitive.
-#[must_use]
-pub fn sccp_solana_destination_proof_account_hash_v1(
-    account: &SccpSolanaDestinationProofAccountV1,
-) -> Option<H256> {
-    Some(sha256_bytes(
-        &canonical_sccp_solana_destination_proof_account_bytes_v1(account)?,
-    ))
-}
-/// Encode exact `[1,3,...]` proof-account initialization bytes.
-#[must_use]
-pub fn encode_sccp_solana_init_proof_instruction_v1(
-    header: &SccpSolanaDestinationProofHeaderV1,
-) -> Vec<u8> {
-    let mut out = Vec::with_capacity(172);
-    out.extend_from_slice(&[1, 3]);
-    out.extend_from_slice(&header.body_len.to_le_bytes());
-    out.extend_from_slice(&header.body_sha256);
-    out.extend_from_slice(&header.message_id);
-    out.extend_from_slice(&header.payload_hash);
-    out.extend_from_slice(&header.statement_hash);
-    out.extend_from_slice(&header.destination_token_account);
-    out.extend_from_slice(&header.amount.to_le_bytes());
-    out
-}
-/// Build exact contiguous `[1,4,offset,len,chunk]` proof upload wires.
-#[must_use]
-pub fn build_sccp_solana_destination_proof_chunks_v1(
-    body: &[u8],
-) -> Vec<SccpSolanaDestinationProofChunkV1> {
-    let mut chunks = Vec::new();
-    let mut offset = 0usize;
-    while offset < body.len() {
-        let end = core::cmp::min(
-            offset + SCCP_SOLANA_DESTINATION_MAX_PROOF_CHUNK_BYTES_V1,
-            body.len(),
-        );
-        let bytes = body[offset..end].to_vec();
-        let offset_u16 = u16::try_from(offset).expect("bounded compact proof offset");
-        let len_u16 = u16::try_from(bytes.len()).expect("bounded proof chunk");
-        let mut instruction_data = Vec::with_capacity(6 + bytes.len());
-        instruction_data.extend_from_slice(&[1, 4]);
-        instruction_data.extend_from_slice(&offset_u16.to_le_bytes());
-        instruction_data.extend_from_slice(&len_u16.to_le_bytes());
-        instruction_data.extend_from_slice(&bytes);
-        chunks.push(SccpSolanaDestinationProofChunkV1 {
-            offset: offset_u16,
-            bytes,
-            instruction_data,
-        });
-        offset = end;
-    }
-    chunks
-}
-/// Encode exact compact `[1,6,message_id,amount:u64le]` verification bytes.
-#[must_use]
-pub fn encode_sccp_solana_verify_sealed_proof_instruction_v1(
-    message_id: H256,
-    amount: u64,
-) -> Option<Vec<u8>> {
-    if !h256_is_nonzero(&message_id) || amount == 0 {
-        return None;
-    }
-    let mut out = Vec::with_capacity(42);
-    out.extend_from_slice(&[1, SCCP_SOLANA_VERIFY_SEALED_PROOF_OPCODE_V1]);
-    out.extend_from_slice(&message_id);
-    out.extend_from_slice(&amount.to_le_bytes());
-    Some(out)
-}
-/// Return whether a serialized Solana call is internally canonical.
-#[must_use]
-pub fn sccp_verified_solana_destination_call_is_self_canonical_v1(
-    call: &SccpVerifiedSolanaDestinationCallV1,
-) -> bool {
-    if call.version != 1 || call.backend != BridgeSccpDestinationProofBackendV1::SolanaGroth16Bn254
-    {
-        return false;
-    }
-    let account = &call.proof_account;
-    let expected_signals = sccp_groth16_bn254_public_signal_words(
-        &account.public_inputs,
-        SCCP_DOMAIN_SORA,
-        account.statement_hash,
-        account.destination_binding_hash,
-        account.route_configuration_hash,
-        account.sora_finality_anchor_hash,
-    );
-    let expected_verify_accounts = SccpSolanaDestinationVerifyAccountsV1 {
-        payer: account.runtime_accounts.payer,
-        bridge_verifier_authority: account.runtime_accounts.bridge_verifier_authority,
-        bridge_state: account.deployment.route_state_account,
-        mint: account.deployment.token_mint_address,
-        destination_token_account: account.runtime_accounts.destination_token_account,
-        material_account: account.deployment.native_verifier_material_account,
-        proof_account: account.runtime_accounts.proof_account,
-    };
-    let Some(canonical_payload) =
-        decode_canonical_sccp_payload_bytes(&account.canonical_payload_bytes)
-    else {
-        return false;
-    };
-    sccp_solana_destination_proof_account_is_well_formed_v1(account)
-        && call.public_signals.words() == expected_signals
-        && call.material_pda_seeds
-            == (SccpSolanaMaterialPdaSeedsV1 {
-                verifier_key_keccak: account.deployment.verifier_key_hash,
-                verifier_config_sha256: account.deployment.native_verifier_config_hash,
-            })
-        && call.proof_pda_seeds
-            == (SccpSolanaProofPdaSeedsV1 {
-                material_account: account.deployment.native_verifier_material_account,
-                message_id: account.public_inputs.message_id,
-                payer: account.runtime_accounts.payer,
-            })
-        && call.verify_accounts == expected_verify_accounts
-        && call.verify_instruction_data
-            == encode_sccp_solana_verify_sealed_proof_instruction_v1(
-                account.public_inputs.message_id,
-                account.amount,
-            )
-            .unwrap_or_default()
-        && call.bundle.payload == canonical_payload
-        && call.bundle.commitment.message_id == account.public_inputs.message_id
-        && call.bundle.commitment.payload_hash == account.public_inputs.payload_hash
-        && call.bundle.commitment_root == account.public_inputs.commitment_root
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum SccpParsedDestinationMaterialV1 {
@@ -1819,11 +1261,6 @@ pub enum SccpNormalizedCodecValueV1 {
     TronAddress21 {
         /// Canonical address bytes.
         bytes: [u8; 21],
-    },
-    /// Raw 32-byte Solana public key.
-    SolanaPubkey32 {
-        /// Canonical public-key bytes.
-        bytes: [u8; 32],
     },
     /// Canonical raw TON account.
     TonAccount36 {
@@ -2077,13 +1514,6 @@ impl norito::json::FastJsonWrite for SccpNormalizedCodecValueV1 {
                 write_prefixed_hex_json(out, bytes);
                 out.push('}');
             }
-            Self::SolanaPubkey32 { bytes } => {
-                write_json_key(out, "SolanaPubkey32");
-                out.push('{');
-                write_json_key(out, "bytes");
-                write_prefixed_hex_json(out, bytes);
-                out.push('}');
-            }
             Self::TonAccount36 { workchain, account } => {
                 write_json_key(out, "TonAccount36");
                 out.push('{');
@@ -2143,20 +1573,6 @@ impl norito::json::JsonDeserialize for SccpNormalizedCodecValueV1 {
                 )?;
                 Ok(Self::TronAddress21 {
                     bytes: json_fixed_hex_field::<21>(
-                        "SccpNormalizedCodecValueV1",
-                        payload,
-                        "bytes",
-                    )?,
-                })
-            }
-            "SolanaPubkey32" => {
-                json_require_exact_fields(
-                    "SccpNormalizedCodecValueV1::SolanaPubkey32",
-                    payload,
-                    &["bytes"],
-                )?;
-                Ok(Self::SolanaPubkey32 {
-                    bytes: json_fixed_hex_field::<32>(
                         "SccpNormalizedCodecValueV1",
                         payload,
                         "bytes",
@@ -2484,7 +1900,7 @@ pub struct SccpTonGroth16Bls12381ProofRequestV1 {
     pub backend: BridgeSccpDestinationProofBackendV1,
     /// Exact SORA Taira source profile.
     pub source_network: SccpNetworkV1,
-    /// Exact TON mainnet or testnet destination profile.
+    /// Exact TON mainnet destination profile.
     pub target_network: SccpNetworkV1,
     /// Structured base message inputs.
     pub public_inputs: SccpMessagePublicInputsV1,
@@ -2534,7 +1950,7 @@ pub struct SccpTonGroth16Bls12381ProofRequestV1 {
 /// route. This Rust enum classifies that closed pair without adding a second
 /// wrapper to the wire format.
 pub enum SccpDestinationProofRequestV1 {
-    /// EVM, TRON, or Solana request using the BN254 verifier.
+    /// EVM or TRON request using the BN254 verifier.
     Groth16Bn254(SccpGroth16Bn254ProofRequestV1),
     /// TON request using the BLS12-381 verifier.
     Groth16Bls12381(SccpTonGroth16Bls12381ProofRequestV1),
@@ -2658,9 +2074,9 @@ pub struct SccpTonGroth16Bls12381ProofArtifactV1 {
     norito::derive::JsonDeserialize,
 )]
 #[norito(deny_unknown_fields)]
-/// Fully verified TON settlement material and exact internal-message body BOC.
-pub struct SccpVerifiedTonDestinationCallV1 {
-    /// Call schema version. SCCP V1 requires `1`.
+/// Fully verified TON settlement material.
+pub struct SccpVerifiedTonDestinationMaterialV1 {
+    /// Material schema version. SCCP V1 requires `1`.
     pub version: u8,
     /// TON BLS12-381 backend tag.
     pub backend: BridgeSccpDestinationProofBackendV1,
@@ -2668,8 +2084,6 @@ pub struct SccpVerifiedTonDestinationCallV1 {
     pub network: SccpNetworkV1,
     /// Exact governed route contract.
     pub route_address: SccpTonAddressV1,
-    /// Caller-selected TON query id; replay identity remains the message id.
-    pub query_id: u64,
     /// Nonzero governed route revision.
     pub route_revision: u32,
     /// Canonical TON recipient authenticated by the SCCP payload.
@@ -2683,6 +2097,8 @@ pub struct SccpVerifiedTonDestinationCallV1 {
     /// Exact route-configuration commitment.
     #[norito(with = "json_utils::hex32")]
     pub route_configuration_hash: H256,
+    /// Structured base message inputs verified by the pairing equation.
+    pub public_inputs: SccpMessagePublicInputsV1,
     /// Exact public signals verified by the pairing equation.
     pub public_signals: SccpGroth16Bls12381PublicSignalsV1,
     /// Exact statement hash.
@@ -2697,22 +2113,42 @@ pub struct SccpVerifiedTonDestinationCallV1 {
     /// Exact canonical SCCP payload bytes.
     #[norito(with = "json_utils::bytes_hex")]
     pub canonical_payload_bytes: Vec<u8>,
-    /// Canonical BOC containing one `SccpFinalizeFromTaira` message body.
-    #[norito(with = "json_utils::bytes_hex")]
-    pub internal_message_body_boc: Vec<u8>,
     /// Original message/finality bundle retained for audit and settlement.
     pub bundle: TairaSccpMessageProofV1,
+}
+/// Build the exact TON finalization body from verified proof material and
+/// three caller-supplied current-state replay witnesses.
+#[must_use]
+pub fn encode_sccp_ton_verified_destination_body_boc_v1(
+    material: &SccpVerifiedDestinationMaterialV1,
+    query_id: u64,
+    replay_witnesses: &SccpTonMintReplayWitnessesV1,
+) -> Option<Vec<u8>> {
+    let SccpVerifiedDestinationMaterialV1::Ton(material) = material else {
+        return None;
+    };
+    if material.version != 1
+        || material.backend != BridgeSccpDestinationProofBackendV1::TonGroth16Bls12381
+        || material.network != SccpNetworkV1::TonMainnet
+    {
+        return None;
+    }
+    decode_sccp_groth16_bls12381_proof_bytes_v1(&material.proof_bytes)?;
+    encode_sccp_ton_finalize_from_taira_body_boc_after_verification_v1(
+        query_id,
+        &material.public_inputs,
+        &material.public_signals,
+        material.statement_hash,
+        &material.proof_bytes,
+        &material.canonical_payload_bytes,
+        replay_witnesses,
+    )
 }
 /// Return whether `domain_id` is a recognized SCCP V1 protocol domain.
 pub fn is_supported_domain(domain_id: u32) -> bool {
     matches!(
         domain_id,
-        SCCP_DOMAIN_SORA
-            | SCCP_DOMAIN_ETH
-            | SCCP_DOMAIN_BSC
-            | SCCP_DOMAIN_SOLANA
-            | SCCP_DOMAIN_TON
-            | SCCP_DOMAIN_TRON
+        SCCP_DOMAIN_SORA | SCCP_DOMAIN_ETH | SCCP_DOMAIN_BSC | SCCP_DOMAIN_TON | SCCP_DOMAIN_TRON
     )
 }
 /// Return whether a remote SCCP domain is in the current supported production launch scope.
@@ -2723,14 +2159,14 @@ pub fn sccp_domain_in_supported_launch_scope_v1(domain_id: u32) -> bool {
 pub const fn sccp_domain_supports_native_inbound_source_v1(domain_id: u32) -> bool {
     matches!(
         domain_id,
-        SCCP_DOMAIN_ETH | SCCP_DOMAIN_BSC | SCCP_DOMAIN_SOLANA | SCCP_DOMAIN_TON | SCCP_DOMAIN_TRON
+        SCCP_DOMAIN_ETH | SCCP_DOMAIN_BSC | SCCP_DOMAIN_TON | SCCP_DOMAIN_TRON
     )
 }
 /// Return whether a remote domain has a checked-in value-moving outbound route in V1.
 pub const fn sccp_domain_has_value_moving_outbound_route_v1(domain_id: u32) -> bool {
     matches!(
         domain_id,
-        SCCP_DOMAIN_ETH | SCCP_DOMAIN_BSC | SCCP_DOMAIN_SOLANA | SCCP_DOMAIN_TON | SCCP_DOMAIN_TRON
+        SCCP_DOMAIN_ETH | SCCP_DOMAIN_BSC | SCCP_DOMAIN_TON | SCCP_DOMAIN_TRON
     )
 }
 /// Return whether `codec_id` is one of the closed SCCP V1 wire codecs.
@@ -2740,7 +2176,6 @@ pub fn is_supported_codec(codec_id: u8) -> bool {
         SCCP_CODEC_CANONICAL_TEXT
             | SCCP_CODEC_EVM_ADDRESS20
             | SCCP_CODEC_TRON_ADDRESS21
-            | SCCP_CODEC_SOLANA_PUBKEY32
             | SCCP_CODEC_TON_ACCOUNT36
     )
 }
@@ -2750,7 +2185,6 @@ pub fn sccp_codec_key(codec_id: u8) -> Option<&'static str> {
         SCCP_CODEC_CANONICAL_TEXT => Some("canonical_text"),
         SCCP_CODEC_EVM_ADDRESS20 => Some("evm_address20"),
         SCCP_CODEC_TRON_ADDRESS21 => Some("tron_address21"),
-        SCCP_CODEC_SOLANA_PUBKEY32 => Some("solana_pubkey32"),
         SCCP_CODEC_TON_ACCOUNT36 => Some("ton_account36"),
         _ => None,
     }
@@ -2765,7 +2199,6 @@ pub fn sccp_codec_description(codec_id: u8) -> Option<&'static str> {
         SCCP_CODEC_TRON_ADDRESS21 => {
             Some("Raw nonzero TRON account addresses including the 0x41 prefix.")
         }
-        SCCP_CODEC_SOLANA_PUBKEY32 => Some("Raw nonzero 32-byte Solana public keys."),
         SCCP_CODEC_TON_ACCOUNT36 => Some(
             "Raw TON account: signed big-endian i32 workchain followed by a nonzero 32-byte account id; V1 value-moving routes require basechain workchain 0.",
         ),
@@ -2778,7 +2211,6 @@ pub fn sccp_chain_key_for_domain(domain: u32) -> Option<&'static str> {
         SCCP_DOMAIN_SORA => Some("sora"),
         SCCP_DOMAIN_ETH => Some("eth"),
         SCCP_DOMAIN_BSC => Some("bsc"),
-        SCCP_DOMAIN_SOLANA => Some("solana"),
         SCCP_DOMAIN_TON => Some("ton"),
         SCCP_DOMAIN_TRON => Some("tron"),
         _ => None,
@@ -2789,7 +2221,6 @@ pub fn sccp_counterparty_account_codec(domain: u32) -> Option<u8> {
     match domain {
         SCCP_DOMAIN_SORA => Some(SCCP_CODEC_CANONICAL_TEXT),
         SCCP_DOMAIN_ETH | SCCP_DOMAIN_BSC => Some(SCCP_CODEC_EVM_ADDRESS20),
-        SCCP_DOMAIN_SOLANA => Some(SCCP_CODEC_SOLANA_PUBKEY32),
         SCCP_DOMAIN_TON => Some(SCCP_CODEC_TON_ACCOUNT36),
         SCCP_DOMAIN_TRON => Some(SCCP_CODEC_TRON_ADDRESS21),
         _ => None,
@@ -3086,15 +2517,7 @@ pub fn sccp_groth16_bls12381_public_signal_words_v1(
 /// request builder.
 #[must_use]
 pub fn sccp_ton_groth16_bls12381_proof_profile_commitment_v1() -> H256 {
-    let mut preimage = Vec::with_capacity(256);
-    preimage.extend_from_slice(SCCP_TON_GROTH16_PROOF_PROFILE_PREFIX_V1);
-    preimage.push(1);
-    preimage.extend_from_slice(b"ietf-bls12381-compressed-g1-48-g2-96");
-    preimage.extend_from_slice(b"groth16-a-g1-b-g2-c-g1");
-    preimage.extend_from_slice(b"sha256-sha256-label-value-mod-r");
-    preimage.extend_from_slice(&SCCP_GROTH16_BLS12381_SCALAR_FIELD_MODULUS_BE);
-    preimage.extend_from_slice(&sccp_groth16_bls12381_public_signal_schema_hash_v1());
-    sha256_bytes(&preimage)
+    structural_sccp_ton_groth16_bls12381_proof_profile_commitment_v1()
 }
 fn read_be_u32(bytes: &[u8]) -> Option<u32> {
     (bytes.len() == 4).then(|| {
@@ -3113,6 +2536,86 @@ fn abi_padded_bytes(value: &[u8]) -> Vec<u8> {
     }
     out
 }
+/// Encode one sparse replay witness exactly as Solidity
+/// `abi.encode(SccpReplayWitness)`.
+///
+/// EVM and TRON route calls carry this byte string as their mandatory final
+/// `bytes` argument. The encoded value is state supplied: callers must obtain
+/// a witness for the destination contract's current shard root.
+#[must_use]
+pub fn encode_sccp_solidity_replay_witness_v1(
+    witness: &SccpSparseMerkleWitnessV1,
+) -> Option<Vec<u8>> {
+    if witness.expected_shard_root == [0; 32] || witness.validate().is_err() {
+        return None;
+    }
+    let sibling_count = witness.siblings.len();
+    let capacity = 6usize.checked_add(sibling_count)?.checked_mul(32)?;
+    let mut out = Vec::with_capacity(capacity);
+    // A single dynamic tuple is represented by one outer offset followed by
+    // its fixed head and dynamic array tail.
+    out.extend_from_slice(&abi_word_u64(32));
+    out.extend_from_slice(&witness.expected_shard_root);
+    out.extend_from_slice(&witness.prior_record_digest);
+    out.extend_from_slice(&witness.sibling_bitmap);
+    out.extend_from_slice(&abi_word_u64(4 * 32));
+    out.extend_from_slice(&abi_word_u64(u64::try_from(sibling_count).ok()?));
+    for sibling in &witness.siblings {
+        out.extend_from_slice(sibling);
+    }
+    debug_assert_eq!(out.len(), capacity);
+    Some(out)
+}
+/// Decode the sole canonical Solidity replay-witness representation.
+#[must_use]
+pub fn decode_sccp_solidity_replay_witness_v1(encoded: &[u8]) -> Option<SccpSparseMerkleWitnessV1> {
+    fn word_usize(word: &[u8]) -> Option<usize> {
+        if word.len() != 32 || word[..24].iter().any(|byte| *byte != 0) {
+            return None;
+        }
+        let mut raw = [0_u8; 8];
+        raw.copy_from_slice(&word[24..]);
+        usize::try_from(u64::from_be_bytes(raw)).ok()
+    }
+    if encoded.len() < 6 * 32
+        || encoded.len() % 32 != 0
+        || word_usize(&encoded[..32])? != 32
+        || word_usize(&encoded[128..160])? != 4 * 32
+    {
+        return None;
+    }
+    let sibling_count = word_usize(&encoded[160..192])?;
+    let expected_len = 6usize.checked_add(sibling_count)?.checked_mul(32)?;
+    if sibling_count > iroha_data_model::bridge::SCCP_REPLAY_SMT_MAX_SIBLINGS_V1
+        || encoded.len() != expected_len
+    {
+        return None;
+    }
+    let mut expected_shard_root = [0_u8; 32];
+    expected_shard_root.copy_from_slice(&encoded[32..64]);
+    let mut prior_record_digest = [0_u8; 32];
+    prior_record_digest.copy_from_slice(&encoded[64..96]);
+    let mut sibling_bitmap = [0_u8; 32];
+    sibling_bitmap.copy_from_slice(&encoded[96..128]);
+    let siblings = encoded[192..]
+        .chunks_exact(32)
+        .map(|chunk| {
+            let mut sibling = [0_u8; 32];
+            sibling.copy_from_slice(chunk);
+            sibling
+        })
+        .collect();
+    let witness = SccpSparseMerkleWitnessV1 {
+        expected_shard_root,
+        prior_record_digest,
+        sibling_bitmap,
+        siblings,
+    };
+    (witness.expected_shard_root != [0; 32]
+        && witness.validate().is_ok()
+        && encode_sccp_solidity_replay_witness_v1(&witness).as_deref() == Some(encoded))
+    .then_some(witness)
+}
 fn sccp_evm_public_input_words(public_inputs: &SccpMessagePublicInputsV1) -> [H256; 6] {
     [
         public_inputs.message_id,
@@ -3128,6 +2631,7 @@ fn encode_sccp_finalize_from_taira_calldata_v1(
     public_inputs: &SccpMessagePublicInputsV1,
     statement_hash: H256,
     canonical_payload_bytes: &[u8],
+    replay_witness: &SccpSparseMerkleWitnessV1,
 ) -> Option<Vec<u8>> {
     if proof_bytes.len() != 32 * 12
         || canonical_payload_bytes.is_empty()
@@ -3135,14 +2639,18 @@ fn encode_sccp_finalize_from_taira_calldata_v1(
     {
         return None;
     }
-    let head_len = 9usize.checked_mul(32)?;
+    let replay_witness_bytes = encode_sccp_solidity_replay_witness_v1(replay_witness)?;
+    let head_len = 10usize.checked_mul(32)?;
     let proof_tail = abi_padded_bytes(proof_bytes);
     let payload_offset = head_len.checked_add(proof_tail.len())?;
     let payload_tail = abi_padded_bytes(canonical_payload_bytes);
+    let witness_offset = payload_offset.checked_add(payload_tail.len())?;
+    let witness_tail = abi_padded_bytes(&replay_witness_bytes);
     let capacity = 4usize
         .checked_add(head_len)?
         .checked_add(proof_tail.len())?
-        .checked_add(payload_tail.len())?;
+        .checked_add(payload_tail.len())?
+        .checked_add(witness_tail.len())?;
     let mut out = Vec::with_capacity(capacity);
     out.extend_from_slice(&SCCP_FINALIZE_FROM_TAIRA_SELECTOR_V1);
     out.extend_from_slice(&abi_word_u64(u64::try_from(head_len).ok()?));
@@ -3151,8 +2659,10 @@ fn encode_sccp_finalize_from_taira_calldata_v1(
     }
     out.extend_from_slice(&statement_hash);
     out.extend_from_slice(&abi_word_u64(u64::try_from(payload_offset).ok()?));
+    out.extend_from_slice(&abi_word_u64(u64::try_from(witness_offset).ok()?));
     out.extend_from_slice(&proof_tail);
     out.extend_from_slice(&payload_tail);
+    out.extend_from_slice(&witness_tail);
     Some(out)
 }
 fn abi_read_u32_word(word: &[u8]) -> Option<u32> {
@@ -3805,8 +3315,7 @@ fn sccp_destination_proof_backend_tag_v1(backend: BridgeSccpDestinationProofBack
     match backend {
         BridgeSccpDestinationProofBackendV1::EvmGroth16Bn254 => 0,
         BridgeSccpDestinationProofBackendV1::TronGroth16Bn254 => 1,
-        BridgeSccpDestinationProofBackendV1::SolanaGroth16Bn254 => 2,
-        BridgeSccpDestinationProofBackendV1::TonGroth16Bls12381 => 3,
+        BridgeSccpDestinationProofBackendV1::TonGroth16Bls12381 => 2,
     }
 }
 fn sccp_destination_proof_backend_supports_network_v1(
@@ -3816,22 +3325,14 @@ fn sccp_destination_proof_backend_supports_network_v1(
     match backend {
         BridgeSccpDestinationProofBackendV1::EvmGroth16Bn254 => matches!(
             target_network,
-            SccpNetworkV1::EthereumMainnet
-                | SccpNetworkV1::EthereumSepolia
-                | SccpNetworkV1::BscMainnet
-                | SccpNetworkV1::BscTestnet
+            SccpNetworkV1::EthereumMainnet | SccpNetworkV1::BscMainnet
         ),
-        BridgeSccpDestinationProofBackendV1::TronGroth16Bn254 => matches!(
-            target_network,
-            SccpNetworkV1::TronMainnet | SccpNetworkV1::TronNile | SccpNetworkV1::TronShasta
-        ),
-        BridgeSccpDestinationProofBackendV1::SolanaGroth16Bn254 => {
-            target_network == SccpNetworkV1::SolanaTestnet
+        BridgeSccpDestinationProofBackendV1::TronGroth16Bn254 => {
+            target_network == SccpNetworkV1::TronMainnet
         }
-        BridgeSccpDestinationProofBackendV1::TonGroth16Bls12381 => matches!(
-            target_network,
-            SccpNetworkV1::TonMainnet | SccpNetworkV1::TonTestnet
-        ),
+        BridgeSccpDestinationProofBackendV1::TonGroth16Bls12381 => {
+            target_network == SccpNetworkV1::TonMainnet
+        }
     }
 }
 fn sccp_groth16_bn254_statement_hash_v1(
@@ -4098,10 +3599,7 @@ fn sccp_governed_ton_route_matches_bundle_v1(
         return false;
     };
     if governed_route.validate().is_err()
-        || !matches!(
-            governed_route.lane_id.source,
-            SccpNetworkV1::TonMainnet | SccpNetworkV1::TonTestnet
-        )
+        || governed_route.lane_id.source != SccpNetworkV1::TonMainnet
         || governed_route.lane_id.target != SccpNetworkV1::SoraTaira
         || bundle.commitment.context.lane
             != (SccpLaneIdV1 {
@@ -4129,10 +3627,7 @@ fn sccp_ton_groth16_bls12381_statement_hash_v1(
     if request.version != 1
         || request.backend != BridgeSccpDestinationProofBackendV1::TonGroth16Bls12381
         || request.source_network != SccpNetworkV1::SoraTaira
-        || !matches!(
-            request.target_network,
-            SccpNetworkV1::TonMainnet | SccpNetworkV1::TonTestnet
-        )
+        || request.target_network != SccpNetworkV1::TonMainnet
         || request.public_inputs.target_domain != SCCP_DOMAIN_TON
         || canonical_payload_bytes.is_empty()
         || canonical_payload_bytes.len() > SCCP_TON_DESTINATION_MAX_PAYLOAD_BYTES_V1
@@ -4341,10 +3836,7 @@ fn validate_sccp_ton_groth16_bls12381_request_with_bundle_structural_v1(
     if request.version != 1
         || request.backend != BridgeSccpDestinationProofBackendV1::TonGroth16Bls12381
         || request.source_network != SccpNetworkV1::SoraTaira
-        || !matches!(
-            request.target_network,
-            SccpNetworkV1::TonMainnet | SccpNetworkV1::TonTestnet
-        )
+        || request.target_network != SccpNetworkV1::TonMainnet
         || !sccp_groth16_proof_request_public_inputs_are_valid(
             request.source_network,
             request.target_network,
@@ -4693,7 +4185,18 @@ pub fn decode_bridge_sccp_ton_destination_proof_v1(
 #[derive(Clone, Debug)]
 struct TonBocCellV1 {
     data: Vec<u8>,
+    bit_len: usize,
     refs: Vec<usize>,
+}
+impl TonBocCellV1 {
+    fn full_bytes(data: Vec<u8>, refs: Vec<usize>) -> Self {
+        let bit_len = data.len() * 8;
+        Self {
+            data,
+            bit_len,
+            refs,
+        }
+    }
 }
 fn ton_boc_uint_width_v1(value: usize) -> Option<usize> {
     match value {
@@ -4724,7 +4227,9 @@ fn encode_ton_boc_cells_v1(cells: &[TonBocCellV1]) -> Option<Vec<u8>> {
     }
     let mut serialized_cells = Vec::new();
     for (cell_index, cell) in cells.iter().enumerate() {
-        if cell.data.len() > 127
+        let encoded_bytes = cell.bit_len.div_ceil(8);
+        if cell.bit_len > 1023
+            || cell.data.len() != encoded_bytes
             || cell.refs.len() > 4
             || cell
                 .refs
@@ -4733,9 +4238,18 @@ fn encode_ton_boc_cells_v1(cells: &[TonBocCellV1]) -> Option<Vec<u8>> {
         {
             return None;
         }
+        let remainder_bits = cell.bit_len % 8;
+        let mut data = cell.data.clone();
+        if remainder_bits != 0 {
+            let unused_mask = (1_u8 << (8 - remainder_bits)) - 1;
+            if data.last().copied()? & unused_mask != 0 {
+                return None;
+            }
+            *data.last_mut()? |= 1_u8 << (7 - remainder_bits);
+        }
         serialized_cells.push(u8::try_from(cell.refs.len()).ok()?);
-        serialized_cells.push(u8::try_from(cell.data.len().checked_mul(2)?).ok()?);
-        serialized_cells.extend_from_slice(&cell.data);
+        serialized_cells.push(u8::try_from(cell.bit_len / 8 + cell.bit_len.div_ceil(8)).ok()?);
+        serialized_cells.extend_from_slice(&data);
         for reference in &cell.refs {
             push_ton_boc_uint_v1(&mut serialized_cells, *reference, size_bytes)?;
         }
@@ -4755,19 +4269,64 @@ fn encode_ton_boc_cells_v1(cells: &[TonBocCellV1]) -> Option<Vec<u8>> {
     out.extend_from_slice(&serialized_cells);
     Some(out)
 }
+/// Current-state witnesses for the three replay boundaries crossed by a TON
+/// destination mint.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SccpTonMintReplayWitnessesV1 {
+    /// Taira-to-TON bridge admission witness.
+    pub bridge: SccpSparseMerkleWitnessV1,
+    /// Jetton-master mint admission witness.
+    pub master: SccpSparseMerkleWitnessV1,
+    /// Recipient-wallet mint-credit witness.
+    pub wallet: SccpSparseMerkleWitnessV1,
+}
+
+fn append_ton_replay_witness_cells_v1(
+    cells: &mut Vec<TonBocCellV1>,
+    witness: &SccpSparseMerkleWitnessV1,
+) -> Option<usize> {
+    if witness.expected_shard_root == [0; 32] || witness.validate().is_err() {
+        return None;
+    }
+    let root_index = cells.len();
+    let sibling_root = (!witness.siblings.is_empty()).then_some(root_index.checked_add(1)?);
+    let mut header = Vec::with_capacity(97);
+    header.extend_from_slice(&witness.expected_shard_root);
+    header.extend_from_slice(&witness.prior_record_digest);
+    header.extend_from_slice(&witness.sibling_bitmap);
+    // `cell?` stores one presence bit followed by a reference when present.
+    header.push(if sibling_root.is_some() { 0x80 } else { 0 });
+    cells.push(TonBocCellV1 {
+        data: header,
+        bit_len: 3 * 256 + 1,
+        refs: sibling_root.into_iter().collect(),
+    });
+    let chunk_count = witness.siblings.len().div_ceil(3);
+    for (chunk_index, chunk) in witness.siblings.chunks(3).enumerate() {
+        let mut data = Vec::with_capacity(chunk.len() * 32);
+        for sibling in chunk {
+            data.extend_from_slice(sibling);
+        }
+        let next = (chunk_index + 1 < chunk_count).then_some(cells.len().checked_add(1)?);
+        cells.push(TonBocCellV1::full_bytes(data, next.into_iter().collect()));
+    }
+    Some(root_index)
+}
 /// Build the canonical Bag-of-Cells representation of one
 /// `SccpFinalizeFromTaira` internal-message body.
 ///
 /// The root stores the opcode, query id, schema version, message id, and
 /// statement hash. Its references use the exact contract TL-B topology:
-/// four linked public-signal cells, a proof root referencing `A/B/C`, and a
-/// payload root referencing the fixed `50/100/100/remainder` segmentation.
+/// four linked public-signal cells, a proof root referencing `A/B/C`, a
+/// payload root referencing the fixed `50/100/100/remainder` segmentation,
+/// and the caller-supplied bridge/master/wallet replay-witness bundle.
 #[must_use]
 pub fn encode_sccp_ton_finalize_from_taira_body_boc_v1(
     query_id: u64,
     request: &SccpTonGroth16Bls12381ProofRequestV1,
     proof: &SccpGroth16Bls12381ProofV1,
     canonical_payload_bytes: &[u8],
+    replay_witnesses: &SccpTonMintReplayWitnessesV1,
 ) -> Option<Vec<u8>> {
     validate_sccp_ton_groth16_bls12381_request_v1(request)?;
     if !verify_sccp_groth16_bls12381_pairing_v1(
@@ -4777,42 +4336,46 @@ pub fn encode_sccp_ton_finalize_from_taira_body_boc_v1(
     ) {
         return None;
     }
+    let proof_bytes = canonical_sccp_groth16_bls12381_proof_bytes_v1(proof)?;
     encode_sccp_ton_finalize_from_taira_body_boc_after_verification_v1(
         query_id,
-        request,
-        proof,
+        &request.public_inputs,
+        &request.public_signals,
+        request.statement_hash,
+        &proof_bytes,
         canonical_payload_bytes,
+        replay_witnesses,
     )
 }
 fn encode_sccp_ton_finalize_from_taira_body_boc_after_verification_v1(
     query_id: u64,
-    request: &SccpTonGroth16Bls12381ProofRequestV1,
-    proof: &SccpGroth16Bls12381ProofV1,
+    public_inputs: &SccpMessagePublicInputsV1,
+    public_signals: &SccpGroth16Bls12381PublicSignalsV1,
+    statement_hash: H256,
+    proof_bytes: &[u8],
     canonical_payload_bytes: &[u8],
+    replay_witnesses: &SccpTonMintReplayWitnessesV1,
 ) -> Option<Vec<u8>> {
     if canonical_payload_bytes.len() < SCCP_TON_CANONICAL_PAYLOAD_HEADER_BYTES_V1
         || canonical_payload_bytes.len() > SCCP_TON_DESTINATION_MAX_PAYLOAD_BYTES_V1
-        || payload_hash(canonical_payload_bytes) != request.public_inputs.payload_hash
+        || payload_hash(canonical_payload_bytes) != public_inputs.payload_hash
+        || proof_bytes.len() != SCCP_TON_GROTH16_BLS12381_PROOF_BYTES_V1
     {
         return None;
     }
-    let proof_bytes = canonical_sccp_groth16_bls12381_proof_bytes_v1(proof)?;
-    let signals = request.public_signals.words();
+    let signals = public_signals.words();
     let mut root_data = Vec::with_capacity(78);
     root_data.extend_from_slice(&SCCP_TON_FINALIZE_FROM_TAIRA_OPCODE_V1.to_be_bytes());
     root_data.extend_from_slice(&query_id.to_be_bytes());
     root_data.extend_from_slice(&1_u16.to_be_bytes());
-    root_data.extend_from_slice(&request.public_inputs.message_id);
-    root_data.extend_from_slice(&request.statement_hash);
+    root_data.extend_from_slice(&public_inputs.message_id);
+    root_data.extend_from_slice(&statement_hash);
     let signal_cell = |range: core::ops::Range<usize>, next: Option<usize>| {
         let mut data = Vec::with_capacity(range.len() * 32);
         for signal in &signals[range] {
             data.extend_from_slice(signal);
         }
-        TonBocCellV1 {
-            data,
-            refs: next.into_iter().collect(),
-        }
+        TonBocCellV1::full_bytes(data, next.into_iter().collect())
     };
     let remainder = &canonical_payload_bytes[SCCP_TON_CANONICAL_PAYLOAD_HEADER_BYTES_V1..];
     let first_end = remainder
@@ -4821,52 +4384,30 @@ fn encode_sccp_ton_finalize_from_taira_body_boc_after_verification_v1(
     let second_end = remainder
         .len()
         .min(2 * SCCP_TON_CANONICAL_PAYLOAD_CHUNK_BYTES_V1);
-    let cells = vec![
-        TonBocCellV1 {
-            data: root_data,
-            refs: vec![1, 5, 9],
-        },
+    let mut cells = vec![
+        TonBocCellV1::full_bytes(root_data, vec![1, 5, 9, 14]),
         signal_cell(0..3, Some(2)),
         signal_cell(3..6, Some(3)),
         signal_cell(6..9, Some(4)),
         signal_cell(9..11, None),
-        TonBocCellV1 {
-            data: Vec::new(),
-            refs: vec![6, 7, 8],
-        },
-        TonBocCellV1 {
-            data: proof_bytes[..48].to_vec(),
-            refs: Vec::new(),
-        },
-        TonBocCellV1 {
-            data: proof_bytes[48..144].to_vec(),
-            refs: Vec::new(),
-        },
-        TonBocCellV1 {
-            data: proof_bytes[144..].to_vec(),
-            refs: Vec::new(),
-        },
-        TonBocCellV1 {
-            data: Vec::new(),
-            refs: vec![10, 11, 12, 13],
-        },
-        TonBocCellV1 {
-            data: canonical_payload_bytes[..SCCP_TON_CANONICAL_PAYLOAD_HEADER_BYTES_V1].to_vec(),
-            refs: Vec::new(),
-        },
-        TonBocCellV1 {
-            data: remainder[..first_end].to_vec(),
-            refs: Vec::new(),
-        },
-        TonBocCellV1 {
-            data: remainder[first_end..second_end].to_vec(),
-            refs: Vec::new(),
-        },
-        TonBocCellV1 {
-            data: remainder[second_end..].to_vec(),
-            refs: Vec::new(),
-        },
+        TonBocCellV1::full_bytes(Vec::new(), vec![6, 7, 8]),
+        TonBocCellV1::full_bytes(proof_bytes[..48].to_vec(), Vec::new()),
+        TonBocCellV1::full_bytes(proof_bytes[48..144].to_vec(), Vec::new()),
+        TonBocCellV1::full_bytes(proof_bytes[144..].to_vec(), Vec::new()),
+        TonBocCellV1::full_bytes(Vec::new(), vec![10, 11, 12, 13]),
+        TonBocCellV1::full_bytes(
+            canonical_payload_bytes[..SCCP_TON_CANONICAL_PAYLOAD_HEADER_BYTES_V1].to_vec(),
+            Vec::new(),
+        ),
+        TonBocCellV1::full_bytes(remainder[..first_end].to_vec(), Vec::new()),
+        TonBocCellV1::full_bytes(remainder[first_end..second_end].to_vec(), Vec::new()),
+        TonBocCellV1::full_bytes(remainder[second_end..].to_vec(), Vec::new()),
+        TonBocCellV1::full_bytes(Vec::new(), Vec::new()),
     ];
+    let bridge = append_ton_replay_witness_cells_v1(&mut cells, &replay_witnesses.bridge)?;
+    let master = append_ton_replay_witness_cells_v1(&mut cells, &replay_witnesses.master)?;
+    let wallet = append_ton_replay_witness_cells_v1(&mut cells, &replay_witnesses.wallet)?;
+    cells[14].refs = vec![bridge, master, wallet];
     encode_ton_boc_cells_v1(&cells)
 }
 fn sccp_ton_payload_amount_to_jetton_base_units_v1(
@@ -4878,67 +4419,13 @@ fn sccp_ton_payload_amount_to_jetton_base_units_v1(
     }
     let amount = amount.checked_mul(u128::from(deployment.taira_to_token_multiplier))?;
     // TEP-74 `coins` is VarUInteger 16 and therefore carries at most 15
-    // value bytes.
-    (amount != 0 && amount < (1_u128 << 120)).then_some(amount)
-}
-/// Verify a closed TON destination proof against exact governed history and
-/// explicitly trusted Taira finality, then derive the canonical internal-message body BOC.
-#[must_use]
-pub fn verify_sccp_ton_destination_proof_v1(
-    proof: &BridgeSccpDestinationProofV1,
-    bundle: &TairaSccpMessageProofV1,
-    governed_route: &SccpGovernedRouteV1,
-    trusted_finality: &TairaBridgeFinalityProofV1,
-    query_id: u64,
-) -> Option<SccpVerifiedTonDestinationCallV1> {
-    let embedded_finality = decode_taira_bridge_finality_proof(&bundle.finality_proof)?;
-    if embedded_finality != *trusted_finality {
-        return None;
-    }
-    let artifact = decode_bridge_sccp_ton_destination_proof_v1(proof)?;
-    if !sccp_ton_groth16_bls12381_artifact_matches_governed_route_v1(
-        &artifact,
-        bundle,
-        governed_route,
-    ) {
-        return None;
-    }
-    let SccpDestinationDeploymentV1::Ton(deployment) = governed_route.destination else {
-        return None;
-    };
-    let SccpPayloadV1::Transfer(transfer) = &bundle.payload;
-    let recipient = decode_sccp_ton_account36_v1(&transfer.recipient)?;
-    let amount = sccp_ton_payload_amount_to_jetton_base_units_v1(transfer.amount, &deployment)?;
-    let canonical_payload_bytes = canonical_sccp_payload_bytes(&bundle.payload).ok()?;
-    let proof_bytes = canonical_sccp_groth16_bls12381_proof_bytes_v1(&artifact.result.proof)?;
-    let internal_message_body_boc = encode_sccp_ton_finalize_from_taira_body_boc_v1(
-        query_id,
-        &artifact.request,
-        &artifact.result.proof,
-        &canonical_payload_bytes,
-    )?;
-    if !verify_taira_bridge_finality_proof_cryptographic(trusted_finality) {
-        return None;
-    }
-    Some(SccpVerifiedTonDestinationCallV1 {
-        version: 1,
-        backend: BridgeSccpDestinationProofBackendV1::TonGroth16Bls12381,
-        network: governed_route.lane_id.source,
-        route_address: deployment.route_address,
-        query_id,
-        route_revision: transfer.route_revision,
-        recipient,
-        amount,
-        destination_binding_hash: artifact.request.destination_binding_hash,
-        route_configuration_hash: artifact.request.route_configuration_hash,
-        public_signals: artifact.request.public_signals,
-        statement_hash: artifact.request.statement_hash,
-        request_hash: artifact.request.request_hash,
-        proof_bytes,
-        canonical_payload_bytes,
-        internal_message_body_boc,
-        bundle: bundle.clone(),
-    })
+    // value bytes. The per-call amount must also remain within the exact
+    // immutable cap authenticated by route governance.
+    (deployment.max_wrapped_supply != 0
+        && deployment.max_wrapped_supply <= SCCP_V1_TON_MAX_COINS
+        && amount != 0
+        && amount <= deployment.max_wrapped_supply)
+        .then_some(amount)
 }
 fn sccp_governed_route_groth16_material_v1(
     governed_route: &SccpGovernedRouteV1,
@@ -4954,11 +4441,6 @@ fn sccp_governed_route_groth16_material_v1(
             deployment.outbound_proof_policy,
         ),
         SccpDestinationDeploymentV1::Tron(deployment) => (
-            deployment.verifying_key,
-            deployment.verifier_key_hash,
-            deployment.outbound_proof_policy,
-        ),
-        SccpDestinationDeploymentV1::Solana(deployment) => (
             deployment.verifying_key,
             deployment.verifier_key_hash,
             deployment.outbound_proof_policy,
@@ -5057,9 +4539,7 @@ pub fn build_sccp_destination_proof_request_from_structurally_bound_finality_v1(
             )
             .map(SccpDestinationProofRequestV1::Groth16Bls12381)
         }
-        SccpDestinationDeploymentV1::Evm(_)
-        | SccpDestinationDeploymentV1::Tron(_)
-        | SccpDestinationDeploymentV1::Solana(_) => {
+        SccpDestinationDeploymentV1::Evm(_) | SccpDestinationDeploymentV1::Tron(_) => {
             build_sccp_groth16_bn254_proof_request_from_structurally_bound_finality_v1(
                 bundle,
                 governed_route,
@@ -5088,9 +4568,6 @@ fn build_sccp_groth16_bn254_proof_request_from_bound_finality_v1(
         SccpDestinationDeploymentV1::Evm(_) => BridgeSccpDestinationProofBackendV1::EvmGroth16Bn254,
         SccpDestinationDeploymentV1::Tron(_) => {
             BridgeSccpDestinationProofBackendV1::TronGroth16Bn254
-        }
-        SccpDestinationDeploymentV1::Solana(_) => {
-            BridgeSccpDestinationProofBackendV1::SolanaGroth16Bn254
         }
         SccpDestinationDeploymentV1::Ton(_) => return None,
     };
@@ -5335,10 +4812,8 @@ pub fn wrap_sccp_bsc_mainnet_groth16_bn254_proof_result(
     proof_bytes: &[u8],
     request: &SccpEvmGroth16Bn254ProofRequestV1,
 ) -> Option<SccpEvmGroth16Bn254ProofArtifactV1> {
-    if !matches!(
-        request.target_network,
-        SccpNetworkV1::BscMainnet | SccpNetworkV1::BscTestnet
-    ) || request.public_inputs.target_domain != SCCP_DOMAIN_BSC
+    if request.target_network != SccpNetworkV1::BscMainnet
+        || request.public_inputs.target_domain != SCCP_DOMAIN_BSC
     {
         return None;
     }
@@ -5353,18 +4828,6 @@ pub fn wrap_sccp_tron_groth16_bn254_proof_result(
         proof_bytes,
         request,
         BridgeSccpDestinationProofBackendV1::TronGroth16Bn254,
-    )
-}
-/// Validate and bind raw Solana-program Groth16 proof bytes to their exact
-/// state-derived proving request.
-pub fn wrap_sccp_solana_groth16_bn254_proof_result(
-    proof_bytes: &[u8],
-    request: &SccpGroth16Bn254ProofRequestV1,
-) -> Option<SccpGroth16Bn254ProofArtifactV1> {
-    wrap_sccp_groth16_bn254_proof_result(
-        proof_bytes,
-        request,
-        BridgeSccpDestinationProofBackendV1::SolanaGroth16Bn254,
     )
 }
 fn sccp_groth16_bn254_proof_request_is_self_canonical(
@@ -5605,25 +5068,16 @@ pub fn sccp_groth16_bn254_proof_artifact_matches_governed_route_v1(
         SccpDestinationDeploymentV1::Tron(_) => {
             wrap_sccp_tron_groth16_bn254_proof_result(&artifact.result.proof_bytes, &request)
         }
-        SccpDestinationDeploymentV1::Solana(_) => {
-            wrap_sccp_solana_groth16_bn254_proof_result(&artifact.result.proof_bytes, &request)
-        }
         SccpDestinationDeploymentV1::Ton(_) => return false,
     };
     expected.as_ref() == Some(artifact)
 }
-fn build_sccp_verified_destination_call_v1(
+fn build_sccp_verified_destination_material_v1(
     bundle: &TairaSccpMessageProofV1,
     artifact: &SccpGroth16Bn254ProofArtifactV1,
     governed_route: &SccpGovernedRouteV1,
     canonical_payload_bytes: Vec<u8>,
-) -> Option<SccpVerifiedDestinationCallV1> {
-    let calldata = encode_sccp_finalize_from_taira_calldata_v1(
-        &artifact.result.proof_bytes,
-        &artifact.request.public_inputs,
-        artifact.request.statement_hash,
-        &canonical_payload_bytes,
-    )?;
+) -> Option<SccpVerifiedDestinationMaterialV1> {
     let target = match governed_route.destination {
         SccpDestinationDeploymentV1::Evm(deployment) => SccpDestinationCallTargetV1::Evm {
             network: governed_route.lane_id.source,
@@ -5633,193 +5087,32 @@ fn build_sccp_verified_destination_call_v1(
             network: governed_route.lane_id.source,
             route_address: deployment.route_address,
         },
-        // Solana uses its dedicated proof-account API because payer and the
-        // destination SPL token account are transaction-specific. Never erase
-        // those bindings to fit the EVM/TVM calldata DTO; callers use
-        // `verify_sccp_solana_destination_proof_v1` instead.
-        SccpDestinationDeploymentV1::Solana(_) => return None,
         // TON uses a dedicated BLS12-381 artifact and TVM internal-message
         // body. It must not be projected into Solidity ABI calldata.
         SccpDestinationDeploymentV1::Ton(_) => return None,
     };
     let SccpPayloadV1::Transfer(transfer) = &bundle.payload;
-    Some(SccpVerifiedDestinationCallV1 {
-        version: 1,
-        backend: artifact.request.backend,
-        counterparty_domain: artifact.request.target_network.domain_id(),
-        route_revision: transfer.route_revision,
-        destination_binding_hash: artifact.request.destination_binding_hash,
-        route_configuration_hash: artifact.request.route_configuration_hash,
-        semantic_proof_profile: artifact.request.semantic_proof_profile,
-        semantic_proof_profile_hash: artifact.request.semantic_proof_profile_hash,
-        sora_finality_anchor: artifact.request.sora_finality_anchor,
-        sora_finality_anchor_hash: artifact.request.sora_finality_anchor_hash,
-        target,
-        public_inputs: artifact.request.public_inputs,
-        statement_hash: artifact.request.statement_hash,
-        request_hash: artifact.request.request_hash,
-        proof_bytes: artifact.result.proof_bytes.clone(),
-        canonical_payload_bytes,
-        calldata,
-        bundle: bundle.clone(),
-    })
-}
-#[expect(
-    clippy::large_types_passed_by_value,
-    reason = "the canonical eleven-word signal array is owned by the parsed proof and moved directly into the returned V1 call without cloning"
-)]
-fn build_sccp_verified_solana_destination_call_v1(
-    bundle: &TairaSccpMessageProofV1,
-    artifact: &SccpGroth16Bn254ProofArtifactV1,
-    governed_route: &SccpGovernedRouteV1,
-    runtime_accounts: SccpSolanaDestinationRuntimeAccountsV1,
-    canonical_payload_bytes: Vec<u8>,
-    public_signal_words: [H256; 11],
-) -> Option<SccpVerifiedSolanaDestinationCallV1> {
-    let SccpDestinationDeploymentV1::Solana(deployment) = governed_route.destination else {
-        return None;
-    };
-    let SccpPayloadV1::Transfer(transfer) = &bundle.payload;
-    if governed_route.lane_id.source != SccpNetworkV1::SolanaTestnet
-        || governed_route.lane_id.target != SccpNetworkV1::SoraTaira
-        || artifact.request.backend != BridgeSccpDestinationProofBackendV1::SolanaGroth16Bn254
-        || artifact.request.target_network != SccpNetworkV1::SolanaTestnet
-        || transfer.recipient_codec != SCCP_CODEC_SOLANA_PUBKEY32
-        || transfer.recipient.as_slice() != runtime_accounts.payer
-        || artifact.request.bundle_bytes
-            != canonical_taira_sccp_message_bundle_bytes_checked(bundle)?
-    {
-        return None;
-    }
-    let amount = sccp_solana_payload_amount_to_spl_base_units_v1(transfer.amount, &deployment)?;
-    let mut proof_account = SccpSolanaDestinationProofAccountV1 {
-        version: 1,
-        network: SccpNetworkV1::SolanaTestnet,
-        runtime_accounts,
-        deployment,
-        route_revision: transfer.route_revision,
-        payload_amount: transfer.amount,
-        amount,
-        destination_binding_hash: artifact.request.destination_binding_hash,
-        route_configuration_hash: artifact.request.route_configuration_hash,
-        semantic_proof_profile_hash: artifact.request.semantic_proof_profile_hash,
-        sora_finality_anchor_hash: artifact.request.sora_finality_anchor_hash,
-        statement_hash: artifact.request.statement_hash,
-        request_hash: artifact.request.request_hash,
-        public_inputs: artifact.request.public_inputs,
-        proof_bytes: artifact.result.proof_bytes.clone(),
-        canonical_payload_bytes,
-        proof_body: Vec::new(),
-        header: SccpSolanaDestinationProofHeaderV1 {
-            material_account: deployment.native_verifier_material_account,
-            body_len: 0,
-            body_sha256: [0; 32],
-            message_id: artifact.request.public_inputs.message_id,
-            payload_hash: artifact.request.public_inputs.payload_hash,
+    Some(SccpVerifiedDestinationMaterialV1::EvmOrTron(
+        SccpVerifiedBn254DestinationMaterialV1 {
+            version: 1,
+            backend: artifact.request.backend,
+            counterparty_domain: artifact.request.target_network.domain_id(),
+            route_revision: transfer.route_revision,
+            destination_binding_hash: artifact.request.destination_binding_hash,
+            route_configuration_hash: artifact.request.route_configuration_hash,
+            semantic_proof_profile: artifact.request.semantic_proof_profile,
+            semantic_proof_profile_hash: artifact.request.semantic_proof_profile_hash,
+            sora_finality_anchor: artifact.request.sora_finality_anchor,
+            sora_finality_anchor_hash: artifact.request.sora_finality_anchor_hash,
+            target,
+            public_inputs: artifact.request.public_inputs,
             statement_hash: artifact.request.statement_hash,
-            destination_token_account: runtime_accounts.destination_token_account,
-            payer: runtime_accounts.payer,
-            amount,
+            request_hash: artifact.request.request_hash,
+            proof_bytes: artifact.result.proof_bytes.clone(),
+            canonical_payload_bytes,
+            bundle: bundle.clone(),
         },
-        init_instruction_data: Vec::new(),
-        chunks: Vec::new(),
-        seal_instruction_data: vec![1, 5],
-    };
-    proof_account.proof_body = solana_destination_proof_body_bytes_v1(&proof_account)?;
-    proof_account.header.body_len = u16::try_from(proof_account.proof_body.len()).ok()?;
-    proof_account.header.body_sha256 = sha256_bytes(&proof_account.proof_body);
-    proof_account.init_instruction_data =
-        encode_sccp_solana_init_proof_instruction_v1(&proof_account.header);
-    proof_account.chunks = build_sccp_solana_destination_proof_chunks_v1(&proof_account.proof_body);
-    let verify_accounts = SccpSolanaDestinationVerifyAccountsV1 {
-        payer: runtime_accounts.payer,
-        bridge_verifier_authority: runtime_accounts.bridge_verifier_authority,
-        bridge_state: deployment.route_state_account,
-        mint: deployment.token_mint_address,
-        destination_token_account: runtime_accounts.destination_token_account,
-        material_account: deployment.native_verifier_material_account,
-        proof_account: runtime_accounts.proof_account,
-    };
-    let call = SccpVerifiedSolanaDestinationCallV1 {
-        version: 1,
-        backend: BridgeSccpDestinationProofBackendV1::SolanaGroth16Bn254,
-        proof_account,
-        public_signals: public_signal_words.into(),
-        material_pda_seeds: SccpSolanaMaterialPdaSeedsV1 {
-            verifier_key_keccak: deployment.verifier_key_hash,
-            verifier_config_sha256: deployment.native_verifier_config_hash,
-        },
-        proof_pda_seeds: SccpSolanaProofPdaSeedsV1 {
-            material_account: deployment.native_verifier_material_account,
-            message_id: artifact.request.public_inputs.message_id,
-            payer: runtime_accounts.payer,
-        },
-        verify_accounts,
-        verify_instruction_data: encode_sccp_solana_verify_sealed_proof_instruction_v1(
-            artifact.request.public_inputs.message_id,
-            amount,
-        )?,
-        bundle: bundle.clone(),
-    };
-    sccp_verified_solana_destination_call_is_self_canonical_v1(&call).then_some(call)
-}
-/// Return whether a compact Solana call still matches exact governed history.
-///
-/// This is the verification boundary for a call deserialized independently of a parsed proof. It
-/// rechecks route material, canonical bytes, exact caller-trusted Taira finality, and the BN254
-/// pairing; callers must not trust a mutable DTO merely because it once came from the builder.
-#[must_use]
-pub fn sccp_verified_solana_destination_call_matches_governed_route_v1(
-    call: &SccpVerifiedSolanaDestinationCallV1,
-    governed_route: &SccpGovernedRouteV1,
-    trusted_finality: &TairaBridgeFinalityProofV1,
-) -> bool {
-    let SccpDestinationDeploymentV1::Solana(deployment) = governed_route.destination else {
-        return false;
-    };
-    let Some(finality) = decode_taira_bridge_finality_proof(&call.bundle.finality_proof) else {
-        return false;
-    };
-    let Some(expected_request) =
-        build_sccp_groth16_bn254_proof_request_from_governed_route_v1(&call.bundle, governed_route)
-    else {
-        return false;
-    };
-    if finality != *trusted_finality
-        || !sccp_verified_solana_destination_call_is_self_canonical_v1(call)
-        || governed_route.validate().is_err()
-        || governed_route.lane_id.source != SccpNetworkV1::SolanaTestnet
-        || governed_route.lane_id.target != SccpNetworkV1::SoraTaira
-        || call.proof_account.deployment != deployment
-        || call.proof_account.route_revision != governed_route.revision
-        || governed_route.destination_binding_hash().ok()
-            != Some(call.proof_account.destination_binding_hash)
-        || governed_route.route_configuration_hash().ok()
-            != Some(call.proof_account.route_configuration_hash)
-        || call.proof_account.statement_hash != expected_request.statement_hash
-        || call.proof_account.request_hash != expected_request.request_hash
-        || call.proof_account.public_inputs != expected_request.public_inputs
-        || call.proof_account.destination_binding_hash != expected_request.destination_binding_hash
-        || call.proof_account.route_configuration_hash != expected_request.route_configuration_hash
-        || call.proof_account.semantic_proof_profile_hash
-            != expected_request.semantic_proof_profile_hash
-        || call.proof_account.sora_finality_anchor_hash
-            != expected_request.sora_finality_anchor_hash
-        || call.proof_account.deployment.verifying_key != expected_request.verifying_key
-        || !sccp_governed_groth16_route_matches_bundle_v1(&call.bundle, governed_route)
-        || !verify_taira_bridge_finality_proof_cryptographic(trusted_finality)
-    {
-        return false;
-    }
-    let Some(proof) = decode_sccp_evm_groth16_bn254_proof_bytes(&call.proof_account.proof_bytes)
-    else {
-        return false;
-    };
-    verify_sccp_groth16_bn254_pairing_equation_v1(
-        &proof,
-        &call.public_signals.words(),
-        &deployment.verifying_key,
-    )
+    ))
 }
 /// Decode one destination artifact, its canonical embedded SCCP bundle, and its Taira finality
 /// proof exactly once without evaluating a pairing or BLS aggregate.
@@ -5927,8 +5220,7 @@ pub fn parse_sccp_destination_proof_v1(
             parse_sccp_ton_destination_proof_v1(proof)
         }
         BridgeSccpDestinationProofBackendV1::EvmGroth16Bn254
-        | BridgeSccpDestinationProofBackendV1::TronGroth16Bn254
-        | BridgeSccpDestinationProofBackendV1::SolanaGroth16Bn254 => {
+        | BridgeSccpDestinationProofBackendV1::TronGroth16Bn254 => {
             parse_sccp_bn254_destination_proof_v1(proof)
         }
     }
@@ -5976,9 +5268,6 @@ fn build_sccp_groth16_bn254_proof_request_from_parsed_v1(
         SccpDestinationDeploymentV1::Tron(_) => {
             BridgeSccpDestinationProofBackendV1::TronGroth16Bn254
         }
-        SccpDestinationDeploymentV1::Solana(_) => {
-            BridgeSccpDestinationProofBackendV1::SolanaGroth16Bn254
-        }
         SccpDestinationDeploymentV1::Ton(_) => return None,
     };
     build_sccp_groth16_bn254_proof_request(&SccpGroth16Bn254ProofRequestBuildContextV1 {
@@ -6006,11 +5295,11 @@ fn build_sccp_groth16_bn254_proof_request_from_parsed_v1(
         outbound_proof_policy,
     })
 }
-fn build_sccp_verified_ton_destination_call_from_parsed_v1(
+fn build_sccp_verified_ton_destination_material_from_parsed_v1(
     parsed: &SccpParsedDestinationProofV1,
     artifact: &SccpTonGroth16Bls12381ProofArtifactV1,
     governed_route: &SccpGovernedRouteV1,
-) -> Option<SccpVerifiedDestinationCallV1> {
+) -> Option<SccpVerifiedDestinationMaterialV1> {
     let expected_request = build_sccp_ton_groth16_bls12381_request_from_bound_finality_v1(
         &parsed.bundle,
         governed_route,
@@ -6029,54 +5318,45 @@ fn build_sccp_verified_ton_destination_call_from_parsed_v1(
         return None;
     };
     let SccpPayloadV1::Transfer(transfer) = &parsed.bundle.payload;
-    decode_sccp_ton_account36_v1(&transfer.recipient)?;
-    sccp_ton_payload_amount_to_jetton_base_units_v1(transfer.amount, &deployment)?;
-    let calldata = encode_sccp_ton_finalize_from_taira_body_boc_after_verification_v1(
-        0,
-        &artifact.request,
-        &artifact.result.proof,
-        &parsed.canonical_payload_bytes,
-    )?;
-    Some(SccpVerifiedDestinationCallV1 {
-        version: 1,
-        backend: BridgeSccpDestinationProofBackendV1::TonGroth16Bls12381,
-        counterparty_domain: SCCP_DOMAIN_TON,
-        route_revision: transfer.route_revision,
-        destination_binding_hash: artifact.request.destination_binding_hash,
-        route_configuration_hash: artifact.request.route_configuration_hash,
-        semantic_proof_profile: artifact.request.semantic_proof_profile,
-        semantic_proof_profile_hash: artifact.request.semantic_proof_profile_hash,
-        sora_finality_anchor: artifact.request.sora_finality_anchor,
-        sora_finality_anchor_hash: artifact.request.sora_finality_anchor_hash,
-        target: SccpDestinationCallTargetV1::Ton {
+    let recipient = decode_sccp_ton_account36_v1(&transfer.recipient)?;
+    let amount = sccp_ton_payload_amount_to_jetton_base_units_v1(transfer.amount, &deployment)?;
+    Some(SccpVerifiedDestinationMaterialV1::Ton(
+        SccpVerifiedTonDestinationMaterialV1 {
+            version: 1,
+            backend: BridgeSccpDestinationProofBackendV1::TonGroth16Bls12381,
             network: governed_route.lane_id.source,
             route_address: deployment.route_address,
+            route_revision: transfer.route_revision,
+            recipient,
+            amount,
+            destination_binding_hash: artifact.request.destination_binding_hash,
+            route_configuration_hash: artifact.request.route_configuration_hash,
+            public_inputs: artifact.request.public_inputs,
+            public_signals: artifact.request.public_signals,
+            statement_hash: artifact.request.statement_hash,
+            request_hash: artifact.request.request_hash,
+            proof_bytes: canonical_sccp_groth16_bls12381_proof_bytes_v1(&artifact.result.proof)?,
+            canonical_payload_bytes: parsed.canonical_payload_bytes.clone(),
+            bundle: parsed.bundle.clone(),
         },
-        public_inputs: artifact.request.public_inputs,
-        statement_hash: artifact.request.statement_hash,
-        request_hash: artifact.request.request_hash,
-        proof_bytes: canonical_sccp_groth16_bls12381_proof_bytes_v1(&artifact.result.proof)?,
-        canonical_payload_bytes: parsed.canonical_payload_bytes.clone(),
-        calldata,
-        bundle: parsed.bundle.clone(),
-    })
+    ))
 }
 /// Bind one parsed artifact to the exact historical governed route, evaluate
 /// one Groth16 pairing and the embedded Taira finality certificate, and derive
-/// the destination call without decoding the submitted request again.
+/// destination settlement material without decoding the submitted request again.
 ///
-/// Call material is never exposed by the parse-only phase. `trusted_finality`
+/// Settlement material is never exposed by the parse-only phase. `trusted_finality`
 /// must come from an authoritative local state boundary; exact equality with
 /// the proof-embedded value is mandatory before any pairing is evaluated.
 pub fn verify_parsed_sccp_destination_proof_v1(
     parsed: SccpParsedDestinationProofV1,
     governed_route: &SccpGovernedRouteV1,
     trusted_finality: &TairaBridgeFinalityProofV1,
-) -> Option<SccpVerifiedDestinationCallV1> {
+) -> Option<SccpVerifiedDestinationMaterialV1> {
     if parsed.finality != *trusted_finality {
         return None;
     }
-    let call = match &parsed.material {
+    let material = match &parsed.material {
         SccpParsedDestinationMaterialV1::Bn254 {
             artifact,
             public_signal_words,
@@ -6093,7 +5373,7 @@ pub fn verify_parsed_sccp_destination_proof_v1(
             {
                 return None;
             }
-            build_sccp_verified_destination_call_v1(
+            build_sccp_verified_destination_material_v1(
                 &parsed.bundle,
                 artifact,
                 governed_route,
@@ -6101,110 +5381,34 @@ pub fn verify_parsed_sccp_destination_proof_v1(
             )?
         }
         SccpParsedDestinationMaterialV1::TonBls12381 { artifact } => {
-            build_sccp_verified_ton_destination_call_from_parsed_v1(
+            build_sccp_verified_ton_destination_material_from_parsed_v1(
                 &parsed,
                 artifact,
                 governed_route,
             )?
         }
     };
-    verify_taira_bridge_finality_proof_cryptographic(trusted_finality).then_some(call)
-}
-/// Bind one parsed artifact to exact Solana route history and explicitly
-/// trusted Taira finality, then derive a compact proof-account settlement call.
-///
-/// Payer, destination SPL token account, proof account, and route PDAs are explicit inputs because
-/// they are transaction-specific. The resulting sealed value hashes them together with the governed
-/// program, state, mint, verifier material, message, payload, public inputs, and proof.
-pub fn verify_parsed_sccp_solana_destination_proof_v1(
-    parsed: SccpParsedDestinationProofV1,
-    governed_route: &SccpGovernedRouteV1,
-    runtime_accounts: SccpSolanaDestinationRuntimeAccountsV1,
-    trusted_finality: &TairaBridgeFinalityProofV1,
-) -> Option<SccpVerifiedSolanaDestinationCallV1> {
-    if parsed.finality != *trusted_finality {
-        return None;
-    }
-    let SccpDestinationDeploymentV1::Solana(_) = governed_route.destination else {
-        return None;
-    };
-    let SccpParsedDestinationMaterialV1::Bn254 {
-        artifact,
-        public_signal_words,
-        groth16_proof,
-    } = &parsed.material
-    else {
-        return None;
-    };
-    let expected_request =
-        build_sccp_groth16_bn254_proof_request_from_parsed_v1(&parsed, governed_route)?;
-    if artifact.request != expected_request
-        || artifact.request.backend != BridgeSccpDestinationProofBackendV1::SolanaGroth16Bn254
-        || !verify_sccp_groth16_bn254_pairing_equation_v1(
-            groth16_proof,
-            public_signal_words,
-            &artifact.request.verifying_key,
-        )
-    {
-        return None;
-    }
-    let call = build_sccp_verified_solana_destination_call_v1(
-        &parsed.bundle,
-        artifact,
-        governed_route,
-        runtime_accounts,
-        parsed.canonical_payload_bytes.clone(),
-        *public_signal_words,
-    )?;
-    verify_taira_bridge_finality_proof_cryptographic(trusted_finality).then_some(call)
+    verify_taira_bridge_finality_proof_cryptographic(trusted_finality).then_some(material)
 }
 /// Verify one closed bridge SCCP destination proof against the exact bundle,
 /// historical governed route, and explicitly trusted Taira finality, then
-/// derive the canonical destination call.
+/// derive the canonical destination settlement material.
 pub fn verify_sccp_destination_proof_v1(
     proof: &BridgeSccpDestinationProofV1,
     bundle: &TairaSccpMessageProofV1,
     governed_route: &SccpGovernedRouteV1,
     trusted_finality: &TairaBridgeFinalityProofV1,
-) -> Option<SccpVerifiedDestinationCallV1> {
+) -> Option<SccpVerifiedDestinationMaterialV1> {
     let parsed = parse_sccp_destination_proof_v1(proof)?;
     if parsed.bundle() != bundle {
         return None;
     }
     verify_parsed_sccp_destination_proof_v1(parsed, governed_route, trusted_finality)
 }
-/// Verify one Solana destination proof and derive its compact proof-account transaction material.
-///
-/// This is the complete query-free entrypoint for callers that do not already hold an opaque parsed
-/// context. It performs canonical framing, exact governed-route reconstruction, exact equality
-/// with caller-supplied trusted finality, one BN254 pairing, and Taira BLS verification before
-/// returning a call.
-pub fn verify_sccp_solana_destination_proof_v1(
-    proof: &BridgeSccpDestinationProofV1,
-    bundle: &TairaSccpMessageProofV1,
-    governed_route: &SccpGovernedRouteV1,
-    runtime_accounts: SccpSolanaDestinationRuntimeAccountsV1,
-    trusted_finality: &TairaBridgeFinalityProofV1,
-) -> Option<SccpVerifiedSolanaDestinationCallV1> {
-    if proof.backend != BridgeSccpDestinationProofBackendV1::SolanaGroth16Bn254 {
-        return None;
-    }
-    let parsed = parse_sccp_destination_proof_v1(proof)?;
-    if parsed.bundle() != bundle {
-        return None;
-    }
-    verify_parsed_sccp_solana_destination_proof_v1(
-        parsed,
-        governed_route,
-        runtime_accounts,
-        trusted_finality,
-    )
-}
 fn sccp_exact_xor_destination_route_id_v1(target_domain: u32) -> Option<&'static [u8]> {
     match target_domain {
         SCCP_DOMAIN_ETH => Some(SCCP_TAIRA_ETH_XOR_ROUTE_ID_V1.as_bytes()),
         SCCP_DOMAIN_BSC => Some(SCCP_TAIRA_BSC_XOR_ROUTE_ID_V1.as_bytes()),
-        SCCP_DOMAIN_SOLANA => Some(SCCP_TAIRA_SOL_XOR_ROUTE_ID_V1.as_bytes()),
         SCCP_DOMAIN_TON => Some(SCCP_TAIRA_TON_XOR_ROUTE_ID_V1.as_bytes()),
         SCCP_DOMAIN_TRON => Some(SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1.as_bytes()),
         _ => None,
@@ -6219,7 +5423,6 @@ fn sccp_payload_matches_exact_xor_destination_route_v1(
     };
     let expected_recipient_codec = match target_domain {
         SCCP_DOMAIN_ETH | SCCP_DOMAIN_BSC => SCCP_CODEC_EVM_ADDRESS20,
-        SCCP_DOMAIN_SOLANA => SCCP_CODEC_SOLANA_PUBKEY32,
         SCCP_DOMAIN_TON => SCCP_CODEC_TON_ACCOUNT36,
         SCCP_DOMAIN_TRON => SCCP_CODEC_TRON_ADDRESS21,
         _ => return false,
@@ -6338,9 +5541,6 @@ pub fn decode_sccp_normalized_codec_value(
         }),
         SCCP_CODEC_TRON_ADDRESS21 => Some(SccpNormalizedCodecValueV1::TronAddress21 {
             bytes: decode_tron_address21(bytes)?,
-        }),
-        SCCP_CODEC_SOLANA_PUBKEY32 => Some(SccpNormalizedCodecValueV1::SolanaPubkey32 {
-            bytes: decode_nonzero_fixed(bytes)?,
         }),
         SCCP_CODEC_TON_ACCOUNT36 => {
             let address = decode_sccp_ton_account36_v1(bytes)?;
@@ -6725,7 +5925,7 @@ pub fn canonical_commitment_bytes(commitment: &SccpHubCommitmentV1) -> Vec<u8> {
     push_u8(
         &mut out,
         match commitment.kind {
-            SccpHubMessageKind::Transfer => 5,
+            SccpHubMessageKind::Transfer => 0,
         },
     );
     push_u8(
@@ -6747,7 +5947,7 @@ pub fn decode_canonical_commitment_bytes(bytes: &[u8]) -> Option<SccpHubCommitme
     let mut cursor = PayloadCursor::new(bytes);
     let version = cursor.take_u8()?;
     let kind = match cursor.take_u8()? {
-        5 => SccpHubMessageKind::Transfer,
+        0 => SccpHubMessageKind::Transfer,
         _ => return None,
     };
     let source = sccp_network_from_tag_v1(cursor.take_u8()?)?;
@@ -6786,8 +5986,8 @@ pub fn decode_canonical_commitment_bytes(bytes: &[u8]) -> Option<SccpHubCommitme
 /// Derive the single V1 SCCP message identity for either lane direction.
 ///
 /// Exact source and target profiles are part of the preimage, preventing an
-/// otherwise identical payload from aliasing across external mainnet and
-/// testnet profiles. The governed destination binding is not part of this identity;
+/// otherwise identical payload from aliasing across the admitted external
+/// mainnet profiles. The governed destination binding is not part of this identity;
 /// replay protection therefore survives destination deployment rotation.
 /// The Keccak-256 input is `SCCP_LANE_MESSAGE_ID_PREFIX_V1 || 0x01 ||
 /// le_u32(lane_len) || canonical_lane || le_u32(payload_len) ||
@@ -7158,20 +6358,26 @@ mod tests {
         account::{AccountId, MultisigMember, MultisigPolicy},
         bridge::{
             BridgeProofPayload, BridgeSccpDestinationProofBackendV1, BridgeTransparentProof,
-            SCCP_V1_TAIRA_TO_SOLANA_TOKEN_MULTIPLIER, SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER,
-            SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE, SccpBn254G1PointV1, SccpBn254G2PointV1,
-            SccpDestinationDeploymentV1, SccpEvmDestinationDeploymentV1, SccpEvmSourceEmitterV1,
-            SccpGovernedRouteV1, SccpGroth16Bls12381IcV1, SccpGroth16Bls12381SemanticCircuitV1,
-            SccpGroth16Bn254IcV1, SccpGroth16Bn254VerifyingKeyV1, SccpInboundFinalityCutoffV1,
-            SccpLaneIdV1, SccpNetworkV1, SccpOutboundMessageContextV1, SccpRouteActivationV1,
-            SccpSolanaSourceEmitterV1, SccpSoraSettlementV1, SccpSourceEmitterV1,
-            SccpSourceIdentityV1, SccpTonSourceEmitterV1, SccpTronDestinationDeploymentV1,
+            SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER, SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE,
+            SccpBn254G1PointV1, SccpBn254G2PointV1, SccpDestinationDeploymentV1,
+            SccpEvmDestinationDeploymentV1, SccpEvmSourceEmitterV1, SccpGovernedRouteV1,
+            SccpGroth16Bls12381IcV1, SccpGroth16Bls12381SemanticCircuitV1, SccpGroth16Bn254IcV1,
+            SccpGroth16Bn254VerifyingKeyV1, SccpInboundFinalityCutoffV1, SccpLaneIdV1,
+            SccpNetworkV1, SccpOutboundMessageContextV1, SccpRouteActivationV1,
+            SccpSoraSettlementV1, SccpSourceEmitterV1, SccpSourceIdentityV1,
+            SccpTonSourceEmitterV1, SccpTronDestinationDeploymentV1,
             sccp_exact_tron_xor_route_config_hash_v1, sccp_lane_id_hash_v1,
             sccp_v1_taira_xor_asset_definition_id,
         },
         proof::ProofBox,
     };
     use std::{cell::Cell, sync::OnceLock};
+    const TEST_MAX_OUTSTANDING_LIABILITY: u128 = 1_000_000_000_000;
+
+    const fn test_max_wrapped_supply(multiplier: u64) -> u128 {
+        TEST_MAX_OUTSTANDING_LIABILITY * multiplier as u128
+    }
+
     struct OutboundFixture {
         route: SccpGovernedRouteV1,
         bundle: TairaSccpMessageProofV1,
@@ -7179,12 +6385,6 @@ mod tests {
         artifact: SccpGroth16Bn254ProofArtifactV1,
         bridge_proof: BridgeSccpDestinationProofV1,
     }
-    const TEST_MAX_OUTSTANDING_LIABILITY: u128 = 1_000_000_000_000;
-
-    const fn test_max_wrapped_supply(multiplier: u64) -> u128 {
-        TEST_MAX_OUTSTANDING_LIABILITY * multiplier as u128
-    }
-
     #[test]
     fn taira_finality_network_id_matches_the_governed_genesis_vector() {
         assert_eq!(
@@ -7364,22 +6564,35 @@ mod tests {
             let descriptor_two = bytes[cursor + 1];
             cursor += 2;
             assert_eq!(descriptor_one & 0xf8, 0, "only ordinary level-zero cells");
-            assert_eq!(
-                descriptor_two & 1,
-                0,
-                "all SCCP body cells are byte-aligned"
-            );
             let ref_count = usize::from(descriptor_one & 0x07);
-            let data_len = usize::from(descriptor_two / 2);
+            let data_len = usize::from(descriptor_two).div_ceil(2);
             let data_end = cursor
                 .checked_add(data_len)
                 .expect("test BOC data length fits usize");
-            let data = bytes[cursor..data_end].to_vec();
+            let mut data = bytes[cursor..data_end].to_vec();
             cursor = data_end;
+            let bit_len = if descriptor_two & 1 == 0 {
+                data_len * 8
+            } else {
+                let trailing = usize::try_from(
+                    data.last()
+                        .copied()
+                        .expect("partial cell has one data byte")
+                        .trailing_zeros(),
+                )
+                .expect("trailing-zero count fits usize");
+                assert!(trailing < 7, "partial cell has a canonical top-up bit");
+                *data.last_mut().expect("partial cell data") &= !(1_u8 << trailing);
+                (data_len - 1) * 8 + (7 - trailing)
+            };
             let refs = (0..ref_count)
                 .map(|_| read_test_ton_boc_uint(bytes, &mut cursor, size_bytes))
                 .collect();
-            cells.push(TonBocCellV1 { data, refs });
+            cells.push(TonBocCellV1 {
+                data,
+                bit_len,
+                refs,
+            });
         }
         assert_eq!(cursor, cells_end);
         assert_eq!(cursor, bytes.len());
@@ -7523,7 +6736,6 @@ mod tests {
             },
             SccpNormalizedCodecValueV1::EvmAddress20 { bytes: [0x12; 20] },
             SccpNormalizedCodecValueV1::TronAddress21 { bytes: [0x41; 21] },
-            SccpNormalizedCodecValueV1::SolanaPubkey32 { bytes: [0x13; 32] },
             SccpNormalizedCodecValueV1::TonAccount36 {
                 workchain: 0,
                 account: [0x14; 32],
@@ -7648,11 +6860,8 @@ mod tests {
     }
     #[test]
     fn ton_boc_encoder_is_canonical_and_rejects_invalid_graphs() {
-        let one_cell = encode_ton_boc_cells_v1(&[TonBocCellV1 {
-            data: vec![0xaa],
-            refs: Vec::new(),
-        }])
-        .expect("one ordinary byte-aligned TON cell encodes");
+        let one_cell = encode_ton_boc_cells_v1(&[TonBocCellV1::full_bytes(vec![0xaa], Vec::new())])
+            .expect("one ordinary byte-aligned TON cell encodes");
         assert_eq!(
             one_cell,
             vec![
@@ -7661,18 +6870,11 @@ mod tests {
         );
         assert!(encode_ton_boc_cells_v1(&[]).is_none());
         assert!(
-            encode_ton_boc_cells_v1(&[TonBocCellV1 {
-                data: vec![0; 128],
-                refs: Vec::new(),
-            }])
-            .is_none()
+            encode_ton_boc_cells_v1(&[TonBocCellV1::full_bytes(vec![0; 128], Vec::new(),)])
+                .is_none()
         );
         assert!(
-            encode_ton_boc_cells_v1(&[TonBocCellV1 {
-                data: Vec::new(),
-                refs: vec![0],
-            }])
-            .is_none()
+            encode_ton_boc_cells_v1(&[TonBocCellV1::full_bytes(Vec::new(), vec![0])]).is_none()
         );
     }
     #[test]
@@ -7680,7 +6882,7 @@ mod tests {
         let projection = SccpTransferProjectionV1 {
             version: 1,
             source_domain: SCCP_DOMAIN_SORA,
-            dest_domain: SCCP_DOMAIN_SOLANA,
+            dest_domain: SCCP_DOMAIN_TRON,
             nonce: u64::MAX,
             route_revision: u32::MAX,
             asset_home_domain: SCCP_DOMAIN_SORA,
@@ -7691,9 +6893,9 @@ mod tests {
             sender: SccpNormalizedCodecValueV1::CanonicalText {
                 value: "alice".into(),
             },
-            recipient: SccpNormalizedCodecValueV1::SolanaPubkey32 { bytes: [0x13; 32] },
+            recipient: SccpNormalizedCodecValueV1::TronAddress21 { bytes: [0x41; 21] },
             route_id: SccpNormalizedCodecValueV1::CanonicalText {
-                value: SCCP_TAIRA_SOL_XOR_ROUTE_ID_V1.into(),
+                value: SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1.into(),
             },
         };
         let json = norito::json::to_json(&projection).expect("serialize transfer projection");
@@ -7742,45 +6944,13 @@ mod tests {
             outbound_proof_policy: outbound_proof_policy(),
             route_address: [0x51; 20],
             route_code_hash: [0x61; 32],
+            replay_verifier_address: [0x71; 20],
+            replay_verifier_code_hash: [0x72; 32],
+            mint_breaker_address: [0x81; 20],
+            mint_breaker_code_hash: [0x82; 32],
             taira_to_token_multiplier: SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER,
             max_wrapped_supply: test_max_wrapped_supply(SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER),
         }
-    }
-    fn solana_deployment(revision: u32) -> SccpSolanaDestinationDeploymentV1 {
-        let key = verifying_key();
-        let mut deployment = SccpSolanaDestinationDeploymentV1 {
-            token_mint_address: [0x11; 32],
-            route_program_id: [0x12; 32],
-            route_program_data_address: [0x13; 32],
-            route_program_data_slot: 14,
-            route_state_account: [0x15; 32],
-            route_program_code_hash: [0x16; 32],
-            native_verifier_program_id: [0x17; 32],
-            native_verifier_program_data_address: [0x18; 32],
-            native_verifier_program_data_slot: 25,
-            native_verifier_material_account: [0x1a; 32],
-            native_verifier_program_code_hash: [0x1b; 32],
-            native_verifier_config_hash: [0x1c; 32],
-            verifying_key: key,
-            verifier_key_hash: sccp_groth16_bn254_verifying_key_hash_v1(&key)
-                .expect("valid repeated-generator key"),
-            outbound_proof_policy: outbound_proof_policy(),
-            taira_to_token_multiplier: SCCP_V1_TAIRA_TO_SOLANA_TOKEN_MULTIPLIER,
-            max_wrapped_supply: test_max_wrapped_supply(SCCP_V1_TAIRA_TO_SOLANA_TOKEN_MULTIPLIER),
-        };
-        deployment.native_verifier_config_hash = sccp_solana_native_verifier_config_hash_v1(
-            SccpLaneIdV1 {
-                source: SccpNetworkV1::SolanaTestnet,
-                target: SccpNetworkV1::SoraTaira,
-            },
-            SCCP_TAIRA_SOL_XOR_ROUTE_ID_V1,
-            SCCP_TAIRA_XOR_ASSET_KEY_V1,
-            revision,
-            [0x31; 32],
-            &deployment,
-        )
-        .expect("exact Solana fixture native-verifier config");
-        deployment
     }
     fn ton_address(byte: u8) -> SccpTonAddressV1 {
         SccpTonAddressV1 {
@@ -7804,10 +6974,55 @@ mod tests {
             verifier_key_hash: sccp_groth16_bls12381_verifying_key_hash_v1(&verifying_key)
                 .expect("valid BLS12-381 key"),
             proof_profile_commitment: sccp_ton_groth16_bls12381_proof_profile_commitment_v1(),
+            mint_breaker_guardian_keys: [
+                [0xa1; 32], [0xa2; 32], [0xa3; 32], [0xa4; 32], [0xa5; 32],
+            ]
+            .into(),
             outbound_proof_policy: ton_outbound_proof_policy(),
             taira_to_token_multiplier: SCCP_V1_TAIRA_TO_TON_TOKEN_MULTIPLIER,
             max_wrapped_supply: test_max_wrapped_supply(SCCP_V1_TAIRA_TO_TON_TOKEN_MULTIPLIER),
         }
+    }
+    #[test]
+    fn ton_destination_amount_is_bounded_by_coins_domain_and_governed_cap() {
+        let deployment = ton_deployment();
+        assert_eq!(
+            sccp_ton_payload_amount_to_jetton_base_units_v1(
+                deployment.max_wrapped_supply,
+                &deployment,
+            ),
+            Some(deployment.max_wrapped_supply)
+        );
+        assert_eq!(
+            sccp_ton_payload_amount_to_jetton_base_units_v1(0, &deployment),
+            None
+        );
+        assert_eq!(
+            sccp_ton_payload_amount_to_jetton_base_units_v1(
+                deployment.max_wrapped_supply + 1,
+                &deployment,
+            ),
+            None
+        );
+
+        let maximum = SccpTonDestinationDeploymentV1 {
+            max_wrapped_supply: SCCP_V1_TON_MAX_COINS,
+            ..deployment
+        };
+        assert_eq!(
+            sccp_ton_payload_amount_to_jetton_base_units_v1(SCCP_V1_TON_MAX_COINS, &maximum),
+            Some(SCCP_V1_TON_MAX_COINS)
+        );
+        assert_eq!(
+            sccp_ton_payload_amount_to_jetton_base_units_v1(
+                SCCP_V1_TON_MAX_COINS,
+                &SccpTonDestinationDeploymentV1 {
+                    max_wrapped_supply: SCCP_V1_TON_MAX_COINS + 1,
+                    ..maximum
+                },
+            ),
+            None
+        );
     }
     fn governed_route(
         network: SccpNetworkV1,
@@ -7834,10 +7049,6 @@ mod tests {
                 SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE,
             )
             .expect("valid exact EVM route configuration");
-        let custody = KeyPair::try_from_seed(vec![0x71; 32], Algorithm::Ed25519)
-            .expect("custody key")
-            .public_key()
-            .clone();
         let route = SccpGovernedRouteV1 {
             lane_id,
             route_id: route_id.to_owned(),
@@ -7857,68 +7068,11 @@ mod tests {
             sora_outbound_execution_policy: sccp_sora_outbound_execution_policy_test_fixture_v1(),
             settlement: SccpSoraSettlementV1 {
                 asset_definition_id: sccp_v1_taira_xor_asset_definition_id(),
-                custody_owner: AccountId::new(custody),
                 payload_amount_scale: SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE,
                 max_outstanding_liability: TEST_MAX_OUTSTANDING_LIABILITY,
             },
         };
         route.validate().expect("valid governed EVM fixture route");
-        assert_eq!(
-            route.route_configuration_hash().expect("route config"),
-            route_config_hash
-        );
-        route
-    }
-    fn solana_governed_route(revision: u32) -> SccpGovernedRouteV1 {
-        let lane_id = SccpLaneIdV1 {
-            source: SccpNetworkV1::SolanaTestnet,
-            target: SccpNetworkV1::SoraTaira,
-        };
-        let deployment = solana_deployment(revision);
-        let destination = SccpDestinationDeploymentV1::Solana(deployment);
-        let route_config_hash = destination
-            .route_configuration_hash(
-                lane_id,
-                SCCP_TAIRA_SOL_XOR_ROUTE_ID_V1,
-                SCCP_TAIRA_XOR_ASSET_KEY_V1,
-                revision,
-                SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE,
-            )
-            .expect("valid exact Solana route configuration");
-        let custody = KeyPair::try_from_seed(vec![0x81; 32], Algorithm::Ed25519)
-            .expect("Solana fixture custody key")
-            .public_key()
-            .clone();
-        let route = SccpGovernedRouteV1 {
-            lane_id,
-            route_id: SCCP_TAIRA_SOL_XOR_ROUTE_ID_V1.to_owned(),
-            asset_key: SCCP_TAIRA_XOR_ASSET_KEY_V1.to_owned(),
-            revision,
-            activation: SccpRouteActivationV1::Bidirectional,
-            inbound_finality_cutoff: None,
-            source_identity: SccpSourceIdentityV1 {
-                lane: lane_id,
-                emitter: SccpSourceEmitterV1::Solana(SccpSolanaSourceEmitterV1 {
-                    program_id: [0x31; 32],
-                    program_data_address: [0x32; 32],
-                    program_data_slot: 31,
-                    state_account: [0x33; 32],
-                    program_code_hash: [0x34; 32],
-                    route_config_hash,
-                }),
-            },
-            destination,
-            sora_outbound_execution_policy: sccp_sora_outbound_execution_policy_test_fixture_v1(),
-            settlement: SccpSoraSettlementV1 {
-                asset_definition_id: sccp_v1_taira_xor_asset_definition_id(),
-                custody_owner: AccountId::new(custody),
-                payload_amount_scale: SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE,
-                max_outstanding_liability: TEST_MAX_OUTSTANDING_LIABILITY,
-            },
-        };
-        route
-            .validate()
-            .expect("valid governed Solana fixture route");
         assert_eq!(
             route.route_configuration_hash().expect("route config"),
             route_config_hash
@@ -7941,10 +7095,6 @@ mod tests {
                 SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE,
             )
             .expect("valid exact TON route configuration");
-        let custody = KeyPair::try_from_seed(vec![0x82; 32], Algorithm::Ed25519)
-            .expect("TON fixture custody key")
-            .public_key()
-            .clone();
         let route = SccpGovernedRouteV1 {
             lane_id,
             route_id: SCCP_TAIRA_TON_XOR_ROUTE_ID_V1.to_owned(),
@@ -7964,7 +7114,6 @@ mod tests {
             sora_outbound_execution_policy: sccp_sora_outbound_execution_policy_test_fixture_v1(),
             settlement: SccpSoraSettlementV1 {
                 asset_definition_id: sccp_v1_taira_xor_asset_definition_id(),
-                custody_owner: AccountId::new(custody),
                 payload_amount_scale: SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE,
                 max_outstanding_liability: TEST_MAX_OUTSTANDING_LIABILITY,
             },
@@ -7993,25 +7142,6 @@ mod tests {
             recipient: vec![0x91; 20],
             route_id_codec: SCCP_CODEC_CANONICAL_TEXT,
             route_id: SCCP_TAIRA_ETH_XOR_ROUTE_ID_V1.as_bytes().to_vec(),
-        })
-    }
-    fn solana_transfer_payload(revision: u32, payer: H256) -> SccpPayloadV1 {
-        SccpPayloadV1::Transfer(TransferPayloadV1 {
-            version: 1,
-            source_domain: SCCP_DOMAIN_SORA,
-            dest_domain: SCCP_DOMAIN_SOLANA,
-            nonce: 17,
-            route_revision: revision,
-            asset_home_domain: SCCP_DOMAIN_SORA,
-            asset_id_codec: SCCP_CODEC_CANONICAL_TEXT,
-            asset_id: SCCP_TAIRA_XOR_ASSET_KEY_V1.as_bytes().to_vec(),
-            amount: 3,
-            sender_codec: SCCP_CODEC_CANONICAL_TEXT,
-            sender: b"alice".to_vec(),
-            recipient_codec: SCCP_CODEC_SOLANA_PUBKEY32,
-            recipient: payer.to_vec(),
-            route_id_codec: SCCP_CODEC_CANONICAL_TEXT,
-            route_id: SCCP_TAIRA_SOL_XOR_ROUTE_ID_V1.as_bytes().to_vec(),
         })
     }
     fn ton_transfer_payload(revision: u32, recipient: SccpTonAddressV1) -> SccpPayloadV1 {
@@ -8162,60 +7292,6 @@ mod tests {
             }
         })
     }
-    fn solana_runtime_accounts() -> SccpSolanaDestinationRuntimeAccountsV1 {
-        SccpSolanaDestinationRuntimeAccountsV1 {
-            payer: [0xa1; 32],
-            destination_token_account: [0xa2; 32],
-            proof_account: [0xa3; 32],
-            bridge_verifier_authority: [0xa4; 32],
-        }
-    }
-    fn solana_fixture() -> &'static OutboundFixture {
-        static FIXTURE: OnceLock<OutboundFixture> = OnceLock::new();
-        FIXTURE.get_or_init(|| {
-            let route = solana_governed_route(1);
-            let runtime = solana_runtime_accounts();
-            let bundle = message_bundle_with_payload(
-                &route,
-                solana_transfer_payload(route.revision, runtime.payer),
-            );
-            let request =
-                build_sccp_groth16_bn254_proof_request_from_governed_route_v1(&bundle, &route)
-                    .expect("canonical governed Solana request");
-            assert_eq!(
-                request.backend,
-                BridgeSccpDestinationProofBackendV1::SolanaGroth16Bn254
-            );
-            let proof_bytes = valid_proof(&request);
-            assert!(verify_sccp_groth16_bn254_proof_v1(&request, &proof_bytes));
-            let artifact = wrap_sccp_solana_groth16_bn254_proof_result(&proof_bytes, &request)
-                .expect("valid Solana Groth16 artifact");
-            let bridge_proof =
-                bridge_sccp_destination_proof_v1(&artifact).expect("closed Solana bridge proof");
-            let call = verify_sccp_solana_destination_proof_v1(
-                &bridge_proof,
-                &bundle,
-                &route,
-                runtime,
-                &trusted_finality(&bundle),
-            )
-            .expect("verified Solana proof-account call");
-            assert!(
-                sccp_verified_solana_destination_call_matches_governed_route_v1(
-                    &call,
-                    &route,
-                    &trusted_finality(&bundle),
-                )
-            );
-            OutboundFixture {
-                route,
-                bundle,
-                request,
-                artifact,
-                bridge_proof,
-            }
-        })
-    }
     #[test]
     fn ton_destination_path_roundtrips_bls_artifact_and_derives_boc() {
         let route = ton_governed_route(1);
@@ -8288,17 +7364,22 @@ mod tests {
                 bls12381_point_decodes: 0,
             }
         );
-        let generic = verify_parsed_sccp_destination_proof_v1(parsed, &route, &finality)
+        let verified = verify_parsed_sccp_destination_proof_v1(parsed, &route, &finality)
             .expect("generic route verifier accepts TON with one BLS12-381 pairing");
-        assert_eq!(generic.backend, bridge_proof.backend);
-        assert!(matches!(
-            generic.target,
-            SccpDestinationCallTargetV1::Ton {
-                network: SccpNetworkV1::TonMainnet,
-                route_address,
-            } if route_address == ton_address(0x82)
-        ));
-        assert!(generic.calldata.starts_with(&SCCP_TON_BOC_MAGIC_V1));
+        let SccpVerifiedDestinationMaterialV1::Ton(material) = &verified else {
+            panic!("TON proof must produce TON-specific verified material")
+        };
+        assert_eq!(material.backend, bridge_proof.backend);
+        assert_eq!(material.network, SccpNetworkV1::TonMainnet);
+        assert_eq!(material.route_address, ton_address(0x82));
+        assert!(
+            encode_sccp_verified_destination_calldata_v1(
+                &verified,
+                &SccpSparseMerkleWitnessV1::empty_shard(),
+            )
+            .is_none(),
+            "TON material must not be projected into Solidity calldata"
+        );
         let work = sccp_destination_proof_work_counters_v1();
         assert_eq!(work.artifact_framing_decodes, 1);
         assert_eq!(work.bundle_decodes, 1);
@@ -8308,32 +7389,31 @@ mod tests {
             work.bls12381_point_decodes > 0,
             "route-bound TON verification must perform metered point validation"
         );
-        let call = verify_sccp_ton_destination_proof_v1(
-            &bridge_proof,
-            &bundle,
-            &route,
-            &finality,
-            0x0102_0304_0506_0708,
+        assert_eq!(material.recipient, recipient);
+        assert_eq!(material.amount, 3);
+        assert_eq!(material.proof_bytes, raw_proof_bytes);
+        let query_id = 0x0102_0304_0506_0708;
+        let replay_witnesses = SccpTonMintReplayWitnessesV1 {
+            bridge: SccpSparseMerkleWitnessV1::empty_shard(),
+            master: SccpSparseMerkleWitnessV1::empty_shard(),
+            wallet: SccpSparseMerkleWitnessV1::empty_shard(),
+        };
+        let internal_message_body_boc = encode_sccp_ton_verified_destination_body_boc_v1(
+            &verified,
+            query_id,
+            &replay_witnesses,
         )
-        .expect("verified TON internal-message call");
-        assert_eq!(call.network, SccpNetworkV1::TonMainnet);
-        assert_eq!(call.route_address, ton_address(0x82));
-        assert_eq!(call.recipient, recipient);
-        assert_eq!(call.amount, 3);
-        assert_eq!(call.proof_bytes, raw_proof_bytes);
-        assert!(
-            call.internal_message_body_boc
-                .starts_with(&SCCP_TON_BOC_MAGIC_V1)
-        );
-        let cells = decode_test_ton_boc_cells(&call.internal_message_body_boc);
-        assert_eq!(cells.len(), 14);
-        assert_eq!(cells[0].refs, vec![1, 5, 9]);
+        .expect("current-state TON witnesses build the final message body");
+        assert!(internal_message_body_boc.starts_with(&SCCP_TON_BOC_MAGIC_V1));
+        let cells = decode_test_ton_boc_cells(&internal_message_body_boc);
+        assert_eq!(cells.len(), 18);
+        assert_eq!(cells[0].refs, vec![1, 5, 9, 14]);
         assert_eq!(cells[0].data.len(), 78);
         assert_eq!(
             &cells[0].data[..4],
             &SCCP_TON_FINALIZE_FROM_TAIRA_OPCODE_V1.to_be_bytes()
         );
-        assert_eq!(&cells[0].data[4..12], &call.query_id.to_be_bytes());
+        assert_eq!(&cells[0].data[4..12], &query_id.to_be_bytes());
         assert_eq!(&cells[0].data[12..14], &1_u16.to_be_bytes());
         assert_eq!(&cells[0].data[14..46], &request.public_inputs.message_id);
         assert_eq!(&cells[0].data[46..], &request.statement_hash);
@@ -8377,19 +7457,20 @@ mod tests {
         assert_eq!(cells[12].data, remainder[first_end..second_end]);
         assert_eq!(cells[13].data, remainder[second_end..]);
         assert!(cells[10..=13].iter().all(|cell| cell.refs.is_empty()));
+        assert_eq!(cells[14].refs, vec![15, 16, 17]);
+        assert!(cells[14].data.is_empty());
+        for witness_cell in &cells[15..=17] {
+            assert_eq!(witness_cell.bit_len, 3 * 256 + 1);
+            assert_eq!(witness_cell.data.len(), 97);
+            assert!(witness_cell.refs.is_empty());
+        }
 
         let mut untrusted_finality = finality.clone();
         untrusted_finality.finality_artifact.height += 1;
         reset_sccp_destination_proof_work_counters_v1();
         assert!(
-            verify_sccp_ton_destination_proof_v1(
-                &bridge_proof,
-                &bundle,
-                &route,
-                &untrusted_finality,
-                call.query_id,
-            )
-            .is_none()
+            verify_sccp_destination_proof_v1(&bridge_proof, &bundle, &route, &untrusted_finality,)
+                .is_none()
         );
         let mismatch_work = sccp_destination_proof_work_counters_v1();
         assert_eq!(mismatch_work.groth16_pairings, 0);
@@ -8398,14 +7479,7 @@ mod tests {
         let mut wrong_outer = bridge_proof.clone();
         wrong_outer.route_configuration_hash[0] ^= 1;
         assert!(
-            verify_sccp_ton_destination_proof_v1(
-                &wrong_outer,
-                &bundle,
-                &route,
-                &finality,
-                call.query_id,
-            )
-            .is_none()
+            verify_sccp_destination_proof_v1(&wrong_outer, &bundle, &route, &finality,).is_none()
         );
         let mut wrong_profile = request.clone();
         wrong_profile.proof_profile_commitment[0] ^= 1;
@@ -8476,67 +7550,6 @@ mod tests {
         let verification_work = sccp_destination_proof_work_counters_v1();
         assert_eq!(verification_work.groth16_pairings, 1);
         assert!(verification_work.bls12381_point_decodes > 0);
-    }
-    fn verified_solana_call() -> SccpVerifiedSolanaDestinationCallV1 {
-        let fixture = solana_fixture();
-        verify_sccp_solana_destination_proof_v1(
-            &fixture.bridge_proof,
-            &fixture.bundle,
-            &fixture.route,
-            solana_runtime_accounts(),
-            &trusted_finality(&fixture.bundle),
-        )
-        .expect("verified Solana proof-account call")
-    }
-    fn assert_exact_compact_solana_proof_body_wire(account: &SccpSolanaDestinationProofAccountV1) {
-        let public_inputs = canonical_sccp_message_public_inputs_bytes(&account.public_inputs);
-        assert_eq!(
-            public_inputs.len(),
-            SCCP_SOLANA_DESTINATION_PUBLIC_INPUT_BYTES_V1
-        );
-        let statement_offset = SCCP_SOLANA_DESTINATION_PUBLIC_INPUT_BYTES_V1;
-        let proof_offset = statement_offset + 32;
-        let payload_len_offset = proof_offset + SCCP_SOLANA_AGAVE_GROTH16_PROOF_BYTES_V1;
-        let payload_offset = payload_len_offset + 2;
-        assert_eq!(&account.proof_body[..statement_offset], public_inputs);
-        assert_eq!(
-            &account.proof_body[statement_offset..proof_offset],
-            &account.statement_hash
-        );
-        assert_eq!(
-            &account.proof_body[proof_offset..payload_len_offset],
-            account.proof_bytes
-        );
-        assert_eq!(
-            u16::from_le_bytes(
-                account.proof_body[payload_len_offset..payload_offset]
-                    .try_into()
-                    .expect("two-byte payload length"),
-            ) as usize,
-            account.canonical_payload_bytes.len()
-        );
-        assert_eq!(
-            &account.proof_body[payload_offset..],
-            account.canonical_payload_bytes
-        );
-        assert_eq!(
-            account.proof_body.len(),
-            SCCP_SOLANA_DESTINATION_PUBLIC_INPUT_BYTES_V1
-                + 32
-                + SCCP_SOLANA_AGAVE_GROTH16_PROOF_BYTES_V1
-                + 2
-                + account.canonical_payload_bytes.len()
-        );
-        assert!(account.proof_body.len() <= SCCP_SOLANA_DESTINATION_PROOF_BODY_MAX_BYTES_V1);
-        assert_eq!(SCCP_SOLANA_DESTINATION_PROOF_BODY_MAX_BYTES_V1, 1_071);
-        assert_eq!(
-            account.header.body_sha256,
-            sha256_bytes(&account.proof_body)
-        );
-        assert_eq!(
-            usize::from(account.header.body_len),
-            account.proof_body.len()
-        );
     }
     fn assert_request_rejected(request: &SccpGroth16Bn254ProofRequestV1) {
         assert!(encode_canonical_sccp_groth16_bn254_proof_request_v1(request).is_none());
@@ -8650,196 +7663,59 @@ mod tests {
             decode_canonical_sccp_groth16_bn254_proof_artifact_json_v1(&artifact_json),
             Some(fixture.artifact.clone())
         );
-        let call = verify_sccp_destination_proof_v1(
+        let verified = verify_sccp_destination_proof_v1(
             &fixture.bridge_proof,
             &fixture.bundle,
             &fixture.route,
             &trusted_finality(&fixture.bundle),
         )
-        .expect("verified destination call");
-        assert_eq!(call.route_revision, 1);
+        .expect("verified destination settlement material");
+        let SccpVerifiedDestinationMaterialV1::EvmOrTron(material) = &verified else {
+            panic!("EVM proof must produce BN254-specific verified material")
+        };
+        assert_eq!(material.route_revision, 1);
         assert_eq!(
-            call.route_configuration_hash,
+            material.route_configuration_hash,
             fixture
                 .route
                 .route_configuration_hash()
                 .expect("route config")
         );
         assert_eq!(
-            call.destination_binding_hash,
+            material.destination_binding_hash,
             fixture.request.destination_binding_hash
         );
-        assert_eq!(&call.calldata[..4], &SCCP_FINALIZE_FROM_TAIRA_SELECTOR_V1);
-        let proof_offset = usize::try_from(abi_read_u32_word(&call.calldata[4..36]).unwrap())
-            .expect("proof offset");
-        let payload_offset = usize::try_from(abi_read_u32_word(&call.calldata[260..292]).unwrap())
+        let replay_witness = SccpSparseMerkleWitnessV1::empty_shard();
+        let calldata = encode_sccp_verified_destination_calldata_v1(&verified, &replay_witness)
+            .expect("current-state replay witness builds destination calldata");
+        assert_eq!(&calldata[..4], &SCCP_FINALIZE_FROM_TAIRA_SELECTOR_V1);
+        let proof_offset =
+            usize::try_from(abi_read_u32_word(&calldata[4..36]).unwrap()).expect("proof offset");
+        let payload_offset = usize::try_from(abi_read_u32_word(&calldata[260..292]).unwrap())
             .expect("payload offset");
-        assert_eq!(proof_offset, 9 * 32);
+        let witness_offset = usize::try_from(abi_read_u32_word(&calldata[292..324]).unwrap())
+            .expect("witness offset");
+        assert_eq!(proof_offset, 10 * 32);
         assert!(payload_offset > proof_offset);
+        assert!(witness_offset > payload_offset);
         assert_eq!(
-            &call.calldata[4 + proof_offset + 32..4 + proof_offset + 32 + call.proof_bytes.len()],
-            call.proof_bytes.as_slice()
+            &calldata[4 + proof_offset + 32..4 + proof_offset + 32 + material.proof_bytes.len()],
+            material.proof_bytes.as_slice()
         );
+        let witness_length = usize::try_from(
+            abi_read_u32_word(&calldata[4 + witness_offset..4 + witness_offset + 32]).unwrap(),
+        )
+        .expect("witness byte length");
+        let encoded_witness = encode_sccp_solidity_replay_witness_v1(&replay_witness)
+            .expect("canonical Solidity witness");
+        assert_eq!(witness_length, encoded_witness.len());
         assert_eq!(
-            decode_canonical_sccp_payload_bytes(&call.canonical_payload_bytes),
-            Some(call.bundle.payload.clone())
-        );
-    }
-    #[test]
-    fn solana_destination_uses_exact_compact_proof_account_wire() {
-        let call = verified_solana_call();
-        let account = &call.proof_account;
-        assert_eq!(account.payload_amount, 3);
-        assert_eq!(account.amount, 3);
-        assert_eq!(account.header.amount, 3);
-        assert_exact_compact_solana_proof_body_wire(account);
-        let mut expected_init = vec![1, 3];
-        expected_init.extend_from_slice(&account.header.body_len.to_le_bytes());
-        expected_init.extend_from_slice(&account.header.body_sha256);
-        expected_init.extend_from_slice(&account.header.message_id);
-        expected_init.extend_from_slice(&account.header.payload_hash);
-        expected_init.extend_from_slice(&account.header.statement_hash);
-        expected_init.extend_from_slice(&account.header.destination_token_account);
-        expected_init.extend_from_slice(&account.header.amount.to_le_bytes());
-        assert_eq!(account.init_instruction_data, expected_init);
-        assert_eq!(account.init_instruction_data.len(), 172);
-        let mut reconstructed = Vec::new();
-        let mut next_offset = 0usize;
-        for chunk in &account.chunks {
-            assert_eq!(usize::from(chunk.offset), next_offset);
-            assert!(!chunk.bytes.is_empty());
-            assert!(chunk.bytes.len() <= SCCP_SOLANA_DESTINATION_MAX_PROOF_CHUNK_BYTES_V1);
-            let mut expected = vec![1, 4];
-            expected.extend_from_slice(&chunk.offset.to_le_bytes());
-            expected.extend_from_slice(
-                &u16::try_from(chunk.bytes.len())
-                    .expect("bounded chunk")
-                    .to_le_bytes(),
-            );
-            expected.extend_from_slice(&chunk.bytes);
-            assert_eq!(chunk.instruction_data, expected);
-            reconstructed.extend_from_slice(&chunk.bytes);
-            next_offset += chunk.bytes.len();
-        }
-        assert_eq!(reconstructed, account.proof_body);
-        assert_eq!(account.seal_instruction_data, [1, 5]);
-        let mut expected_verify = vec![1, 6];
-        expected_verify.extend_from_slice(&account.public_inputs.message_id);
-        expected_verify.extend_from_slice(&account.amount.to_le_bytes());
-        assert_eq!(call.verify_instruction_data, expected_verify);
-        assert_eq!(call.verify_instruction_data.len(), 42);
-        assert!(sccp_verified_solana_destination_call_is_self_canonical_v1(
-            &call
-        ));
-        assert!(
-            sccp_verified_solana_destination_call_matches_governed_route_v1(
-                &call,
-                &solana_fixture().route,
-                &trusted_finality(&solana_fixture().bundle),
-            )
-        );
-        let norito = to_bytes(&call).expect("encode compact Solana call");
-        let decoded: SccpVerifiedSolanaDestinationCallV1 =
-            norito::decode_from_bytes(&norito).expect("decode compact Solana call");
-        assert_eq!(decoded, call);
-        assert_eq!(to_bytes(&decoded).expect("re-encode compact call"), norito);
-        let json = norito::json::to_json(&call).expect("encode compact call JSON");
-        let decoded_json = norito::json::from_str::<SccpVerifiedSolanaDestinationCallV1>(&json)
-            .expect("decode compact call JSON");
-        assert_eq!(decoded_json, call);
-    }
-    #[test]
-    fn solana_destination_amount_conversion_is_exact_and_overflow_safe() {
-        let deployment = match solana_fixture().route.destination {
-            SccpDestinationDeploymentV1::Solana(deployment) => deployment,
-            _ => unreachable!("Solana fixture must use the Solana deployment"),
-        };
-        assert_eq!(
-            sccp_solana_payload_amount_to_spl_base_units_v1(3, &deployment),
-            Some(3)
+            &calldata[4 + witness_offset + 32..4 + witness_offset + 32 + witness_length],
+            encoded_witness
         );
         assert_eq!(
-            sccp_solana_payload_amount_to_spl_base_units_v1(u128::from(u64::MAX) + 1, &deployment,),
-            None
-        );
-        let mut wrong_multiplier = deployment;
-        wrong_multiplier.taira_to_token_multiplier = SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER;
-        assert_eq!(
-            sccp_solana_payload_amount_to_spl_base_units_v1(3, &wrong_multiplier),
-            None
-        );
-        let mut mismatched_amount = verified_solana_call();
-        mismatched_amount.proof_account.amount = 4;
-        mismatched_amount.proof_account.header.amount = 4;
-        assert!(!sccp_verified_solana_destination_call_is_self_canonical_v1(
-            &mismatched_amount
-        ));
-    }
-    #[test]
-    fn solana_destination_call_substitutions_fail_closed() {
-        let fixture = solana_fixture();
-        let call = verified_solana_call();
-        let mut changed = call.clone();
-        changed.backend = BridgeSccpDestinationProofBackendV1::EvmGroth16Bn254;
-        assert!(!sccp_verified_solana_destination_call_is_self_canonical_v1(
-            &changed
-        ));
-        let mut changed = call.clone();
-        changed.proof_account.runtime_accounts.payer[0] ^= 1;
-        assert!(!sccp_verified_solana_destination_call_is_self_canonical_v1(
-            &changed
-        ));
-        let mut changed = call.clone();
-        changed.proof_account.proof_body[141] ^= 1;
-        assert!(!sccp_verified_solana_destination_call_is_self_canonical_v1(
-            &changed
-        ));
-        let mut changed = call.clone();
-        changed.proof_account.chunks[0].bytes[0] ^= 1;
-        assert!(!sccp_verified_solana_destination_call_is_self_canonical_v1(
-            &changed
-        ));
-        let mut changed = call.clone();
-        changed.verify_instruction_data[2] ^= 1;
-        assert!(!sccp_verified_solana_destination_call_is_self_canonical_v1(
-            &changed
-        ));
-        let mut changed = call.clone();
-        changed.proof_account.request_hash[0] ^= 1;
-        assert!(sccp_verified_solana_destination_call_is_self_canonical_v1(
-            &changed
-        ));
-        assert!(
-            !sccp_verified_solana_destination_call_matches_governed_route_v1(
-                &changed,
-                &fixture.route,
-                &trusted_finality(&fixture.bundle),
-            ),
-            "ungoverned request-hash substitutions must fail historical binding"
-        );
-        let mut hostile_outer = fixture.bridge_proof.clone();
-        hostile_outer.backend = BridgeSccpDestinationProofBackendV1::EvmGroth16Bn254;
-        assert!(
-            verify_sccp_solana_destination_proof_v1(
-                &hostile_outer,
-                &fixture.bundle,
-                &fixture.route,
-                solana_runtime_accounts(),
-                &trusted_finality(&fixture.bundle),
-            )
-            .is_none()
-        );
-        let mut hostile_runtime = solana_runtime_accounts();
-        hostile_runtime.payer[0] ^= 1;
-        assert!(
-            verify_sccp_solana_destination_proof_v1(
-                &fixture.bridge_proof,
-                &fixture.bundle,
-                &fixture.route,
-                hostile_runtime,
-                &trusted_finality(&fixture.bundle),
-            )
-            .is_none()
+            decode_canonical_sccp_payload_bytes(&material.canonical_payload_bytes),
+            Some(material.bundle.payload.clone())
         );
     }
     #[test]
@@ -8921,7 +7797,7 @@ mod tests {
         let parsed = parse_sccp_destination_proof_v1(&fixture.bridge_proof)
             .expect("canonical destination artifact parses");
         let hostile_route = governed_route(
-            SccpNetworkV1::EthereumSepolia,
+            SccpNetworkV1::BscMainnet,
             fixture.route.revision,
             SccpRouteActivationV1::Staged,
         );
@@ -9295,11 +8171,15 @@ mod tests {
             outbound_proof_policy: outbound_proof_policy(),
             route_address: [0x51; 20],
             route_code_hash: [0x61; 32],
+            replay_verifier_address: [0x71; 20],
+            replay_verifier_code_hash: [0x72; 32],
+            mint_breaker_address: [0x81; 20],
+            mint_breaker_code_hash: [0x82; 32],
             taira_to_token_multiplier: SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER,
             max_wrapped_supply: test_max_wrapped_supply(SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER),
         };
         let inbound = SccpLaneIdV1 {
-            source: SccpNetworkV1::TronNile,
+            source: SccpNetworkV1::TronMainnet,
             target: SccpNetworkV1::SoraTaira,
         };
         let outbound = SccpLaneIdV1 {
@@ -9307,7 +8187,7 @@ mod tests {
             target: inbound.source,
         };
         let route_config = sccp_exact_tron_xor_route_config_hash_v1(
-            SccpNetworkV1::TronNile,
+            SccpNetworkV1::TronMainnet,
             sccp_lane_id_hash_v1(inbound).unwrap(),
             sccp_lane_id_hash_v1(outbound).unwrap(),
             &tron_deployment,
@@ -9316,7 +8196,7 @@ mod tests {
         .expect("TRON contract route config");
         assert_eq!(
             route_config,
-            hex32("2c4188bc7a1fecaf6d909f713211ad1363202729f79e745f48b026da67049505")
+            hex32("27da5c364f20fdee0bdd8cd84bb01908d88f40d9eb5171f9dec8b330f604258d")
         );
         let request = &fixture().request;
         let signals = sccp_groth16_bn254_public_signal_words(
@@ -9378,10 +8258,10 @@ mod tests {
             candidate.backend = BridgeSccpDestinationProofBackendV1::TronGroth16Bn254;
         });
         assert_request_mutation_rejected(|candidate| {
-            candidate.source_network = SccpNetworkV1::EthereumSepolia;
+            candidate.source_network = SccpNetworkV1::BscMainnet;
         });
         assert_request_mutation_rejected(|candidate| {
-            candidate.target_network = SccpNetworkV1::EthereumSepolia;
+            candidate.target_network = SccpNetworkV1::BscMainnet;
         });
         assert_request_mutation_rejected(|candidate| candidate.public_inputs.message_id[0] ^= 1);
         assert_request_mutation_rejected(|candidate| candidate.public_inputs.payload_hash[0] ^= 1);
@@ -9706,7 +8586,7 @@ mod tests {
         candidate.commitment.context.route_configuration_hash[0] ^= 1;
         candidates.push(candidate);
         let mut candidate = fixture.bundle.clone();
-        candidate.commitment.context.lane.target = SccpNetworkV1::EthereumSepolia;
+        candidate.commitment.context.lane.target = SccpNetworkV1::BscMainnet;
         candidates.push(candidate);
         let mut candidate = fixture.bundle.clone();
         candidate.commitment.message_id[0] ^= 1;

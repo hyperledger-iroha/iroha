@@ -695,7 +695,7 @@ def test_vega_device_digest_preserves_compiled_profile_unavailability(
         def privacy_vega_device_authentication_digest_v1(*_args: object) -> bytes:
             raise RuntimeError(
                 "compiled Vega privacy profile is unavailable: "
-                "native privacy engine for VegaExistingCredentialZkV0 "
+                "native privacy engine for VegaExistingCredentialZkV1 "
                 "is not governance-available"
             )
 

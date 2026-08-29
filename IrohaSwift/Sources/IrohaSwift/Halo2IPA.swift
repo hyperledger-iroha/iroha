@@ -2,10 +2,13 @@ import Foundation
 
 public enum Halo2IPAError: Error, Equatable {
     case invalidK(UInt32)
+    case unexpectedK(expected: UInt32, actual: UInt32)
+    case kExceedsMaximum(k: UInt32, maximum: UInt32)
     case invalidPointCount(expected: Int, actual: Int)
     case invalidPolynomialLength(expected: Int, actual: Int)
     case truncatedParameters
     case invalidPointEncoding
+    case nonCanonicalParameters
     case nonInvertibleChallenge
 }
 
@@ -17,7 +20,7 @@ public struct Halo2IPAParameters: Equatable, Sendable {
     public let w: VestaAffine
     public let u: VestaAffine
 
-    public init(
+    private init(
         k: UInt32,
         g: [VestaAffine],
         gLagrange: [VestaAffine],
@@ -34,6 +37,12 @@ public struct Halo2IPAParameters: Equatable, Sendable {
         guard gLagrange.count == n else {
             throw Halo2IPAError.invalidPointCount(expected: n, actual: gLagrange.count)
         }
+        guard !g.contains(where: { $0.isIdentity }),
+              !gLagrange.contains(where: { $0.isIdentity }),
+              !w.isIdentity,
+              !u.isIdentity else {
+            throw Halo2IPAError.invalidPointEncoding
+        }
         self.k = k
         self.n = n
         self.g = g
@@ -42,27 +51,64 @@ public struct Halo2IPAParameters: Equatable, Sendable {
         self.u = u
     }
 
-    public static func read(from data: Data) throws -> Halo2IPAParameters {
+    public static func read(
+        from data: Data,
+        expectedK: UInt32,
+        maximumK: UInt32
+    ) throws -> Halo2IPAParameters {
+        try validatePolicy(expectedK: expectedK, maximumK: maximumK)
         var cursor = 0
         let k = try readUInt32LE(data, cursor: &cursor)
         guard k < 32 else {
             throw Halo2IPAError.invalidK(k)
         }
+        guard k <= maximumK else {
+            throw Halo2IPAError.kExceedsMaximum(k: k, maximum: maximumK)
+        }
+        guard k == expectedK else {
+            throw Halo2IPAError.unexpectedK(expected: expectedK, actual: k)
+        }
         let n = 1 << Int(k)
-        let g = try (0..<n).map { _ in try readPoint(data, cursor: &cursor) }
-        let gLagrange = try (0..<n).map { _ in try readPoint(data, cursor: &cursor) }
-        let w = try readPoint(data, cursor: &cursor)
-        let u = try readPoint(data, cursor: &cursor)
+        let (generatorBytes, generatorBytesOverflow) = n.multipliedReportingOverflow(by: 64)
+        let (expectedBytes, expectedBytesOverflow) = generatorBytes.addingReportingOverflow(68)
+        guard !generatorBytesOverflow, !expectedBytesOverflow else {
+            throw Halo2IPAError.invalidK(k)
+        }
+        guard data.count >= expectedBytes else {
+            throw Halo2IPAError.truncatedParameters
+        }
+        guard data.count == expectedBytes else {
+            throw Halo2IPAError.invalidPointEncoding
+        }
+        let canonical = try generated(expectedK: expectedK, maximumK: maximumK)
+        for expected in canonical.g {
+            guard try readPoint(data, cursor: &cursor) == expected else {
+                throw Halo2IPAError.nonCanonicalParameters
+            }
+        }
+        for expected in canonical.gLagrange {
+            guard try readPoint(data, cursor: &cursor) == expected else {
+                throw Halo2IPAError.nonCanonicalParameters
+            }
+        }
+        guard try readPoint(data, cursor: &cursor) == canonical.w else {
+            throw Halo2IPAError.nonCanonicalParameters
+        }
+        guard try readPoint(data, cursor: &cursor) == canonical.u else {
+            throw Halo2IPAError.nonCanonicalParameters
+        }
         guard cursor == data.count else {
             throw Halo2IPAError.invalidPointEncoding
         }
-        return try Halo2IPAParameters(k: k, g: g, gLagrange: gLagrange, w: w, u: u)
+        return canonical
     }
 
-    public static func generated(k: UInt32) throws -> Halo2IPAParameters {
-        guard k < 32 else {
-            throw Halo2IPAError.invalidK(k)
-        }
+    public static func generated(
+        expectedK: UInt32,
+        maximumK: UInt32
+    ) throws -> Halo2IPAParameters {
+        try validatePolicy(expectedK: expectedK, maximumK: maximumK)
+        let k = expectedK
         let n = 1 << Int(k)
         var gProjective = [VestaProjective]()
         gProjective.reserveCapacity(n)
@@ -154,6 +200,21 @@ public struct Halo2IPAParameters: Equatable, Sendable {
             throw Halo2IPAError.invalidPointEncoding
         }
         return point
+    }
+
+    private static func validatePolicy(
+        expectedK: UInt32,
+        maximumK: UInt32
+    ) throws {
+        guard maximumK < 32 else {
+            throw Halo2IPAError.invalidK(maximumK)
+        }
+        guard expectedK < 32 else {
+            throw Halo2IPAError.invalidK(expectedK)
+        }
+        guard expectedK <= maximumK else {
+            throw Halo2IPAError.kExceedsMaximum(k: expectedK, maximum: maximumK)
+        }
     }
 
     private static func lagrangeBasisGenerators(from coefficientGenerators: [VestaProjective], k: UInt32) throws -> [VestaAffine] {

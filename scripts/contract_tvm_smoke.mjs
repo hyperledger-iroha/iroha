@@ -2,6 +2,7 @@
 /** Exercise the production TRON verifier and value-moving bridge on real TVM. */
 
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 
@@ -19,12 +20,22 @@ const { TronWeb, utils } = require("tronweb");
 const TRON_COMPILER_IDENTITY = "tron-solc-tvm-0.7.4+commit.3f05b770";
 const TRON_COMPILER_SHA256 =
   "2b55ed5fec4d9625b6c7b3ab1abd2b7fb7dd2a9c68543bf0323db2c7e2d55af2";
-const TRON_MAINNET_PROFILE = 10;
+const TRON_MAINNET_PROFILE = 0x43;
+const RETIRED_TRON_NILE_PROFILE = 0x0b;
 const TRON_MAINNET_CHAIN_ID = 0x2b6653dcn;
+const REPLAY_NETWORK_TAIRA = 0x40;
+const REPLAY_NETWORK_TRON = 0x43;
+const REPLAY_ACTOR_TRON = 2;
+const REPLAY_TRON_SOURCE_BURN = 0x20;
+const REPLAY_TRON_DESTINATION_MINT = 0x21;
+const REPLAY_PRINCIPAL_TRON = 2;
+const REPLAY_DEPTH = 248;
+const REPLAY_MAGIC = Buffer.from("SCCP-REPLAY-SMT-V1", "utf8");
+const ZERO_WORD = `0x${"00".repeat(32)}`;
 const DOMAIN_TAIRA = 0;
-const DOMAIN_TRON = 5;
-const CODEC_TEXT = 1;
-const CODEC_TRON21 = 5;
+const DOMAIN_TRON = 3;
+const CODEC_TEXT = 0;
+const CODEC_TRON21 = 2;
 const ROUTE_REVISION = 7;
 const SCALE = 1_000_000_000n;
 const MAX_U128 = (1n << 128n) - 1n;
@@ -126,6 +137,15 @@ function requireFunctions(contractArtifact, names) {
   for (const name of names) assert(functions.has(name), `artifact ABI is missing ${name}`);
 }
 
+function rejectFunctions(contractArtifact, names) {
+  const functions = new Set(
+    contractArtifact.abi
+      .filter((entry) => entry.type === "function")
+      .map((entry) => entry.name),
+  );
+  for (const name of names) assert(!functions.has(name), `artifact ABI retains retired ${name}`);
+}
+
 function validateManifest(manifest) {
   assert.equal(manifest.schema, "iroha.sccp.contract-artifacts.v1");
   assert.notDeepEqual(
@@ -155,13 +175,21 @@ function validateManifest(manifest) {
     "destinationLaneHash",
     "finalizeFromTaira",
     "maxWrappedSupply",
+    "mintBreakerCodeHash",
+    "replayForestState",
+    "replayVerifier",
+    "replayVerifierCodeHash",
     "routeConfigHash",
-    "sccpDestinationMessageId",
-    "sccpPayloadHash",
-    "sourceEventDigest",
     "sourceLaneHash",
     "transferNonces",
     "transferToTaira",
+  ]);
+  rejectFunctions(bridge, [
+    "sccpDestinationMessageId",
+    "sccpPayloadHash",
+    "sourceEventDigest",
+    "usedDestinationMessages",
+    "usedSourceMessages",
   ]);
   requireFunctions(token, ["balanceOf", "burnFrom", "mint", "totalSupply"]);
   return { verifier, bridge, token };
@@ -278,6 +306,18 @@ function le(value, width) {
   return output;
 }
 
+function be(value, width) {
+  let remaining = BigInt(value);
+  assert(remaining >= 0n, `${value} must be unsigned`);
+  const output = Buffer.alloc(width);
+  for (let index = width - 1; index >= 0; index -= 1) {
+    output[index] = Number(remaining & 0xffn);
+    remaining >>= 8n;
+  }
+  assert.equal(remaining, 0n, `${value} exceeds ${width} bytes`);
+  return output;
+}
+
 function vec(value) {
   const bytes = Buffer.from(value);
   return Buffer.concat([le(bytes.length, 4), bytes]);
@@ -285,7 +325,7 @@ function vec(value) {
 
 function inboundTransferPayload(recipient, amount = 3n, nonce = 23n) {
   return Buffer.concat([
-    Buffer.from([2, 1]),
+    Buffer.from([0, 1]),
     le(DOMAIN_TAIRA, 4),
     le(DOMAIN_TRON, 4),
     le(nonce, 8),
@@ -305,7 +345,7 @@ function inboundTransferPayload(recipient, amount = 3n, nonce = 23n) {
 
 function outboundTransferPayload(sender, recipient, nonce, amount) {
   return Buffer.concat([
-    Buffer.from([2, 1]),
+    Buffer.from([0, 1]),
     le(DOMAIN_TRON, 4),
     le(DOMAIN_TAIRA, 4),
     le(nonce, 8),
@@ -358,6 +398,259 @@ function independentSourceEventDigest(laneHash, messageId, payloadHash) {
   );
 }
 
+function exactBytes(value, width, label) {
+  if (Buffer.isBuffer(value) || value instanceof Uint8Array) {
+    const bytes = Buffer.from(value);
+    assert.equal(bytes.length, width, `${label} must contain exactly ${width} bytes`);
+    return bytes;
+  }
+  const raw = strip0x(String(value));
+  assert.match(raw, new RegExp(`^[0-9a-fA-F]{${width * 2}}$`), `${label} is malformed`);
+  return Buffer.from(raw, "hex");
+}
+
+function sha256Packed(...parts) {
+  const hash = createHash("sha256");
+  for (const part of parts) hash.update(Buffer.from(part));
+  return `0x${hash.digest("hex")}`;
+}
+
+function replayParent(level, left, right) {
+  return sha256Packed(
+    REPLAY_MAGIC,
+    Buffer.from([0x12]),
+    be(level, 2),
+    exactBytes(left, 32, "left replay node"),
+    exactBytes(right, 32, "right replay node"),
+  );
+}
+
+const EMPTY_REPLAY_HASHES = (() => {
+  const hashes = [sha256Packed(REPLAY_MAGIC, Buffer.from([0x10]))];
+  for (let level = 0; level < REPLAY_DEPTH; level += 1) {
+    hashes.push(replayParent(level, hashes[level], hashes[level]));
+  }
+  return Object.freeze(hashes);
+})();
+
+function independentReplayDomainHash({
+  sourceNetwork,
+  targetNetwork,
+  boundary,
+  routeRevision,
+  routeConfigurationHash,
+  actorKind,
+  actor,
+}) {
+  const actorBytes = Buffer.from(actor);
+  return sha256Packed(
+    REPLAY_MAGIC,
+    Buffer.from([0x00]),
+    be(sourceNetwork, 4),
+    be(targetNetwork, 4),
+    be(boundary, 1),
+    be(routeRevision, 4),
+    exactBytes(routeConfigurationHash, 32, "replay route configuration hash"),
+    be(actorKind, 1),
+    be(actorBytes.length, 2),
+    actorBytes,
+  );
+}
+
+function independentReplayKey(domainHash, replayId) {
+  return sha256Packed(
+    REPLAY_MAGIC,
+    Buffer.from([0x01]),
+    exactBytes(domainHash, 32, "replay domain hash"),
+    exactBytes(replayId, 32, "replay id"),
+  );
+}
+
+function independentAddressReplayRecordDigest({
+  operation,
+  replayId,
+  payloadSha256,
+  amountScale9,
+  principalKind,
+  principal,
+  auxiliaryIdentitySha256,
+}) {
+  const principalBytes = exactBytes(principal, 20, "replay principal");
+  const principalDigest = sha256Packed(
+    REPLAY_MAGIC,
+    Buffer.from([0x03]),
+    be(principalKind, 1),
+    be(principalBytes.length, 2),
+    principalBytes,
+  );
+  const auxiliaryDigest = sha256Packed(
+    REPLAY_MAGIC,
+    Buffer.from([0x04]),
+    be(operation, 1),
+    exactBytes(auxiliaryIdentitySha256, 32, "replay auxiliary identity hash"),
+  );
+  return sha256Packed(
+    REPLAY_MAGIC,
+    Buffer.from([0x02]),
+    be(operation, 1),
+    exactBytes(replayId, 32, "record replay id"),
+    exactBytes(payloadSha256, 32, "record payload SHA-256"),
+    be(amountScale9, 16),
+    exactBytes(principalDigest, 32, "principal digest"),
+    exactBytes(auxiliaryDigest, 32, "auxiliary digest"),
+  );
+}
+
+function occupiedReplayLeaf(key, recordDigest) {
+  return sha256Packed(
+    REPLAY_MAGIC,
+    Buffer.from([0x11]),
+    exactBytes(key, 32, "replay key"),
+    exactBytes(recordDigest, 32, "replay record digest"),
+  );
+}
+
+function encodeReplayWitness(expectedShardRoot, priorRecordDigest, siblingBitmap, siblings) {
+  assert(siblingBitmap >= 0n && siblingBitmap < 1n << BigInt(REPLAY_DEPTH));
+  assert.equal(
+    siblings.length,
+    siblingBitmap.toString(2).replaceAll("0", "").length,
+    "replay sibling bitmap cardinality drift",
+  );
+  const encoded = Buffer.concat([
+    wordBuffer(32),
+    exactBytes(expectedShardRoot, 32, "witness shard root"),
+    exactBytes(priorRecordDigest, 32, "witness prior record digest"),
+    wordBuffer(siblingBitmap),
+    wordBuffer(128),
+    wordBuffer(siblings.length),
+    ...siblings.map((sibling) => exactBytes(sibling, 32, "witness sibling")),
+  ]);
+  assert.equal(encoded.length, 192 + 32 * siblings.length, "noncanonical replay witness size");
+  return `0x${encoded.toString("hex")}`;
+}
+
+function replayLeafNodes(forest, shard) {
+  const mask = (1n << BigInt(REPLAY_DEPTH)) - 1n;
+  const nodes = new Map();
+  for (const [key, recordDigest] of forest.records) {
+    const keyBytes = exactBytes(key, 32, "stored replay key");
+    if (keyBytes[0] !== shard) continue;
+    nodes.set(BigInt(key) & mask, occupiedReplayLeaf(key, recordDigest));
+  }
+  return nodes;
+}
+
+function nextReplayLevel(nodes, level) {
+  const parents = new Set([...nodes.keys()].map((position) => position >> 1n));
+  const next = new Map();
+  for (const position of parents) {
+    const left = nodes.get(position << 1n) ?? EMPTY_REPLAY_HASHES[level];
+    const right = nodes.get((position << 1n) | 1n) ?? EMPTY_REPLAY_HASHES[level];
+    const parent = replayParent(level, left, right);
+    if (parent !== EMPTY_REPLAY_HASHES[level + 1]) next.set(position, parent);
+  }
+  return next;
+}
+
+function buildReplayWitness(forest, domainHash, replayId) {
+  const key = independentReplayKey(domainHash, replayId);
+  const keyBytes = exactBytes(key, 32, "derived replay key");
+  const shard = keyBytes[0];
+  const mask = (1n << BigInt(REPLAY_DEPTH)) - 1n;
+  const keyBits = BigInt(key) & mask;
+  const priorRecordDigest = forest.records.get(key) ?? ZERO_WORD;
+  let nodes = replayLeafNodes(forest, shard);
+  let foldedRoot = priorRecordDigest === ZERO_WORD
+    ? EMPTY_REPLAY_HASHES[0]
+    : occupiedReplayLeaf(key, priorRecordDigest);
+  let siblingBitmap = 0n;
+  const siblings = [];
+  for (let level = 0; level < REPLAY_DEPTH; level += 1) {
+    const sibling = nodes.get((keyBits >> BigInt(level)) ^ 1n)
+      ?? EMPTY_REPLAY_HASHES[level];
+    if (sibling !== EMPTY_REPLAY_HASHES[level]) {
+      siblingBitmap |= 1n << BigInt(level);
+      siblings.push(sibling);
+    }
+    foldedRoot = ((keyBits >> BigInt(level)) & 1n) === 1n
+      ? replayParent(level, sibling, foldedRoot)
+      : replayParent(level, foldedRoot, sibling);
+    nodes = nextReplayLevel(nodes, level);
+  }
+  const expectedShardRoot = nodes.get(0n) ?? EMPTY_REPLAY_HASHES[REPLAY_DEPTH];
+  assert.equal(foldedRoot, expectedShardRoot, "canonical replay witness does not fold to state");
+  return {
+    encoded: encodeReplayWitness(
+      expectedShardRoot,
+      priorRecordDigest,
+      siblingBitmap,
+      siblings,
+    ),
+    expectedShardRoot,
+    key,
+    priorRecordDigest,
+    shard,
+  };
+}
+
+function commitReplayRecord(forest, key, recordDigest) {
+  assert(!forest.records.has(key), "replay record was already occupied");
+  forest.records.set(bytes32(key), bytes32(recordDigest));
+}
+
+async function checkedReplayWitness(bridge, source, forest, domainHash, replayId) {
+  const witness = buildReplayWitness(forest, domainHash, replayId);
+  const state = await bridge.replayForestState(source, witness.shard).call();
+  assert.equal(bytes32(state[0]), bytes32(domainHash), "replay domain readback drift");
+  assert.equal(bytes32(state[1]), witness.expectedShardRoot, "replay shard root readback drift");
+  assert.equal(asInteger(state[2]), BigInt(forest.records.size), "replay leaf count drift");
+  assert.equal(asInteger(state[3]), BigInt(forest.records.size), "replay sequence drift");
+  return witness;
+}
+
+function validateReplayHelpers(document) {
+  const actorKinds = { route: 0, evm: 1, tron: 2, ton: 3 };
+  const principalKinds = { evm: 2, tron: 3 };
+  const domainHash = independentReplayDomainHash({
+    sourceNetwork: document.domain.source_network_tag,
+    targetNetwork: document.domain.target_network_tag,
+    boundary: document.domain.operation_tag,
+    routeRevision: document.domain.route_revision,
+    routeConfigurationHash: `0x${document.domain.route_configuration_hash_hex}`,
+    actorKind: actorKinds[document.domain.actor_kind],
+    actor: Buffer.from(document.domain.actor_bytes_hex, "hex"),
+  });
+  assert.equal(domainHash, `0x${document.expected.domain_hash_hex}`);
+  const replayId = `0x${document.record.replay_id_hex}`;
+  const key = independentReplayKey(domainHash, replayId);
+  assert.equal(key, `0x${document.expected.replay_key_hex}`);
+  const recordDigest = independentAddressReplayRecordDigest({
+    operation: document.domain.operation_tag,
+    replayId,
+    payloadSha256: `0x${document.record.payload_sha256_hex}`,
+    amountScale9: document.record.amount_scale9,
+    principalKind: principalKinds[document.record.principal_kind],
+    principal: Buffer.from(document.record.principal_bytes_hex, "hex"),
+    auxiliaryIdentitySha256: `0x${document.record.auxiliary_identity_sha256_hex}`,
+  });
+  assert.equal(recordDigest, `0x${document.expected.record_digest_hex}`);
+  assert.equal(EMPTY_REPLAY_HASHES[0], `0x${document.expected.empty_leaf_hash_hex}`);
+  assert.equal(
+    EMPTY_REPLAY_HASHES[REPLAY_DEPTH],
+    `0x${document.expected.empty_shard_root_hex}`,
+  );
+  const forest = { records: new Map() };
+  const empty = buildReplayWitness(forest, domainHash, replayId);
+  assert.equal(empty.shard, document.expected.shard);
+  assert.equal(empty.expectedShardRoot, `0x${document.expected.empty_shard_root_hex}`);
+  assert.equal(empty.priorRecordDigest, ZERO_WORD);
+  commitReplayRecord(forest, empty.key, recordDigest);
+  const occupied = buildReplayWitness(forest, domainHash, replayId);
+  assert.equal(occupied.expectedShardRoot, `0x${document.expected.occupied_shard_root_hex}`);
+  assert.equal(occupied.priorRecordDigest, recordDigest);
+}
+
 function validateNativeVectors(document) {
   assert.deepEqual(
     Object.keys(document).sort(),
@@ -374,12 +667,9 @@ function validateNativeVectors(document) {
     document.vectors.map((vector) => vector.source_profile),
     [
       "ethereum-mainnet",
-      "ethereum-sepolia",
       "bsc-mainnet",
-      "bsc-testnet",
       "tron-mainnet",
-      "tron-nile",
-      "tron-shasta",
+      "ton-mainnet",
     ],
   );
   const expectedFields = [
@@ -423,7 +713,17 @@ function tronAddressWord(client, address) {
   return word(BigInt(`0x${tronHexAddress(client, address)}`));
 }
 
-function exactDestinationBinding({ client, verifierAddress, bridgeAddress, verifierCodeHash, keyHash }) {
+function exactDestinationBinding({
+  client,
+  verifierAddress,
+  bridgeAddress,
+  verifierCodeHash,
+  keyHash,
+  replayVerifierAddress,
+  replayVerifierCodeHash,
+  mintBreakerAddress,
+  mintBreakerCodeHash,
+}) {
   return encodedHash(
     [
       "bytes32",
@@ -431,6 +731,10 @@ function exactDestinationBinding({ client, verifierAddress, bridgeAddress, verif
       "bytes32",
       "uint256",
       "uint256",
+      "bytes32",
+      "bytes32",
+      "bytes32",
+      "bytes32",
       "bytes32",
       "bytes32",
       "bytes32",
@@ -450,6 +754,10 @@ function exactDestinationBinding({ client, verifierAddress, bridgeAddress, verif
       keyHash,
       SEMANTIC_PROOF_PROFILE_HASH,
       TAIRA_FINALITY_ANCHOR_HASH,
+      tronAddressWord(client, replayVerifierAddress),
+      replayVerifierCodeHash,
+      tronAddressWord(client, mintBreakerAddress),
+      mintBreakerCodeHash,
     ],
   );
 }
@@ -463,12 +771,29 @@ function exactRouteConfig({
   verifierCodeHash,
   keyHash,
   destinationBinding,
+  replayVerifierAddress,
+  replayVerifierCodeHash,
+  mintBreakerAddress,
+  mintBreakerCodeHash,
+  maxWrappedSupply,
   sourceLaneHash,
   destinationLaneHash,
-  maxWrappedSupply,
 }) {
   const deploymentConfigHash = encodedHash(
-    ["bytes32", "bytes32", "bytes32", "bytes32", "bytes32", "bytes32", "bytes32", "bytes32"],
+    [
+      "bytes32",
+      "bytes32",
+      "bytes32",
+      "bytes32",
+      "bytes32",
+      "bytes32",
+      "bytes32",
+      "bytes32",
+      "bytes32",
+      "bytes32",
+      "bytes32",
+      "bytes32",
+    ],
     [
       solidityAddressWord(client, tokenAddress),
       tokenCodeHash,
@@ -478,6 +803,10 @@ function exactRouteConfig({
       SEMANTIC_PROOF_PROFILE_HASH,
       TAIRA_FINALITY_ANCHOR_HASH,
       destinationBinding,
+      solidityAddressWord(client, replayVerifierAddress),
+      replayVerifierCodeHash,
+      solidityAddressWord(client, mintBreakerAddress),
+      mintBreakerCodeHash,
     ],
   );
   const assetRouteConfigHash = encodedHash(
@@ -660,6 +989,9 @@ function asInteger(value) {
 
 const manifest = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
 const nativeVectorDocument = JSON.parse(fs.readFileSync(process.argv[3], "utf8"));
+const replayFixture = JSON.parse(
+  fs.readFileSync(new URL("../fixtures/sccp/replay_forest_v1.json", import.meta.url), "utf8"),
+);
 const artifacts = validateManifest(manifest);
 const nativeVectors = validateNativeVectors(nativeVectorDocument);
 const tronMainnetVector = nativeVectors.find(
@@ -667,6 +999,7 @@ const tronMainnetVector = nativeVectors.find(
 );
 assert(tronMainnetVector, "Rust-generated vectors omitted TRON mainnet");
 pureSelfTest();
+validateReplayHelpers(replayFixture);
 if (process.env.SCCP_TVM_STATIC_ONLY === "1") {
   process.stdout.write(
     "SCCP TVM artifact, Rust vector, and proof-helper static verification passed.\n",
@@ -680,7 +1013,7 @@ if (!/^http:\/\/127\.0\.0\.1:[0-9]+$/.test(endpoint || "")) {
 }
 
 // The chain-id probe is deliberately first: no deployment is attempted until
-// official TRE proves that it is running the exact mainnet profile-10 chain.
+// official TRE proves that it is running the exact mainnet profile-0x43 chain.
 await assertMainnetChainId(endpoint);
 
 // The first-release token constructor must name the exact future route, while
@@ -755,15 +1088,29 @@ const policy = [
   SEMANTIC_PROOF_PROFILE_HASH,
   TAIRA_FINALITY_ANCHOR_HASH,
 ];
+const mintGuardians = [
+  "0x1111111111111111111111111111111111111111",
+  "0x2222222222222222222222222222222222222222",
+  "0x3333333333333333333333333333333333333333",
+  "0x4444444444444444444444444444444444444444",
+  "0x5555555555555555555555555555555555555555",
+];
 await expectConfirmedTvmFailure(
   () =>
     deploy(
       bridgeClient,
       artifacts.bridge,
-      [prebinding.tokenAddress, policy, 11, ROUTE_REVISION, String(MAX_WRAPPED_SUPPLY)],
-      "wrong-chain bridge",
+      [
+        prebinding.tokenAddress,
+        policy,
+        RETIRED_TRON_NILE_PROFILE,
+        ROUTE_REVISION,
+        mintGuardians,
+        String(MAX_WRAPPED_SUPPLY),
+      ],
+      "retired-profile bridge",
     ),
-  "bridge deployment for the Nile profile",
+  "bridge deployment for the retired Nile profile tag",
 );
 const wrongCodeHash = `0x${(BigInt(verifierCodeHash) ^ 1n).toString(16).padStart(64, "0")}`;
 await expectConfirmedTvmFailure(
@@ -776,6 +1123,7 @@ await expectConfirmedTvmFailure(
         [verifierAddress, wrongCodeHash, ...policy.slice(2)],
         TRON_MAINNET_PROFILE,
         ROUTE_REVISION,
+        mintGuardians,
         String(MAX_WRAPPED_SUPPLY),
       ],
       "wrong-code-hash bridge",
@@ -787,7 +1135,14 @@ await expectConfirmedTvmFailure(
     deploy(
       bridgeClient,
       artifacts.bridge,
-      [prebinding.tokenAddress, policy, TRON_MAINNET_PROFILE, 0, String(MAX_WRAPPED_SUPPLY)],
+      [
+        prebinding.tokenAddress,
+        policy,
+        TRON_MAINNET_PROFILE,
+        0,
+        mintGuardians,
+        String(MAX_WRAPPED_SUPPLY),
+      ],
       "zero-revision bridge",
     ),
   "bridge deployment with a zero route revision",
@@ -797,7 +1152,14 @@ await expectConfirmedTvmFailure(
     deploy(
       bridgeClient,
       artifacts.bridge,
-      [prebinding.tokenAddress, policy, TRON_MAINNET_PROFILE, ROUTE_REVISION, "0"],
+      [
+        prebinding.tokenAddress,
+        policy,
+        TRON_MAINNET_PROFILE,
+        ROUTE_REVISION,
+        mintGuardians,
+        "0",
+      ],
       "zero-cap bridge",
     ),
   "bridge deployment with a zero wrapped-supply cap",
@@ -812,6 +1174,7 @@ await expectConfirmedTvmFailure(
         policy,
         TRON_MAINNET_PROFILE,
         ROUTE_REVISION,
+        mintGuardians,
         String(MAX_U128 + 1n),
       ],
       "oversized-cap bridge",
@@ -827,6 +1190,7 @@ const bridge = await deploy(
     policy,
     TRON_MAINNET_PROFILE,
     ROUTE_REVISION,
+    mintGuardians,
     String(MAX_WRAPPED_SUPPLY),
   ],
   "production TRON bridge",
@@ -859,6 +1223,17 @@ assert.equal(
 const tokenRuntimeCodeHash = await runtimeCodeHash(bridgeClient, tokenAddress);
 assert.equal(bytes32(await bridge.tokenCodeHash().call()), tokenRuntimeCodeHash);
 assert.equal(bytes32(await bridge.verifierCodeHash().call()), verifierCodeHash);
+const replayVerifierAddress = await bridge.replayVerifier().call();
+const replayVerifierCodeHash = await runtimeCodeHash(bridgeClient, replayVerifierAddress);
+assert.equal(
+  bytes32(await bridge.replayVerifierCodeHash().call()),
+  replayVerifierCodeHash,
+);
+const mintBreakerAddress = await bridge.mintBreaker().call();
+const mintBreakerCodeHash = await runtimeCodeHash(bridgeClient, mintBreakerAddress);
+assert.equal(bytes32(await bridge.mintBreakerCodeHash().call()), mintBreakerCodeHash);
+const maxWrappedSupply = asInteger(await bridge.maxWrappedSupply().call());
+assert.equal(maxWrappedSupply, MAX_WRAPPED_SUPPLY);
 
 const canonicalTronMainnet = Buffer.concat([
   Buffer.from([1, TRON_MAINNET_PROFILE]),
@@ -869,42 +1244,10 @@ const canonicalTaira = Buffer.from("010100000000fc56984b2be7431d840e21514d1883f0
 const expectedSourceLane = canonicalLane(canonicalTronMainnet, canonicalTaira);
 assert.equal(expectedSourceLane.toString("hex"), tronMainnetVector.canonical_lane_hex);
 const expectedSourceLaneHash = `0x${tronMainnetVector.lane_hash_hex}`;
-const expectedDestinationLaneHash = independentLaneHash(
-  canonicalLane(canonicalTaira, canonicalTronMainnet),
-);
+const expectedDestinationLane = canonicalLane(canonicalTaira, canonicalTronMainnet);
+const expectedDestinationLaneHash = independentLaneHash(expectedDestinationLane);
 assert.equal(bytes32(await bridge.sourceLaneHash().call()), expectedSourceLaneHash);
 assert.equal(bytes32(await bridge.destinationLaneHash().call()), expectedDestinationLaneHash);
-
-for (const vector of nativeVectors) {
-  const vectorPayload = `0x${vector.canonical_payload_hex}`;
-  assert.equal(
-    bytes32(await bridge.sccpPayloadHash(vectorPayload).call()),
-    `0x${vector.payload_hash_hex}`,
-    `${vector.source_profile} Rust payload hash drifted on TVM`,
-  );
-}
-assert.equal(
-  bytes32(
-    await bridge
-      .sourceEventDigest(
-        `0x${tronMainnetVector.message_id_hex}`,
-        `0x${tronMainnetVector.payload_hash_hex}`,
-      )
-      .call(),
-  ),
-  `0x${tronMainnetVector.source_event_digest_hex}`,
-  "Rust-generated TRON source event digest drifted on TVM",
-);
-for (const length of [0, 1, 127, 128, 129, 255, 256, 257, 511]) {
-  const boundaryPayload = Buffer.from(
-    Array.from({ length }, (_value, index) => (index * 197 + length) & 0xff),
-  );
-  assert.equal(
-    bytes32(await bridge.sccpPayloadHash(`0x${boundaryPayload.toString("hex")}`).call()),
-    independentPayloadHash(boundaryPayload),
-    `TVM BLAKE2b-256 drift at ${length} payload bytes`,
-  );
-}
 
 const expectedDestinationBinding = exactDestinationBinding({
   client: bridgeClient,
@@ -912,6 +1255,10 @@ const expectedDestinationBinding = exactDestinationBinding({
   bridgeAddress: bridge.address,
   verifierCodeHash,
   keyHash,
+  replayVerifierAddress,
+  replayVerifierCodeHash,
+  mintBreakerAddress,
+  mintBreakerCodeHash,
 });
 assert.equal(bytes32(await bridge.destinationBindingHash().call()), expectedDestinationBinding);
 const expectedRouteConfigHash = exactRouteConfig({
@@ -923,11 +1270,36 @@ const expectedRouteConfigHash = exactRouteConfig({
   verifierCodeHash,
   keyHash,
   destinationBinding: expectedDestinationBinding,
+  replayVerifierAddress,
+  replayVerifierCodeHash,
+  mintBreakerAddress,
+  mintBreakerCodeHash,
+  maxWrappedSupply,
   sourceLaneHash: expectedSourceLaneHash,
   destinationLaneHash: expectedDestinationLaneHash,
-  maxWrappedSupply: MAX_WRAPPED_SUPPLY,
 });
 assert.equal(bytes32(await bridge.routeConfigHash().call()), expectedRouteConfigHash);
+const replayActor = Buffer.from(tronHexAddress(bridgeClient, bridge.address).slice(2), "hex");
+const sourceReplayDomainHash = independentReplayDomainHash({
+  sourceNetwork: REPLAY_NETWORK_TRON,
+  targetNetwork: REPLAY_NETWORK_TAIRA,
+  boundary: REPLAY_TRON_SOURCE_BURN,
+  routeRevision: ROUTE_REVISION,
+  routeConfigurationHash: expectedRouteConfigHash,
+  actorKind: REPLAY_ACTOR_TRON,
+  actor: replayActor,
+});
+const destinationReplayDomainHash = independentReplayDomainHash({
+  sourceNetwork: REPLAY_NETWORK_TAIRA,
+  targetNetwork: REPLAY_NETWORK_TRON,
+  boundary: REPLAY_TRON_DESTINATION_MINT,
+  routeRevision: ROUTE_REVISION,
+  routeConfigurationHash: expectedRouteConfigHash,
+  actorKind: REPLAY_ACTOR_TRON,
+  actor: replayActor,
+});
+const sourceReplayForest = { records: new Map() };
+const destinationReplayForest = { records: new Map() };
 
 const initialSupply = asInteger(await token.totalSupply().call());
 await expectConfirmedTvmFailure(
@@ -945,8 +1317,8 @@ assert.equal(asInteger(await token.totalSupply().call()), initialSupply);
 const recipient = Buffer.from(tronHexAddress(bridgeClient, bridgeClient.defaultAddress.base58), "hex");
 const payload = inboundTransferPayload(recipient);
 const payloadHex = `0x${payload.toString("hex")}`;
-const messageId = bytes32(await bridge.sccpDestinationMessageId(payloadHex).call());
-const payloadHash = bytes32(await bridge.sccpPayloadHash(payloadHex).call());
+const messageId = independentMessageId(expectedDestinationLane, payload);
+const payloadHash = independentPayloadHash(payload);
 const destinationBinding = bytes32(await bridge.destinationBindingHash().call());
 const routeConfigHash = bytes32(await bridge.routeConfigHash().call());
 const publicInputs = [
@@ -971,22 +1343,48 @@ assert.equal(bytes32(verifierResult[2]), publicInputs[3]);
 
 const ownerAddress = bridgeClient.defaultAddress.base58;
 const balanceBeforeFailedFinalize = asInteger(await token.balanceOf(ownerAddress).call());
-assert.equal(await bridge.usedDestinationMessages(messageId).call(), false);
+const initialDestinationWitness = await checkedReplayWitness(
+  bridge,
+  false,
+  destinationReplayForest,
+  destinationReplayDomainHash,
+  messageId,
+);
 await expectConfirmedTvmFailure(
   () =>
     sendAndConfirmTvm(
       hostileClient,
-      hostileBridge.finalizeFromTaira(wrongProof, publicInputs, statementHash, payloadHex),
+      hostileBridge.finalizeFromTaira(
+        wrongProof,
+        publicInputs,
+        statementHash,
+        payloadHex,
+        initialDestinationWitness.encoded,
+      ),
       { feeLimit: METHOD_FEE_LIMIT },
       "hostile invalid BN254 proof",
     ),
   "hostile invalid BN254 proof",
 );
 assert.equal(asInteger(await token.balanceOf(ownerAddress).call()), balanceBeforeFailedFinalize);
-assert.equal(await bridge.usedDestinationMessages(messageId).call(), false);
+await checkedReplayWitness(
+  bridge,
+  false,
+  destinationReplayForest,
+  destinationReplayDomainHash,
+  messageId,
+);
 
 const wrongRevisionPayload = Buffer.from(payload);
 wrongRevisionPayload.writeUInt32LE(ROUTE_REVISION + 1, 18);
+const wrongRevisionMessageId = independentMessageId(expectedDestinationLane, wrongRevisionPayload);
+const wrongRevisionWitness = await checkedReplayWitness(
+  bridge,
+  false,
+  destinationReplayForest,
+  destinationReplayDomainHash,
+  wrongRevisionMessageId,
+);
 await expectConfirmedTvmFailure(
   () =>
     sendAndConfirmTvm(
@@ -996,6 +1394,7 @@ await expectConfirmedTvmFailure(
         publicInputs,
         statementHash,
         `0x${wrongRevisionPayload.toString("hex")}`,
+        wrongRevisionWitness.encoded,
       ),
       { feeLimit: METHOD_FEE_LIMIT },
       "wrong route revision rollback",
@@ -1003,21 +1402,56 @@ await expectConfirmedTvmFailure(
   "wrong route revision rollback",
 );
 assert.equal(asInteger(await token.balanceOf(ownerAddress).call()), balanceBeforeFailedFinalize);
-assert.equal(await bridge.usedDestinationMessages(messageId).call(), false);
+await checkedReplayWitness(
+  bridge,
+  false,
+  destinationReplayForest,
+  destinationReplayDomainHash,
+  messageId,
+);
 
 await sendAndConfirmTvm(
   bridgeClient,
-  bridge.finalizeFromTaira(proof, publicInputs, statementHash, payloadHex),
+  bridge.finalizeFromTaira(
+    proof,
+    publicInputs,
+    statementHash,
+    payloadHex,
+    initialDestinationWitness.encoded,
+  ),
   { feeLimit: METHOD_FEE_LIMIT },
   "valid destination finalize",
 );
+const destinationRecordDigest = independentAddressReplayRecordDigest({
+  operation: REPLAY_TRON_DESTINATION_MINT,
+  replayId: messageId,
+  payloadSha256: sha256Packed(payload),
+  amountScale9: 3,
+  principalKind: REPLAY_PRINCIPAL_TRON,
+  principal: recipient.subarray(1),
+  auxiliaryIdentitySha256: sha256Packed(exactBytes(destinationBinding, 32, "binding")),
+});
+commitReplayRecord(destinationReplayForest, initialDestinationWitness.key, destinationRecordDigest);
 assert.equal(asInteger(await token.balanceOf(ownerAddress).call()), 3n * SCALE);
-assert.equal(await bridge.usedDestinationMessages(messageId).call(), true);
+const occupiedDestinationWitness = await checkedReplayWitness(
+  bridge,
+  false,
+  destinationReplayForest,
+  destinationReplayDomainHash,
+  messageId,
+);
+assert.equal(occupiedDestinationWitness.priorRecordDigest, destinationRecordDigest);
 await expectConfirmedTvmFailure(
   () =>
     sendAndConfirmTvm(
       bridgeClient,
-      bridge.finalizeFromTaira(proof, publicInputs, statementHash, payloadHex),
+      bridge.finalizeFromTaira(
+        proof,
+        publicInputs,
+        statementHash,
+        payloadHex,
+        occupiedDestinationWitness.encoded,
+      ),
       { feeLimit: METHOD_FEE_LIMIT },
       "destination replay",
     ),
@@ -1027,10 +1461,10 @@ assert.equal(asInteger(await token.balanceOf(ownerAddress).call()), 3n * SCALE);
 
 const capPayload = inboundTransferPayload(recipient, MAX_OUTSTANDING_LIABILITY, 990n);
 const capPayloadHex = `0x${capPayload.toString("hex")}`;
-const capMessageId = bytes32(await bridge.sccpDestinationMessageId(capPayloadHex).call());
+const capMessageId = independentMessageId(expectedDestinationLane, capPayload);
 const capPublicInputs = [
   capMessageId,
-  bytes32(await bridge.sccpPayloadHash(capPayloadHex).call()),
+  independentPayloadHash(capPayload),
   word(DOMAIN_TRON),
   sha3Utf8("tvm-cap-commitment-root"),
   word(990),
@@ -1043,6 +1477,13 @@ const capProof = acceptingProof(
   destinationBinding,
   routeConfigHash,
 );
+const capReplayWitness = await checkedReplayWitness(
+  bridge,
+  false,
+  destinationReplayForest,
+  destinationReplayDomainHash,
+  capMessageId,
+);
 await expectConfirmedTvmFailure(
   () =>
     sendAndConfirmTvm(
@@ -1052,19 +1493,46 @@ await expectConfirmedTvmFailure(
         capPublicInputs,
         capStatementHash,
         capPayloadHex,
+        capReplayWitness.encoded,
       ),
       { feeLimit: METHOD_FEE_LIMIT },
       "wrapped-supply cap",
     ),
   "destination mint above the wrapped-supply cap",
 );
-assert.equal(await bridge.usedDestinationMessages(capMessageId).call(), false);
+await checkedReplayWitness(
+  bridge,
+  false,
+  destinationReplayForest,
+  destinationReplayDomainHash,
+  capMessageId,
+);
 assert.equal(asInteger(await token.totalSupply().call()), 3n * SCALE);
 
 const nonceBeforeFailedBurns = asInteger(
   await bridge.transferNonces(ownerAddress).call(),
 );
 const balanceBeforeFailedBurns = asInteger(await token.balanceOf(ownerAddress).call());
+const expectedSourcePayload = outboundTransferPayload(
+  recipient,
+  Buffer.from(CANONICAL_TAIRA_I105, "utf8"),
+  nonceBeforeFailedBurns,
+  1,
+);
+const expectedSourcePayloadHash = independentPayloadHash(expectedSourcePayload);
+const expectedSourceMessageId = independentMessageId(expectedSourceLane, expectedSourcePayload);
+const expectedSourceEventDigest = independentSourceEventDigest(
+  expectedSourceLaneHash,
+  expectedSourceMessageId,
+  expectedSourcePayloadHash,
+);
+const sourceReplayWitness = await checkedReplayWitness(
+  bridge,
+  true,
+  sourceReplayForest,
+  sourceReplayDomainHash,
+  expectedSourceMessageId,
+);
 await expectConfirmedTvmFailure(
   () =>
     sendAndConfirmTvm(
@@ -1073,6 +1541,7 @@ await expectConfirmedTvmFailure(
         Buffer.from(NUMERIC_TAIRA_ALIAS, "utf8"),
         String(SCALE),
         String(nonceBeforeFailedBurns),
+        sourceReplayWitness.encoded,
       ),
       { feeLimit: METHOD_FEE_LIMIT },
       "noncanonical Taira recipient burn",
@@ -1087,6 +1556,7 @@ await expectConfirmedTvmFailure(
         Buffer.from(CANONICAL_TAIRA_I105, "utf8"),
         "1",
         String(nonceBeforeFailedBurns),
+        sourceReplayWitness.encoded,
       ),
       { feeLimit: METHOD_FEE_LIMIT },
       "unaligned Taira burn amount",
@@ -1101,6 +1571,7 @@ await expectConfirmedTvmFailure(
         Buffer.from(CANONICAL_TAIRA_I105, "utf8"),
         String(SCALE),
         String(nonceBeforeFailedBurns + 1n),
+        sourceReplayWitness.encoded,
       ),
       { feeLimit: METHOD_FEE_LIMIT },
       "mismatched source transfer nonce",
@@ -1129,23 +1600,31 @@ const sourceReceipt = await sendAndConfirmTvm(
     Buffer.from(CANONICAL_TAIRA_I105, "utf8"),
     String(SCALE),
     String(nonceBeforeFailedBurns),
+    sourceReplayWitness.encoded,
   ),
   { feeLimit: METHOD_FEE_LIMIT },
   "valid source transfer",
 );
-const expectedSourcePayload = outboundTransferPayload(
-  recipient,
-  Buffer.from(CANONICAL_TAIRA_I105, "utf8"),
-  nonceBeforeFailedBurns,
-  1,
-);
-const expectedSourcePayloadHash = independentPayloadHash(expectedSourcePayload);
-const expectedSourceMessageId = independentMessageId(expectedSourceLane, expectedSourcePayload);
-const expectedSourceEventDigest = independentSourceEventDigest(
-  expectedSourceLaneHash,
+const sourceRecordDigest = independentAddressReplayRecordDigest({
+  operation: REPLAY_TRON_SOURCE_BURN,
+  replayId: expectedSourceMessageId,
+  payloadSha256: sha256Packed(expectedSourcePayload),
+  amountScale9: 1,
+  principalKind: REPLAY_PRINCIPAL_TRON,
+  principal: recipient.subarray(1),
+  auxiliaryIdentitySha256: sha256Packed(
+    exactBytes(expectedSourceEventDigest, 32, "source event digest"),
+  ),
+});
+commitReplayRecord(sourceReplayForest, sourceReplayWitness.key, sourceRecordDigest);
+const occupiedSourceWitness = await checkedReplayWitness(
+  bridge,
+  true,
+  sourceReplayForest,
+  sourceReplayDomainHash,
   expectedSourceMessageId,
-  expectedSourcePayloadHash,
 );
+assert.equal(occupiedSourceWitness.priorRecordDigest, sourceRecordDigest);
 const emittedSource = decodeSccpTransferLog(bridgeClient, bridge.address, sourceReceipt);
 assert.equal(emittedSource.laneHash, expectedSourceLaneHash);
 assert.equal(emittedSource.messageId, expectedSourceMessageId);
@@ -1153,7 +1632,6 @@ assert.equal(emittedSource.sourceEventDigest, expectedSourceEventDigest);
 assert.equal(emittedSource.payloadHash, expectedSourcePayloadHash);
 assert.equal(emittedSource.routeConfigHash, expectedRouteConfigHash);
 assert.deepEqual(emittedSource.payload, expectedSourcePayload);
-assert.equal(await bridge.usedSourceMessages(expectedSourceMessageId).call(), true);
 assert.equal(
   asInteger(await bridge.transferNonces(ownerAddress).call()),
   nonceBeforeFailedBurns + 1n,

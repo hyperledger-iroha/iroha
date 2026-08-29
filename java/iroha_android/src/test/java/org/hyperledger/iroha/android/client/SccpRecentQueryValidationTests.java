@@ -2,6 +2,7 @@ package org.hyperledger.iroha.android.client;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertThrows;
+import static org.junit.Assert.assertTrue;
 
 import java.math.BigInteger;
 import java.net.URI;
@@ -110,7 +111,23 @@ public final class SccpRecentQueryValidationTests {
   }
 
   @Test
-  public void sccpJsonRequiresExact200AndUnambiguousCanonicalContentType() {
+  public void sccpJsonRequiresExact200AndOneUnambiguousApplicationJsonMediaType() {
+    for (final String contentType :
+        List.of(
+            "application/json",
+            "Application/JSON; charset=utf-8",
+            "application/json; charset=\"UTF-8\"; profile=exact")) {
+      final CountingExecutor executor =
+          new CountingExecutor(response(200, List.of(contentType), null));
+      assertTrue(
+          transport(executor)
+              .getSccpRecentMessages(BigInteger.ONE, null, 1)
+              .join()
+              .items
+              .isEmpty());
+      assertEquals(1, executor.requests.size());
+    }
+
     final List<TransportResponse> invalidResponses =
         List.of(
             response(201, List.of("application/json"), null),
@@ -118,7 +135,11 @@ public final class SccpRecentQueryValidationTests {
             response(200, List.of("text/html"), null),
             response(200, null, null),
             response(200, List.of("application/json", "application/json"), null),
-            response(200, List.of("application/json; charset=utf-8"), null));
+            response(200, List.of("application/problem+json"), null),
+            response(200, List.of("application/json, text/plain"), null),
+            response(200, List.of("application/json;"), null),
+            response(200, List.of("application/json; charset"), null),
+            response(200, List.of("application/json; profile=\"a,b\""), null));
     for (final TransportResponse response : invalidResponses) {
       final CountingExecutor executor = new CountingExecutor(response);
       assertThrows(

@@ -12,10 +12,12 @@ use super::{
     },
 };
 use iroha_crypto::Hash;
+#[cfg(test)]
+use iroha_data_model::nexus::PrivateSettlementPoolGovernanceV1;
 use iroha_data_model::{
     nexus::{
-        PrivateSettlementAbortReceiptV1, PrivateSettlementDeltaV1,
-        PrivateSettlementPoolGovernanceV1, PrivateSettlementReceiptV1, PrivateSettlementRouteV1,
+        PrivateSettlementAbortReceiptV1, PrivateSettlementDeltaV1, PrivateSettlementReceiptV1,
+        PrivateSettlementRouteV1,
     },
     privacy::{
         PrivacyCommitmentV1, PrivacyEncryptedOutputV1, PrivacyNullifierV1, PrivacyPoolIdV1,
@@ -74,16 +76,6 @@ impl PrivateSettlementPoolKeyV1 {
             return Err(PrivateSettlementGlobalStateErrorV1::Pool);
         }
         Ok(Self { route, pool_id })
-    }
-
-    /// Exact participant route.
-    pub(crate) const fn route(self) -> PrivateSettlementRouteV1 {
-        self.route
-    }
-
-    /// Opaque pool identifier.
-    pub(crate) const fn pool_id(self) -> PrivacyPoolIdV1 {
-        self.pool_id
     }
 }
 
@@ -217,7 +209,8 @@ pub(crate) struct PrivateSettlementOutputRecordV1 {
     pub(crate) encrypted_output: PrivacyEncryptedOutputV1,
 }
 
-/// Globally replicated private-settlement state projection.
+/// Test/reference aggregate over the production private-settlement planner maps.
+#[cfg(test)]
 #[derive(Clone, Debug, Default, PartialEq, Eq, Decode, Encode)]
 pub(crate) struct PrivateSettlementGlobalStateV1 {
     governance: BTreeMap<PrivateSettlementPoolKeyV1, PrivateSettlementPoolGovernanceProjectionV1>,
@@ -356,13 +349,14 @@ pub(crate) fn plan_private_settlement_pool_bootstrap_v1(
     if pools.get(&key).is_some() || roots.get(&root_key).is_some() {
         return Err(PrivateSettlementGlobalStateErrorV1::Substitution);
     }
+    let governance_digest = governance.governance_digest;
     Ok(Some(PrivateSettlementPoolBootstrapPlanV1 {
         key,
         governance,
         pool,
         root_key,
         root_provenance: PrivateSettlementRootProvenanceV1::Governance {
-            governance_digest: governance.governance_digest,
+            governance_digest,
             admitted_at_height,
         },
     }))
@@ -881,6 +875,7 @@ pub(crate) fn validate_private_settlement_persisted_state_v1(
     Ok(())
 }
 
+#[cfg(test)]
 impl PrivateSettlementGlobalStateV1 {
     /// Explicitly bootstrap one restricted pool through governance.
     pub(crate) fn bootstrap_pool(
@@ -940,10 +935,13 @@ impl PrivateSettlementGlobalStateV1 {
         replacement: PrivateSettlementPoolGovernanceProjectionV1,
         admitted_at_height: u64,
     ) -> Result<PrivateSettlementGlobalStateOutcomeV1, PrivateSettlementGlobalStateErrorV1> {
+        let governance = mv::storage::Storage::from_iter(self.governance.clone());
+        let pools = mv::storage::Storage::from_iter(self.pools.clone());
+        let receipts = mv::storage::Storage::from_iter(self.receipts.clone());
         let plan = plan_private_settlement_pool_rotation_v1(
-            &self.governance,
-            &self.pools,
-            &self.receipts,
+            &governance.view(),
+            &pools.view(),
+            &receipts.view(),
             expected_governance_digest,
             replacement,
             admitted_at_height,
@@ -1776,12 +1774,12 @@ pub(crate) mod tests {
         )
         .expect("pool key");
         let current = state.governance.get(&key).expect("governance").clone();
-        let old_head = state.pool_head(key.route(), key.pool_id()).expect("head");
+        let old_head = state.pool_head(key.route, key.pool_id).expect("head");
         let old_roots = state.roots.clone();
         let old_nullifiers = state.nullifiers.clone();
         let old_outputs = state.outputs.clone();
         let old_receipts = state.receipts.clone();
-        let mut replacement = current;
+        let mut replacement = current.clone();
         replacement.audit_policy_digest = Hash::new(b"rotated audit policy");
         replacement.audit_key_epoch += 1;
         replacement.lifecycle.governance_revision += 1;
@@ -1792,7 +1790,7 @@ pub(crate) mod tests {
             state.rotate_pool_policy(current.governance_digest, replacement.clone(), 20),
             Ok(PrivateSettlementGlobalStateOutcomeV1::Applied)
         );
-        assert_eq!(state.pool_head(key.route(), key.pool_id()), Some(old_head));
+        assert_eq!(state.pool_head(key.route, key.pool_id), Some(old_head));
         assert_eq!(state.roots, old_roots);
         assert_eq!(state.nullifiers, old_nullifiers);
         assert_eq!(state.outputs, old_outputs);
@@ -1827,7 +1825,7 @@ pub(crate) mod tests {
         )
         .expect("pool key");
         let current = state.governance.get(&key).expect("governance").clone();
-        let old_head = state.pool_head(key.route(), key.pool_id()).expect("head");
+        let old_head = state.pool_head(key.route, key.pool_id).expect("head");
         let mut replacement = current.clone();
         replacement.audit_policy_digest = Hash::new(b"post-finality audit policy");
         replacement.audit_key_epoch += 1;
@@ -1843,7 +1841,7 @@ pub(crate) mod tests {
             ),
             Ok(PrivateSettlementGlobalStateOutcomeV1::Applied)
         );
-        assert_eq!(state.pool_head(key.route(), key.pool_id()), Some(old_head));
+        assert_eq!(state.pool_head(key.route, key.pool_id), Some(old_head));
         let persisted = norito::encode_canonical(&state).expect("state encodes");
         let mut restored: PrivateSettlementGlobalStateV1 =
             norito::decode_from_bytes(&persisted).expect("state decodes");
@@ -1922,7 +1920,7 @@ pub(crate) mod tests {
         )
         .expect("pool key");
         let current = state.governance.get(&key).expect("governance").clone();
-        let mut replacement = current;
+        let mut replacement = current.clone();
         replacement.audit_policy_digest = Hash::new(b"new policy");
         replacement.audit_key_epoch += 1;
         replacement.lifecycle.governance_revision += 1;
@@ -2022,6 +2020,40 @@ pub(crate) mod tests {
         )
         .expect_err("two roots at one pool epoch must fail closed");
         assert_eq!(error, PrivateSettlementGlobalStateErrorV1::Conflict);
+    }
+
+    #[test]
+    fn world_view_pool_head_requires_retained_root_provenance() {
+        let world = finalized_world_fixture();
+        let (pool_key, epoch, root) = {
+            let pools = world.private_settlement_pools.view();
+            let (pool_key, pool) = pools.iter().next().expect("governed fixture pool");
+            (*pool_key, pool.epoch(), pool.root())
+        };
+        assert_eq!(
+            world
+                .view()
+                .private_settlement_pool_head_v1(pool_key.route, pool_key.pool_id),
+            Some((epoch, root))
+        );
+
+        {
+            let mut roots = world.private_settlement_roots.block();
+            roots.remove(PrivateSettlementRootKeyV1 {
+                pool: pool_key,
+                epoch,
+                root,
+            });
+            roots.commit();
+        }
+
+        assert_eq!(
+            world
+                .view()
+                .private_settlement_pool_head_v1(pool_key.route, pool_key.pool_id),
+            None,
+            "an unproven pool frontier must not be reported"
+        );
     }
 
     #[test]

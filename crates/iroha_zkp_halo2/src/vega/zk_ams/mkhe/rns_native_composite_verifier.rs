@@ -1,28 +1,19 @@
 //! Atomic verifier boundary for the replacement RNS-native composite proof.
 //!
-//! The boundary consumes one canonical envelope, one move-only authenticated
-//! source-snapshot owner, and the move-only result of the canonical transcript.
-//! The source layout and structural receipt are derived only from that retained
-//! owner. It exposes no downstream verifier trait and no partial stage receipt:
-//! all four sections must pass private first-party adapters before a
-//! non-authorizing candidate receipt can be minted.
+//! The raw standalone boundary consumes only a canonical envelope, source
+//! snapshot, and transcript. It has none of the typed source-chain authorities,
+//! so every production stage remains fail-closed with an explicit unavailable
+//! stage instead of accepting detached stage bytes.
 //!
-//! None of the existing complete proof kernels can currently satisfy that
-//! contract for the 40-limb replacement profile.  The replacement qPCS adapter
-//! now authenticates every qPCS tree, checks all queried opening/batch equations,
-//! all eighteen FRI folds, and the terminal-degree equation. The RLWE/source
-//! linkage is still unavailable. The terminal adapter now checks the complete
-//! 1,536-row cross-basis representation-equality kernel. A separate private
-//! source-to-terminal mapping prerequisite exists, but this boundary lacks the
-//! exact public-artifact inventory needed to construct its preceding RLWE/source
-//! preflight and that preflight proves no RLWE equality. The 40-limb
-//! cross-field prerequisites are not joined under one authenticated
-//! source/terminal owner, the global-lookup module does not verify a proof, and
-//! the authenticated zero-padding commitment inventory is not yet linked to
-//! the source, lookup, or terminal materialization. Production therefore fails
-//! closed with an explicit unavailable stage. Success here, once those adapters are replaced,
-//! will still be proof verification only and can never grant readiness or
-//! release authority.
+//! The private authenticated boundary instead consumes the move-only source
+//! owner plus the retained same-opening and qPCS authorities. It reauthenticates
+//! the terminal and RNS-relation candidates against those exact retained facts,
+//! then runs the narrowly authenticated cross-field/global-lookup and
+//! zero-padding stages under the all-stage authority. The source owner and both
+//! authorities stay live through the atomic result; no partial stage receipt or
+//! downstream verifier trait escapes. Even complete success mints only a
+//! non-authorizing candidate receipt and can never grant readiness or release
+//! authority.
 
 #![allow(
     clippy::large_types_passed_by_value,
@@ -30,21 +21,29 @@
 )]
 
 use super::{
+    collective::RnsNativeQpcsCompositeAuthorityV2,
+    rns_native_cross_field_rlwe_direct::RnsNativeCrossFieldRlweCompositeSourceOwnerV2,
     rns_native_profile::{
         zk_ams_mkhe_rns_native_profile_manifest_v1,
         zk_ams_mkhe_rns_native_release_candidate_digest_v1, zk_ams_mkhe_rns_native_topology_v1,
     },
-    rns_native_qpcs_fri_complete::authenticate_rns_native_qpcs_fri_complete_v1,
+    rns_native_qpcs_fri_complete::{
+        RnsNativeQpcsFriCompleteStageV1, authenticate_rns_native_qpcs_fri_complete_v1,
+    },
     rns_native_section_codec::{
-        CompositeSectionSetErrorV1, ZkAmsMkheRnsNativeRnsRelationQpcsSectionV1,
-        ZkAmsMkheRnsNativeTerminalBridgeSectionV1, ZkAmsMkheRnsNativeZeroPaddingSectionV1,
-        validate_composite_section_set_exact_v1,
+        CompositeSectionSetErrorV1, ZkAmsMkheRnsNativeCrossFieldGlobalLookupSectionV1,
+        ZkAmsMkheRnsNativeRnsRelationQpcsSectionV1, ZkAmsMkheRnsNativeTerminalBridgeSectionV1,
+        ZkAmsMkheRnsNativeZeroPaddingSectionV1, validate_composite_section_set_exact_v1,
     },
     rns_native_source::{
         ZkAmsMkheRnsNativeSourceLayoutV1, ZkAmsMkheRnsNativeSourceReceiptV1,
         ZkAmsMkheRnsNativeSourceSnapshotV1,
     },
-    rns_native_terminal_cross_basis::authenticate_rns_native_terminal_cross_basis_kernel_v1,
+    rns_native_source_packing_same_opening::RnsNativeSourcePackingCompositeAuthorityV2,
+    rns_native_terminal_cross_basis::{
+        RnsNativeTerminalCrossBasisKernelPrerequisiteV1,
+        authenticate_rns_native_terminal_cross_basis_kernel_v1,
+    },
     rns_native_transcript::{
         ZK_AMS_MKHE_RNS_NATIVE_TRANSCRIPT_CHALLENGE_COUNT_V1, ZkAmsMkheRnsNativeChallengeSeedsV1,
     },
@@ -197,6 +196,56 @@ pub struct ZkAmsMkheRnsNativeCompositeCandidateReceiptV1 {
     candidate_digest: [u8; 32],
 }
 
+/// Move-only, source-chain-authenticated input for all four composite stages.
+///
+/// Construction requires the opaque source owner minted only after the direct
+/// cross-field, global-membership, and zero-padding root obligations have all
+/// been discharged.  It retains the original source snapshot and an exact
+/// borrow of the envelope authenticated by that chain; no raw root, digest,
+/// detached layout, or partial receipt is exposed.
+#[allow(
+    dead_code,
+    missing_copy_implementations,
+    reason = "the all-stage input is consumed only by the private authenticated source-chain entry"
+)]
+#[must_use = "the authenticated lookup/padding owner must be consumed by the atomic composite verifier"]
+pub(super) struct RnsNativeCrossFieldRlweCompositeInputV2<
+    'source,
+    'proof,
+    'envelope,
+    S: ZkAmsMkheRnsNativeSourceSnapshotV1,
+> {
+    source_owner: RnsNativeCrossFieldRlweCompositeSourceOwnerV2<'source, 'proof, S>,
+    final_challenge_seeds: ZkAmsMkheRnsNativeChallengeSeedsV1,
+    envelope: &'envelope ZkAmsMkheRnsNativeProofEnvelopeV1,
+    source_packing_authority: RnsNativeSourcePackingCompositeAuthorityV2<'envelope>,
+    qpcs_authority: RnsNativeQpcsCompositeAuthorityV2<'envelope>,
+}
+
+impl<'source, 'proof, 'envelope, S: ZkAmsMkheRnsNativeSourceSnapshotV1>
+    RnsNativeCrossFieldRlweCompositeInputV2<'source, 'proof, 'envelope, S>
+{
+    /// Join only the five authority and context values moved out of the
+    /// authenticated source-chain transition.  The opaque source-owner
+    /// constructor and the final-seed typestate keep this crate-private join
+    /// unforgeable in production.
+    pub(super) fn from_authenticated_parts_v2(
+        source_owner: RnsNativeCrossFieldRlweCompositeSourceOwnerV2<'source, 'proof, S>,
+        final_challenge_seeds: ZkAmsMkheRnsNativeChallengeSeedsV1,
+        envelope: &'envelope ZkAmsMkheRnsNativeProofEnvelopeV1,
+        source_packing_authority: RnsNativeSourcePackingCompositeAuthorityV2<'envelope>,
+        qpcs_authority: RnsNativeQpcsCompositeAuthorityV2<'envelope>,
+    ) -> Self {
+        Self {
+            source_owner,
+            final_challenge_seeds,
+            envelope,
+            source_packing_authority,
+            qpcs_authority,
+        }
+    }
+}
+
 impl ZkAmsMkheRnsNativeCompositeCandidateReceiptV1 {
     /// Canonical non-authorizing profile-manifest identity.
     #[must_use]
@@ -312,6 +361,170 @@ where
     )
 }
 
+/// Consume the source-chain-authenticated all-stage input at the atomic boundary.
+///
+/// Before the cursor-driven stage walk, the retained same-opening and qPCS
+/// authorities reauthenticate the terminal and RNS-relation candidates against
+/// the exact source-chain facts. The all-stage authority then accepts only those
+/// preauthenticated stages and keeps the cross-field/global-lookup and
+/// zero-padding authenticators narrow. The result remains non-authorizing.
+/// The final claimed-qPCS source carrier now calls this boundary directly, but
+/// its upstream live-correspondence entry remains unavailable; this private seam
+/// does not establish readiness, release authority, or production reachability.
+pub(super) fn verify_zk_ams_mkhe_rns_native_composite_from_source_chain_v2<
+    'source,
+    'proof,
+    'envelope,
+    S,
+>(
+    input: RnsNativeCrossFieldRlweCompositeInputV2<'source, 'proof, 'envelope, S>,
+) -> Result<
+    ZkAmsMkheRnsNativeCompositeCandidateReceiptV1,
+    ZkAmsMkheRnsNativeCompositeVerificationErrorV1,
+>
+where
+    S: ZkAmsMkheRnsNativeSourceSnapshotV1,
+    RnsNativeCrossFieldRlweCompositeSourceOwnerV2<'source, 'proof, S>:
+        ZkAmsMkheRnsNativeSourceSnapshotV1,
+{
+    let RnsNativeCrossFieldRlweCompositeInputV2 {
+        source_owner,
+        final_challenge_seeds,
+        envelope,
+        source_packing_authority,
+        qpcs_authority,
+    } = input;
+    retain_composite_authorities_through_result_v2(
+        source_owner,
+        source_packing_authority,
+        qpcs_authority,
+        |source_owner, source_packing_authority, qpcs_authority| {
+            let source_layout = source_owner.layout();
+            source_layout.validate().map_err(|_| {
+                ZkAmsMkheRnsNativeCompositeVerificationErrorV1::InvalidSourceContext
+            })?;
+            let source_receipt = source_owner.structural_receipt().map_err(|_| {
+                ZkAmsMkheRnsNativeCompositeVerificationErrorV1::InvalidSourceContext
+            })?;
+            source_receipt.validate(source_layout).map_err(|_| {
+                ZkAmsMkheRnsNativeCompositeVerificationErrorV1::InvalidSourceContext
+            })?;
+
+            source_packing_authority
+                .validate_composite_context_v2(envelope, &final_challenge_seeds)
+                .map_err(|_| {
+                    ZkAmsMkheRnsNativeCompositeVerificationErrorV1::InvalidSourceContext
+                })?;
+            qpcs_authority
+                .validate_composite_context_v2(envelope, &final_challenge_seeds)
+                .map_err(|_| {
+                    ZkAmsMkheRnsNativeCompositeVerificationErrorV1::InvalidSourceContext
+                })?;
+
+            let context_checked = validate_then_authenticate_source_bound_context_v2(
+                envelope,
+                source_layout,
+                source_receipt,
+                final_challenge_seeds,
+                |context_checked| {
+                    let terminal_candidate = authenticate_terminal_hyrax_bp_bridge_production_v1(
+                        &context_checked.transcript,
+                        envelope
+                            .section(ZkAmsMkheRnsNativeProofSectionKindV1::TerminalHyraxBpBridge),
+                    )?;
+                    source_owner
+                        .authenticate_terminal_candidate_v2(
+                            source_packing_authority,
+                            envelope,
+                            &context_checked.transcript,
+                            &terminal_candidate,
+                        )
+                        .map_err(|_| {
+                            ZkAmsMkheRnsNativeCompositeVerificationErrorV1::StageRejected(
+                                ZkAmsMkheRnsNativeVerificationStageV1::TerminalHyraxBpBridge,
+                            )
+                        })
+                },
+                |context_checked| {
+                    let qpcs_candidate = authenticate_rns_relation_qpcs_production_v1(
+                        &context_checked.transcript,
+                        envelope.section(ZkAmsMkheRnsNativeProofSectionKindV1::RnsRelationQpcs),
+                    )?;
+                    source_owner
+                        .authenticate_qpcs_candidate_v2(
+                            qpcs_authority,
+                            envelope,
+                            &context_checked.transcript,
+                            &qpcs_candidate,
+                        )
+                        .map_err(|_| {
+                            ZkAmsMkheRnsNativeCompositeVerificationErrorV1::StageRejected(
+                                ZkAmsMkheRnsNativeVerificationStageV1::RnsRelationQpcs,
+                            )
+                        })
+                },
+            )?;
+
+            context_checked
+                .verify_terminal_bridge_v1()?
+                .verify_rns_relation_qpcs_v1()?
+                .verify_cross_field_global_lookup_v1()?
+                .verify_zero_padding_v1()?
+                .finish_v1()
+        },
+    )
+}
+
+fn validate_then_authenticate_source_bound_context_v2<'envelope>(
+    envelope: &'envelope ZkAmsMkheRnsNativeProofEnvelopeV1,
+    source_layout: ZkAmsMkheRnsNativeSourceLayoutV1,
+    source_receipt: ZkAmsMkheRnsNativeSourceReceiptV1,
+    final_challenge_seeds: ZkAmsMkheRnsNativeChallengeSeedsV1,
+    authenticate_terminal: impl FnOnce(
+        &ContextCheckedV1<'envelope>,
+    )
+        -> Result<(), ZkAmsMkheRnsNativeCompositeVerificationErrorV1>,
+    authenticate_qpcs: impl FnOnce(
+        &ContextCheckedV1<'envelope>,
+    ) -> Result<(), ZkAmsMkheRnsNativeCompositeVerificationErrorV1>,
+) -> Result<ContextCheckedV1<'envelope>, ZkAmsMkheRnsNativeCompositeVerificationErrorV1> {
+    let context_checked = ContextCheckedV1::new(
+        envelope,
+        source_layout,
+        source_receipt,
+        final_challenge_seeds,
+        FirstPartyStageAuthorityV1::ProductionSourceBoundAllStages,
+    )?;
+    authenticate_terminal(&context_checked)?;
+    authenticate_qpcs(&context_checked)?;
+    Ok(context_checked)
+}
+
+fn retain_composite_authorities_through_result_v2<
+    SourceOwner,
+    SourcePackingAuthority,
+    QpcsAuthority,
+    Output,
+    Error,
+>(
+    source_owner: SourceOwner,
+    source_packing_authority: SourcePackingAuthority,
+    qpcs_authority: QpcsAuthority,
+    calculation: impl FnOnce(
+        &SourceOwner,
+        &SourcePackingAuthority,
+        &QpcsAuthority,
+    ) -> Result<Output, Error>,
+) -> Result<Output, Error> {
+    let result = calculation(&source_owner, &source_packing_authority, &qpcs_authority);
+    // Materialize the complete success or error before releasing any member
+    // of the inseparable authenticated-owner set.
+    drop(source_owner);
+    drop(source_packing_authority);
+    drop(qpcs_authority);
+    result
+}
+
 fn verify_with_first_party_authority_v1<S>(
     envelope: ZkAmsMkheRnsNativeProofEnvelopeV1,
     source_snapshot: S,
@@ -337,7 +550,7 @@ where
             .map_err(|_| ZkAmsMkheRnsNativeCompositeVerificationErrorV1::InvalidSourceContext)?;
 
         ContextCheckedV1::new(
-            envelope,
+            &envelope,
             source_layout,
             source_receipt,
             transcript,
@@ -371,96 +584,116 @@ struct CandidateAxesV1 {
     context_digest: [u8; 32],
 }
 
-struct ContextCheckedV1 {
-    envelope: ZkAmsMkheRnsNativeProofEnvelopeV1,
+struct ContextCheckedV1<'envelope> {
+    envelope: &'envelope ZkAmsMkheRnsNativeProofEnvelopeV1,
     transcript: ZkAmsMkheRnsNativeChallengeSeedsV1,
     axes: CandidateAxesV1,
     authority: FirstPartyStageAuthorityV1,
+    next_stage: usize,
 }
 
-impl ContextCheckedV1 {
+impl<'envelope> ContextCheckedV1<'envelope> {
     fn new(
-        envelope: ZkAmsMkheRnsNativeProofEnvelopeV1,
+        envelope: &'envelope ZkAmsMkheRnsNativeProofEnvelopeV1,
         source_layout: ZkAmsMkheRnsNativeSourceLayoutV1,
         source_receipt: ZkAmsMkheRnsNativeSourceReceiptV1,
         transcript: ZkAmsMkheRnsNativeChallengeSeedsV1,
         authority: FirstPartyStageAuthorityV1,
     ) -> Result<Self, ZkAmsMkheRnsNativeCompositeVerificationErrorV1> {
-        let axes = validate_context_v1(&envelope, source_layout, source_receipt, &transcript)?;
+        let axes = validate_context_v1(envelope, source_layout, source_receipt, &transcript)?;
         Ok(Self {
             envelope,
             transcript,
             axes,
             authority,
+            next_stage: 0,
         })
     }
 
     fn verify_stage_v1(
-        &self,
+        mut self,
         stage: ZkAmsMkheRnsNativeVerificationStageV1,
-    ) -> Result<(), ZkAmsMkheRnsNativeCompositeVerificationErrorV1> {
+    ) -> Result<Self, ZkAmsMkheRnsNativeCompositeVerificationErrorV1> {
+        if stage.index() != self.next_stage {
+            return Err(ZkAmsMkheRnsNativeCompositeVerificationErrorV1::InvalidSection(stage));
+        }
         let kind = stage.section_kind();
         let descriptor = self.envelope.descriptors()[stage.index()];
         let section = self.envelope.section(kind);
         self.authority
-            .verify_v1(stage, &self.axes, &self.transcript, descriptor, section)
+            .verify_v1(stage, &self.axes, &self.transcript, descriptor, section)?;
+        self.next_stage = self
+            .next_stage
+            .checked_add(1)
+            .ok_or(ZkAmsMkheRnsNativeCompositeVerificationErrorV1::InvalidSection(stage))?;
+        Ok(self)
     }
 
     fn verify_terminal_bridge_v1(
         self,
-    ) -> Result<TerminalBridgeCheckedV1, ZkAmsMkheRnsNativeCompositeVerificationErrorV1> {
-        self.verify_stage_v1(ZkAmsMkheRnsNativeVerificationStageV1::TerminalHyraxBpBridge)?;
-        Ok(TerminalBridgeCheckedV1(self))
+    ) -> Result<TerminalBridgeCheckedV1<'envelope>, ZkAmsMkheRnsNativeCompositeVerificationErrorV1>
+    {
+        Ok(TerminalBridgeCheckedV1(self.verify_stage_v1(
+            ZkAmsMkheRnsNativeVerificationStageV1::TerminalHyraxBpBridge,
+        )?))
     }
 }
 
-struct TerminalBridgeCheckedV1(ContextCheckedV1);
+struct TerminalBridgeCheckedV1<'envelope>(ContextCheckedV1<'envelope>);
 
-impl TerminalBridgeCheckedV1 {
+impl<'envelope> TerminalBridgeCheckedV1<'envelope> {
     fn verify_rns_relation_qpcs_v1(
         self,
-    ) -> Result<RnsRelationQpcsCheckedV1, ZkAmsMkheRnsNativeCompositeVerificationErrorV1> {
-        self.0
-            .verify_stage_v1(ZkAmsMkheRnsNativeVerificationStageV1::RnsRelationQpcs)?;
-        Ok(RnsRelationQpcsCheckedV1(self.0))
+    ) -> Result<RnsRelationQpcsCheckedV1<'envelope>, ZkAmsMkheRnsNativeCompositeVerificationErrorV1>
+    {
+        Ok(RnsRelationQpcsCheckedV1(self.0.verify_stage_v1(
+            ZkAmsMkheRnsNativeVerificationStageV1::RnsRelationQpcs,
+        )?))
     }
 }
 
-struct RnsRelationQpcsCheckedV1(ContextCheckedV1);
+struct RnsRelationQpcsCheckedV1<'envelope>(ContextCheckedV1<'envelope>);
 
-impl RnsRelationQpcsCheckedV1 {
+impl<'envelope> RnsRelationQpcsCheckedV1<'envelope> {
     fn verify_cross_field_global_lookup_v1(
         self,
-    ) -> Result<CrossFieldGlobalLookupCheckedV1, ZkAmsMkheRnsNativeCompositeVerificationErrorV1>
-    {
-        self.0
-            .verify_stage_v1(ZkAmsMkheRnsNativeVerificationStageV1::CrossFieldGlobalLookup)?;
-        Ok(CrossFieldGlobalLookupCheckedV1(self.0))
+    ) -> Result<
+        CrossFieldGlobalLookupCheckedV1<'envelope>,
+        ZkAmsMkheRnsNativeCompositeVerificationErrorV1,
+    > {
+        Ok(CrossFieldGlobalLookupCheckedV1(self.0.verify_stage_v1(
+            ZkAmsMkheRnsNativeVerificationStageV1::CrossFieldGlobalLookup,
+        )?))
     }
 }
 
-struct CrossFieldGlobalLookupCheckedV1(ContextCheckedV1);
+struct CrossFieldGlobalLookupCheckedV1<'envelope>(ContextCheckedV1<'envelope>);
 
-impl CrossFieldGlobalLookupCheckedV1 {
+impl<'envelope> CrossFieldGlobalLookupCheckedV1<'envelope> {
     fn verify_zero_padding_v1(
         self,
-    ) -> Result<ZeroPaddingCheckedV1, ZkAmsMkheRnsNativeCompositeVerificationErrorV1> {
-        self.0
-            .verify_stage_v1(ZkAmsMkheRnsNativeVerificationStageV1::ZeroPadding)?;
-        Ok(ZeroPaddingCheckedV1(self.0))
+    ) -> Result<ZeroPaddingCheckedV1<'envelope>, ZkAmsMkheRnsNativeCompositeVerificationErrorV1>
+    {
+        Ok(ZeroPaddingCheckedV1(self.0.verify_stage_v1(
+            ZkAmsMkheRnsNativeVerificationStageV1::ZeroPadding,
+        )?))
     }
 }
 
-struct ZeroPaddingCheckedV1(ContextCheckedV1);
+struct ZeroPaddingCheckedV1<'envelope>(ContextCheckedV1<'envelope>);
 
-impl ZeroPaddingCheckedV1 {
+impl ZeroPaddingCheckedV1<'_> {
     fn finish_v1(
         self,
     ) -> Result<
         ZkAmsMkheRnsNativeCompositeCandidateReceiptV1,
         ZkAmsMkheRnsNativeCompositeVerificationErrorV1,
     > {
+        if self.0.next_stage != ZK_AMS_MKHE_RNS_NATIVE_PROOF_SECTION_COUNT_V1 {
+            return Err(ZkAmsMkheRnsNativeCompositeVerificationErrorV1::InvalidTranscript);
+        }
         let axes = self.0.axes;
+        let context_digest = axes.context_digest;
         let mut receipt = ZkAmsMkheRnsNativeCompositeCandidateReceiptV1 {
             version: ZK_AMS_MKHE_RNS_NATIVE_COMPOSITE_VERIFICATION_VERSION_V1,
             profile_manifest_digest: axes.profile_manifest_digest,
@@ -479,6 +712,21 @@ impl ZeroPaddingCheckedV1 {
         };
         receipt.candidate_digest = candidate_receipt_digest_v1(&receipt);
         if receipt.candidate_digest == [0; 32]
+            || [
+                receipt.profile_manifest_digest,
+                receipt.topology_digest,
+                receipt.release_candidate_digest,
+                receipt.statement_digest,
+                receipt.operational_context_digest,
+                receipt.source_binding_digest,
+                receipt.source_receipt_digest,
+                receipt.governed_roster_digest,
+                receipt.public_ciphertext_digest,
+                receipt.transcript_digest,
+                receipt.proof_digest,
+                context_digest,
+            ]
+            .contains(&receipt.candidate_digest)
             || receipt.section_digests.contains(&receipt.candidate_digest)
         {
             return Err(ZkAmsMkheRnsNativeCompositeVerificationErrorV1::InvalidTranscript);
@@ -493,6 +741,7 @@ impl ZeroPaddingCheckedV1 {
 )]
 enum FirstPartyStageAuthorityV1 {
     Production,
+    ProductionSourceBoundAllStages,
     #[cfg(test)]
     ExactFixture(Box<ExactFixtureStageAuthorityV1>),
 }
@@ -510,6 +759,16 @@ impl FirstPartyStageAuthorityV1 {
             Self::Production => {
                 verify_production_stage_v1(stage, axes, transcript, descriptor, section)
             }
+            Self::ProductionSourceBoundAllStages => match stage {
+                ZkAmsMkheRnsNativeVerificationStageV1::TerminalHyraxBpBridge
+                | ZkAmsMkheRnsNativeVerificationStageV1::RnsRelationQpcs => Ok(()),
+                ZkAmsMkheRnsNativeVerificationStageV1::CrossFieldGlobalLookup => {
+                    authenticate_source_bound_cross_field_global_lookup_v2(transcript, section)
+                }
+                ZkAmsMkheRnsNativeVerificationStageV1::ZeroPadding => {
+                    authenticate_zero_padding_production_v1(transcript, section)
+                }
+            },
             #[cfg(test)]
             Self::ExactFixture(authority) => {
                 authority.verify_v1(stage, axes, transcript, descriptor, section)
@@ -547,6 +806,23 @@ fn verify_terminal_hyrax_bp_bridge_production_v1(
     _descriptor: ZkAmsMkheRnsNativeProofSectionDescriptorV1,
     section: &[u8],
 ) -> Result<(), ZkAmsMkheRnsNativeCompositeVerificationErrorV1> {
+    let _terminal = authenticate_terminal_hyrax_bp_bridge_production_v1(transcript, section)?;
+    // The standalone boundary owns no source-packing same-opening authority.
+    // The atomic stage may not pass and no partial token escapes.
+    Err(
+        ZkAmsMkheRnsNativeCompositeVerificationErrorV1::StageUnavailable(
+            ZkAmsMkheRnsNativeVerificationStageV1::TerminalHyraxBpBridge,
+        ),
+    )
+}
+
+fn authenticate_terminal_hyrax_bp_bridge_production_v1(
+    transcript: &ZkAmsMkheRnsNativeChallengeSeedsV1,
+    section: &[u8],
+) -> Result<
+    RnsNativeTerminalCrossBasisKernelPrerequisiteV1,
+    ZkAmsMkheRnsNativeCompositeVerificationErrorV1,
+> {
     let typed = ZkAmsMkheRnsNativeTerminalBridgeSectionV1::from_canonical_bytes_exact_v1(
         section, transcript,
     )
@@ -555,7 +831,7 @@ fn verify_terminal_hyrax_bp_bridge_production_v1(
             ZkAmsMkheRnsNativeVerificationStageV1::TerminalHyraxBpBridge,
         )
     })?;
-    let _cross_basis =
+    let cross_basis =
         authenticate_rns_native_terminal_cross_basis_kernel_v1(transcript, typed.proof()).map_err(
             |_| {
                 ZkAmsMkheRnsNativeCompositeVerificationErrorV1::StageRejected(
@@ -563,16 +839,7 @@ fn verify_terminal_hyrax_bp_bridge_production_v1(
                 )
             },
         )?;
-    // The kernel proves only representation equality for the detached ordered
-    // point rows. A private source-to-Hyrax mapping prerequisite exists, but
-    // this boundary cannot construct its preceding RLWE/source stage from the
-    // public facts it owns. The atomic stage may not pass and no partial token
-    // escapes.
-    Err(
-        ZkAmsMkheRnsNativeCompositeVerificationErrorV1::StageUnavailable(
-            ZkAmsMkheRnsNativeVerificationStageV1::TerminalHyraxBpBridge,
-        ),
-    )
+    Ok(cross_basis)
 }
 
 fn verify_rns_relation_qpcs_production_v1(
@@ -581,6 +848,21 @@ fn verify_rns_relation_qpcs_production_v1(
     _descriptor: ZkAmsMkheRnsNativeProofSectionDescriptorV1,
     section: &[u8],
 ) -> Result<(), ZkAmsMkheRnsNativeCompositeVerificationErrorV1> {
+    let _qpcs = authenticate_rns_relation_qpcs_production_v1(transcript, section)?;
+    // The standalone boundary owns no authenticated RLWE/source linkage for
+    // the retained qPCS residual.
+    Err(
+        ZkAmsMkheRnsNativeCompositeVerificationErrorV1::StageUnavailable(
+            ZkAmsMkheRnsNativeVerificationStageV1::RnsRelationQpcs,
+        ),
+    )
+}
+
+fn authenticate_rns_relation_qpcs_production_v1<'section>(
+    transcript: &ZkAmsMkheRnsNativeChallengeSeedsV1,
+    section: &'section [u8],
+) -> Result<RnsNativeQpcsFriCompleteStageV1<'section>, ZkAmsMkheRnsNativeCompositeVerificationErrorV1>
+{
     let typed = ZkAmsMkheRnsNativeRnsRelationQpcsSectionV1::from_canonical_bytes_exact_v1(
         section, transcript,
     )
@@ -589,7 +871,7 @@ fn verify_rns_relation_qpcs_production_v1(
             ZkAmsMkheRnsNativeVerificationStageV1::RnsRelationQpcs,
         )
     })?;
-    let _qpcs_fri = authenticate_rns_native_qpcs_fri_complete_v1(
+    let qpcs_fri = authenticate_rns_native_qpcs_fri_complete_v1(
         transcript,
         typed.equation_commitment_digests(),
         typed.limb_commitment_digests(),
@@ -601,15 +883,7 @@ fn verify_rns_relation_qpcs_production_v1(
             ZkAmsMkheRnsNativeVerificationStageV1::RnsRelationQpcs,
         )
     })?;
-    // Initial, quotient, and all eighteen FRI tree memberships, every queried
-    // opening/batch/fold equation, and the derived terminal-degree equation are
-    // now checked. The retained RLWE/source residual still requires its own
-    // verifier before this atomic stage may pass.
-    Err(
-        ZkAmsMkheRnsNativeCompositeVerificationErrorV1::StageUnavailable(
-            ZkAmsMkheRnsNativeVerificationStageV1::RnsRelationQpcs,
-        ),
-    )
+    Ok(qpcs_fri)
 }
 
 fn verify_cross_field_global_lookup_production_v1(
@@ -628,10 +902,43 @@ fn verify_cross_field_global_lookup_production_v1(
     )
 }
 
+fn authenticate_source_bound_cross_field_global_lookup_v2(
+    transcript: &ZkAmsMkheRnsNativeChallengeSeedsV1,
+    section: &[u8],
+) -> Result<(), ZkAmsMkheRnsNativeCompositeVerificationErrorV1> {
+    ZkAmsMkheRnsNativeCrossFieldGlobalLookupSectionV1::from_canonical_bytes_exact_v1(
+        section, transcript,
+    )
+    .map_err(|_| {
+        ZkAmsMkheRnsNativeCompositeVerificationErrorV1::StageRejected(
+            ZkAmsMkheRnsNativeVerificationStageV1::CrossFieldGlobalLookup,
+        )
+    })?;
+    // Algebraic and root-equality authority is carried solely by the opaque
+    // `ProductionSourceBoundAllStages` variant.  This local replay binds
+    // that authority to the exact final-context section bytes once more.
+    Ok(())
+}
+
 fn verify_zero_padding_production_v1(
     _axes: &CandidateAxesV1,
     transcript: &ZkAmsMkheRnsNativeChallengeSeedsV1,
     _descriptor: ZkAmsMkheRnsNativeProofSectionDescriptorV1,
+    section: &[u8],
+) -> Result<(), ZkAmsMkheRnsNativeCompositeVerificationErrorV1> {
+    authenticate_zero_padding_production_v1(transcript, section)?;
+    // The standalone public boundary has authenticated the committed padding
+    // inventory as zero, but it does not own the global/source linkage that
+    // identifies those commitments as the governed padding lanes.
+    Err(
+        ZkAmsMkheRnsNativeCompositeVerificationErrorV1::StageUnavailable(
+            ZkAmsMkheRnsNativeVerificationStageV1::ZeroPadding,
+        ),
+    )
+}
+
+fn authenticate_zero_padding_production_v1(
+    transcript: &ZkAmsMkheRnsNativeChallengeSeedsV1,
     section: &[u8],
 ) -> Result<(), ZkAmsMkheRnsNativeCompositeVerificationErrorV1> {
     let typed =
@@ -641,7 +948,7 @@ fn verify_zero_padding_production_v1(
                     ZkAmsMkheRnsNativeVerificationStageV1::ZeroPadding,
                 )
             })?;
-    let _padding = authenticate_rns_native_zero_padding_commitments_v1(
+    let padding = authenticate_rns_native_zero_padding_commitments_v1(
         transcript,
         typed.limb_padding_digests(),
         typed.proof(),
@@ -651,15 +958,15 @@ fn verify_zero_padding_production_v1(
             ZkAmsMkheRnsNativeVerificationStageV1::ZeroPadding,
         )
     })?;
-    // The committed padding inventory is authenticated as zero. Its private
-    // source/terminal linkage prerequisite is not reachable from this
-    // boundary, and no global-lookup verifier proves that these are the actual
-    // governed padding lanes. No partial prerequisite escapes this adapter.
-    Err(
-        ZkAmsMkheRnsNativeCompositeVerificationErrorV1::StageUnavailable(
-            ZkAmsMkheRnsNativeVerificationStageV1::ZeroPadding,
-        ),
-    )
+    let _verified_zero_padding_root =
+        padding
+            .verified_zero_padding_root_v1(transcript)
+            .map_err(|_| {
+                ZkAmsMkheRnsNativeCompositeVerificationErrorV1::StageRejected(
+                    ZkAmsMkheRnsNativeVerificationStageV1::ZeroPadding,
+                )
+            })?;
+    Ok(())
 }
 
 fn validate_context_v1(

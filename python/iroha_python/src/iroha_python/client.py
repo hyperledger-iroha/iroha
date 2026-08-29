@@ -13039,7 +13039,7 @@ _PIPELINE_STATUS_KINDS = frozenset(
 )
 _DEFAULT_RETRY_STATUSES = frozenset({502, 503, 504})
 _DEFAULT_RETRY_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
-_ZK_X509_PRIVACY_PROTOCOL_ID_V1 = "iroha-zk-x509-stark-p256-v0"
+_ZK_X509_PRIVACY_PROTOCOL_ID_V1 = "iroha-zk-x509-stark-p256-v1"
 _CONTRACT_CALL_BATCH_BINDING_DOMAIN_V1 = b"iroha:contract-call-batch-binding:v1\0"
 _CONTRACT_CALL_BATCH_ARGUMENTS_DOMAIN_V1 = b"iroha:contract-call-batch-arguments:v1\0"
 _CONTRACT_CALL_BATCH_INSTRUCTION_DOMAIN_V1 = (

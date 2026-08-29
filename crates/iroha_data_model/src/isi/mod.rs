@@ -118,6 +118,7 @@ macro_rules! impl_direct_instruction_box {
 impl_direct_instruction_box!(crate::isi::zk::VerifyProof);
 impl_direct_instruction_box!(crate::isi::zk::PruneProofs);
 impl_direct_instruction_box!(crate::isi::privacy::RegisterPrivacyProtocolActivationV1);
+impl_direct_instruction_box!(crate::isi::privacy::RegisterPrivacyExact12QualificationV1);
 impl_direct_instruction_box!(crate::isi::privacy::SchedulePrivacyConsensusPolicyTighteningV1);
 impl_direct_instruction_box!(crate::isi::privacy::SchedulePrivacyProtocolLimitsTighteningV1);
 impl_direct_instruction_box!(crate::isi::privacy::TransitionPrivacyProtocolLifecycleV1);
@@ -153,6 +154,7 @@ impl_direct_instruction_box!(crate::isi::bridge::SubmitBridgeProof);
 impl_direct_instruction_box!(crate::isi::bridge::RecordBridgeReceipt);
 impl_direct_instruction_box!(crate::isi::bridge::RecordSccpMessage);
 impl_direct_instruction_box!(crate::isi::bridge::ApplySccpRouteGovernance);
+impl_direct_instruction_box!(crate::isi::bridge::SubmitSccpTonBreakerObservationV1);
 impl_direct_instruction_box!(crate::isi::asset_alias::SetAssetDefinitionAlias);
 impl_direct_instruction_box!(crate::isi::asset_transfer_control::SetAssetTransferAvailability);
 impl_direct_instruction_box!(crate::isi::asset_transfer_control::SetAssetTransferBlacklist);
@@ -356,6 +358,13 @@ impl_sorafs_reserve_instruction_box!(
 impl_direct_instruction_box!(crate::isi::sorafs::SetSorafsPopIssuerPolicy);
 impl_direct_instruction_box!(crate::isi::sorafs::CommitSorafsPopCredentialBatch);
 impl_direct_instruction_box!(crate::isi::sorafs::PublishSorafsPopRevocationList);
+impl_direct_instruction_box!(crate::isi::sorafs::RegisterSorafsCitizenBond);
+impl_direct_instruction_box!(crate::isi::sorafs::RotateSorafsCitizenBondAuthorization);
+impl_direct_instruction_box!(crate::isi::sorafs::RequestSorafsCitizenBondExit);
+impl_direct_instruction_box!(crate::isi::sorafs::RegisterSorafsAnonymousServiceNote);
+impl_direct_instruction_box!(crate::isi::sorafs::RegisterSorafsAnonymousJurorCandidacy);
+impl_direct_instruction_box!(crate::isi::sorafs::RefundSorafsAnonymousServiceEscrow);
+impl_direct_instruction_box!(crate::isi::sorafs::SlashSorafsAnonymousServiceEscrow);
 impl_direct_instruction_box!(crate::isi::sorafs::SetSorafsModerationPolicy);
 impl_direct_instruction_box!(crate::isi::sorafs::SubmitSorafsModerationAppeal);
 impl_direct_instruction_box!(crate::isi::sorafs::RegisterSorafsModerationJurorEligibility);
@@ -2676,6 +2685,7 @@ pub mod prelude {
         },
         bridge::{
             ApplySccpRouteGovernance, RecordBridgeReceipt, RecordSccpMessage, SubmitBridgeProof,
+            SubmitSccpTonBreakerObservationV1,
         },
         confidential::{
             PublishPedersenParams, PublishPoseidonParams, SetPedersenParamsLifecycle,
@@ -2759,17 +2769,20 @@ pub mod prelude {
             FinalizeSorafsModerationSortition, IssueReplicationOrder, MaintainSorafsOrderbook,
             MatchSorafsOrderbook, PublishSorafsPopRevocationList, RaiseSorafsModerationChallenge,
             RecordCapacityTelemetry, RecordSorafsOrderbookSettlementReceipt,
-            RegisterCapacityDeclaration, RegisterCapacityDispute, RegisterPinManifest,
+            RefundSorafsAnonymousServiceEscrow, RegisterCapacityDeclaration,
+            RegisterCapacityDispute, RegisterPinManifest, RegisterSorafsAnonymousJurorCandidacy,
+            RegisterSorafsAnonymousServiceNote, RegisterSorafsCitizenBond,
             RegisterSorafsModerationJurorEligibility, RegisterSorafsReserveAccount,
-            RepaySorafsReserveCredit, RequestSorafsReserveMovement, ResolveSorafsCapacityDispute,
-            ResolveSorafsModerationChallenge, RetirePinManifest, ReviseReplicationOrderAssignments,
-            RevokeProviderIngestCompletionAuthority, SetPricingSchedule,
+            RepaySorafsReserveCredit, RequestSorafsCitizenBondExit, RequestSorafsReserveMovement,
+            ResolveSorafsCapacityDispute, ResolveSorafsModerationChallenge, RetirePinManifest,
+            ReviseReplicationOrderAssignments, RevokeProviderIngestCompletionAuthority,
+            RotateSorafsCitizenBondAuthorization, SetPricingSchedule,
             SetProviderIngestCompletionAuthority, SetSorafsModerationPolicy,
             SetSorafsOrderbookPolicy, SetSorafsPopIssuerPolicy,
             SetSorafsReputationJournalAuthorityPolicy, SetSorafsReservePolicy,
-            SubmitSorafsModerationAppeal, SubmitSorafsModerationCommit,
-            SubmitSorafsModerationReveal, SubmitSorafsOrderbookOrder, SubmitSorafsReserveAppeal,
-            UpsertProviderCredit,
+            SlashSorafsAnonymousServiceEscrow, SubmitSorafsModerationAppeal,
+            SubmitSorafsModerationCommit, SubmitSorafsModerationReveal, SubmitSorafsOrderbookOrder,
+            SubmitSorafsReserveAppeal, UpsertProviderCredit,
         },
         space_directory::{
             ExpireSpaceDirectoryManifest, PublishSpaceDirectoryManifest,

@@ -84,7 +84,7 @@ impl ZkX509CredentialPublicBindingV1 {
         if genesis_hash == [0; 32] {
             return Err(ZkX509CredentialProofErrorV1::InvalidStatement);
         }
-        let statement_digest = PrivacyStatementV1::IrohaZkX509StarkP256V0(statement.clone())
+        let statement_digest = PrivacyStatementV1::IrohaZkX509StarkP256V1(statement.clone())
             .digest()
             .map_err(|_| ZkX509CredentialProofErrorV1::InvalidStatement)?
             .into_bytes();

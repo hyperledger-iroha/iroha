@@ -3088,8 +3088,11 @@ mod tests {
         for (backend, name) in [
             ("halo2/ipa", "vk_transfer"),
             ("halo2/ipa", "halo2/ipa::transfer_v1"),
-            ("stark/fri/sha256-goldilocks", "zk_ace.v1"),
-            ("stark/fri/sha256_goldilocks.v1", "zk-ace-pq-v0"),
+            ("stark/fri/poseidon-x7-goldilocks-6x64-v1", "zk_ace.v1"),
+            (
+                "stark/fri/poseidon-x7-goldilocks-6x64-v1",
+                "generic.binding.v1",
+            ),
         ] {
             let id = VerifyingKeyId::new(backend, name);
             assert!(

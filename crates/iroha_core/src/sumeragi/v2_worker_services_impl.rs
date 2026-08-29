@@ -474,12 +474,9 @@ impl ProductionV2Services {
                 owner.authenticated.request().clone(),
             ));
         let encoded = Self::preencode_v2_network_message(message)?;
-        let peers = owner
-            .sources
-            .iter()
-            .filter(|peer| *peer != &self.local_peer)
-            .cloned()
-            .collect::<Vec<_>>();
+        // Only delivery destinations follow authenticated topology churn. The
+        // WAL-owned signed request, QC, context, and response verifier remain exact.
+        let peers = self.current_archive_targets_with_frozen_fallback(&owner.sources);
         PendingExactFanout::claimed(
             vec![encoded],
             peers,
@@ -507,6 +504,7 @@ impl ProductionV2Services {
             operation.complete();
             return Ok(true);
         };
+        let mut released_kura_replica_advert_heights = BTreeSet::new();
         let ownership = {
             let mut pending = self.lock_pending_exact_output()?;
             if self.exact_output_handoff_owner.is_sealed() {
@@ -516,10 +514,17 @@ impl ProductionV2Services {
             }
             let ownership = pending.enqueue(fanout)?;
             if ownership == ExactFanoutOwnership::Owned {
-                let _ = self.drive_pending_exact_output(&mut pending)?;
+                self.drive_pending_exact_output(
+                    &mut pending,
+                    &mut released_kura_replica_advert_heights,
+                )
+                .map(|_| ownership)
+            } else {
+                Ok(ownership)
             }
-            ownership
         };
+        self.schedule_released_kura_replica_advert_heights(released_kura_replica_advert_heights)?;
+        let ownership = ownership?;
         if ownership == ExactFanoutOwnership::SourceRetained {
             iroha_logger::debug!(
                 request_hash = %owner.request_hash(),
@@ -3874,7 +3879,11 @@ impl ProductionV2Services {
             }
         }
     }
-    fn drive_pending_exact_output(&self, pending: &mut PendingExactOutput) -> Result<bool, String> {
+    fn drive_pending_exact_output(
+        &self,
+        pending: &mut PendingExactOutput,
+        released_kura_replica_advert_heights: &mut BTreeSet<u64>,
+    ) -> Result<bool, String> {
         if pending.applied_height_finality.is_none()
             && u64::try_from(self.state.committed_height())
                 .is_ok_and(|height| height >= self.context.height)
@@ -3901,33 +3910,47 @@ impl ProductionV2Services {
                     let mut hook = hook.lock().map_err(|_| {
                         "Sumeragi v2 exact-output admission hook was poisoned".to_owned()
                     })?;
-                    pending.drive_bounded_with_ack(|post, ticket, route, _timeout_attempt| {
-                        hook(post, ticket).map(|outcome| match outcome {
-                            ExactOutputTestAdmission::Admitted
-                                if matches!(route, ExactTargetRoute::Reply(_)) =>
-                            {
-                                ExactOutputAttemptOutcome::TestReplyFlushed
-                            }
-                            ExactOutputTestAdmission::Admitted => {
-                                ExactOutputAttemptOutcome::Admitted
-                            }
-                            ExactOutputTestAdmission::SidecarFlush(flush_ack) => {
-                                ExactOutputAttemptOutcome::SidecarFlush(flush_ack)
-                            }
-                            ExactOutputTestAdmission::Retired => ExactOutputAttemptOutcome::Retired,
-                        })
-                    })?
+                    pending.drive_bounded_with_ack(
+                        self.kura.as_ref(),
+                        released_kura_replica_advert_heights,
+                        |post, ticket, route, _timeout_attempt| {
+                            hook(post, ticket).map(|outcome| match outcome {
+                                ExactOutputTestAdmission::Admitted
+                                    if matches!(route, ExactTargetRoute::Reply(_)) =>
+                                {
+                                    ExactOutputAttemptOutcome::TestReplyFlushed
+                                }
+                                ExactOutputTestAdmission::Admitted => {
+                                    ExactOutputAttemptOutcome::Admitted
+                                }
+                                ExactOutputTestAdmission::SidecarFlush(flush_ack) => {
+                                    ExactOutputAttemptOutcome::SidecarFlush(flush_ack)
+                                }
+                                ExactOutputTestAdmission::Retired => {
+                                    ExactOutputAttemptOutcome::Retired
+                                }
+                            })
+                        },
+                    )?
                 } else {
-                    pending.drive_bounded_with_ack(|post, ticket, route, timeout_attempt| {
-                        self.admit_network_exact_output(post, ticket, route, timeout_attempt)
-                    })?
+                    pending.drive_bounded_with_ack(
+                        self.kura.as_ref(),
+                        released_kura_replica_advert_heights,
+                        |post, ticket, route, timeout_attempt| {
+                            self.admit_network_exact_output(post, ticket, route, timeout_attempt)
+                        },
+                    )?
                 }
             }
             #[cfg(not(test))]
             {
-                pending.drive_bounded_with_ack(|post, ticket, route, timeout_attempt| {
-                    self.admit_network_exact_output(post, ticket, route, timeout_attempt)
-                })?
+                pending.drive_bounded_with_ack(
+                    self.kura.as_ref(),
+                    released_kura_replica_advert_heights,
+                    |post, ticket, route, timeout_attempt| {
+                        self.admit_network_exact_output(post, ticket, route, timeout_attempt)
+                    },
+                )?
             }
         };
         pending.poll_reply_flushes()?;
@@ -3961,27 +3984,62 @@ impl ProductionV2Services {
         }
         Ok(pending.is_pending())
     }
+    fn schedule_released_kura_replica_advert_heights(
+        &self,
+        heights: BTreeSet<u64>,
+    ) -> Result<(), String> {
+        if heights.is_empty() {
+            return Ok(());
+        }
+        let _ = self
+            .kura_replica_advert_refresh
+            .schedule_retired_exact_output_heights(heights, Instant::now())?;
+        Ok(())
+    }
     fn enqueue_exact_fanout_while_guarded(
         &self,
         messages: Vec<NetworkMessage>,
         peers: Vec<PeerId>,
         rollover_claim: ExactOutputRolloverClaim,
+        permit: &ConsensusOutputPermit<'_>,
+    ) -> Result<ExactFanoutOwnership, String> {
+        let mut released_kura_replica_advert_heights = BTreeSet::new();
+        let ownership = self.enqueue_exact_fanout_while_guarded_collecting_released_adverts(
+            messages,
+            peers,
+            rollover_claim,
+            permit,
+            &mut released_kura_replica_advert_heights,
+        );
+        self.schedule_released_kura_replica_advert_heights(released_kura_replica_advert_heights)?;
+        ownership
+    }
+    fn enqueue_exact_fanout_while_guarded_collecting_released_adverts(
+        &self,
+        messages: Vec<NetworkMessage>,
+        peers: Vec<PeerId>,
+        rollover_claim: ExactOutputRolloverClaim,
         _permit: &ConsensusOutputPermit<'_>,
+        released_kura_replica_advert_heights: &mut BTreeSet<u64>,
     ) -> Result<ExactFanoutOwnership, String> {
         let Some(fanout) = PendingExactFanout::claimed(messages, peers, rollover_claim)? else {
             return Ok(ExactFanoutOwnership::Owned);
         };
-        let mut pending = self.lock_pending_exact_output()?;
-        if self.exact_output_handoff_owner.is_sealed() {
-            return Err(
-                "Sumeragi v2 exact output is sealed after durable finality handoff".to_owned(),
-            );
+        {
+            let mut pending = self.lock_pending_exact_output()?;
+            if self.exact_output_handoff_owner.is_sealed() {
+                return Err(
+                    "Sumeragi v2 exact output is sealed after durable finality handoff".to_owned(),
+                );
+            }
+            let ownership = pending.enqueue(fanout)?;
+            if ownership == ExactFanoutOwnership::Owned {
+                self.drive_pending_exact_output(&mut pending, released_kura_replica_advert_heights)
+                    .map(|_| ownership)
+            } else {
+                Ok(ownership)
+            }
         }
-        let ownership = pending.enqueue(fanout)?;
-        if ownership == ExactFanoutOwnership::Owned {
-            let _ = self.drive_pending_exact_output(&mut pending)?;
-        }
-        Ok(ownership)
     }
     /// Transfer an inseparable topology batch after same-lock bound/capacity/FIFO
     /// checks, returning it whole when full.
@@ -3990,17 +4048,22 @@ impl ProductionV2Services {
         fanouts: Vec<PendingExactFanout>,
         _permit: &ConsensusOutputPermit<'_>,
     ) -> Result<ExactFanoutOwnership, String> {
-        let mut pending = self.lock_pending_exact_output()?;
-        if self.exact_output_handoff_owner.is_sealed() {
-            return Err(
-                "Sumeragi v2 exact output is sealed after durable finality handoff".to_owned(),
-            );
-        }
-        let Some(batch) = pending.prepare_atomic_fanout_batch(fanouts)? else {
-            return Ok(ExactFanoutOwnership::SourceRetained);
+        let mut released_kura_replica_advert_heights = BTreeSet::new();
+        let drive_result = {
+            let mut pending = self.lock_pending_exact_output()?;
+            if self.exact_output_handoff_owner.is_sealed() {
+                return Err(
+                    "Sumeragi v2 exact output is sealed after durable finality handoff".to_owned(),
+                );
+            }
+            let Some(batch) = pending.prepare_atomic_fanout_batch(fanouts)? else {
+                return Ok(ExactFanoutOwnership::SourceRetained);
+            };
+            pending.commit_atomic_fanout_batch(batch);
+            self.drive_pending_exact_output(&mut pending, &mut released_kura_replica_advert_heights)
         };
-        pending.commit_atomic_fanout_batch(batch);
-        let _ = self.drive_pending_exact_output(&mut pending)?;
+        self.schedule_released_kura_replica_advert_heights(released_kura_replica_advert_heights)?;
+        let _ = drive_result?;
         Ok(ExactFanoutOwnership::Owned)
     }
     fn enqueue_owned_exact_reply_routes_while_guarded(
@@ -4027,17 +4090,27 @@ impl ProductionV2Services {
         else {
             return Ok(ExactFanoutOwnership::Owned);
         };
-        let mut pending = self.lock_pending_exact_output()?;
-        if self.exact_output_handoff_owner.is_sealed() {
-            return Err(
-                "Sumeragi v2 exact output is sealed after durable finality handoff".to_owned(),
-            );
-        }
-        let ownership = pending.enqueue_owned_reply_transfer(fanout)?;
-        if ownership == ExactFanoutOwnership::Owned {
-            let _ = self.drive_pending_exact_output(&mut pending)?;
-        }
-        Ok(ownership)
+        let mut released_kura_replica_advert_heights = BTreeSet::new();
+        let ownership = {
+            let mut pending = self.lock_pending_exact_output()?;
+            if self.exact_output_handoff_owner.is_sealed() {
+                return Err(
+                    "Sumeragi v2 exact output is sealed after durable finality handoff".to_owned(),
+                );
+            }
+            let ownership = pending.enqueue_owned_reply_transfer(fanout)?;
+            if ownership == ExactFanoutOwnership::Owned {
+                self.drive_pending_exact_output(
+                    &mut pending,
+                    &mut released_kura_replica_advert_heights,
+                )
+                .map(|_| ownership)
+            } else {
+                Ok(ownership)
+            }
+        };
+        self.schedule_released_kura_replica_advert_heights(released_kura_replica_advert_heights)?;
+        ownership
     }
     fn exact_output_scope(&self) -> ExactOutputCreationScope {
         ExactOutputCreationScope {
@@ -4065,6 +4138,7 @@ impl ProductionV2Services {
         let operation = output_guard
             .begin_fail_stop_operation()
             .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
+        let mut released_kura_replica_advert_heights = BTreeSet::new();
         let outcome = self.kura_replica_advert_refresh.drive_turn(
             now,
             |source_height| {
@@ -4072,8 +4146,16 @@ impl ProductionV2Services {
                     .probe_kura_replica_advert_source(source_height, &self.key_pair)
                     .map_err(|error| error.to_string())
             },
-            |source| self.post_kura_replica_advert_while_guarded(source, operation.permit()),
-        )?;
+            |source| {
+                self.post_kura_replica_advert_while_guarded(
+                    source,
+                    operation.permit(),
+                    &mut released_kura_replica_advert_heights,
+                )
+            },
+        );
+        self.schedule_released_kura_replica_advert_heights(released_kura_replica_advert_heights)?;
+        let outcome = outcome?;
         operation.complete();
         Ok(outcome)
     }
@@ -4085,6 +4167,7 @@ impl ProductionV2Services {
         let operation = output_guard
             .begin_fail_stop_operation()
             .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
+        let mut released_kura_replica_advert_heights = BTreeSet::new();
         let pending_remains = {
             let mut pending = self.lock_pending_exact_output()?;
             if self.exact_output_handoff_owner.is_sealed() {
@@ -4092,8 +4175,10 @@ impl ProductionV2Services {
                 operation.complete();
                 return Ok(false);
             }
-            self.drive_pending_exact_output(&mut pending)?
+            self.drive_pending_exact_output(&mut pending, &mut released_kura_replica_advert_heights)
         };
+        self.schedule_released_kura_replica_advert_heights(released_kura_replica_advert_heights)?;
+        let pending_remains = pending_remains?;
         operation.complete();
         Ok(pending_remains)
     }
@@ -4610,6 +4695,7 @@ impl ProductionV2Services {
         &self,
         source: &KuraReplicaAdvertSourceV1,
         permit: &ConsensusOutputPermit<'_>,
+        released_kura_replica_advert_heights: &mut BTreeSet<u64>,
     ) -> Result<ExactFanoutOwnership, String> {
         let source_height = source.height();
         if source_height == 0 || source_height > self.context.height {
@@ -4635,11 +4721,12 @@ impl ProductionV2Services {
         // authority available under validator rotation. Historical departed
         // validators are not guessed or contacted; Kura pins bodies outside
         // the configured proactive horizon fail-closed.
-        self.enqueue_exact_fanout_while_guarded(
+        self.enqueue_exact_fanout_while_guarded_collecting_released_adverts(
             vec![NetworkMessage::SumeragiBlock(Arc::new(wire))],
             self.remote_voters(),
             rollover_claim,
             permit,
+            released_kura_replica_advert_heights,
         )
     }
     fn committee_for_round(&self, round: wire::ConsensusRound) -> Result<Committee, String> {

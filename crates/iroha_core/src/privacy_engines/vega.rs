@@ -1031,6 +1031,8 @@ fn derive_vega_transaction_intent_digest_v1(
     // The proof-empty projection exists only on this stack frame. It cannot be
     // returned, signed, or submitted through the sealed prepared-action API.
     let normalized_projection_envelope = PrivacyProofEnvelopeV1 {
+        wire_magic: Default::default(),
+        catalog_commitment: Default::default(),
         protocol_id: profile.protocol_id,
         proof_system_id: profile.proof_system_id,
         engine_id: profile.engine_id,
@@ -1040,8 +1042,8 @@ fn derive_vega_transaction_intent_digest_v1(
         statement_schema_digest: profile.statement_schema_digest,
         engine_manifest_digest: profile.engine_manifest_digest,
         statement_digest: PrivacyStatementDigestV1::new([0; 32]),
-        statement: PrivacyStatementV1::VegaExistingCredentialZkV0(statement),
-        proof: PrivacyProofV1::VegaExistingCredentialZkV0(PrivacyProofBytesV1::new(Vec::new())),
+        statement: PrivacyStatementV1::VegaExistingCredentialZkV1(statement),
+        proof: PrivacyProofV1::VegaExistingCredentialZkV1(PrivacyProofBytesV1::new(Vec::new())),
     };
     vega_transaction_payload_v1(context, normalized_projection_envelope)?
         .privacy_transaction_intent_digest_v1()
@@ -1108,12 +1110,12 @@ fn validate_vega_payload_integrity_v1(
     envelope
         .validate_with_limits(&PrivacyConsensusLimitsV1::taira_default())
         .map_err(|_| ())?;
-    if envelope.protocol_id != PrivacyProtocolIdV1::VegaExistingCredentialZkV0
+    if envelope.protocol_id != PrivacyProtocolIdV1::VegaExistingCredentialZkV1
         || envelope.statement_digest.as_bytes() != &expected.statement_digest
     {
         return Err(());
     }
-    let PrivacyStatementV1::VegaExistingCredentialZkV0(statement) = &envelope.statement else {
+    let PrivacyStatementV1::VegaExistingCredentialZkV1(statement) = &envelope.statement else {
         return Err(());
     };
     if statement.context.action_index != VEGA_PRIVACY_ACTION_INDEX_V1
@@ -1122,7 +1124,7 @@ fn validate_vega_payload_integrity_v1(
     {
         return Err(());
     }
-    let PrivacyProofV1::VegaExistingCredentialZkV0(proof) = &envelope.proof else {
+    let PrivacyProofV1::VegaExistingCredentialZkV1(proof) = &envelope.proof else {
         return Err(());
     };
     if u32::try_from(proof.as_bytes().len()).map_err(|_| ())? != expected.proof_bytes {
@@ -1175,7 +1177,7 @@ where
     validate_vega_transaction_context_v1(&context)?;
     validate_vega_public_input_v1(input)?;
     let profile = crate::privacy_profiles::compiled_privacy_profile_v1(
-        PrivacyProtocolIdV1::VegaExistingCredentialZkV0,
+        PrivacyProtocolIdV1::VegaExistingCredentialZkV1,
     )
     .map_err(|_| VegaPrivacyActionBuildErrorV1::CompiledProfileUnavailable)?;
     prepare_vega_privacy_action_with_profile_and_rng_v1(
@@ -1189,51 +1191,6 @@ where
         rng,
     )
 }
-/// Prepare a non-authorizing Vega release candidate using explicit candidate profile material.
-///
-/// This entry point exists only for crate-internal tests and non-default release-evidence builds.
-/// It cannot make the candidate governance-available, and envelopes it produces remain rejected by
-/// the public compiled-profile admission path while Vega readiness is closed.
-///
-/// # Errors
-///
-/// Returns the same validation and proving errors as [`prepare_vega_privacy_action_with_rng_v1`],
-/// including `CompiledProfileUnavailable` when candidate material cannot be derived.
-#[cfg(feature = "privacy-release-evidence")]
-pub(crate) fn prepare_vega_release_candidate_privacy_action_with_rng_v1<R>(
-    context: VegaPrivacyActionTransactionContextV1,
-    input: VegaPrivacyActionPublicInputV1,
-    witness_material: VegaPrivacyActionWitnessMaterialV1,
-    device_signing_key: &P256SigningKey,
-    canonical_genesis_hash: [u8; 32],
-    trusted_block_timestamp_ms: u64,
-    rng: &mut R,
-) -> Result<VegaPreparedPrivacyActionV1, VegaPrivacyActionBuildErrorV1>
-where
-    R: CryptoRng + RngCore,
-{
-    if canonical_genesis_hash == [0; 32] {
-        return Err(VegaPrivacyActionBuildErrorV1::ZeroGenesisHash);
-    }
-    if context.network_id.as_bytes() != &canonical_genesis_hash {
-        return Err(VegaPrivacyActionBuildErrorV1::NetworkIdMismatch);
-    }
-    validate_vega_transaction_context_v1(&context)?;
-    validate_vega_public_input_v1(input)?;
-    let profile = crate::privacy_profiles::vega_release_candidate_profile_material_v1()
-        .map_err(|_| VegaPrivacyActionBuildErrorV1::CompiledProfileUnavailable)?;
-    prepare_vega_privacy_action_with_profile_and_rng_v1(
-        context,
-        input,
-        witness_material,
-        device_signing_key,
-        canonical_genesis_hash,
-        trusted_block_timestamp_ms,
-        profile,
-        rng,
-    )
-}
-#[allow(clippy::too_many_arguments)]
 fn prepare_vega_privacy_action_with_profile_and_rng_v1<R>(
     context: VegaPrivacyActionTransactionContextV1,
     input: VegaPrivacyActionPublicInputV1,
@@ -1281,7 +1238,7 @@ where
     let witness = witness_material
         .witness_with_device_signature(device_signature)
         .map_err(VegaPrivacyActionBuildErrorV1::from)?;
-    let typed_statement = PrivacyStatementV1::VegaExistingCredentialZkV0(final_statement.clone());
+    let typed_statement = PrivacyStatementV1::VegaExistingCredentialZkV1(final_statement.clone());
     typed_statement
         .validate(&PrivacyConsensusLimitsV1::taira_default())
         .map_err(|_| VegaPrivacyActionBuildErrorV1::StatementValidation)?;
@@ -1309,6 +1266,8 @@ where
     let proof_bytes = u32::try_from(proof.len())
         .map_err(|_| VegaPrivacyActionBuildErrorV1::EncodedLengthOverflow)?;
     let final_envelope = PrivacyProofEnvelopeV1 {
+        wire_magic: Default::default(),
+        catalog_commitment: Default::default(),
         protocol_id: profile.protocol_id,
         proof_system_id: profile.proof_system_id,
         engine_id: profile.engine_id,
@@ -1319,7 +1278,7 @@ where
         engine_manifest_digest: profile.engine_manifest_digest,
         statement_digest,
         statement: typed_statement,
-        proof: PrivacyProofV1::VegaExistingCredentialZkV0(PrivacyProofBytesV1::new(proof)),
+        proof: PrivacyProofV1::VegaExistingCredentialZkV1(PrivacyProofBytesV1::new(proof)),
     };
     final_envelope
         .validate_with_limits(&PrivacyConsensusLimitsV1::taira_default())

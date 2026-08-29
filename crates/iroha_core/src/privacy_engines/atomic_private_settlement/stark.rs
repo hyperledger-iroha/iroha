@@ -17,19 +17,22 @@ use crate::privacy_engines::{
         PROOF_MANAGED_NOTE_QUERY_COUNT_V1, PROOF_MANAGED_NOTE_SECURITY_LANES_V1,
         PROOF_MANAGED_NOTE_TERMINAL_DEGREE_BOUND_V1, PROOF_MANAGED_NOTE_TERMINAL_LOG2_V1,
         ProofManagedNoteStarkAdapterV1, ProofManagedNoteStarkErrorV1,
-        ProofManagedNoteStarkProtocolV1, proof_managed_note_stark_profile_digest_v1,
-        prove_proof_managed_note_stark_v1_with_rng, verify_proof_managed_note_stark_v1,
+        ProofManagedNoteStarkProtocolV1, prove_proof_managed_note_stark_v1_with_rng,
+        verify_proof_managed_note_stark_v1,
     },
-    transparent_stark::{GoldilocksFieldV1 as F, TransparentTranscriptV1, sha256_frame_v1},
+    transparent_stark::{
+        GoldilocksDigest384V1, GoldilocksFieldV1 as F, TransparentStarkDigestContextV1,
+        TransparentTranscriptV1, goldilocks_digest384_frame_v1,
+    },
 };
 use iroha_data_model::{
     nexus::{AtomicPrivateSettlementV1, PrivateSettlementProofStatementV1},
-    privacy::IrohaIvmPrivateNoteStarkStatementV1,
+    privacy::{IrohaIvmPrivateNoteStarkStatementV1, PrivacyProtocolIdV1},
 };
 use rand::TryRngCore;
 
 /// Exact settlement proof relation and transcript descriptor.
-pub(crate) const ATOMIC_PRIVATE_SETTLEMENT_STARK_PROFILE_DESCRIPTOR_V1: &[u8] = b"iroha-atomic-private-settlement-stark-v1:wire=APZ1-v1:shared-proof-managed-note-geometry:trace=2^14:base=556:profile-aux=1:profile-fixed=122:profile-constraints=1372:constraint-degree=4:max-proof=8388608:relation=ivm-private-note-fixed-2-input-3-output-balanced-with-zero-cover:public-input=sha256-frame(canonical-manifest-intent-proof-binding,canonical-leg-statement,canonical-internal-statement,canonical-genesis):post-proof-artifacts=manifest+committee-qc+carrier:output-memos=auditor-plaintext-commitment+payer-change-role+sponsor-reimbursement-terms:transparent-amx=separate:governed-disabled-by-default";
+pub(crate) const ATOMIC_PRIVATE_SETTLEMENT_STARK_PROFILE_DESCRIPTOR_V1: &[u8] = b"iroha-atomic-private-settlement-stark-v1:wire=APZ1-v1:shared-proof-managed-note-geometry:trace=2^14:base=556:profile-aux=1:profile-fixed=122:profile-constraints=1372:constraint-degree=4:max-proof=8388608:relation=ivm-private-note-fixed-2-input-3-output-balanced-with-zero-cover:public-input=poseidon-x7-goldilocks-6x64(canonical-manifest-intent-proof-binding,canonical-leg-statement,canonical-internal-statement,canonical-genesis):post-proof-artifacts=manifest+committee-qc+carrier:output-memos=auditor-plaintext-commitment+payer-change-role+sponsor-reimbursement-terms:transparent-amx=separate:governed-disabled-by-default";
 
 const SETTLEMENT_PARAMETERS_V1: aggregate::AggregateStarkParametersV1 =
     aggregate::AggregateStarkParametersV1 {
@@ -53,6 +56,10 @@ const SETTLEMENT_PARAMETERS_V1: aggregate::AggregateStarkParametersV1 =
 
 const SETTLEMENT_DOMAINS_V1: aggregate::AggregateStarkDomainsV1 =
     aggregate::AggregateStarkDomainsV1 {
+        digest_context: TransparentStarkDigestContextV1::new(
+            PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+            b"atomic-private-settlement-stark-profile-v1",
+        ),
         base_leaf: b"atomic-private-settlement-stark-base-leaf-v1",
         base_node: b"atomic-private-settlement-stark-base-node-v1",
         aux_leaf: b"atomic-private-settlement-stark-aux-leaf-v1",
@@ -75,9 +82,6 @@ fn settlement_protocol_v1() -> ProofManagedNoteStarkProtocolV1 {
         parameters: SETTLEMENT_PARAMETERS_V1,
         domains: SETTLEMENT_DOMAINS_V1,
         maximum_constraint_degree: PRIVATE_NOTE_PROFILE_CONSTRAINT_DEGREE_V1,
-        profile_digest: proof_managed_note_stark_profile_digest_v1(
-            ATOMIC_PRIVATE_SETTLEMENT_STARK_PROFILE_DESCRIPTOR_V1,
-        ),
         profile_binding_label: b"atomic-private-settlement-stark-profile-v1",
         profile_descriptor: ATOMIC_PRIVATE_SETTLEMENT_STARK_PROFILE_DESCRIPTOR_V1,
         relation_layout_domain: b"atomic-private-settlement-stark-relation-layout-v1",
@@ -129,7 +133,9 @@ impl ProofManagedNoteStarkAdapterV1 for AtomicPrivateSettlementStarkAdapterV1<'_
         settlement_protocol_v1()
     }
 
-    fn public_input_digest_v1(&self) -> Result<[u8; 32], ProofManagedNoteStarkErrorV1> {
+    fn public_input_digest_v1(
+        &self,
+    ) -> Result<GoldilocksDigest384V1, ProofManagedNoteStarkErrorV1> {
         validate_public_binding_v1(
             self.manifest,
             self.statement,
@@ -151,8 +157,13 @@ impl ProofManagedNoteStarkAdapterV1 for AtomicPrivateSettlementStarkAdapterV1<'_
             .map_err(|_| ProofManagedNoteStarkErrorV1::InvalidProfile)?;
         let internal = norito::encode_canonical(self.internal_statement)
             .map_err(|_| ProofManagedNoteStarkErrorV1::InvalidProfile)?;
-        sha256_frame_v1(
+        goldilocks_digest384_frame_v1(
+            SETTLEMENT_DOMAINS_V1.digest_context,
             b"atomic-private-settlement-stark-public-input-v1",
+            b"statement-binding",
+            0,
+            0,
+            0,
             &[
                 proof_binding_digest.as_ref(),
                 &statement,

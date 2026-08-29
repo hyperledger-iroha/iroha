@@ -18,7 +18,7 @@ fn exact12_capability_manifest_has_canonical_generic_and_x509_operation_rows() {
     assert_eq!(manifest.protocols.len(), PrivacyProtocolIdV1::COUNT);
     let generic_rows = [
         (
-            PrivacyProtocolIdV1::ZkAcePqAuthorizationV0,
+            PrivacyProtocolIdV1::ZkAcePqAuthorizationV1,
             "zk_ace_authorization_action_v1",
             "authorization_action",
             0,
@@ -42,13 +42,13 @@ fn exact12_capability_manifest_has_canonical_generic_and_x509_operation_rows() {
             2,
         ),
         (
-            PrivacyProtocolIdV1::VegaExistingCredentialZkV0,
+            PrivacyProtocolIdV1::VegaExistingCredentialZkV1,
             "vega_credential_presentation_v1",
             "presentation_action",
             2,
         ),
         (
-            PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0,
+            PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1,
             "jindo_polynomial_evaluation_v1",
             "component",
             0,
@@ -78,7 +78,7 @@ fn exact12_capability_manifest_has_canonical_generic_and_x509_operation_rows() {
             7,
         ),
         (
-            PrivacyProtocolIdV1::PqMaspStarkV0,
+            PrivacyProtocolIdV1::PqMaspStarkV1,
             "pq_masp_note_action_v1",
             "note_action",
             31,
@@ -97,7 +97,7 @@ fn exact12_capability_manifest_has_canonical_generic_and_x509_operation_rows() {
     let x509 = &manifest.protocols[5];
     assert_eq!(
         x509.protocol_id,
-        PrivacyProtocolIdV1::IrohaZkX509StarkP256V0
+        PrivacyProtocolIdV1::IrohaZkX509StarkP256V1
     );
     assert_eq!(
         x509.operation_schema,
@@ -111,7 +111,9 @@ fn exact12_capability_manifest_has_canonical_generic_and_x509_operation_rows() {
     assert_eq!(
         x509.readiness,
         PrivacyCapabilityReadinessV1::Unavailable(
-            PrivacyCompiledProfileUnavailableReasonV1::EngineUnavailable
+            PrivacyCapabilityUnavailableReasonV1::CompiledProfile(
+                PrivacyCompiledProfileUnavailableReasonV1::EngineUnavailable
+            )
         ),
         "a public operation mapping must not open the ZK-X509 readiness gate"
     );
@@ -142,14 +144,18 @@ fn exact12_capability_manifest_is_canonical_self_authenticating_and_committed() 
     let decoded_json: PrivacyExact12CapabilityManifestV1 =
         norito::json::from_json(&json).expect("decode manifest JSON");
     assert_eq!(decoded_json, manifest);
-    assert!(json.contains("missing-distribution-wide-knowledge-soundness-evidence"));
+    assert!(json.contains("production-qualified"));
+    assert!(!json.contains("available-experimental"));
+    assert!(!json.contains("limitation"));
     let pgc = &manifest.protocols[1];
-    assert_eq!(pgc.readiness, PrivacyCapabilityReadinessV1::Available);
     assert_eq!(
-        pgc.activation_state,
-        PrivacyCapabilityActivationStateV1::Active
+        pgc.readiness,
+        PrivacyCapabilityReadinessV1::Unavailable(
+            PrivacyCapabilityUnavailableReasonV1::MissingProductionQualification
+        )
     );
-    assert!(pgc.is_network_available());
+    assert!(!pgc.is_network_available());
+    assert!(manifest.qualification.is_none());
     for row in manifest
         .protocols
         .iter()
@@ -162,10 +168,10 @@ fn exact12_capability_manifest_is_canonical_self_authenticating_and_committed() 
     }
 }
 #[test]
-fn revised_jindo_is_explicitly_experimental_and_never_falsely_certified() {
+fn revised_jindo_is_unavailable_without_registered_production_evidence() {
     let mut snapshot = capability_snapshot();
     let jindo_activation = activation(&envelope(statement_for(
-        PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0,
+        PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1,
     )));
     snapshot.protocols[6].compiled_profile =
         PrivacyCompiledProfileResultV1::Available(compiled_profile_snapshot(&jindo_activation));
@@ -178,11 +184,9 @@ fn revised_jindo_is_explicitly_experimental_and_never_falsely_certified() {
     let jindo = &manifest.protocols[6];
     assert_eq!(
         jindo.readiness,
-        PrivacyCapabilityReadinessV1::AvailableExperimental
-    );
-    assert_eq!(
-        jindo.limitation,
-        Some(PrivacyCapabilityLimitationV1::MissingDistributionWideKnowledgeSoundnessEvidence)
+        PrivacyCapabilityReadinessV1::Unavailable(
+            PrivacyCapabilityUnavailableReasonV1::NotRegistered
+        )
     );
     assert!(
         !jindo.is_network_available(),
@@ -229,39 +233,13 @@ fn exact12_capability_manifest_rejects_derived_field_and_digest_substitution() {
         )
     ));
     let mut readiness = manifest.clone();
-    readiness.protocols[1].readiness = PrivacyCapabilityReadinessV1::Unavailable(
-        PrivacyCompiledProfileUnavailableReasonV1::EngineUnavailable,
-    );
+    readiness.protocols[1].readiness = PrivacyCapabilityReadinessV1::ProductionQualified;
     redigest_exact12_capability_manifest(&mut readiness);
     assert!(matches!(
         readiness.validate(),
         Err(
             PrivacyExact12CapabilityManifestValidationErrorV1::ProtocolRow {
                 source: PrivacyExact12CapabilityRowValidationErrorV1::ReadinessMismatch { .. },
-                ..
-            }
-        )
-    ));
-    let mut activation = manifest.clone();
-    activation.protocols[1].activation_state = PrivacyCapabilityActivationStateV1::Suspended;
-    redigest_exact12_capability_manifest(&mut activation);
-    assert!(matches!(
-        activation.validate(),
-        Err(
-            PrivacyExact12CapabilityManifestValidationErrorV1::ProtocolRow {
-                source: PrivacyExact12CapabilityRowValidationErrorV1::ActivationStateMismatch { .. },
-                ..
-            }
-        )
-    ));
-    let mut limitation = manifest.clone();
-    limitation.protocols[6].limitation = None;
-    redigest_exact12_capability_manifest(&mut limitation);
-    assert!(matches!(
-        limitation.validate(),
-        Err(
-            PrivacyExact12CapabilityManifestValidationErrorV1::ProtocolRow {
-                source: PrivacyExact12CapabilityRowValidationErrorV1::LimitationMismatch { .. },
                 ..
             }
         )
@@ -317,14 +295,14 @@ fn exact12_capability_manifest_rejects_shape_zero_digest_and_json_adversaries() 
 fn exact12_capability_manifest_rejects_false_jindo_certification() {
     let mut snapshot = capability_snapshot();
     let jindo_activation = activation(&envelope(statement_for(
-        PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0,
+        PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1,
     )));
     snapshot.protocols[6].compiled_profile =
         PrivacyCompiledProfileResultV1::Available(compiled_profile_snapshot(&jindo_activation));
     let mut manifest = snapshot
         .exact12_capability_manifest_v1()
-        .expect("project available-experimental Jindo");
-    manifest.protocols[6].readiness = PrivacyCapabilityReadinessV1::Available;
+        .expect("project unregistered Jindo");
+    manifest.protocols[6].readiness = PrivacyCapabilityReadinessV1::ProductionQualified;
     redigest_exact12_capability_manifest(&mut manifest);
     assert!(matches!(
         manifest.validate(),

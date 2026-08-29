@@ -6,18 +6,11 @@ import java.util.Map;
 
 /** Closed first-release SCCP network inventory with exact, case-sensitive profile keys. */
 public enum SccpNetworkV1 {
-  // Tag 0 is permanently reserved for the removed pre-release SORA profile.
-  SORA_TAIRA("sora-taira", 1, 0, true),
-  ETHEREUM_MAINNET("ethereum-mainnet", 2, 1, true),
-  ETHEREUM_SEPOLIA("ethereum-sepolia", 3, 1, false),
-  BSC_MAINNET("bsc-mainnet", 4, 2, true),
-  BSC_TESTNET("bsc-testnet", 5, 2, false),
-  // Tags 6 through 9 are permanently reserved for retired prerelease profiles.
-  TRON_MAINNET("tron-mainnet", 10, 5, true),
-  TRON_NILE("tron-nile", 11, 5, false),
-  TRON_SHASTA("tron-shasta", 12, 5, false),
-  TON_MAINNET("ton-mainnet", 14, 4, true),
-  TON_TESTNET("ton-testnet", 15, 4, false);
+  SORA_TAIRA("sora-taira", 0x40, 0, true),
+  ETHEREUM_MAINNET("ethereum-mainnet", 0x41, 1, true),
+  BSC_MAINNET("bsc-mainnet", 0x42, 2, true),
+  TRON_MAINNET("tron-mainnet", 0x43, 3, true),
+  TON_MAINNET("ton-mainnet", 0x44, 4, true);
 
   private static final Map<String, SccpNetworkV1> BY_PROFILE;
   private static final Map<Integer, SccpNetworkV1> BY_TAG;

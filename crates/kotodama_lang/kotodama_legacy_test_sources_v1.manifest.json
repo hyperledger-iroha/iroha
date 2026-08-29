@@ -66,23 +66,23 @@
       "path": "crates/kotodama_lang/src/semantic/test_sources/escrow_open_offer_signature_matches_the_host_abi_2.ko"
     },
     {
-      "byte_len": 386,
-      "content_sha256": "1042195dd11fa81c384ade2523188189665a2bd2de62206b3c9a4cb55cfd1531",
+      "byte_len": 385,
+      "content_sha256": "e9566b71dc0ecc60888e86e495c2e6b119566cacee7185cb4ed2df2650bd5bdf",
       "path": "crates/kotodama_lang/src/semantic/test_sources/invoke_entrypoint_accepts_name_literal_target_1.ko"
     },
     {
-      "byte_len": 373,
-      "content_sha256": "6716dc25763d37b479cd785568731fbfbaf5965c1a752c0d2226c873639c1bbf",
+      "byte_len": 372,
+      "content_sha256": "1e0960faff6a1a10f4c9434a660aba4053b9cf907705c2d6328a0db95edec0a7",
       "path": "crates/kotodama_lang/src/semantic/test_sources/invoke_entrypoint_accepts_test_functions_1.ko"
     },
     {
-      "byte_len": 461,
-      "content_sha256": "8bc47e574abfea2c3e041e459b8bf64388bd6d55a383e1b6fe1ce029638dc0dc",
+      "byte_len": 460,
+      "content_sha256": "368f85984f582b0e04c53c9a9f9dc69dbdb2c589004ac969bb5b72f9786fff8b",
       "path": "crates/kotodama_lang/src/semantic/test_sources/invoke_entrypoint_as_accepts_tuple_returning_targets_1.ko"
     },
     {
-      "byte_len": 902,
-      "content_sha256": "773a8f44053f6dd33c42d23180fe1fadfb4f4db7c6e883062ce7244894223774",
+      "byte_len": 900,
+      "content_sha256": "704faeb3019f853299a1f5729bdc83e62cbc41032bdce6ee25166f560128963b",
       "path": "crates/kotodama_lang/src/semantic/test_sources/invoke_entrypoint_as_and_actor_helpers_type_check_in_tests_1.ko"
     },
     {
@@ -96,13 +96,13 @@
       "path": "crates/kotodama_lang/src/semantic/test_sources/invoke_entrypoint_rejects_non_json_payload_1.ko"
     },
     {
-      "byte_len": 347,
-      "content_sha256": "553b0137183f74fc48e6b42a6e8ff9df0e6dc5f51b5d1bf57aa6e25ebb0d1822",
+      "byte_len": 346,
+      "content_sha256": "d05f2fb68e80d369d9fe47b2ec791c878f05b5be050cc5d07f431743a9b6f668",
       "path": "crates/kotodama_lang/src/semantic/test_sources/invoke_entrypoint_rejects_non_literal_target_1.ko"
     },
     {
-      "byte_len": 279,
-      "content_sha256": "a089b563f7719d5ff4af240c972de098551475bd67fe521e9f8c72aa54066944",
+      "byte_len": 278,
+      "content_sha256": "f10cbf58d508f3983a3e29ed53919b245c38c24a29708c7778ca47112c1777d4",
       "path": "crates/kotodama_lang/src/semantic/test_sources/invoke_entrypoint_rejects_non_test_functions_1.ko"
     },
     {
@@ -262,7 +262,7 @@
     }
   ],
   "format": "iroha.kotodama.legacy-test-sources",
-  "inventory_sha256": "24c8109366577811b8243d13af241dae5e33a6493083cf183614d311d17b656e",
+  "inventory_sha256": "2aa2b5037556ae02926e63cf1f2a334991907b78ac67c99e5606985ac24422ca",
   "origin_merge": "58a8040dc1726359edfdc72759b73ea3649ae38c",
   "schema_version": 1,
   "source_files": [

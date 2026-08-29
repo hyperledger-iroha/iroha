@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import re
 import unicodedata
 from collections.abc import Iterator, Mapping
@@ -14,6 +15,7 @@ from ._account_id import decode_canonical_i105_account_id
 
 _U64_MAX = (1 << 64) - 1
 _U128_MAX = (1 << 128) - 1
+_TON_MAX_COINS = (1 << 120) - 1
 _U32_MAX = (1 << 32) - 1
 _JSON_SAFE_UINT_MAX = (1 << 53) - 1
 _BECH32M_CONST = 0x2BC830A3
@@ -27,12 +29,18 @@ _BN254_BASE_FIELD_MODULUS = int(
 _SCCP_PUBLIC_SIGNAL_SCHEMA_HASH = (
     "7567439F41173D6745A3D51923CB70371ACC7D66F23CEFB4100D6D5D7A432CBB"
 )
+_SCCP_BLS12381_PUBLIC_SIGNAL_SCHEMA_HASH = (
+    "A4DB9F6AAC0ECD22AC107BFDAFBF30DD01087147517EFE285D345F3F1182B874"
+)
 _SCCP_TAIRA_CHAIN_ID_HASH = (
     "CF1CFC0F57B0BFA4C21882A9870317A1F4812F86533897095E3944BE34C5BBA7"
 )
 _SCCP_TAIRA_XOR_ASSET_DEFINITION_ID = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
 _SCCP_SORA_OUTBOUND_SEMANTICS = "ivm_proved_record_sccp_message_v1"
 _SCCP_MAX_SORA_OUTBOUND_GAS_LIMIT = 1_000_000_000
+_KECCAK256_EMPTY_HEX = (
+    "C5D2460186F7233C927E7DB2DCC703C0E500B653CA82273B7BFAD8045D85A470"
+)
 
 
 def _exact(value: Any, fields: frozenset[str], context: str) -> Mapping[str, Any]:
@@ -70,6 +78,22 @@ def _decimal_u64(value: Any, context: str, *, positive: bool = False) -> int:
     parsed = int(value)
     if parsed > _U64_MAX:
         raise TypeError(f"{context} must fit in u64")
+    return parsed
+
+
+def _decimal_u128(
+    value: Any,
+    context: str,
+    *,
+    positive: bool = False,
+    maximum: int = _U128_MAX,
+) -> int:
+    pattern = r"[1-9][0-9]*" if positive else r"(?:0|[1-9][0-9]*)"
+    if not isinstance(value, str) or re.fullmatch(pattern, value) is None:
+        raise TypeError(f"{context} must be a canonical unsigned decimal string")
+    parsed = int(value)
+    if parsed > maximum:
+        raise TypeError(f"{context} is outside its exact unsigned range")
     return parsed
 
 
@@ -411,35 +435,23 @@ class GovernanceSccpNetworkKind(str, Enum):
 
     SORA_TAIRA = "sora_taira"
     ETHEREUM_MAINNET = "ethereum_mainnet"
-    ETHEREUM_SEPOLIA = "ethereum_sepolia"
     BSC_MAINNET = "bsc_mainnet"
-    BSC_TESTNET = "bsc_testnet"
     TRON_MAINNET = "tron_mainnet"
-    TRON_NILE = "tron_nile"
-    TRON_SHASTA = "tron_shasta"
-    SOLANA_TESTNET = "solana_testnet"
+    TON_MAINNET = "ton_mainnet"
 
 
 _SCCP_EXTERNAL_NETWORK_FAMILY = {
     GovernanceSccpNetworkKind.ETHEREUM_MAINNET: "evm",
-    GovernanceSccpNetworkKind.ETHEREUM_SEPOLIA: "evm",
     GovernanceSccpNetworkKind.BSC_MAINNET: "evm",
-    GovernanceSccpNetworkKind.BSC_TESTNET: "evm",
     GovernanceSccpNetworkKind.TRON_MAINNET: "tron",
-    GovernanceSccpNetworkKind.TRON_NILE: "tron",
-    GovernanceSccpNetworkKind.TRON_SHASTA: "tron",
-    GovernanceSccpNetworkKind.SOLANA_TESTNET: "solana",
+    GovernanceSccpNetworkKind.TON_MAINNET: "ton",
 }
 
 _SCCP_EXACT_ROUTE_ID = {
     GovernanceSccpNetworkKind.ETHEREUM_MAINNET: "taira_eth_xor",
-    GovernanceSccpNetworkKind.ETHEREUM_SEPOLIA: "taira_eth_xor",
     GovernanceSccpNetworkKind.BSC_MAINNET: "taira_bsc_xor",
-    GovernanceSccpNetworkKind.BSC_TESTNET: "taira_bsc_xor",
     GovernanceSccpNetworkKind.TRON_MAINNET: "taira_tron_xor",
-    GovernanceSccpNetworkKind.TRON_NILE: "taira_tron_xor",
-    GovernanceSccpNetworkKind.TRON_SHASTA: "taira_tron_xor",
-    GovernanceSccpNetworkKind.SOLANA_TESTNET: "taira_sol_xor",
+    GovernanceSccpNetworkKind.TON_MAINNET: "taira_ton_xor",
 }
 
 
@@ -568,28 +580,21 @@ class GovernanceSccpNativeProofBackendKind(str, Enum):
     ETHEREUM_BEACON = "ethereum_beacon_v1"
     BSC_PARLIA = "bsc_parlia_v1"
     TRON_DPOS = "tron_dpos_v1"
-    SOLANA_AGAVE = "solana_agave_v1"
+    TON_MASTERCHAIN = "ton_masterchain_v1"
 
 
 _SCCP_NATIVE_BACKEND_NETWORKS = {
     GovernanceSccpNativeProofBackendKind.ETHEREUM_BEACON: frozenset(
-        {
-            GovernanceSccpNetworkKind.ETHEREUM_MAINNET,
-            GovernanceSccpNetworkKind.ETHEREUM_SEPOLIA,
-        }
+        {GovernanceSccpNetworkKind.ETHEREUM_MAINNET}
     ),
     GovernanceSccpNativeProofBackendKind.BSC_PARLIA: frozenset(
-        {GovernanceSccpNetworkKind.BSC_MAINNET, GovernanceSccpNetworkKind.BSC_TESTNET}
+        {GovernanceSccpNetworkKind.BSC_MAINNET}
     ),
     GovernanceSccpNativeProofBackendKind.TRON_DPOS: frozenset(
-        {
-            GovernanceSccpNetworkKind.TRON_MAINNET,
-            GovernanceSccpNetworkKind.TRON_NILE,
-            GovernanceSccpNetworkKind.TRON_SHASTA,
-        }
+        {GovernanceSccpNetworkKind.TRON_MAINNET}
     ),
-    GovernanceSccpNativeProofBackendKind.SOLANA_AGAVE: frozenset(
-        {GovernanceSccpNetworkKind.SOLANA_TESTNET}
+    GovernanceSccpNativeProofBackendKind.TON_MASTERCHAIN: frozenset(
+        {GovernanceSccpNetworkKind.TON_MAINNET}
     ),
 }
 
@@ -689,40 +694,48 @@ class GovernanceSccpTronSourceEmitter:
 
 
 @dataclass(frozen=True)
-class GovernanceSccpSolanaSourceEmitter:
-    """Exact immutable Solana source-program deployment identity."""
+class GovernanceSccpTonAddress:
+    """Canonical TON basechain account identity."""
 
-    program_id: str
-    program_data_address: str
-    program_data_slot: int
-    state_account: str
-    program_code_hash: str
+    workchain: int
+    account: str
+
+    @classmethod
+    def from_payload(cls, value: Any, context: str) -> "GovernanceSccpTonAddress":
+        record = _exact(value, frozenset({"workchain", "account"}), context)
+        workchain = _uint(record["workchain"], f"{context}.workchain")
+        if workchain != 0:
+            raise TypeError(f"{context}.workchain must be the basechain integer 0")
+        return cls(workchain, _upper_hex(record["account"], f"{context}.account", 32))
+
+
+@dataclass(frozen=True)
+class GovernanceSccpTonSourceEmitter:
+    """Exact immutable TON source-contract identity."""
+
+    address: GovernanceSccpTonAddress
+    code_hash: str
     route_config_hash: str
 
     @classmethod
-    def from_payload(cls, value: Any, context: str) -> "GovernanceSccpSolanaSourceEmitter":
-        fields = frozenset(
-            {
-                "program_id",
-                "program_data_address",
-                "program_data_slot",
-                "state_account",
-                "program_code_hash",
-                "route_config_hash",
-            }
+    def from_payload(cls, value: Any, context: str) -> "GovernanceSccpTonSourceEmitter":
+        record = _exact(
+            value,
+            frozenset({"address", "code_hash", "route_config_hash"}),
+            context,
         )
-        record = _exact(value, fields, context)
+        code_hash = _upper_hex(record["code_hash"], f"{context}.code_hash", 32)
+        route_hash = _upper_hex(
+            record["route_config_hash"], f"{context}.route_config_hash", 32
+        )
+        if code_hash == route_hash:
+            raise TypeError(f"{context} reuses a TON source hash role")
         return cls(
-            _upper_hex(record["program_id"], f"{context}.program_id", 32),
-            _upper_hex(
-                record["program_data_address"], f"{context}.program_data_address", 32
+            GovernanceSccpTonAddress.from_payload(
+                record["address"], f"{context}.address"
             ),
-            _sccp_uint(
-                record["program_data_slot"], f"{context}.program_data_slot", positive=True
-            ),
-            _upper_hex(record["state_account"], f"{context}.state_account", 32),
-            _upper_hex(record["program_code_hash"], f"{context}.program_code_hash", 32),
-            _upper_hex(record["route_config_hash"], f"{context}.route_config_hash", 32),
+            code_hash,
+            route_hash,
         )
 
 
@@ -731,13 +744,13 @@ class GovernanceSccpSourceEmitterKind(str, Enum):
 
     EVM = "evm"
     TRON = "tron"
-    SOLANA = "solana"
+    TON = "ton"
 
 
 GovernanceSccpSourceEmitterIdentity = Union[
     GovernanceSccpEvmSourceEmitter,
     GovernanceSccpTronSourceEmitter,
-    GovernanceSccpSolanaSourceEmitter,
+    GovernanceSccpTonSourceEmitter,
 ]
 
 
@@ -758,7 +771,7 @@ class GovernanceSccpSourceEmitter:
         parser = {
             GovernanceSccpSourceEmitterKind.EVM: GovernanceSccpEvmSourceEmitter.from_payload,
             GovernanceSccpSourceEmitterKind.TRON: GovernanceSccpTronSourceEmitter.from_payload,
-            GovernanceSccpSourceEmitterKind.SOLANA: GovernanceSccpSolanaSourceEmitter.from_payload,
+            GovernanceSccpSourceEmitterKind.TON: GovernanceSccpTonSourceEmitter.from_payload,
         }[emitter]
         identity = cast(
             GovernanceSccpSourceEmitterIdentity,
@@ -936,11 +949,64 @@ class GovernanceSccpGroth16Bn254SemanticCircuit:
         return cls(version, circuit, witness, schema)
 
 
+@dataclass(frozen=True)
+class GovernanceSccpGroth16Bls12381SemanticCircuit:
+    """Immutable commitments for the audited TON eleven-signal circuit."""
+
+    version: int
+    circuit_commitment: str
+    witness_generator_commitment: str
+    public_signal_schema_hash: str
+
+    @classmethod
+    def from_payload(
+        cls, value: Any, context: str
+    ) -> "GovernanceSccpGroth16Bls12381SemanticCircuit":
+        record = _exact(
+            value,
+            frozenset(
+                {
+                    "version",
+                    "circuit_commitment",
+                    "witness_generator_commitment",
+                    "public_signal_schema_hash",
+                }
+            ),
+            context,
+        )
+        version = _sccp_uint(
+            record["version"], f"{context}.version", 0xFF, positive=True
+        )
+        if version != 1:
+            raise TypeError(f"{context}.version must be the integer 1")
+        circuit = _upper_hex(
+            record["circuit_commitment"], f"{context}.circuit_commitment", 32
+        )
+        witness = _upper_hex(
+            record["witness_generator_commitment"],
+            f"{context}.witness_generator_commitment",
+            32,
+        )
+        schema = _upper_hex(
+            record["public_signal_schema_hash"],
+            f"{context}.public_signal_schema_hash",
+            32,
+        )
+        if schema != _SCCP_BLS12381_PUBLIC_SIGNAL_SCHEMA_HASH:
+            raise TypeError(f"{context}.public_signal_schema_hash is not the TON V1 schema")
+        if len({circuit, witness, schema}) != 3:
+            raise TypeError(f"{context} reuses a semantic commitment role")
+        return cls(version, circuit, witness, schema)
+
+
 class GovernanceSccpSemanticProofProfileKind(str, Enum):
     """Closed semantic proof-profile tags."""
 
     SORA_TAIRA_FINALITY_INCLUSION_GROTH16_BN254 = (
         "sora_taira_finality_inclusion_groth16_bn254"
+    )
+    SORA_TAIRA_FINALITY_INCLUSION_GROTH16_BLS12381 = (
+        "sora_taira_finality_inclusion_groth16_bls12381"
     )
 
 
@@ -949,7 +1015,10 @@ class GovernanceSccpSemanticProofProfile:
     """Exact adjacently tagged semantic proof profile."""
 
     profile: GovernanceSccpSemanticProofProfileKind
-    commitments: GovernanceSccpGroth16Bn254SemanticCircuit
+    commitments: Union[
+        GovernanceSccpGroth16Bn254SemanticCircuit,
+        GovernanceSccpGroth16Bls12381SemanticCircuit,
+    ]
 
     @classmethod
     def from_payload(cls, value: Any, context: str) -> "GovernanceSccpSemanticProofProfile":
@@ -958,12 +1027,13 @@ class GovernanceSccpSemanticProofProfile:
             profile = GovernanceSccpSemanticProofProfileKind(record["profile"])
         except (ValueError, TypeError) as exc:
             raise TypeError(f"{context}.profile is unsupported or retired") from exc
-        return cls(
-            profile,
-            GovernanceSccpGroth16Bn254SemanticCircuit.from_payload(
-                record["commitments"], f"{context}.commitments"
-            ),
+        parser = (
+            GovernanceSccpGroth16Bn254SemanticCircuit.from_payload
+            if profile
+            is GovernanceSccpSemanticProofProfileKind.SORA_TAIRA_FINALITY_INCLUSION_GROTH16_BN254
+            else GovernanceSccpGroth16Bls12381SemanticCircuit.from_payload
         )
+        return cls(profile, parser(record["commitments"], f"{context}.commitments"))
 
 
 @dataclass(frozen=True)
@@ -1116,17 +1186,21 @@ class GovernanceSccpSoraOutboundExecutionPolicy:
         semantics = _string(record["semantics"], f"{context}.semantics")
         if semantics != _SCCP_SORA_OUTBOUND_SEMANTICS:
             raise TypeError(f"{context}.semantics is unsupported or retired")
+        artifact = _upper_hex(
+            record["contract_artifact_sha256"],
+            f"{context}.contract_artifact_sha256",
+            32,
+        )
+        vk_ref = GovernanceSccpPortableVerifyingKeyRef.from_payload(
+            record["vk_ref"], f"{context}.vk_ref"
+        )
+        if artifact == vk_ref.commitment:
+            raise TypeError(f"{context} reuses a governed hash role")
         return cls(
             version,
             semantics,
-            _upper_hex(
-                record["contract_artifact_sha256"],
-                f"{context}.contract_artifact_sha256",
-                32,
-            ),
-            GovernanceSccpPortableVerifyingKeyRef.from_payload(
-                record["vk_ref"], f"{context}.vk_ref"
-            ),
+            artifact,
+            vk_ref,
             _sccp_uint(
                 record["gas_limit"],
                 f"{context}.gas_limit",
@@ -1149,6 +1223,10 @@ class GovernanceSccpEvmDestinationDeployment:
     outbound_proof_policy: GovernanceSccpOutboundProofPolicy
     route_address: str
     route_code_hash: str
+    replay_verifier_address: str
+    replay_verifier_code_hash: str
+    mint_breaker_address: str
+    mint_breaker_code_hash: str
     taira_to_token_multiplier: int
     max_wrapped_supply: int
 
@@ -1167,6 +1245,10 @@ class GovernanceSccpEvmDestinationDeployment:
                 "outbound_proof_policy",
                 "route_address",
                 "route_code_hash",
+                "replay_verifier_address",
+                "replay_verifier_code_hash",
+                "mint_breaker_address",
+                "mint_breaker_code_hash",
                 "taira_to_token_multiplier",
                 "max_wrapped_supply",
             }
@@ -1179,25 +1261,60 @@ class GovernanceSccpEvmDestinationDeployment:
         )
         if multiplier != 1_000_000_000:
             raise TypeError(f"{context}.taira_to_token_multiplier must equal 1000000000")
+        addresses = tuple(
+            _upper_hex(record[field], f"{context}.{field}", 20)
+            for field in (
+                "token_address",
+                "verifier_address",
+                "route_address",
+                "replay_verifier_address",
+                "mint_breaker_address",
+            )
+        )
+        hashes = tuple(
+            _upper_hex(record[field], f"{context}.{field}", 32)
+            for field in (
+                "token_code_hash",
+                "verifier_code_hash",
+                "verifier_key_hash",
+                "route_code_hash",
+                "replay_verifier_code_hash",
+                "mint_breaker_code_hash",
+            )
+        )
+        if len(set(addresses)) != len(addresses) or len(set(hashes)) != len(hashes):
+            raise TypeError(f"{context} reuses a role-separated address or hash")
+        if any(hashes[index] == _KECCAK256_EMPTY_HEX for index in (0, 1, 3, 4, 5)):
+            raise TypeError(f"{context} runtime code hash identifies empty bytecode")
+        key = GovernanceSccpGroth16Bn254VerifyingKey.from_payload(
+            record["verifying_key"], f"{context}.verifying_key"
+        )
+        policy = GovernanceSccpOutboundProofPolicy.from_payload(
+            record["outbound_proof_policy"], f"{context}.outbound_proof_policy"
+        )
+        if (
+            policy.semantic_profile.profile
+            is not GovernanceSccpSemanticProofProfileKind.SORA_TAIRA_FINALITY_INCLUSION_GROTH16_BN254
+        ):
+            raise TypeError(f"{context}.outbound_proof_policy selects the wrong curve")
         return cls(
-            _upper_hex(record["token_address"], f"{context}.token_address", 20),
-            _upper_hex(record["token_code_hash"], f"{context}.token_code_hash", 32),
-            _upper_hex(record["verifier_address"], f"{context}.verifier_address", 20),
-            _upper_hex(record["verifier_code_hash"], f"{context}.verifier_code_hash", 32),
-            GovernanceSccpGroth16Bn254VerifyingKey.from_payload(
-                record["verifying_key"], f"{context}.verifying_key"
-            ),
-            _upper_hex(record["verifier_key_hash"], f"{context}.verifier_key_hash", 32),
-            GovernanceSccpOutboundProofPolicy.from_payload(
-                record["outbound_proof_policy"], f"{context}.outbound_proof_policy"
-            ),
-            _upper_hex(record["route_address"], f"{context}.route_address", 20),
-            _upper_hex(record["route_code_hash"], f"{context}.route_code_hash", 32),
+            addresses[0],
+            hashes[0],
+            addresses[1],
+            hashes[1],
+            key,
+            hashes[2],
+            policy,
+            addresses[2],
+            hashes[3],
+            addresses[3],
+            hashes[4],
+            addresses[4],
+            hashes[5],
             multiplier,
-            _uint(
+            _decimal_u128(
                 record["max_wrapped_supply"],
                 f"{context}.max_wrapped_supply",
-                _U128_MAX,
                 positive=True,
             ),
         )
@@ -1216,6 +1333,10 @@ class GovernanceSccpTronDestinationDeployment:
     outbound_proof_policy: GovernanceSccpOutboundProofPolicy
     route_address: str
     route_code_hash: str
+    replay_verifier_address: str
+    replay_verifier_code_hash: str
+    mint_breaker_address: str
+    mint_breaker_code_hash: str
     taira_to_token_multiplier: int
     max_wrapped_supply: int
 
@@ -1223,71 +1344,79 @@ class GovernanceSccpTronDestinationDeployment:
     def from_payload(
         cls, value: Any, context: str
     ) -> "GovernanceSccpTronDestinationDeployment":
-        fields = frozenset(
-            {
-                "token_address",
-                "token_code_hash",
-                "verifier_address",
-                "verifier_code_hash",
-                "verifying_key",
-                "verifier_key_hash",
-                "outbound_proof_policy",
-                "route_address",
-                "route_code_hash",
-                "taira_to_token_multiplier",
-                "max_wrapped_supply",
-            }
-        )
-        record = _exact(value, fields, context)
-        multiplier = _sccp_uint(
-            record["taira_to_token_multiplier"],
-            f"{context}.taira_to_token_multiplier",
-            positive=True,
-        )
-        if multiplier != 1_000_000_000:
-            raise TypeError(f"{context}.taira_to_token_multiplier must equal 1000000000")
+        parsed = GovernanceSccpEvmDestinationDeployment.from_payload(value, context)
         return cls(
-            _upper_hex(record["token_address"], f"{context}.token_address", 20),
-            _upper_hex(record["token_code_hash"], f"{context}.token_code_hash", 32),
-            _upper_hex(record["verifier_address"], f"{context}.verifier_address", 20),
-            _upper_hex(record["verifier_code_hash"], f"{context}.verifier_code_hash", 32),
-            GovernanceSccpGroth16Bn254VerifyingKey.from_payload(
-                record["verifying_key"], f"{context}.verifying_key"
-            ),
-            _upper_hex(record["verifier_key_hash"], f"{context}.verifier_key_hash", 32),
-            GovernanceSccpOutboundProofPolicy.from_payload(
-                record["outbound_proof_policy"], f"{context}.outbound_proof_policy"
-            ),
-            _upper_hex(record["route_address"], f"{context}.route_address", 20),
-            _upper_hex(record["route_code_hash"], f"{context}.route_code_hash", 32),
-            multiplier,
-            _uint(
-                record["max_wrapped_supply"],
-                f"{context}.max_wrapped_supply",
-                _U128_MAX,
-                positive=True,
-            ),
+            parsed.token_address,
+            parsed.token_code_hash,
+            parsed.verifier_address,
+            parsed.verifier_code_hash,
+            parsed.verifying_key,
+            parsed.verifier_key_hash,
+            parsed.outbound_proof_policy,
+            parsed.route_address,
+            parsed.route_code_hash,
+            parsed.replay_verifier_address,
+            parsed.replay_verifier_code_hash,
+            parsed.mint_breaker_address,
+            parsed.mint_breaker_code_hash,
+            parsed.taira_to_token_multiplier,
+            parsed.max_wrapped_supply,
         )
 
 
 @dataclass(frozen=True)
-class GovernanceSccpSolanaDestinationDeployment:
-    """Exact immutable Solana route and native-verifier deployment identity."""
+class GovernanceSccpTonMintBreakerGuardianKeys:
+    """Exact ordered five-key TON mint-breaker guardian set."""
 
-    token_mint_address: str
-    route_program_id: str
-    route_program_data_address: str
-    route_program_data_slot: int
-    route_state_account: str
-    route_program_code_hash: str
-    native_verifier_program_id: str
-    native_verifier_program_data_address: str
-    native_verifier_program_data_slot: int
-    native_verifier_material_account: str
-    native_verifier_program_code_hash: str
-    native_verifier_config_hash: str
-    verifying_key: GovernanceSccpGroth16Bn254VerifyingKey
+    guardian_0: str
+    guardian_1: str
+    guardian_2: str
+    guardian_3: str
+    guardian_4: str
+
+    @classmethod
+    def from_payload(
+        cls, value: Any, context: str
+    ) -> "GovernanceSccpTonMintBreakerGuardianKeys":
+        fields = frozenset(f"guardian_{index}" for index in range(5))
+        record = _exact(value, fields, context)
+        keys = tuple(
+            _upper_hex(record[f"guardian_{index}"], f"{context}.guardian_{index}", 32)
+            for index in range(5)
+        )
+        if any(left >= right for left, right in zip(keys, keys[1:])):
+            raise TypeError(f"{context} must be strictly lexicographically increasing")
+        return cls(*keys)
+
+    def ordered(self) -> tuple[str, str, str, str, str]:
+        """Return the exact commitment order."""
+
+        return (
+            self.guardian_0,
+            self.guardian_1,
+            self.guardian_2,
+            self.guardian_3,
+            self.guardian_4,
+        )
+
+
+@dataclass(frozen=True)
+class GovernanceSccpTonDestinationDeployment:
+    """Exact TON Jetton, route, verifier, and breaker deployment identity."""
+
+    jetton_master_address: GovernanceSccpTonAddress
+    jetton_master_code_hash: str
+    jetton_master_initial_data_hash: str
+    jetton_wallet_code_hash: str
+    route_address: GovernanceSccpTonAddress
+    route_code_hash: str
+    route_initial_data_hash: str
+    embedded_verifier_code_hash: str
+    verifier_circuit_hash: str
+    verifying_key: Mapping[str, Any]
     verifier_key_hash: str
+    proof_profile_commitment: str
+    mint_breaker_guardian_keys: GovernanceSccpTonMintBreakerGuardianKeys
     outbound_proof_policy: GovernanceSccpOutboundProofPolicy
     taira_to_token_multiplier: int
     max_wrapped_supply: int
@@ -1295,29 +1424,75 @@ class GovernanceSccpSolanaDestinationDeployment:
     @classmethod
     def from_payload(
         cls, value: Any, context: str
-    ) -> "GovernanceSccpSolanaDestinationDeployment":
+    ) -> "GovernanceSccpTonDestinationDeployment":
         fields = frozenset(
             {
-                "token_mint_address",
-                "route_program_id",
-                "route_program_data_address",
-                "route_program_data_slot",
-                "route_state_account",
-                "route_program_code_hash",
-                "native_verifier_program_id",
-                "native_verifier_program_data_address",
-                "native_verifier_program_data_slot",
-                "native_verifier_material_account",
-                "native_verifier_program_code_hash",
-                "native_verifier_config_hash",
+                "jetton_master_address",
+                "jetton_master_code_hash",
+                "jetton_master_initial_data_hash",
+                "jetton_wallet_code_hash",
+                "route_address",
+                "route_code_hash",
+                "route_initial_data_hash",
+                "embedded_verifier_code_hash",
+                "verifier_circuit_hash",
                 "verifying_key",
                 "verifier_key_hash",
+                "proof_profile_commitment",
+                "mint_breaker_guardian_keys",
                 "outbound_proof_policy",
                 "taira_to_token_multiplier",
                 "max_wrapped_supply",
             }
         )
         record = _exact(value, fields, context)
+        master = GovernanceSccpTonAddress.from_payload(
+            record["jetton_master_address"], f"{context}.jetton_master_address"
+        )
+        route = GovernanceSccpTonAddress.from_payload(
+            record["route_address"], f"{context}.route_address"
+        )
+        if master == route:
+            raise TypeError(f"{context} reuses a TON contract address")
+        hash_fields = (
+            "jetton_master_code_hash",
+            "jetton_master_initial_data_hash",
+            "jetton_wallet_code_hash",
+            "route_code_hash",
+            "route_initial_data_hash",
+            "embedded_verifier_code_hash",
+            "verifier_circuit_hash",
+            "verifier_key_hash",
+            "proof_profile_commitment",
+        )
+        hashes = {
+            field: _upper_hex(record[field], f"{context}.{field}", 32)
+            for field in hash_fields
+        }
+        if len(set(hashes.values())) != len(hashes):
+            raise TypeError(f"{context} reuses a TON deployment hash role")
+        from . import sccp as _sccp
+
+        key_bytes = _sccp._bls12381_verifying_key(  # noqa: SLF001
+            record["verifying_key"], f"{context}.verifying_key"
+        )
+        if hashlib.sha256(key_bytes).hexdigest().upper() != hashes["verifier_key_hash"]:
+            raise TypeError(f"{context}.verifier_key_hash does not match verifying_key")
+        if (
+            _sccp._ton_proof_profile_commitment().hex().upper()  # noqa: SLF001
+            != hashes["proof_profile_commitment"]
+        ):
+            raise TypeError(f"{context}.proof_profile_commitment is not canonical")
+        policy = GovernanceSccpOutboundProofPolicy.from_payload(
+            record["outbound_proof_policy"], f"{context}.outbound_proof_policy"
+        )
+        if (
+            policy.semantic_profile.profile
+            is not GovernanceSccpSemanticProofProfileKind.SORA_TAIRA_FINALITY_INCLUSION_GROTH16_BLS12381
+            or policy.semantic_profile.commitments.circuit_commitment
+            != hashes["verifier_circuit_hash"]
+        ):
+            raise TypeError(f"{context} verifier circuit and proof profile disagree")
         multiplier = _sccp_uint(
             record["taira_to_token_multiplier"],
             f"{context}.taira_to_token_multiplier",
@@ -1326,65 +1501,29 @@ class GovernanceSccpSolanaDestinationDeployment:
         if multiplier != 1:
             raise TypeError(f"{context}.taira_to_token_multiplier must equal 1")
         return cls(
-            _upper_hex(record["token_mint_address"], f"{context}.token_mint_address", 32),
-            _upper_hex(record["route_program_id"], f"{context}.route_program_id", 32),
-            _upper_hex(
-                record["route_program_data_address"],
-                f"{context}.route_program_data_address",
-                32,
+            master,
+            hashes["jetton_master_code_hash"],
+            hashes["jetton_master_initial_data_hash"],
+            hashes["jetton_wallet_code_hash"],
+            route,
+            hashes["route_code_hash"],
+            hashes["route_initial_data_hash"],
+            hashes["embedded_verifier_code_hash"],
+            hashes["verifier_circuit_hash"],
+            cast(Mapping[str, Any], _freeze(record["verifying_key"])),
+            hashes["verifier_key_hash"],
+            hashes["proof_profile_commitment"],
+            GovernanceSccpTonMintBreakerGuardianKeys.from_payload(
+                record["mint_breaker_guardian_keys"],
+                f"{context}.mint_breaker_guardian_keys",
             ),
-            _sccp_uint(
-                record["route_program_data_slot"],
-                f"{context}.route_program_data_slot",
-                positive=True,
-            ),
-            _upper_hex(record["route_state_account"], f"{context}.route_state_account", 32),
-            _upper_hex(
-                record["route_program_code_hash"], f"{context}.route_program_code_hash", 32
-            ),
-            _upper_hex(
-                record["native_verifier_program_id"],
-                f"{context}.native_verifier_program_id",
-                32,
-            ),
-            _upper_hex(
-                record["native_verifier_program_data_address"],
-                f"{context}.native_verifier_program_data_address",
-                32,
-            ),
-            _sccp_uint(
-                record["native_verifier_program_data_slot"],
-                f"{context}.native_verifier_program_data_slot",
-                positive=True,
-            ),
-            _upper_hex(
-                record["native_verifier_material_account"],
-                f"{context}.native_verifier_material_account",
-                32,
-            ),
-            _upper_hex(
-                record["native_verifier_program_code_hash"],
-                f"{context}.native_verifier_program_code_hash",
-                32,
-            ),
-            _upper_hex(
-                record["native_verifier_config_hash"],
-                f"{context}.native_verifier_config_hash",
-                32,
-            ),
-            GovernanceSccpGroth16Bn254VerifyingKey.from_payload(
-                record["verifying_key"], f"{context}.verifying_key"
-            ),
-            _upper_hex(record["verifier_key_hash"], f"{context}.verifier_key_hash", 32),
-            GovernanceSccpOutboundProofPolicy.from_payload(
-                record["outbound_proof_policy"], f"{context}.outbound_proof_policy"
-            ),
+            policy,
             multiplier,
-            _uint(
+            _decimal_u128(
                 record["max_wrapped_supply"],
                 f"{context}.max_wrapped_supply",
-                _U128_MAX,
                 positive=True,
+                maximum=_TON_MAX_COINS,
             ),
         )
 
@@ -1394,13 +1533,13 @@ class GovernanceSccpDestinationDeploymentKind(str, Enum):
 
     EVM = "evm"
     TRON = "tron"
-    SOLANA = "solana"
+    TON = "ton"
 
 
 GovernanceSccpDestinationDeploymentValue = Union[
     GovernanceSccpEvmDestinationDeployment,
     GovernanceSccpTronDestinationDeployment,
-    GovernanceSccpSolanaDestinationDeployment,
+    GovernanceSccpTonDestinationDeployment,
 ]
 
 
@@ -1427,8 +1566,8 @@ class GovernanceSccpDestinationDeployment:
             GovernanceSccpDestinationDeploymentKind.TRON: (
                 GovernanceSccpTronDestinationDeployment.from_payload
             ),
-            GovernanceSccpDestinationDeploymentKind.SOLANA: (
-                GovernanceSccpSolanaDestinationDeployment.from_payload
+            GovernanceSccpDestinationDeploymentKind.TON: (
+                GovernanceSccpTonDestinationDeployment.from_payload
             ),
         }[family]
         deployment = cast(
@@ -1440,10 +1579,9 @@ class GovernanceSccpDestinationDeployment:
 
 @dataclass(frozen=True)
 class GovernanceSccpSoraSettlement:
-    """Typed SORA-side asset and custody policy for SCCP settlement."""
+    """Typed SORA-side derived-escrow liability policy for SCCP settlement."""
 
     asset_definition_id: str
-    custody_owner: str
     payload_amount_scale: int
     max_outstanding_liability: int
 
@@ -1454,7 +1592,6 @@ class GovernanceSccpSoraSettlement:
             frozenset(
                 {
                     "asset_definition_id",
-                    "custody_owner",
                     "payload_amount_scale",
                     "max_outstanding_liability",
                 }
@@ -1471,12 +1608,10 @@ class GovernanceSccpSoraSettlement:
             raise TypeError(f"{context}.payload_amount_scale must be the integer 9")
         return cls(
             asset,
-            _account_id(record["custody_owner"], f"{context}.custody_owner"),
             scale,
-            _uint(
+            _decimal_u128(
                 record["max_outstanding_liability"],
                 f"{context}.max_outstanding_liability",
-                _U128_MAX,
                 positive=True,
             ),
         )
@@ -1522,8 +1657,6 @@ class GovernanceSccpGovernedRoute:
         )
         if route_id != _SCCP_EXACT_ROUTE_ID[lane.source.network] or asset_key != "xor":
             raise TypeError(f"{context} does not identify the exact first-release XOR route")
-        if lane.source.network is GovernanceSccpNetworkKind.SOLANA_TESTNET and revision != 1:
-            raise TypeError(f"{context}.revision must be 1 for the Solana V1 route")
         activation = GovernanceSccpRouteActivation.from_payload(
             record["activation"], f"{context}.activation"
         )
@@ -1570,17 +1703,25 @@ class GovernanceSccpGovernedRoute:
                 != destination.deployment.route_code_hash
             ):
                 raise TypeError(f"{context} source emitter does not identify the route deployment")
+        if isinstance(source.emitter.identity, GovernanceSccpTonSourceEmitter) and isinstance(
+            destination.deployment, GovernanceSccpTonDestinationDeployment
+        ):
+            if (
+                source.emitter.identity.address != destination.deployment.route_address
+                or source.emitter.identity.code_hash
+                != destination.deployment.route_code_hash
+            ):
+                raise TypeError(f"{context} source emitter does not identify the route deployment")
         settlement = GovernanceSccpSoraSettlement.from_payload(
             record["settlement"], f"{context}.settlement"
         )
         if (
-            destination.deployment.max_wrapped_supply
-            != settlement.max_outstanding_liability
+            settlement.max_outstanding_liability
             * destination.deployment.taira_to_token_multiplier
+            != destination.deployment.max_wrapped_supply
         ):
             raise TypeError(
-                f"{context}.destination.max_wrapped_supply must equal "
-                "settlement.max_outstanding_liability multiplied by the destination multiplier"
+                f"{context} wrapped-supply cap does not match the liability cap"
             )
         return cls(
             lane,

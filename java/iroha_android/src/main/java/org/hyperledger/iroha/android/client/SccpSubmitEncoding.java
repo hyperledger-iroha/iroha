@@ -1,15 +1,13 @@
 package org.hyperledger.iroha.android.client;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
-import java.util.Objects;
+import java.util.List;
 import java.util.Set;
 import org.hyperledger.iroha.android.address.AccountAddress;
 import org.hyperledger.iroha.android.address.AccountIdLiteral;
-import org.hyperledger.iroha.android.model.FeePaymentIntent;
-import org.hyperledger.iroha.android.model.TransactionAdmissionIntent;
-import org.hyperledger.iroha.android.model.TransactionPayload;
-import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
+import org.hyperledger.iroha.android.sccp.SccpReplayV1;
 import org.hyperledger.iroha.android.sccp.SccpV1;
 import org.hyperledger.iroha.norito.NoritoHeader;
 import org.hyperledger.iroha.norito.SchemaHash;
@@ -20,19 +18,18 @@ final class SccpSubmitEncoding {
   static final int MAX_DESTINATION_ARTIFACT_BYTES = MAX_GROTH16_ARTIFACT_BYTES + 64 * 1024;
   static final int MAX_DESTINATION_ARTIFACT_BASE64_BYTES = 22_544_384;
   static final int MAX_NATIVE_PROOF_BYTES = 16 * 1024 * 1024;
-  static final int MAX_DETACHED_SIGNATURE_BYTES = 16 * 1024;
+  static final int MAX_REPLAY_WITNESS_BYTES = 16 * 1024;
   static final int MAX_TRANSACTION_PAYLOAD_BYTES = 16 * 1024 * 1024;
   static final String DESTINATION_ARTIFACT_SCHEMA_NAME =
       "iroha_data_model::bridge::BridgeSccpDestinationProofV1";
   static final String NATIVE_INBOUND_PROOF_SCHEMA_NAME =
       "iroha_sccp::native_admission::SccpNativeInboundMessageProofV1";
+  static final String REPLAY_WITNESS_SCHEMA_NAME =
+      "iroha_data_model::bridge::sccp_replay::SccpSparseMerkleWitnessV1";
   static final Set<String> PROOF_REQUEST_SCHEMA_NAMES =
       Set.of(
           "iroha_sccp::SccpGroth16Bn254ProofRequestV1",
           "iroha_sccp::SccpTonGroth16Bls12381ProofRequestV1");
-  private static final NoritoJavaCodecAdapter TRANSACTION_CODEC =
-      new NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1);
-
   private SccpSubmitEncoding() {}
 
   static byte[] validateCanonicalNoritoBase64(
@@ -66,6 +63,15 @@ final class SccpSubmitEncoding {
       final byte[] value, final String field) {
     return validateCanonicalNoritoBytes(
         value, field, MAX_GROTH16_ARTIFACT_BYTES, PROOF_REQUEST_SCHEMA_NAMES);
+  }
+
+  static byte[] validateCanonicalReplayWitnessBase64(
+      final String value, final String field) {
+    final byte[] archive =
+        validateCanonicalNoritoBase64(
+            value, field, MAX_REPLAY_WITNESS_BYTES, REPLAY_WITNESS_SCHEMA_NAME);
+    validateCanonicalReplayWitnessArchive(archive, field);
+    return archive;
   }
 
   private static byte[] validateCanonicalNoritoBytes(
@@ -117,135 +123,118 @@ final class SccpSubmitEncoding {
     return canonical;
   }
 
-  static Long normalizeOptionalCreationTimeMs(final Long value) {
-    if (value != null && value <= 0) {
-      throw new IllegalArgumentException("creationTimeMs must be positive");
+  private static void validateCanonicalReplayWitnessArchive(
+      final byte[] archive, final String field) {
+    final CompactCursor cursor =
+        new CompactCursor(NoritoHeader.decode(archive, null).payload());
+    final byte[] expectedRoot = requireFixed32(cursor.field(field + ".expected_shard_root"), field);
+    final byte[] priorRecordDigest =
+        requireFixed32(cursor.field(field + ".prior_record_digest"), field);
+    final byte[] siblingBitmap =
+        requireFixed32(cursor.field(field + ".sibling_bitmap"), field);
+    final CompactCursor siblingSequence =
+        new CompactCursor(cursor.field(field + ".siblings"));
+    if (!cursor.finished()) {
+      throw new IllegalArgumentException(field + " contains trailing fields");
     }
-    return value;
-  }
-
-  static String normalizeOptionalSignature(final String value) {
-    if (value == null) return null;
-    final byte[] decoded =
-        canonicalBase64(value, "signature_b64", MAX_DETACHED_SIGNATURE_BYTES);
-    if (allZero(decoded)) {
+    final long siblingCount = siblingSequence.u64(field + ".siblings.count");
+    if (siblingCount > SccpReplayV1.DEPTH) {
+      throw new IllegalArgumentException(field + " contains too many siblings");
+    }
+    final List<byte[]> siblings = new ArrayList<>((int) siblingCount);
+    for (int index = 0; index < (int) siblingCount; index++) {
+      siblings.add(requireFixed32(siblingSequence.field(field + ".sibling"), field));
+    }
+    if (!siblingSequence.finished()) {
+      throw new IllegalArgumentException(field + " sibling sequence contains trailing bytes");
+    }
+    if (!allZero(priorRecordDigest)) {
       throw new IllegalArgumentException(
-          "signature_b64 must contain one admitted nonzero signature payload");
+          field + " must prove non-membership with an all-zero prior record digest");
+    }
+    SccpReplayV1.rootFromWitness(
+        repeatedByte(1, 32),
+        null,
+        new SccpReplayV1.Witness(
+            expectedRoot, priorRecordDigest, siblingBitmap, siblings));
+  }
+
+  private static byte[] requireFixed32(final byte[] value, final String field) {
+    if (value.length != 32) {
+      throw new IllegalArgumentException(field + " contains a malformed fixed byte array");
     }
     return value;
   }
 
-  static void validateDetachedSigningState(
-      final String signatureB64,
-      final String transactionPayloadB64,
-      final Long creationTimeMs) {
-    if (signatureB64 == null && transactionPayloadB64 == null) {
-      return;
+  private static byte[] repeatedByte(final int value, final int length) {
+    final byte[] result = new byte[length];
+    Arrays.fill(result, (byte) value);
+    return result;
+  }
+
+  private static final class CompactCursor {
+    private final byte[] input;
+    private int offset;
+
+    private CompactCursor(final byte[] input) {
+      this.input = input.clone();
     }
-    if (signatureB64 != null && transactionPayloadB64 != null) {
-      if (creationTimeMs == null || creationTimeMs <= 0) {
-        throw new IllegalArgumentException(
-            "signed SCCP submission requires an explicit positive creation_time_ms");
+
+    private byte[] field(final String field) {
+      final long length = compactLength(field);
+      if (length > Integer.MAX_VALUE) {
+        throw new IllegalArgumentException(field + " length exceeds the runtime bound");
       }
-      return;
+      return exact((int) length, field);
     }
-    throw new IllegalArgumentException(
-        "SCCP preparation requires neither signature_b64 nor transaction_payload_b64; signed submission requires both");
-  }
 
-  static String normalizeOptionalTransactionPayload(
-      final String value,
-      final Long creationTimeMs,
-      final String expectedAuthority,
-      final FeePaymentIntent expectedFeePayment) {
-    if (value == null) return null;
-    final byte[] bytes = canonicalBase64(
-        value, "transaction_payload_b64", MAX_TRANSACTION_PAYLOAD_BYTES);
-    final TransactionPayload payload;
-    final byte[] canonical;
-    try {
-      payload = TRANSACTION_CODEC.decodeTransaction(bytes);
-      canonical = TRANSACTION_CODEC.encodeTransaction(payload);
-    } catch (final Exception ex) {
-      throw new IllegalArgumentException(
-          "transaction_payload_b64 must contain one canonical transaction payload", ex);
+    private long u64(final String field) {
+      final byte[] bytes = exact(8, field);
+      if ((bytes[7] & 0x80) != 0) {
+        throw new IllegalArgumentException(field + " exceeds the signed runtime bound");
+      }
+      long value = 0;
+      for (int index = 0; index < bytes.length; index++) {
+        value |= (long) (bytes[index] & 0xff) << (index * 8);
+      }
+      return value;
     }
-    if (!Arrays.equals(bytes, canonical)) {
-      throw new IllegalArgumentException("transaction_payload_b64 is not canonical");
-    }
-    if (!sameCanonicalAccountId(payload.authority(), expectedAuthority)) {
-      throw new IllegalArgumentException(
-          "transaction payload authority does not match authority");
-    }
-    if (!sameSccpFeePayerAndGasBound(expectedFeePayment, payload.feePayment())) {
-      throw new IllegalArgumentException(
-          "transaction payload changed the requested payer, sponsor revision, or gas bound");
-    }
-    if (payload.admissionIntent() != TransactionAdmissionIntent.QUEUE_PLAN_SYNCED) {
-      throw new IllegalArgumentException(
-          "transaction payload admission intent must be QueuePlanSynced");
-    }
-    if (creationTimeMs != null && payload.creationTimeMs() != creationTimeMs) {
-      throw new IllegalArgumentException(
-          "transaction payload creation time does not match creation_time_ms");
-    }
-    return value;
-  }
 
-  private static boolean sameSccpFeePayerAndGasBound(
-      final FeePaymentIntent expected, final FeePaymentIntent actual) {
-    if (!Objects.equals(expected.gasLimit(), actual.gasLimit())) return false;
-    if (expected instanceof FeePaymentIntent.Authority
-        && actual instanceof FeePaymentIntent.Authority) {
-      return true;
+    private boolean finished() {
+      return offset == input.length;
     }
-    if (expected instanceof FeePaymentIntent.Sponsor
-        && actual instanceof FeePaymentIntent.Sponsor) {
-      final FeePaymentIntent.Sponsor left = (FeePaymentIntent.Sponsor) expected;
-      final FeePaymentIntent.Sponsor right = (FeePaymentIntent.Sponsor) actual;
-      return left.programRevision() == right.programRevision()
-          && left.programId().name().equals(right.programId().name())
-          && sameCanonicalAccountId(
-              left.programId().sponsor(), right.programId().sponsor());
-    }
-    return false;
-  }
 
-  private static boolean sameCanonicalAccountId(final String left, final String right) {
-    try {
-      // AccountId wire identity is domainless and excludes its I105 display discriminant.
-      final byte[] leftBytes =
-          AccountAddress.parseEncodedIgnoringCurveSupport(left, null).canonicalBytes();
-      final byte[] rightBytes =
-          AccountAddress.parseEncodedIgnoringCurveSupport(right, null).canonicalBytes();
-      return Arrays.equals(leftBytes, rightBytes);
-    } catch (final AccountAddress.AccountAddressException ex) {
-      throw new IllegalArgumentException(
-          "transaction payload account must be canonical I105", ex);
+    private long compactLength(final String field) {
+      long result = 0;
+      int shift = 0;
+      while (true) {
+        final int value = exact(1, field)[0] & 0xff;
+        final int chunk = value & 0x7f;
+        if (shift == 63 && chunk > 1) {
+          throw new IllegalArgumentException(field + " compact length exceeds u64");
+        }
+        result |= (long) chunk << shift;
+        if ((value & 0x80) == 0) {
+          if (shift > 0 && chunk == 0) {
+            throw new IllegalArgumentException(field + " compact length is overlong");
+          }
+          return result;
+        }
+        shift += 7;
+        if (shift >= 64) {
+          throw new IllegalArgumentException(field + " compact length exceeds u64");
+        }
+      }
     }
-  }
 
-  static byte[] canonicalBase64(
-      final String value, final String field, final int maximum) {
-    if (value == null || value.isEmpty() || !value.equals(value.trim())) {
-      throw new IllegalArgumentException(field + " must be canonical padded base64");
+    private byte[] exact(final int length, final String field) {
+      if (length < 0 || offset > input.length - length) {
+        throw new IllegalArgumentException(field + " is truncated");
+      }
+      final byte[] result = Arrays.copyOfRange(input, offset, offset + length);
+      offset += length;
+      return result;
     }
-    if (value.length() > maximumBase64Length(maximum)) {
-      throw new IllegalArgumentException(field + " exceeds its canonical size bound");
-    }
-    final byte[] decoded;
-    try {
-      decoded = Base64.getDecoder().decode(value);
-    } catch (final IllegalArgumentException ex) {
-      throw new IllegalArgumentException(field + " must be valid base64", ex);
-    }
-    if (decoded.length == 0 || decoded.length > maximum) {
-      throw new IllegalArgumentException(field + " exceeds its canonical size bound");
-    }
-    if (!Base64.getEncoder().encodeToString(decoded).equals(value)) {
-      throw new IllegalArgumentException(field + " must be canonical padded base64");
-    }
-    return decoded;
   }
 
   private static int maximumBase64Length(final int maximumBytes) {

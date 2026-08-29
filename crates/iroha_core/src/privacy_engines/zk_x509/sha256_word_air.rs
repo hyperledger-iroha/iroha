@@ -18,6 +18,8 @@ use super::air::{U32RangeAirRowV1, ZkX509AirErrorV1};
 use super::io_air::{
     ZkX509IoChallengesV1, ZkX509IoEndpointV1, ZkX509IoSegmentRoleV1, ZkX509IoTraceV1,
 };
+#[cfg(test)]
+use crate::privacy_engines::transparent_stark::GoldilocksDigest384V1;
 use crate::privacy_engines::transparent_stark::{
     GoldilocksFieldV1 as F, TransparentStarkErrorV1, TransparentTranscriptV1,
 };
@@ -1363,6 +1365,9 @@ mod tests {
         ZK_X509_MAX_CRL_BYTES_V1, ZK_X509_TARGET_SOUNDNESS_BITS_V1,
     };
     use sha2::{Digest as _, Sha256};
+    fn test_digest_v1(value: u64) -> GoldilocksDigest384V1 {
+        GoldilocksDigest384V1::new([value; 6]).expect("canonical test digest")
+    }
     fn word_memory_challenges() -> ZkX509WordMemoryChallengesV1 {
         ZkX509WordMemoryChallengesV1 {
             lanes: [
@@ -1397,13 +1402,19 @@ mod tests {
         ZkX509IoEndpointV1 { role, instance }
     }
     fn io_challenges() -> ZkX509IoChallengesV1 {
-        let mut transcript =
-            TransparentTranscriptV1::new(b"zk-x509-sha-io-test", &[0x61; 32], &[0x62; 32])
-                .expect("I/O transcript");
+        let mut transcript = TransparentTranscriptV1::new(
+            super::super::stark::ZK_X509_DIGEST_CONTEXT_V1,
+            b"zk-x509-sha-io-test",
+            &test_digest_v1(0x61),
+            &test_digest_v1(0x62),
+        )
+        .expect("I/O transcript");
+        let execution_root = test_digest_v1(0x63).to_le_bytes();
+        let sorted_root = test_digest_v1(0x64).to_le_bytes();
         transcript
             .absorb(
                 b"zk-x509-io-trace-commitments-v1",
-                &[&[0x63; 32], &[0x64; 32]],
+                &[&execution_root, &sorted_root],
             )
             .expect("I/O trace commitments");
         derive_zk_x509_io_challenges_v1(&mut transcript).expect("I/O challenges")
@@ -1599,12 +1610,17 @@ mod tests {
     }
     #[test]
     fn word_memory_challenges_are_commitment_bound_and_fail_closed() {
-        let profile = [0x11; 32];
-        let public = [0x22; 32];
-        let main_root = [0x33; 32];
-        let sorted_root = [0x44; 32];
-        let mut transcript = TransparentTranscriptV1::new(b"zk-x509-test-suite", &profile, &public)
-            .expect("transcript");
+        let profile = test_digest_v1(0x11);
+        let public = test_digest_v1(0x22);
+        let main_root = test_digest_v1(0x33).to_le_bytes();
+        let sorted_root = test_digest_v1(0x44).to_le_bytes();
+        let mut transcript = TransparentTranscriptV1::new(
+            super::super::stark::ZK_X509_DIGEST_CONTEXT_V1,
+            b"zk-x509-test-suite",
+            &profile,
+            &public,
+        )
+        .expect("transcript");
         transcript
             .absorb(
                 b"zk-x509-sha-word-trace-commitments-v1",
@@ -1616,8 +1632,13 @@ mod tests {
         sampled.validate().expect("valid sampled challenges");
         let mut changed_root = main_root;
         changed_root[0] ^= 1;
-        let mut changed = TransparentTranscriptV1::new(b"zk-x509-test-suite", &profile, &public)
-            .expect("transcript");
+        let mut changed = TransparentTranscriptV1::new(
+            super::super::stark::ZK_X509_DIGEST_CONTEXT_V1,
+            b"zk-x509-test-suite",
+            &profile,
+            &public,
+        )
+        .expect("transcript");
         changed
             .absorb(
                 b"zk-x509-sha-word-trace-commitments-v1",

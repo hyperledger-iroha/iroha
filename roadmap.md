@@ -43,7 +43,10 @@ Completed history lives in [`status.md`](./status.md).
 - Close focused/workspace tests, strict all-target Clippy, formatting, ten
   randomized seeds, two-hour soak, serial privacy-release checks, release
   inventory, reproducible build, and SBOM from one settled candidate. Qualify
-  auditor HSM/KMS rotation, retired-key retention or capsule rewrapping, and
+  the governed `RotatePrivateSettlementPoolPolicyV1` boundary--including
+  pre-rotation receipt recovery/idempotence, same-activation-height pool-receipt
+  rejection, and fail-closed old-policy in-flight bundles--alongside auditor
+  HSM/KMS rotation, retired-key retention or capsule rewrapping, and
   finality/restart reconciliation on every shipping host filesystem.
 - Obtain independent review of the AIR, dummy selectors, asset/capsule and
   reimbursement bindings, hybrid cryptography, auditor/QC domains, and the
@@ -247,25 +250,17 @@ Completed history lives in [`status.md`](./status.md).
   connection-ID retirement, and zero-length DATAGRAM accounting. Shipping P2P,
   streaming, SoraNet relay, and VPN-helper QUIC reject endpoint creation while
   the vulnerable resolution remains locked. After the dependency fix lands,
-  reactivate the QUIC and DATAGRAM-on abuse suites before removing those
-  fail-closed gates. Strict SoraNet configuration and live preflight remain
-  rejected without downgrade.
-- Expose the documented deterministic Norito streaming media fallback over
-  bounded unidirectional streams. The current QUIC helper exposes its control
-  streams but no stream-based media payload API; until both that fallback and
-  fixed Quinn DATAGRAM accounting are qualified, DATAGRAM media remains
-  dormant.
+  reactivate the QUIC and DATAGRAM-on abuse suites and requalify the deterministic
+  media-stream fallback before removing those fail-closed gates. Strict SoraNet
+  configuration and live preflight remain rejected without downgrade.
 - Requalify the dormant strict SoraNet mux after per-entry DATAGRAM accounting
   lands. Application/exit, measurement, and VPN payload are wired through the
   authenticated fixed-rate scheduler; unavailability, missed deadlines, bounded
-  queue exhaustion, send failure, sequence loss, and unscheduled streams are
-  circuit-fatal, with direct mixed-channel and loss regressions. Final activation
-  still requires dependency-level zero-length-DATAGRAM abuse coverage and full
-  relay/helper end-to-end traffic-shape qualification.
-- Split the large peer and network actors along their existing transport,
-  handshake, admission, queueing, and relay ownership boundaries after adding a
-  production-source reachability guard. Keep the single TLS/optional-QUIC wire
-  protocol and fail-closed admission behavior byte-for-byte identical.
+  queue exhaustion, send failure, sequence loss, early-arrival bursts, prolonged
+  silence, and unscheduled streams are circuit-fatal, with direct mixed-channel,
+  loss, pacing, and deadline regressions. Final activation still requires
+  dependency-level zero-length-DATAGRAM abuse coverage and full relay/helper
+  end-to-end traffic-shape qualification.
 
 ## Sumeragi first-release closure
 
@@ -565,17 +560,17 @@ Completed history lives in [`status.md`](./status.md).
   evidence checker passes all 18 collected cases across 15 test functions, and
   byte-identical pre-merge allocation runs establish the harness contract, but
   do not replace fresh candidate measurements and an archived sealed report.
-- Re-run the bounded Parliament model and deterministic source/model contract
-  from the immutable candidate, then pass focused data-model/Core/Torii tests,
-  the legacy-codec guard, workspace tests, strict all-target Clippy, formatting,
-  strict TLAPS, pinned Verus, chaos/soak qualification, and a clean externally
-  signed release corridor. The local TLC run now covers the typed zero/singleton
-  pre-request capacity path, bounded exhaustion, and atomic Confirmation-capacity
-  decision in addition to the original lifecycle, while the deterministic
-  source/model gate and all 14 lifecycle corridor source checks with 113
-  adversarial subtests are green.
-  Bounded model checking remains regression evidence and does not replace
-  cryptographic review, real-HSM custody, or multi-peer tests.
+- Re-run and archive the configured state space exhaustively with pinned TLC
+  2.19 plus the deterministic source/model contract from the immutable
+  candidate, then pass focused data-model/Core/Torii tests, the legacy-codec
+  guard, workspace tests, strict all-target Clippy, formatting, strict TLAPS,
+  pinned Verus, chaos/soak qualification, and a clean externally signed release
+  corridor. The local exhaustive run covered 11,488,938 generated and 8,495,064
+  distinct states through complete-graph depth 52 with no error; the
+  deterministic source/model gate and all 15 lifecycle corridor source checks
+  with 173 adversarial contexts are green. Model checking remains regression
+  evidence and does not replace cryptographic review, real-HSM custody, or
+  multi-peer tests.
 
 ## ZK algorithm release qualification
 
@@ -587,17 +582,18 @@ Completed history lives in [`status.md`](./status.md).
   implement the quotient/zerofier and degree argument needed to verify from
   bounded openings without replay, or deliberately reduce the format to one
   clearly documented full-replay artifact; benchmark the chosen single path.
-- Keep FASTPQ ledger qualification blocked until its proof boundary uses a
-  commitment and transcript with at least 128-bit security. Cross-check the
-  dense-MDS Goldilocks `x^7` permutation against an independent implementation
-  or replace it with a standardized commitment, and produce a quantitative
-  proof for the implemented quadratic-bound FRI schedule. V1 uses the
-  Goldilocks base field with no grinding step and a roughly 32-bit one-field
-  collision ceiling; it exposes no inert Fp2, security-label, or grinding
-  parameter. This is not ledger release qualification. The
-  canonical batch-ordering digest is now full-width BLAKE2b-256, but that local
-  hardening does not raise the one-field Poseidon Merkle/FRI roots or the
-  reduced Fiat-Shamir challenges above the remaining proof-system ceiling.
+- Keep FASTPQ ledger qualification blocked until independent review connects
+  the implemented arithmetic bound to the complete protocol adversary and
+  validates the final-artifact multi-target digest accounting. V1 now pins six
+  independently domain-separated Poseidon-x7 Goldilocks lanes for 384-bit
+  commitments/transcript state, degree-four FRI challenges, binary folds, an
+  eightfold LDE, zero grinding, and 136 queries. Its exact dyadic qROM
+  calculator passes the 128-bit aggregate target across 54 release artifacts
+  under the declared `Q ≤ 2^32` oracle-query bound, but intentionally reports
+  production qualification unavailable until the protocol-specific reduction
+  is reviewed. Cross-check the dense-MDS permutation and six-lane construction
+  against an independent implementation and bind that review to final artifact
+  digests before clearing the gate.
 - Qualify the simplified accelerator boundary on release-class Apple and NVIDIA
   hardware. Compile the native Metal and CUDA sources, inject copy, launch,
   event, stream, and timeout failures to confirm process-lifetime quarantine,
@@ -608,9 +604,8 @@ Completed history lives in [`status.md`](./status.md).
   source roots and transaction set are matched to an authoritative finalized/QC
   source-state statement. Before releasing handle-backed remote spend, either
   make the issuer authentication cover the exact intent, proof, and effective
-  amount or give those facts an independently anchored binding with at least
-  128-bit security; the current handle signature plus roughly 32-bit FASTPQ
-  metadata is not a release authorization boundary.
+  amount or give those facts an independently anchored binding. Commitment
+  width cannot compensate for facts omitted from the authenticated statement.
 - Keep ZK-ACE proving, verification, and activation unavailable until its four
   public commitment words come from independent domain-separated invocations
   (or an equivalently strong replacement) with at least 128-bit collision
@@ -658,8 +653,6 @@ Completed history lives in [`status.md`](./status.md).
   guards until that policy exists. Supporting aliasless relays would likewise
   require a signed home-domain field or a protected relay-to-home index; do not
   restore global allowlist discovery.
-- Decide whether the currently unreachable
-  `halo2/ipa/poly-open` backend belongs in the closed first-release registry.
 - Run the focused native-STARK and FASTPQ regressions, then the full workspace
   test and strict all-target Clippy matrices from one settled candidate.
 - On CUDA- and Metal-capable release hosts, compile the corrected BN254 kernels
@@ -960,8 +953,8 @@ close the internal blockers below:
 ## Workspace review closure
 
 - Run the remaining release-wide workspace matrix against the regenerated
-  eight-limb Blake2b-256 FastPQ proof/trace
-  fixtures and the first-release AXT hard cut. Retired single-field metadata
+  six-lane 384-bit FastPQ proof fixture, the BLAKE2b-256 ordering/metadata
+  commitments, and the first-release AXT hard cut. Retired single-field metadata
   proofs, pre-incarnation handles, and pre-ratchet snapshots must not be
   accepted or migrated by relabelling; pre-transition-set block results and
   fixtures must be regenerated rather than defaulting the required set to
@@ -2239,13 +2232,13 @@ green at that checkpoint. That historical checkpoint did not include a Cargo
 result against its split source; newer receipts above supersede it, without
 replacing the complete release gates.
 
-The static release inventory contract now enumerates `863/863` production tests
-across 44 modules and `518/518` focused `G-UNIT` entries. Its canonical 519-line
+The static release inventory contract now enumerates `864/864` production tests
+across 44 modules and `522/522` focused `G-UNIT` entries. Its canonical 523-line
 TSV has
 SHA-256
-`3d2c93cab0528cb668d977642eecfe78e9c20378e887a0b7db4198ffd220eb29`.
+`5e8b82b400b438eabb7733adbccae15b5aa212a98a89161a586cbce686e2f6e9`.
 The separate canonical production module/test TSV has SHA-256
-`42509872b04f64962dc8edc09ca9f007bafffe402c4e0847255dc937a105888c`;
+`44784c79c489d83ab142bb0db84e89138c3a54b1349926a80597e2c5b21a83df`;
 the newest inventoried rows bind stale exact `TimeoutVote` retransmission
 coalescing without reply-route regression, Ready local Proposal Sign plus
 its exact output taking precedence over a pending Timeout Certificate, the
@@ -2281,7 +2274,7 @@ symbols, three ordered checks, and 14 mutations with no pending structural
 source check. The reviewed Rust include topology contains 70 parents and 425
 direct entries; its canonical payload SHA-256 is
 `0e92b92181eb915d6b70f2ec963fb721ebdd6c0519446a1c5bc7ef1d5013635f`.
-The release-inventory contract is statically reconciled at 85/863/518, and the
+The release-inventory contract is statically reconciled at 85/864/522, and the
 structural model/source contract suite passes. The aggregate proof-ledger
 checker discharges its current Rust/model/mutation/source obligations except
 for the separately recorded task-start `Cargo.lock` mismatch; the static
@@ -2296,11 +2289,11 @@ correspondence plus drain/restart/liveness evidence remain mandatory.
 The Rust-owned protocol-4 grouped fixture contains 56 negative controls and
 hashes to
 `e4fb62addba3c3b8aecdbff55840e21620c770ab96d346ca55b156cf0239942b`;
-its staged grouped and diagnostics suite-source manifests contain 1,400 and
-1,402 records respectively and hash to
-`fdc4c3fb9192277bc6a80018ecb62ed096f12cb41a4c40bde0681ee8f6478577`
+its staged grouped and diagnostics suite-source manifests contain 1,451 and
+1,453 records respectively and hash to
+`bdf4efd88885521e3806cfe610e7ab3d72d690ebe329a4b7acfc0b2fe9b22ae0`
 and
-`f2e7d3b79dd311b93f9ade26a846940dcd12b636c551a70800f63817a10bfa4c`;
+`90235165ad20cc6e4363d4fd6935b8c25bc2e1856cdbbad3323dcc5c4843c2a3`;
 the synchronized 48-line wire TSV hashes to
 `79240b3b95d8c40dc8f1129177a88dca3f31fe08027fe9f5372b6a67b05e9a4c`.
 The current grouped harness inventories OpenAPI `7`, Python `63`, JavaScript
@@ -2315,7 +2308,7 @@ source/distribution `88`, Swift `34`, Kotlin `43`, and Java `42` tests. Its
 Swift/Kotlin/Java wire consumers are runner- and receipt-bound; the Rust wire
 consumer is bound directly by the release runner and receipt. The
 receipt-required unsupported-version-before-signing regression preserves the exact
-863-production-test and 518-G-UNIT-test counts. Rust's separated client test
+864-production-test and 522-G-UNIT-test counts. Rust's separated client test
 module covers both complete endpoint-payload swaps while retaining its
 14-test count, so the API-separation source gap is closed. This is
 mutable-source inventory consistency, not deterministic regeneration, SDK
@@ -2324,13 +2317,11 @@ artifacts remain dirty and unsigned. Exact-five replay is source- and
 receipt-bound to the protected schema-v3 OpenAPI Node closure, but immutable
 candidate execution remains unclaimed.
 
-The first-release in-flight persistence corridor accepts only schema V1:
+The first-release in-flight persistence corridor has one canonical schema:
 `LaneExecutablePayloadV1` version 1, QueuePlan journal V1, and reservation
-journal V1, with contiguous zero-based tags. V2, V4, and V5 readers, rewrite
-fixtures, migrations, and dual decoders are retired and must fail closed. The
-formal/source-bound layout manifests, hashes, inventories, and immutable receipt
-must be regenerated from the final V1 candidate; the former schema-5 counts and
-hashes are not evidence for this hard cut. The current structural checker is
+journal V1, with contiguous zero-based tags. The formal/source-bound layout
+manifests, hashes, inventories, and immutable receipt must be regenerated from
+the final V1 candidate. The current structural checker is
 blocked by the separately owned Kura include-inventory mismatch between
 `02a_unauthenticated_preflight.rs` and
 `02a_fresh_single_lane_preflight.rs` across 74 bindings, so no green
@@ -2347,9 +2338,9 @@ The remaining work is evidence-driven and must stay in order:
   retain separate `SidecarTopologyProgress` and `SidecarReplyControl` Lane
   reservations so parked ordinary output and saturated shared capacity cannot
   starve Request/Close or CloseAck/GenerationHint progress.
-  `MergeSidecarLifecycleSnapshotV3` must remain the only durable schema, with
-  V1/V2 rejected, a durable generation-zero bootstrap marker, semantic
-  validation before bootstrap adoption or cleanup, selected-state/root
+  `MergeSidecarLifecycleSnapshotV3` must remain the only durable schema, with a
+  durable generation-zero bootstrap marker, semantic validation before
+  bootstrap adoption or cleanup, selected-state/root
   directory re-sync before destructive recovery cleanup, fail-closed alias and
   reparse-point rejection, and the checked generation increment plus empty
   responder state committed through an fsynced inactive slot and
@@ -2373,13 +2364,13 @@ The remaining work is evidence-driven and must stay in order:
   merge-sidecar/lane/runner/worker/core tests, formatting, clippy, codec guard,
   proof-ledger and TLAPS-sharding tests, proof checker, and source-fidelity
   mutations before release evidence is accepted, then finish the remaining
-  863-test,
+  864-test,
   44-module production inventory legs and archived G-UNIT execution.
   The asynchronous reply-route product assigns all 54 structural TLAPS
   projection rows; that is source inventory only. Its V2 inductive-safety,
   successor-isolation, and temporal-product obligations remain in the formal
   dependency queue.
-- Finish `G-UNIT` with a fresh archived run of all 518 source-bound focused tests
+- Finish `G-UNIT` with a fresh archived run of all 522 source-bound focused tests
   across core multilane and queue-journal code, `iroha_data_model`, Torii, and
   the integration-support library, then complete and archive the Rust-owned
   control-corpus replay across OpenAPI, both Python surfaces, JavaScript
@@ -2387,11 +2378,11 @@ The remaining work is evidence-driven and must stay in order:
   `ML-API-04`/`G-SDK`. The current protocol-4 corpus has 56 negative controls,
   fixture SHA-256
   `e4fb62addba3c3b8aecdbff55840e21620c770ab96d346ca55b156cf0239942b`,
-  staged grouped/diagnostics suite-source manifests at exactly 1,400 and 1,402
+  staged grouped/diagnostics suite-source manifests at exactly 1,451 and 1,453
   records with SHA-256 values
-  `fdc4c3fb9192277bc6a80018ecb62ed096f12cb41a4c40bde0681ee8f6478577`
+  `bdf4efd88885521e3806cfe610e7ab3d72d690ebe329a4b7acfc0b2fe9b22ae0`
   and
-  `f2e7d3b79dd311b93f9ade26a846940dcd12b636c551a70800f63817a10bfa4c`,
+  `90235165ad20cc6e4363d4fd6935b8c25bc2e1856cdbbad3323dcc5c4843c2a3`,
   to be regenerated and receipt-bound from the exact immutable candidate, and
   wire-TSV SHA-256
   `79240b3b95d8c40dc8f1129177a88dca3f31fe08027fe9f5372b6a67b05e9a4c`.
@@ -5590,7 +5581,7 @@ workflows remain excluded from the first release.
 					  including bare `stark/fri` and alternate production-profile aliases.
 			  Soracloud BFV input-admission, bootstrap-key, full-bootstrap material,
 			  and execution proof attachments now require the canonical BFV STARK/FRI backend
-			  (`stark/fri/sha256-goldilocks`) and advertise that backend in their
+			  (`stark/fri/poseidon-x7-goldilocks-6x64-v1`) and advertise that backend in their
 			  public-input schema descriptors, so alternate production STARK profiles
 			  cannot satisfy governed BFV proof gates.
 				  BFV full-bootstrap proof-key profile validation also rejects known
@@ -25575,7 +25566,7 @@ exact TON shard-state
 source-state OpenVerify/FastPQ request from UI/mobile witness material,
 including statement bytes, witness commitment bytes, verification context,
 schema descriptor, public-input columns, FastPQ metadata transitions, and the
-`sccp-ton-shard-state-light-client-v1`/`fastpq-lane-balanced` identifiers. The
+`sccp-ton-shard-state-light-client-v1`/`fastpq-state-transition-stark-v1` identifiers. The
 shared vector now uses the production-consistent masterchain config proof hash
 for the same `ShardStateUnsplit` root that the TON shard-state opening proves,
 matching the Rust FastPQ batch gate. The
@@ -25662,8 +25653,8 @@ signed ancestor-linked solid-block header proof,
   unknown fields, forcing future java-tron call extensions to fail closed until
   they are explicitly profiled and bound. The signed `raw_data` parser now also
   requires non-zero ref-block bytes/hash, non-zero expiration/timestamp/fee limit,
-  and `expiration > timestamp`, while keeping deprecated `ref_block_num`
-  optional. The Rust source-call calldata helper
+  and `expiration > timestamp`, and rejects deprecated `ref_block_num` field 3.
+  The Rust source-call calldata helper
   and source-adapter deployment builder are now
   locked to the same production TRON -> SORA lane as the SDK helpers and reject
   non-TRON sources, non-SORA targets, and zero source-event digests before
@@ -28404,7 +28395,7 @@ rejects escaping or writable-output symlinks plus hard-linked source files.
 The original checkout manifest and sealed manifest are both retained; every
 child completion uses the latter. One canonical aggregate receipt binds
 original HEAD/tree/`Cargo.lock`, all 85 pre-network legs and their exact
-863-test inventory plus the separate exact 518-test G-UNIT inventory, the
+864-test inventory plus the separate exact 522-test G-UNIT inventory, the
 formal harness lock/toolchain, matrix, chaos, and soak
 evidence. The formal leg archives a tee-captured all-legs log plus
 `proof_coverage.json` and `proof_evidence.json`; receipt publication reruns the
@@ -28760,8 +28751,8 @@ advanced by each responsive validator.
   reviewers and subsystem owners.
 
 **Next checkpoints:** monthly X Spaces cadence, clearer contributor onboarding,
-public follow-up notes for LFDT governance review items, and commit/reveal
-hardening for SORA Parliament policy juries.
+public follow-up notes for LFDT governance review items, and timed-OVN/
+threshold-release hardening for SORA Parliament policy juries.
 
 ## Kagemusha protected mobile production publication
 

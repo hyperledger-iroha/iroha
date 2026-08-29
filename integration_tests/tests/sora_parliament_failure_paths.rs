@@ -27,7 +27,9 @@ const CAPACITY_SORTITION_DELAY_BLOCKS: u64 = 4;
 const CONFIRMATION_CITIZENS: usize = 22;
 const CONFIRMATION_POLICY_SEATS: u32 = 21;
 const CONFIRMATION_REGISTRATION_BLOCKS: u64 = 50;
-const CONFIRMATION_PHASE_BLOCKS: u64 = 4;
+const CONFIRMATION_SURVIVOR_FREEZE_PHASE_BLOCKS: u64 = 32;
+const TERMINAL_SURVIVOR_FREEZE_PHASE_BLOCKS: u64 = 8;
+const BALLOT_COMMITMENT_PHASE_BLOCKS: u64 = 4;
 const CONFIRMATION_RELEASE_DELAY_BLOCKS: u64 = 4;
 const CONFIRMATION_OPENING_BLOCKS: u64 = 8;
 const TERMINAL_POLICY_SEATS: u32 = 3;
@@ -291,11 +293,11 @@ fn confirmation_capacity_builder(
                         "parliament_timed_ovn",
                         "survivor_freeze_phase_blocks",
                     ],
-                    CONFIRMATION_PHASE_BLOCKS as i64,
+                    CONFIRMATION_SURVIVOR_FREEZE_PHASE_BLOCKS as i64,
                 )
                 .write(
                     ["gov", "parliament_timed_ovn", "commitment_phase_blocks"],
-                    CONFIRMATION_PHASE_BLOCKS as i64,
+                    BALLOT_COMMITMENT_PHASE_BLOCKS as i64,
                 )
                 .write(
                     ["gov", "parliament_timed_ovn", "release_delay_blocks"],
@@ -423,11 +425,11 @@ fn certified_terminal_builder(
                         "parliament_timed_ovn",
                         "survivor_freeze_phase_blocks",
                     ],
-                    CONFIRMATION_PHASE_BLOCKS as i64,
+                    TERMINAL_SURVIVOR_FREEZE_PHASE_BLOCKS as i64,
                 )
                 .write(
                     ["gov", "parliament_timed_ovn", "commitment_phase_blocks"],
-                    CONFIRMATION_PHASE_BLOCKS as i64,
+                    BALLOT_COMMITMENT_PHASE_BLOCKS as i64,
                 )
                 .write(
                     ["gov", "parliament_timed_ovn", "release_delay_blocks"],
@@ -715,6 +717,8 @@ async fn finalize_failure_path_policy_ballot(
     sessions: &ThresholdSessionsV1,
     policy_seats: u32,
     registration_phase_blocks: u64,
+    survivor_freeze_phase_blocks: u64,
+    commitment_phase_blocks: u64,
     aye_ballots: usize,
 ) -> Result<BallotAttemptId> {
     let policy_body_id = body_ids[&ParliamentBody::PolicyJury];
@@ -746,10 +750,10 @@ async fn finalize_failure_path_policy_ballot(
         .checked_add(registration_phase_blocks)
         .ok_or_else(|| eyre!("confirmation-capacity registration height overflow"))?;
     let survivor_freeze_height = registration_close_height
-        .checked_add(CONFIRMATION_PHASE_BLOCKS)
+        .checked_add(survivor_freeze_phase_blocks)
         .ok_or_else(|| eyre!("confirmation-capacity survivor height overflow"))?;
     let commitment_close_height = survivor_freeze_height
-        .checked_add(CONFIRMATION_PHASE_BLOCKS)
+        .checked_add(commitment_phase_blocks)
         .ok_or_else(|| eyre!("confirmation-capacity commitment height overflow"))?;
     let release_height = commitment_close_height
         .checked_add(CONFIRMATION_RELEASE_DELAY_BLOCKS)
@@ -1018,6 +1022,8 @@ async fn certify_failure_path_attempt(
         sessions,
         TERMINAL_POLICY_SEATS,
         TERMINAL_REGISTRATION_BLOCKS,
+        TERMINAL_SURVIVOR_FREEZE_PHASE_BLOCKS,
+        BALLOT_COMMITMENT_PHASE_BLOCKS,
         2,
     )
     .await?;
@@ -1463,6 +1469,8 @@ async fn four_validator_narrow_policy_aborts_when_confirmation_capacity_is_one_i
         &sessions,
         CONFIRMATION_POLICY_SEATS,
         CONFIRMATION_REGISTRATION_BLOCKS,
+        CONFIRMATION_SURVIVOR_FREEZE_PHASE_BLOCKS,
+        BALLOT_COMMITMENT_PHASE_BLOCKS,
         11,
     )
     .await?;

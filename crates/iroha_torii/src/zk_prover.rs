@@ -91,24 +91,20 @@ use tokio::{
     PartialEq,
     Eq,
 )]
+#[norito(deny_unknown_fields)]
 /// Durable processing disposition embedded in a prover report.
 pub struct ProverReportProcessing {
     /// Whether the attachment outcome must not be retried automatically.
     pub terminal: bool,
     /// Earliest retry time for a transient failure, in Unix milliseconds.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub retry_not_before_ms: Option<u64>,
     /// Number of transient attempts already made for this attachment.
-    #[norito(default)]
     pub retry_count: u32,
     /// Indices whose successful verification can be reused on the next retry.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Vec::is_empty")]
     pub completed_proof_indices: Vec<u16>,
     /// Hash of the effective verifier context for reusable successful proofs.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub processing_context_hash: Option<String>,
 }
 #[derive(
@@ -197,8 +193,7 @@ pub struct ProverReport {
     #[norito(skip_serializing_if = "Vec::is_empty")]
     pub proofs: Vec<ProofReportEntry>,
     /// Processing disposition used to recover a receipt after a partial commit.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub processing: Option<ProverReportProcessing>,
 }
 #[derive(
@@ -2656,10 +2651,7 @@ mod tests {
         for backend in [
             "halo2/ipa",
             "halo2/pasta/ivm-execution-v1",
-            "stark/fri",
-            "stark/fri/sha256-goldilocks",
-            "stark/fri/poseidon2-goldilocks",
-            "stark/fri/sha256_goldilocks.v1",
+            "stark/fri/poseidon-x7-goldilocks-6x64-v1",
         ] {
             assert!(
                 backend_allowed(backend, &[]),
@@ -3171,6 +3163,93 @@ mod tests {
                 processing_context_hash: None,
             }),
         }
+    }
+    #[test]
+    fn prover_report_processing_json_requires_complete_v1_schema() {
+        let processing = ProverReportProcessing {
+            terminal: true,
+            retry_not_before_ms: None,
+            retry_count: 0,
+            completed_proof_indices: Vec::new(),
+            processing_context_hash: None,
+        };
+        let canonical = json::to_value(&processing).expect("encode exact report disposition");
+        assert!(
+            canonical
+                .get("retry_not_before_ms")
+                .is_some_and(norito::json::Value::is_null),
+            "terminal retry deadline must be present as explicit null"
+        );
+        assert!(
+            canonical
+                .get("completed_proof_indices")
+                .and_then(norito::json::Value::as_array)
+                .is_some_and(Vec::is_empty),
+            "terminal completed-proof cache must be present as an empty array"
+        );
+        assert!(
+            canonical
+                .get("processing_context_hash")
+                .is_some_and(norito::json::Value::is_null),
+            "terminal processing-context hash must be present as explicit null"
+        );
+        assert_eq!(
+            json::from_value::<ProverReportProcessing>(canonical.clone())
+                .expect("decode exact report disposition"),
+            processing
+        );
+        for field in [
+            "terminal",
+            "retry_not_before_ms",
+            "retry_count",
+            "completed_proof_indices",
+            "processing_context_hash",
+        ] {
+            let mut omitted = canonical.clone();
+            omitted
+                .as_object_mut()
+                .expect("report disposition object")
+                .remove(field);
+            assert!(
+                json::from_value::<ProverReportProcessing>(omitted).is_err(),
+                "omitted report disposition field `{field}` must not default"
+            );
+        }
+        let mut unknown = canonical;
+        unknown
+            .as_object_mut()
+            .expect("report disposition object")
+            .insert("retired_cache".to_owned(), true.into());
+        assert!(
+            json::from_value::<ProverReportProcessing>(unknown).is_err(),
+            "unknown report disposition fields must fail closed"
+        );
+    }
+    #[test]
+    fn prover_report_json_requires_explicit_processing_disposition() {
+        let mut report = sample_report("ac".repeat(32), true, None, "application/x-norito", 10);
+        report.processing = None;
+        let canonical = json::to_value(&report).expect("encode report with null disposition");
+        assert!(
+            canonical
+                .get("processing")
+                .is_some_and(norito::json::Value::is_null),
+            "absent processing disposition must be represented by an explicit null key"
+        );
+        assert_eq!(
+            json::from_value::<ProverReport>(canonical.clone())
+                .expect("decode report with explicit null disposition"),
+            report
+        );
+        let mut omitted = canonical;
+        omitted
+            .as_object_mut()
+            .expect("prover report object")
+            .remove("processing");
+        assert!(
+            json::from_value::<ProverReport>(omitted).is_err(),
+            "omitted processing disposition must not default to null"
+        );
     }
     #[test]
     fn terminal_receipt_suppression_skips_report_reconciliation() {

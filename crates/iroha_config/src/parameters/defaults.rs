@@ -2250,6 +2250,35 @@ pub mod torii {
         /// First-release terminal-retention hard ceiling.
         pub const TERMINAL_RETENTION_BLOCKS_MAX: u64 = u32::MAX as u64;
     }
+    /// Independently rebuildable SCCP replay archive defaults.
+    pub mod sccp_replay_archive {
+        use iroha_config_base::util::Bytes;
+        use std::time::Duration;
+
+        /// Replay archive reads are unavailable until an operator supplies the
+        /// complete signed three-replica production policy.
+        pub const ENABLED: bool = false;
+        /// Complete bounded checkpoint-set response.
+        pub const MAX_RESPONSE_BYTES: Bytes = Bytes(1024 * 1024 * 1024);
+        /// Maximum encoded bytes in one independently verified snapshot.
+        pub const MAX_SNAPSHOT_BYTES: Bytes = Bytes(1024 * 1024 * 1024);
+        /// Maximum leaves retained by one snapshot.
+        pub const MAX_SNAPSHOT_LEAVES: usize = 8 * 1024 * 1024;
+        /// Maximum route/boundary accumulators in one checkpoint set.
+        pub const MAX_ACCUMULATORS: usize = 4_096;
+        /// Complete deadline for one pinned replica fetch.
+        pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+        /// First-release response-size ceiling.
+        pub const MAX_RESPONSE_BYTES_HARD: u64 = 8 * 1024 * 1024 * 1024;
+        /// First-release per-snapshot size ceiling.
+        pub const MAX_SNAPSHOT_BYTES_HARD: u64 = 8 * 1024 * 1024 * 1024;
+        /// First-release per-snapshot leaf ceiling.
+        pub const MAX_SNAPSHOT_LEAVES_HARD: u64 = 64 * 1024 * 1024;
+        /// First-release checkpoint-set cardinality ceiling.
+        pub const MAX_ACCUMULATORS_HARD: u64 = 65_536;
+        /// First-release request deadline ceiling.
+        pub const REQUEST_TIMEOUT_HARD: Duration = Duration::from_secs(5 * 60);
+    }
     /// Peer-telemetry geo lookup defaults (disabled unless explicitly enabled).
     pub mod peer_geo {
         use url::Url;

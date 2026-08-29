@@ -2512,34 +2512,35 @@ fn update_relay_auth_component(hasher: &mut Sha3_256, component: &[u8]) {
     Update::update(hasher, &(component.len() as u64).to_be_bytes());
     Update::update(hasher, component);
 }
-fn relay_auth_digest(
+struct RelayAuthDigestInputs<'a> {
     suite: HandshakeSuite,
-    client_hello: &[u8],
-    relay_body: &[u8],
-    transcript_hash: &[u8; 32],
-    ed25519_public_key: &[u8],
-    mldsa65_public_key: &[u8],
-    authenticated_binding_digest: &[u8; TRANSCRIPT_BINDING_LEN],
-    transport_alpn: &[u8],
-    tls_server_name: &str,
-) -> [u8; 32] {
+    client_hello: &'a [u8],
+    relay_body: &'a [u8],
+    transcript_hash: &'a [u8; 32],
+    ed25519_public_key: &'a [u8],
+    mldsa65_public_key: &'a [u8],
+    authenticated_binding_digest: &'a [u8; TRANSCRIPT_BINDING_LEN],
+    transport_alpn: &'a [u8],
+    tls_server_name: &'a str,
+}
+fn relay_auth_digest(inputs: &RelayAuthDigestInputs<'_>) -> [u8; 32] {
     let mut hasher = Sha3_256::new();
     let version = [RELAY_AUTH_VERSION_V1];
     let scheme = [RELAY_AUTH_SCHEME_ED25519_MLDSA65_V1];
-    let suite_id = [u8::from(suite)];
+    let suite_id = [u8::from(inputs.suite)];
     for component in [
         RELAY_AUTH_DOMAIN,
         version.as_slice(),
         scheme.as_slice(),
         suite_id.as_slice(),
-        client_hello,
-        relay_body,
-        transcript_hash,
-        ed25519_public_key,
-        mldsa65_public_key,
-        authenticated_binding_digest,
-        transport_alpn,
-        tls_server_name.as_bytes(),
+        inputs.client_hello,
+        inputs.relay_body,
+        inputs.transcript_hash,
+        inputs.ed25519_public_key,
+        inputs.mldsa65_public_key,
+        inputs.authenticated_binding_digest,
+        inputs.transport_alpn,
+        inputs.tls_server_name.as_bytes(),
     ] {
         update_relay_auth_component(&mut hasher, component);
     }
@@ -2569,17 +2570,17 @@ fn append_relay_authentication(
         signer.mldsa65_public_key(),
         Algorithm::MlDsa,
     )?;
-    let digest = relay_auth_digest(
+    let digest = relay_auth_digest(&RelayAuthDigestInputs {
         suite,
         client_hello,
         relay_body,
         transcript_hash,
         ed25519_public_key,
         mldsa65_public_key,
-        signer.authenticated_binding_digest(),
+        authenticated_binding_digest: signer.authenticated_binding_digest(),
         transport_alpn,
         tls_server_name,
-    );
+    });
     let signatures = signer.sign_digest(&digest)?;
     append_relay_authentication_signatures(frame, &signatures);
     Ok(())
@@ -2609,17 +2610,17 @@ fn append_relay_authentication_with_hedged_rng(
         signer.mldsa65_public_key(),
         Algorithm::MlDsa,
     )?;
-    let digest = relay_auth_digest(
+    let digest = relay_auth_digest(&RelayAuthDigestInputs {
         suite,
         client_hello,
         relay_body,
         transcript_hash,
         ed25519_public_key,
         mldsa65_public_key,
-        signer.authenticated_binding_digest(),
+        authenticated_binding_digest: signer.authenticated_binding_digest(),
         transport_alpn,
         tls_server_name,
-    );
+    });
     let signatures = signer.sign_digest_with_hedged_rng(&digest, rng)?;
     append_relay_authentication_signatures(frame, &signatures);
     Ok(())
@@ -2656,17 +2657,17 @@ fn verify_relay_authentication(
         verifier.mldsa65_public_key(),
         Algorithm::MlDsa,
     )?;
-    let digest = relay_auth_digest(
+    let digest = relay_auth_digest(&RelayAuthDigestInputs {
         suite,
         client_hello,
         relay_body,
         transcript_hash,
         ed25519_public_key,
         mldsa65_public_key,
-        verifier.authenticated_binding_digest(),
+        authenticated_binding_digest: verifier.authenticated_binding_digest(),
         transport_alpn,
         tls_server_name,
-    );
+    });
     Signature::try_from_bytes(&signatures.ed25519)
         .map_err(|error| {
             HarnessError::Validation(format!("invalid relay Ed25519 signature: {error}"))
@@ -5021,7 +5022,7 @@ fn build_pqfs_relay_response(
 }
 fn process_nk2_client_hello<R: TryCryptoRng>(
     client_init: &[u8],
-    parsed: ClientHelloParsed,
+    parsed: &ClientHelloParsed,
     params: &RuntimeParams<'_>,
     rng: &mut R,
     kem_suite: MlKemSuite,
@@ -5045,7 +5046,7 @@ fn process_nk2_client_hello<R: TryCryptoRng>(
     )?;
     let primary = RuntimeKemArtifacts::encapsulate(kem_suite, &parsed.client_kem_public)?;
     let transcript =
-        compute_relay_transcript(&parsed, &noise.nonce, params, HandshakeSuite::Nk2Hybrid)?;
+        compute_relay_transcript(parsed, &noise.nonce, params, HandshakeSuite::Nk2Hybrid)?;
     let (session_key, confirmation) = derive_session_key_and_confirmation(SessionKeyInputs {
         suite: HandshakeSuite::Nk2Hybrid,
         transcript_hash: &transcript,
@@ -5121,13 +5122,13 @@ impl Nk3ConfirmationBundle {
 }
 fn process_nk3_client_hello<R: TryCryptoRng>(
     client_commit: &[u8],
-    parsed: ClientHelloParsed,
+    parsed: &ClientHelloParsed,
     params: &RuntimeParams<'_>,
     rng: &mut R,
     kem_suite: MlKemSuite,
     relay_authentication: &RelayAuthenticationSignerV1,
 ) -> Result<(Vec<u8>, SessionSecrets), HarnessError> {
-    let requirements = Nk3HandshakeRequirements::collect(&parsed)?;
+    let requirements = Nk3HandshakeRequirements::collect(parsed)?;
     let noise = RelayNoiseState::generate(rng)?;
     let noise_xx_dh = derive_relay_noise_xx_dh(
         &noise.ephemeral_secret,
@@ -5138,7 +5139,7 @@ fn process_nk3_client_hello<R: TryCryptoRng>(
     let primary = RuntimeKemArtifacts::encapsulate(kem_suite, &parsed.client_kem_public)?;
     let forward = RuntimeKemArtifacts::encapsulate(kem_suite, &requirements.forward_public)?;
     let transcript = compute_relay_transcript(
-        &parsed,
+        parsed,
         &noise.nonce,
         params,
         HandshakeSuite::Nk3PqForwardSecure,
@@ -5237,7 +5238,7 @@ pub fn process_client_hello<R: TryCryptoRng>(
     match parsed.handshake_suite {
         HandshakeSuite::Nk2Hybrid => process_nk2_client_hello(
             client_hello,
-            parsed,
+            &parsed,
             params,
             rng,
             profile.suite(),
@@ -5245,7 +5246,7 @@ pub fn process_client_hello<R: TryCryptoRng>(
         ),
         HandshakeSuite::Nk3PqForwardSecure => process_nk3_client_hello(
             client_hello,
-            parsed,
+            &parsed,
             params,
             rng,
             profile.suite(),

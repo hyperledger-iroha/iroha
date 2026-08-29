@@ -2205,6 +2205,17 @@ pub(crate) enum AutonomousLaneReservationSlotPlanError {
     #[error("lane reservation identity encoding failed")]
     IdentityEncode,
 }
+
+impl AutonomousLaneReservationSlotPlanError {
+    /// Whether a later producer tick can succeed after State or Kura advances.
+    pub(crate) const fn is_retryable_after_state_or_kura_progress(&self) -> bool {
+        matches!(
+            self,
+            Self::BlockedPredecessor { .. } | Self::PlanningSnapshotChanged
+        )
+    }
+}
+
 #[derive(Encode)]
 struct AutonomousLaneReservationSlotIdentityV1 {
     identity_version: u16,

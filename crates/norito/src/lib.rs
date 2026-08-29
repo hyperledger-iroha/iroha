@@ -984,20 +984,59 @@ pub mod json {
         pub enum Number {
             I64(i64),
             U64(u64),
+            U128(u128),
             F64(f64),
         }
+        const F64_TWO_POW_63: f64 = f64::from_bits((1023_u64 + 63) << 52);
+        const F64_TWO_POW_64: f64 = f64::from_bits((1023_u64 + 64) << 52);
+        const F64_TWO_POW_128: f64 = f64::from_bits((1023_u64 + 128) << 52);
+
+        fn i64_equals_f64(integer: i64, float: f64) -> bool {
+            float.is_finite()
+                && float.fract() == 0.0
+                && float >= -F64_TWO_POW_63
+                && float < F64_TWO_POW_63
+                && (float as i64) == integer
+        }
+
+        fn u64_equals_f64(integer: u64, float: f64) -> bool {
+            float.is_finite()
+                && float.fract() == 0.0
+                && float >= 0.0
+                && float < F64_TWO_POW_64
+                && (float as u64) == integer
+        }
+
+        fn u128_equals_f64(integer: u128, float: f64) -> bool {
+            float.is_finite()
+                && float.fract() == 0.0
+                && float >= 0.0
+                && float < F64_TWO_POW_128
+                && (float as u128) == integer
+        }
+
         impl Number {
             pub fn as_i64(&self) -> Option<i64> {
-                if let Number::I64(v) = self {
-                    Some(*v)
-                } else {
-                    None
+                match self {
+                    Number::I64(v) => Some(*v),
+                    Number::U64(v) => i64::try_from(*v).ok(),
+                    Number::U128(v) => i64::try_from(*v).ok(),
+                    Number::F64(_) => None,
                 }
             }
             pub fn as_u64(&self) -> Option<u64> {
                 match self {
                     Number::U64(v) => Some(*v),
+                    Number::U128(v) => u64::try_from(*v).ok(),
                     Number::I64(v) if *v >= 0 => Some(*v as u64),
+                    _ => None,
+                }
+            }
+            pub fn as_u128(&self) -> Option<u128> {
+                match self {
+                    Number::U64(v) => Some(u128::from(*v)),
+                    Number::U128(v) => Some(*v),
+                    Number::I64(v) if *v >= 0 => Some(*v as u128),
                     _ => None,
                 }
             }
@@ -1006,6 +1045,7 @@ pub mod json {
                     Number::F64(v) => Some(*v),
                     Number::I64(v) => Some(*v as f64),
                     Number::U64(v) => Some(*v as f64),
+                    Number::U128(v) => Some(*v as f64),
                 }
             }
             pub fn from_f64(v: f64) -> Option<Self> {
@@ -1026,6 +1066,11 @@ pub mod json {
                 Number::U64(v)
             }
         }
+        impl From<u128> for Number {
+            fn from(v: u128) -> Self {
+                Number::U128(v)
+            }
+        }
         impl From<f64> for Number {
             fn from(v: f64) -> Self {
                 Number::F64(v)
@@ -1036,13 +1081,20 @@ pub mod json {
                 match (self, other) {
                     (Number::I64(a), Number::I64(b)) => a == b,
                     (Number::U64(a), Number::U64(b)) => a == b,
+                    (Number::U128(a), Number::U128(b)) => a == b,
                     (Number::F64(a), Number::F64(b)) => a == b,
                     (Number::I64(a), Number::U64(b)) => *a >= 0 && (*a as u64) == *b,
                     (Number::U64(a), Number::I64(b)) => *b >= 0 && *a == (*b as u64),
-                    (Number::I64(a), Number::F64(b)) => (*a as f64) == *b,
-                    (Number::F64(a), Number::I64(b)) => *a == (*b as f64),
-                    (Number::U64(a), Number::F64(b)) => (*a as f64) == *b,
-                    (Number::F64(a), Number::U64(b)) => *a == (*b as f64),
+                    (Number::I64(a), Number::U128(b)) => *a >= 0 && (*a as u128) == *b,
+                    (Number::U128(a), Number::I64(b)) => *b >= 0 && *a == (*b as u128),
+                    (Number::U64(a), Number::U128(b)) => u128::from(*a) == *b,
+                    (Number::U128(a), Number::U64(b)) => *a == u128::from(*b),
+                    (Number::I64(a), Number::F64(b)) => i64_equals_f64(*a, *b),
+                    (Number::F64(a), Number::I64(b)) => i64_equals_f64(*b, *a),
+                    (Number::U64(a), Number::F64(b)) => u64_equals_f64(*a, *b),
+                    (Number::F64(a), Number::U64(b)) => u64_equals_f64(*b, *a),
+                    (Number::U128(a), Number::F64(b)) => u128_equals_f64(*a, *b),
+                    (Number::F64(a), Number::U128(b)) => u128_equals_f64(*b, *a),
                 }
             }
         }
@@ -1163,6 +1215,13 @@ pub mod json {
                     None
                 }
             }
+            pub fn as_u128(&self) -> Option<u128> {
+                if let Value::Number(n) = self {
+                    n.as_u128()
+                } else {
+                    None
+                }
+            }
             pub fn as_i64(&self) -> Option<i64> {
                 if let Value::Number(n) = self {
                     n.as_i64()
@@ -1235,6 +1294,11 @@ pub mod json {
         impl From<u64> for Value {
             fn from(v: u64) -> Self {
                 Value::Number(Number::U64(v))
+            }
+        }
+        impl From<u128> for Value {
+            fn from(v: u128) -> Self {
+                Value::Number(Number::U128(v))
             }
         }
         impl From<u32> for Value {
@@ -1405,7 +1469,7 @@ pub mod json {
     }
     mod schema_support {
         use super::{JsonSerialize, Map, Number, Value};
-        use core::{any::TypeId, convert::TryFrom};
+        use core::any::TypeId;
         use iroha_schema::{
             ArrayMeta, BitmapMask, BitmapMeta, EnumMeta, EnumVariant, FixedMeta, FloatMode, Ident,
             IntMode, IntoSchema, MapMeta, MetaMap, MetaMapEntry, Metadata, NamedFieldsMeta,
@@ -1650,14 +1714,20 @@ pub mod json {
                         ty: Some(TypeId::of::<u64>()),
                     },
                     EnumVariant {
-                        tag: "F64".to_owned(),
+                        tag: "U128".to_owned(),
                         discriminant: 2,
+                        ty: Some(TypeId::of::<u128>()),
+                    },
+                    EnumVariant {
+                        tag: "F64".to_owned(),
+                        discriminant: 3,
                         ty: Some(TypeId::of::<f64>()),
                     },
                 ];
                 map.insert::<Self>(Metadata::Enum(EnumMeta { variants }));
                 <i64 as IntoSchema>::update_schema_map(map);
                 <u64 as IntoSchema>::update_schema_map(map);
+                <u128 as IntoSchema>::update_schema_map(map);
                 <f64 as IntoSchema>::update_schema_map(map);
             }
         }
@@ -1715,10 +1785,7 @@ pub mod json {
             }
         }
         fn u128_to_value(len: u128) -> Value {
-            match u64::try_from(len) {
-                Ok(v) => Value::from(v),
-                Err(_) => Value::String(len.to_string()),
-            }
+            Value::from(len)
         }
         fn single_entry(key: &str, value: Value) -> Value {
             let mut map = Map::new();
@@ -1835,6 +1902,7 @@ pub mod json {
                     V::Number(value) => match value {
                         native::Number::I64(value) => out.push_str(&value.to_string()),
                         native::Number::U64(value) => out.push_str(&value.to_string()),
+                        native::Number::U128(value) => out.push_str(&value.to_string()),
                         native::Number::F64(value) => write_f64_json(*value, out),
                     },
                     V::String(value) => write_json_string(value, out),
@@ -2284,9 +2352,9 @@ pub mod json {
         let digits = &s[int_start..i];
         if !neg {
             if let Ok(u) = digits.parse::<u64>() {
-                if u <= i64::MAX as u64 {
-                    return Ok(Value::Number(Number::from(u as i64)));
-                }
+                return Ok(Value::Number(Number::from(u)));
+            }
+            if let Ok(u) = digits.parse::<u128>() {
                 return Ok(Value::Number(Number::from(u)));
             }
         } else if let Ok(u) = digits.parse::<u64>() {
@@ -2298,25 +2366,13 @@ pub mod json {
                 return Ok(Value::Number(Number::from(v)));
             }
         }
-        let v: f64 = num_slice.parse().map_err(|_| {
-            let (byte, line, col) = p.pos_meta(p.position());
-            Error::WithPos {
-                msg: "number parse",
-                byte,
-                line,
-                col,
-            }
-        })?;
-        let n = Number::from_f64(v).ok_or_else(|| {
-            let (byte, line, col) = p.pos_meta(p.position());
-            Error::WithPos {
-                msg: "NaN/Inf",
-                byte,
-                line,
-                col,
-            }
-        })?;
-        Ok(Value::Number(n))
+        let (byte, line, col) = p.pos_meta(p.position());
+        Err(Error::WithPos {
+            msg: "integer out of range",
+            byte,
+            line,
+            col,
+        })
     }
     /// Convenience: parse a JSON `Value` from a byte slice.
     pub fn from_slice_value(bytes: &[u8]) -> Result<Value, Error> {
@@ -4761,9 +4817,9 @@ pub mod json {
         }
         fn json_from_value(value: &Value) -> Result<Self, Error> {
             if let Value::Number(number) = value
-                && let Some(u) = number.as_u64()
+                && let Some(u) = number.as_u128()
             {
-                return Ok(u as u128);
+                return Ok(u);
             }
             json_from_value_via_string(value)
         }
@@ -8781,6 +8837,14 @@ pub mod json {
         fn visit_bool(self, v: bool) -> Result<Self::Value, Error>;
         fn visit_i64(self, v: i64) -> Result<Self::Value, Error>;
         fn visit_u64(self, v: u64) -> Result<Self::Value, Error>;
+        fn visit_u128(self, v: u128) -> Result<Self::Value, Error>
+        where
+            Self: Sized,
+        {
+            let value = u64::try_from(v)
+                .map_err(|_| Error::Message("visitor does not accept u128 values".to_owned()))?;
+            self.visit_u64(value)
+        }
         fn visit_f64(self, v: f64) -> Result<Self::Value, Error>;
         fn visit_string(self, v: String) -> Result<Self::Value, Error>;
         fn visit_map(self, visitor: MapVisitor<'a, '_>) -> Result<Self::Value, Error>;
@@ -8817,6 +8881,7 @@ pub mod json {
                 match number {
                     Number::I64(v) => visitor.visit_i64(v),
                     Number::U64(v) => visitor.visit_u64(v),
+                    Number::U128(v) => visitor.visit_u128(v),
                     Number::F64(v) => visitor.visit_f64(v),
                 }
             }
@@ -8923,6 +8988,9 @@ pub mod json {
             if let Ok(u) = digits.parse::<u64>() {
                 return Ok(Number::from(u));
             }
+            if let Ok(u) = digits.parse::<u128>() {
+                return Ok(Number::from(u));
+            }
         } else if let Ok(u) = digits.parse::<u64>() {
             if u == (i64::MAX as u64) + 1 {
                 return Ok(Number::from(i64::MIN));
@@ -8931,12 +8999,7 @@ pub mod json {
                 return Ok(Number::from(-(u as i64)));
             }
         }
-        let v: f64 = slice
-            .parse()
-            .map_err(|_| Error::Message("number parse".to_owned()))?;
-        let n = Number::from_f64(v)
-            .ok_or_else(|| Error::Message("json float out of range".to_owned()))?;
-        Ok(n)
+        Err(Error::Message("json integer out of range".to_owned()))
     }
     // ===== CRC32C helpers (portable + HW-accelerated byte update) =====
     #[inline]

@@ -13,7 +13,7 @@ class TransportResponseTest {
             "content-type" to listOf("application/x-norito"),
         )
 
-        val response = TransportResponse(200, null, null, source)
+        val response = TransportResponse(200, null, null, source, null, false)
         source.clear()
 
         assertEquals(
@@ -27,10 +27,11 @@ class TransportResponseTest {
     }
 
     @Test
-    fun networkProvenanceIsExplicitAndLegacyConstructorRemainsAvailable() {
-        val legacy = TransportResponse(200, null, null, emptyMap())
-        assertEquals(null, legacy.finalUri)
-        assertEquals(false, legacy.redirected)
+    fun networkProvenanceIsAlwaysExplicit() {
+        val provenanceUnavailable =
+            TransportResponse(200, null, null, emptyMap(), null, false)
+        assertEquals(null, provenanceUnavailable.finalUri)
+        assertEquals(false, provenanceUnavailable.redirected)
 
         val finalUri = URI.create("https://torii.example/v1/validation-fee/hijiri/quote")
         val response = TransportResponse.builder()

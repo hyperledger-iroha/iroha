@@ -15,10 +15,10 @@ use axum::{
 use iroha_core::private_settlement::{
     PrivateSettlementAvailabilityErrorV1, PrivateSettlementAvailabilitySignerV1,
     PrivateSettlementFileSidecarStoreV1, PrivateSettlementPhaseErrorV1,
-    PrivateSettlementPhaseSignerV1, PrivateSettlementRestrictedSidecarV1,
-    PrivateSettlementSidecarLifecycleV1, PrivateSettlementSidecarStoreConfigV1,
-    PrivateSettlementSidecarStoreErrorV1, PrivateSettlementSidecarStoreOutcomeV1,
-    validate_private_settlement_committee_authority_v1,
+    PrivateSettlementPhaseSignerV1, PrivateSettlementReconciliationCandidateV1,
+    PrivateSettlementRestrictedSidecarV1, PrivateSettlementSidecarLifecycleV1,
+    PrivateSettlementSidecarStoreConfigV1, PrivateSettlementSidecarStoreErrorV1,
+    PrivateSettlementSidecarStoreOutcomeV1, validate_private_settlement_committee_authority_v1,
 };
 use iroha_core::state::StateReadOnly as _;
 use iroha_crypto::{Hash, PublicKey};
@@ -245,6 +245,32 @@ struct PrivateSettlementReconciliationWorkV1 {
     abort: Option<iroha_data_model::nexus::PrivateSettlementAbortReceiptV1>,
 }
 
+fn snapshot_private_settlement_reconciliation_work_v1(
+    state: &iroha_core::state::State,
+    candidates: Vec<PrivateSettlementReconciliationCandidateV1>,
+) -> Result<
+    (u64, Vec<PrivateSettlementReconciliationWorkV1>),
+    PrivateSettlementReconciliationFailureV1,
+> {
+    let view = state.view();
+    let authoritative_height = u64::try_from(view.height())
+        .map_err(|_| PrivateSettlementReconciliationFailureV1::HeightUnavailable)?;
+    let world = view.world();
+    let work = candidates
+        .into_iter()
+        .map(|candidate| PrivateSettlementReconciliationWorkV1 {
+            payload_digest: candidate.payload_digest,
+            receipt: world
+                .private_settlement_receipt_v1(&candidate.bundle_id)
+                .cloned(),
+            abort: world
+                .private_settlement_abort_v1(&candidate.bundle_id)
+                .copied(),
+        })
+        .collect();
+    Ok((authoritative_height, work))
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PrivateSettlementReconciliationFailureV1 {
     HeightUnavailable,
@@ -282,26 +308,8 @@ async fn reconcile_private_settlement_finality_tick_v1(
         if page.next_cursor.is_some() && page.next_cursor == cursor {
             return Err(PrivateSettlementReconciliationFailureV1::CursorDidNotAdvance);
         }
-        let (authoritative_height, work) = {
-            let view = state.view();
-            let authoritative_height = u64::try_from(view.height())
-                .map_err(|_| PrivateSettlementReconciliationFailureV1::HeightUnavailable)?;
-            let world = view.world();
-            let work = page
-                .candidates
-                .into_iter()
-                .map(|candidate| PrivateSettlementReconciliationWorkV1 {
-                    payload_digest: candidate.payload_digest,
-                    receipt: world
-                        .private_settlement_receipt_v1(&candidate.bundle_id)
-                        .cloned(),
-                    abort: world
-                        .private_settlement_abort_v1(&candidate.bundle_id)
-                        .copied(),
-                })
-                .collect::<Vec<_>>();
-            (authoritative_height, work)
-        };
+        let (authoritative_height, work) =
+            snapshot_private_settlement_reconciliation_work_v1(&state, page.candidates)?;
         if !work.is_empty() {
             let blocking_store = Arc::clone(&store);
             tokio::task::spawn_blocking(move || {

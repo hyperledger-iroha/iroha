@@ -1441,6 +1441,12 @@ fn schedule_local_proposal(
         let (_, time_source) =
             iroha_primitives::time::TimeSource::new_mock(carrier_context_header.creation_time());
         let assembler = V2CandidateAssembler::new(candidate_limits, time_source.clone());
+        // Merge refresh may add the local signature which completes and durably
+        // publishes the exact-round certificate. Do that before freezing candidate
+        // attachments so the same producer turn can carry the newly certified entry;
+        // waiting for `CandidateWorkProvider::prepare` would miss it until a later
+        // turn, which may already be fenced by timeout/view-change control work.
+        lane_work.refresh_merge_candidates(directive.tag().view())?;
         let queue_plan_admissions =
             lane_work.reconcile_pending_queue_plan_admissions(directive.tag().view())?;
         let attachments = candidate_attachments(
@@ -2965,6 +2971,11 @@ fn dispatch_lane_work_effect_from_snapshot(
     Ok(LaneWorkEffectDispatch::Complete)
 }
 include!("v2_runner/merge_sidecar_recovery.rs");
+// Open heights interleave authenticated lane relays with reducer completions,
+// producer work, and pacemaker progress. One relay occurrence per serialized
+// turn prevents an expensive authenticated backlog from starving those owners.
+const OPEN_HEIGHT_LANE_RELAY_SERVICE_BURST: usize = 1;
+
 fn drain_lane_relay_prefix(
     lane_relay_rx: &std::sync::mpsc::Receiver<super::LaneRelayMessage>,
     lane_work: &mut V2LaneWorkAdapter,
@@ -2988,12 +2999,19 @@ fn drain_lane_relay_prefix(
 fn drain_lane_relay_ingress(
     lane_relay_rx: &std::sync::mpsc::Receiver<super::LaneRelayMessage>,
     lane_work: &mut V2LaneWorkAdapter,
+    services: &ProductionV2Services,
     active_view: wire::View,
-    limit: usize,
 ) -> std::result::Result<bool, V2LaneWorkError> {
-    let drained_any = drain_lane_relay_prefix(lane_relay_rx, lane_work, active_view, limit);
+    let drained_any = drain_lane_relay_prefix(
+        lane_relay_rx,
+        lane_work,
+        active_view,
+        OPEN_HEIGHT_LANE_RELAY_SERVICE_BURST,
+    );
     if drained_any {
-        let _ = lane_work.service_next_historical_recovery()?;
+        let current_archive_targets = services.current_archive_targets();
+        let _ = lane_work
+            .service_next_historical_recovery_with_archive_targets(&current_archive_targets)?;
     }
     Ok(drained_any)
 }

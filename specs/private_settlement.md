@@ -272,10 +272,20 @@ environment variable enables the feature. The actual configuration includes:
 - `max_participants` (hard V1 maximum 255) and `max_expiry_blocks`;
 - audit, Prepare, and Commit height timeouts;
 - strictly increasing capsule padding classes;
-- proof, capsule, carrier, per-record, and retention bounds;
+- proof, whole-canonical-capsule, carrier, per-record, and retention bounds;
 - `sidecar_max_records` and `sidecar_max_total_bytes`, which are consensus-
   committed governed capacities passed to every Torii sidecar store at open;
-- `default_min_auditor_approvals` and permitted audit-policy versions.
+- `default_min_auditor_approvals`, which is the governed minimum threshold
+  accepted for every newly admitted policy, and permitted audit-policy versions.
+
+`max_capsule_bytes` limits the canonical Norito encoding of the complete
+`PrivateSettlementAuditCapsuleV1`, including AAD, nonce, ciphertext, vector
+framing, auditor identifiers, and every wrapped-DEK row; it is not a
+ciphertext-only allowance. Configuration parsing proves that each enabled
+padding class can fit the conservative complete-capsule envelope for at least
+`default_min_auditor_approvals` auditors. Admission then rejects any policy
+whose `min_approvals` is below that governed floor and any actual capsule whose
+whole canonical encoding exceeds `max_capsule_bytes`.
 
 Invalid zero values, unsupported V1 versions, duplicate/unsorted padding or
 policy lists, enabled-without-activation configurations, and values above hard
@@ -295,6 +305,9 @@ protocol limits are configuration errors.
 - Every global leg is validated before the first overlay write.
 - Replay markers and terminal receipts survive snapshots, Kura replay, and
   restart; ambiguous local state fails closed and reconciles from immutable WSV.
+- Governed pool projections retain exact policy-revision lineage so historical
+  finalized receipts remain restart-valid and exact-replay idempotent after a
+  rotation, while old-policy in-flight bundles remain inadmissible.
 - Mandatory signed RS16 DA/RBC remains enabled in every deployment and fault
   test; there is no private-settlement bypass.
 

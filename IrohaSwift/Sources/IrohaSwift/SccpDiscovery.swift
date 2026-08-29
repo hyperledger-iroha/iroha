@@ -1,6 +1,10 @@
 import CryptoKit
 import Foundation
 
+private let maximumUInt128 = "340282366920938463463374607431768211455"
+private let maximumTonCoins = "1329227995784915872903807060280344575"
+private let keccak256EmptyBytes = Data(hexString: "C5D2460186F7233C927E7DB2DCC703C0E500B653CA82273B7BFAD8045D85A470")!
+
 /// Fixed SCCP V1 route-registry capacity limits.
 public struct SccpRegistryLimits: Equatable, Sendable {
     public let maxGovernedLanes: UInt32
@@ -51,6 +55,7 @@ public struct SccpCapabilities: Equatable, Sendable {
     public let messageBundlePath: String
     public let proofRequestPath: String
     public let recentMessagesPath: String
+    public let soraOutboundMaterialPath: String
     public let registryLimits: SccpRegistryLimits
     public let resourceLimits: SccpResourceLimits
     public let proofSubmitPath: String?
@@ -91,6 +96,23 @@ public struct SccpNativeTrustAnchorV1: Equatable, Sendable {
 public struct SccpInboundFinalityCutoffV1: Equatable, Sendable {
     public let trustAnchorHash: Data
     public let maxAnchorIntervalHeight: UInt64
+}
+
+/// Governance-registered portable verification-key identity for SORA-side execution proofs.
+public struct SccpPortableVerifyingKeyReferenceV1: Equatable, Sendable {
+    public let backend: String
+    public let name: String
+    public let version: UInt32
+    public let commitment: Data
+}
+
+/// Mandatory SORA-side proved burn-and-record execution policy for one route.
+public struct SccpSoraOutboundExecutionPolicyV1: Equatable, Sendable {
+    public let version: UInt8
+    public let semantics: String
+    public let contractArtifactSha256: Data
+    public let verifyingKeyReference: SccpPortableVerifyingKeyReferenceV1
+    public let gasLimit: UInt64
 }
 
 /// Closed curve-specific semantic circuit admitted by SCCP V1.
@@ -136,9 +158,47 @@ public struct SccpEvmTronDestinationDeploymentV1: Equatable, Sendable {
     public let outboundProofPolicy: SccpOutboundProofPolicyV1
     public let routeAddress: Data
     public let routeCodeHash: Data
+    public let replayVerifierAddress: Data
+    public let replayVerifierCodeHash: Data
+    public let mintBreakerAddress: Data
+    public let mintBreakerCodeHash: Data
     public let tairaToTokenMultiplier: UInt64
     public let maxWrappedSupply: String
     public let destinationBindingHash: Data
+}
+
+/// Exact ordered five-key TON mint-breaker guardian set.
+public struct SccpTonMintBreakerGuardianKeysV1: Equatable, Sendable {
+    public let guardian0: Data
+    public let guardian1: Data
+    public let guardian2: Data
+    public let guardian3: Data
+    public let guardian4: Data
+
+    public init(
+        guardian0: Data,
+        guardian1: Data,
+        guardian2: Data,
+        guardian3: Data,
+        guardian4: Data
+    ) throws {
+        let keys = [guardian0, guardian1, guardian2, guardian3, guardian4]
+        guard keys.allSatisfy({ $0.count == 32 && $0.contains(where: { $0 != 0 }) }),
+              zip(keys, keys.dropFirst()).allSatisfy({ $0.lexicographicallyPrecedes($1) })
+        else {
+            throw SccpV1Error.invalid(
+                "TON mint-breaker guardians must be five nonzero, strictly increasing 32-byte keys"
+            )
+        }
+        self.guardian0 = Data(guardian0)
+        self.guardian1 = Data(guardian1)
+        self.guardian2 = Data(guardian2)
+        self.guardian3 = Data(guardian3)
+        self.guardian4 = Data(guardian4)
+    }
+
+    /// Keys in canonical TON StateInit and SCCP hash-preimage order.
+    public var ordered: [Data] { [guardian0, guardian1, guardian2, guardian3, guardian4] }
 }
 
 /// Exact TON Jetton route with an embedded BLS12-381 Groth16 verifier.
@@ -154,10 +214,23 @@ public struct SccpTonDestinationDeploymentV1: Equatable, Sendable {
     public let verifierCircuitHash: Data
     public let verifierKeyHash: Data
     public let proofProfileCommitment: Data
+    public let mintBreakerGuardianKeys: SccpTonMintBreakerGuardianKeysV1
     public let outboundProofPolicy: SccpOutboundProofPolicyV1
     public let tairaToTokenMultiplier: UInt64
     public let maxWrappedSupply: String
     public let destinationBindingHash: Data
+
+    /// Validate a positive outbound Jetton amount against the immutable route cap.
+    public func validateJettonAmount(_ amount: String) throws {
+        guard !amount.isEmpty,
+              amount.utf8.allSatisfy({ (48...57).contains($0) }),
+              amount.first != "0",
+              amount.count < maxWrappedSupply.count
+                  || amount.count == maxWrappedSupply.count && amount <= maxWrappedSupply
+        else {
+            throw SccpV1Error.invalid("TON Jetton amount must be positive and no greater than max_wrapped_supply")
+        }
+    }
 }
 
 /// Closed, family-specific destination deployment.
@@ -227,8 +300,8 @@ public struct SccpGovernedRouteV1: Equatable, Sendable {
     public let inboundFinalityCutoff: SccpInboundFinalityCutoffV1?
     public let sourceEmitter: SccpSourceEmitterV1
     public let destination: SccpDestinationDeploymentV1
+    public let soraOutboundExecutionPolicy: SccpSoraOutboundExecutionPolicyV1
     public let assetDefinitionId: String
-    public let custodyOwner: String
     public let payloadAmountScale: UInt32
     public let maxOutstandingLiability: String
     public let routeConfigurationHash: Data
@@ -349,7 +422,7 @@ public struct SccpRecentMessages: Equatable, Sendable {
     }
 }
 
-private enum SccpExactParser {
+enum SccpExactParser {
     private static let jsonSafeIntegerMaximum: UInt64 = (1 << 53) - 1
 
     private static let capabilityPaths: [String: String] = [
@@ -357,6 +430,7 @@ private enum SccpExactParser {
         "message_bundle_path": "/v1/sccp/proofs/message/{message_id}",
         "proof_request_path": "/v1/sccp/proof-requests/{message_id}",
         "recent_messages_path": "/v1/sccp/messages/recent",
+        "sora_outbound_material_path": "/v1/sccp/routes/{source_profile}/{route_id}/{asset_key}/{revision}/sora-outbound-material",
         "proof_submit_path": "/v1/bridge/proofs/submit",
         "native_message_submit_path": "/v1/bridge/messages",
     ]
@@ -408,7 +482,8 @@ private enum SccpExactParser {
         let root = try SccpStrictJSON.object(data, label: "SCCP capabilities")
         let required: Set<String> = [
             "version", "registry_revision", "registry_path", "message_bundle_path",
-            "proof_request_path", "recent_messages_path", "registry_limits", "resource_limits",
+            "proof_request_path", "recent_messages_path", "sora_outbound_material_path",
+            "registry_limits", "resource_limits",
         ]
         let allowed = required.union(["proof_submit_path", "native_message_submit_path"])
         try SccpStrictJSON.exactFields(root, allowed: allowed, required: required, label: "SCCP capabilities")
@@ -420,6 +495,7 @@ private enum SccpExactParser {
         let bundlePath = try fixedPath(root, "message_bundle_path")
         let proofRequestPath = try fixedPath(root, "proof_request_path")
         let recentPath = try fixedPath(root, "recent_messages_path")
+        let outboundMaterialPath = try fixedPath(root, "sora_outbound_material_path")
         let registryLimits = try registryLimits(object(root, "registry_limits"))
         let resourceLimits = try resourceLimits(object(root, "resource_limits"))
         let proofSubmitPath = try optionalFixedPath(root, "proof_submit_path")
@@ -434,6 +510,7 @@ private enum SccpExactParser {
             messageBundlePath: bundlePath,
             proofRequestPath: proofRequestPath,
             recentMessagesPath: recentPath,
+            soraOutboundMaterialPath: outboundMaterialPath,
             registryLimits: registryLimits,
             resourceLimits: resourceLimits,
             proofSubmitPath: proofSubmitPath,
@@ -869,7 +946,7 @@ private enum SccpExactParser {
         case .evmGroth16Bn254:
             backendMatchesTarget = target.domainId == 1 || target.domainId == 2
         case .tronGroth16Bn254:
-            backendMatchesTarget = target.domainId == 5
+            backendMatchesTarget = target.domainId == 3
         case .tonGroth16Bls12381:
             backendMatchesTarget = target.domainId == 4
         }
@@ -884,7 +961,7 @@ private enum SccpExactParser {
         guard try SccpStrictJSON.uint64(inputs, "version", minimum: 1) == 1 else {
             throw SccpV1Error.invalid("SCCP public-input version must be exactly 1")
         }
-        let targetDomain = try SccpStrictJSON.uint32(inputs, "target_domain", minimum: 1, maximum: 5)
+        let targetDomain = try SccpStrictJSON.uint32(inputs, "target_domain", minimum: 1, maximum: 4)
         guard targetDomain == target.domainId else { throw SccpV1Error.invalid("SCCP target profile/domain mismatch") }
         let messageId = try prefixedHash(inputs, "message_id")
         let payloadHash = try prefixedHash(inputs, "payload_hash")
@@ -1022,7 +1099,7 @@ private enum SccpExactParser {
             else { throw SccpV1Error.invalid("recent SCCP message contains an unsupported profile") }
             let lane = try SccpLaneIdV1(source: source, target: target)
             guard lane.isOutbound, source == .soraTaira else { throw SccpV1Error.invalid("recent SCCP lane must be Taira-to-external") }
-            let domain = try SccpStrictJSON.uint32(item, "target_domain", minimum: 1, maximum: 5)
+            let domain = try SccpStrictJSON.uint32(item, "target_domain", minimum: 1, maximum: 4)
             guard domain == target.domainId else { throw SccpV1Error.invalid("recent SCCP target profile/domain mismatch") }
             let id = try unprefixedHash(item, "message_id_hex")
             guard ids.insert(id).inserted else { throw SccpV1Error.invalid("recent SCCP message ids must be unique") }
@@ -1131,7 +1208,8 @@ private enum SccpExactParser {
     ) throws -> SccpGovernedRouteV1 {
         try SccpStrictJSON.exactFields(item, [
             "lane_id", "route_id", "asset_key", "revision", "activation",
-            "inbound_finality_cutoff", "source_identity", "destination", "settlement",
+            "inbound_finality_cutoff", "source_identity", "destination",
+            "sora_outbound_execution_policy", "settlement",
         ], label: label)
         let lane = try inboundLane(object(item, "lane_id"), label: "\(label).lane_id")
         guard lane == expectedLane else { throw SccpV1Error.invalid("\(label).lane_id does not match its parent lane") }
@@ -1166,40 +1244,27 @@ private enum SccpExactParser {
         guard sourceMatchesDestination(source, destination) else {
             throw SccpV1Error.invalid("\(label) source identity does not name its destination route deployment")
         }
+        let executionPolicy = try soraOutboundExecutionPolicy(
+            object(item, "sora_outbound_execution_policy"),
+            label: "\(label).sora_outbound_execution_policy"
+        )
         let settlement = try object(item, "settlement")
         try SccpStrictJSON.exactFields(
             settlement,
-            [
-                "asset_definition_id", "custody_owner", "payload_amount_scale",
-                "max_outstanding_liability",
-            ],
+            ["asset_definition_id", "payload_amount_scale", "max_outstanding_liability"],
             label: "\(label).settlement"
         )
         let assetDefinition = try SccpStrictJSON.text(settlement, "asset_definition_id")
         guard assetDefinition == "6TEAJqbb8oEPmLncoNiMRbLEK6tw" else { throw SccpV1Error.invalid("\(label) must settle canonical Taira XOR") }
-        let custody = try SccpStrictJSON.text(settlement, "custody_owner")
-        guard let address = try? AccountAddress.parseEncoded(custody),
-              let canonical = try? address.toI105(
-                  networkPrefix: SccpV1.tairaI105DiscriminantV1
-              ), canonical == custody
-        else {
-            throw SccpV1Error.invalid(
-                "\(label).custody_owner must be a canonical Taira I105 AccountId"
-            )
-        }
         let scale = try SccpStrictJSON.uint32(settlement, "payload_amount_scale", minimum: 9, maximum: 9)
-        let maxOutstandingLiability = try SccpStrictJSON.uint128(
+        let maxOutstandingLiability = try unsignedIntegerText(
             settlement,
-            "max_outstanding_liability"
+            "max_outstanding_liability",
+            maximum: maximumUInt128
         )
-        guard SccpUInt128.product(
-            maxOutstandingLiability,
-            by: destination.tairaToTokenMultiplier,
-            equals: destination.maxWrappedSupply
-        ) else {
-            throw SccpV1Error.invalid(
-                "\(label) wrapped supply cap must equal its SORA liability times the destination multiplier"
-            )
+        guard multiplyDecimal(maxOutstandingLiability, by: destination.tairaToTokenMultiplier)
+            == destination.maxWrappedSupply else {
+            throw SccpV1Error.invalid("\(label) wrapped-supply cap does not match its SORA liability cap")
         }
         let configuration = try routeConfigurationHash(
             lane: lane,
@@ -1210,6 +1275,22 @@ private enum SccpExactParser {
         )
         guard sourceRouteConfigHash(source) == configuration else {
             throw SccpV1Error.invalid("\(label) source route_config_hash does not match the immutable deployment")
+        }
+        var governedRoles = [
+            executionPolicy.contractArtifactSha256,
+            executionPolicy.verifyingKeyReference.commitment,
+            configuration,
+            destination.destinationBindingHash,
+            destination.verifierKeyHash,
+            destination.outboundProofPolicy.semanticProfile.profileHash,
+            destination.outboundProofPolicy.soraFinalityAnchor.anchorHash,
+        ]
+        if case let .ton(ton) = destination {
+            governedRoles.append(ton.jettonMasterInitialDataHash)
+            governedRoles.append(ton.routeInitialDataHash)
+        }
+        guard Set(governedRoles).count == governedRoles.count else {
+            throw SccpV1Error.invalid("\(label) reuses a governed execution or deployment hash role")
         }
         if activation.allowsInbound {
             guard let nativeAnchor, nativeAnchor.backend.supports(lane.source) else {
@@ -1225,12 +1306,92 @@ private enum SccpExactParser {
             inboundFinalityCutoff: cutoff,
             sourceEmitter: source,
             destination: destination,
+            soraOutboundExecutionPolicy: executionPolicy,
             assetDefinitionId: assetDefinition,
-            custodyOwner: custody,
             payloadAmountScale: scale,
             maxOutstandingLiability: maxOutstandingLiability,
             routeConfigurationHash: configuration
         )
+    }
+
+    private static func soraOutboundExecutionPolicy(
+        _ item: [String: Any],
+        label: String
+    ) throws -> SccpSoraOutboundExecutionPolicyV1 {
+        try SccpStrictJSON.exactFields(
+            item,
+            ["version", "semantics", "contract_artifact_sha256", "vk_ref", "gas_limit"],
+            label: label
+        )
+        guard try SccpStrictJSON.uint64(item, "version", minimum: 1, maximum: 1) == 1,
+              try SccpStrictJSON.text(item, "semantics") == "ivm_proved_record_sccp_message_v1"
+        else { throw SccpV1Error.invalid("\(label) does not select the exact V1 execution semantics") }
+        let contractArtifactSha256 = try upperFixed(item, "contract_artifact_sha256", bytes: 32)
+        let reference = try object(item, "vk_ref")
+        try SccpStrictJSON.exactFields(
+            reference,
+            ["backend", "name", "version", "commitment"],
+            label: "\(label).vk_ref"
+        )
+        let backend = try SccpStrictJSON.text(reference, "backend")
+        let name = try SccpStrictJSON.text(reference, "name")
+        guard portableVerifyingKeyField(backend), portableVerifyingKeyField(name) else {
+            throw SccpV1Error.invalid("\(label).vk_ref is not a portable verifying-key identity")
+        }
+        let keyReference = SccpPortableVerifyingKeyReferenceV1(
+            backend: backend,
+            name: name,
+            version: try SccpStrictJSON.uint32(
+                reference,
+                "version",
+                minimum: 1,
+                maximum: UInt32.max
+            ),
+            commitment: try upperFixed(reference, "commitment", bytes: 32)
+        )
+        guard contractArtifactSha256 != keyReference.commitment else {
+            throw SccpV1Error.invalid("\(label) reuses its artifact and verification-key hash roles")
+        }
+        return SccpSoraOutboundExecutionPolicyV1(
+            version: 1,
+            semantics: "ivm_proved_record_sccp_message_v1",
+            contractArtifactSha256: contractArtifactSha256,
+            verifyingKeyReference: keyReference,
+            gasLimit: try SccpStrictJSON.uint64(item, "gas_limit", minimum: 1, maximum: 1_000_000_000)
+        )
+    }
+
+    private static func portableVerifyingKeyField(_ value: String) -> Bool {
+        let bytes = Array(value.utf8)
+        func isLowercaseOrDigit(_ byte: UInt8) -> Bool {
+            (97...122).contains(byte) || (48...57).contains(byte)
+        }
+        guard (1...256).contains(bytes.count),
+              let first = bytes.first, let last = bytes.last,
+              isLowercaseOrDigit(first),
+              isLowercaseOrDigit(last),
+              !["..", "//", ":::", "/:", ":/", "/.", "./", ":.", ".:"]
+                  .contains(where: value.contains)
+        else { return false }
+        return bytes.allSatisfy {
+            isLowercaseOrDigit($0) || [45, 95, 47, 58, 46].contains($0)
+        }
+    }
+
+    private static func multiplyDecimal(_ value: String, by multiplier: UInt64) -> String {
+        var carry: UInt64 = 0
+        var digits: [UInt8] = []
+        digits.reserveCapacity(value.count + 10)
+        for byte in value.utf8.reversed() {
+            let product = UInt64(byte - 48) * multiplier + carry
+            digits.append(UInt8(product % 10))
+            carry = product / 10
+        }
+        while carry != 0 {
+            digits.append(UInt8(carry % 10))
+            carry /= 10
+        }
+        return digits.reversed().map(String.init).joined()
     }
 
     private static func destination(_ item: [String: Any], lane: SccpLaneIdV1, label: String) throws -> SccpDestinationDeploymentV1 {
@@ -1267,16 +1428,31 @@ private enum SccpExactParser {
         try SccpStrictJSON.exactFields(deployment, [
             "token_address", "token_code_hash", "verifier_address", "verifier_code_hash",
             "verifying_key", "verifier_key_hash", "outbound_proof_policy", "route_address",
-            "route_code_hash", "taira_to_token_multiplier", "max_wrapped_supply",
+            "route_code_hash", "replay_verifier_address", "replay_verifier_code_hash",
+            "mint_breaker_address", "mint_breaker_code_hash", "taira_to_token_multiplier",
+            "max_wrapped_supply",
         ], label: "\(label).deployment")
-        let addresses = try ["token_address", "verifier_address", "route_address"].map {
+        let addresses = try [
+            "token_address", "verifier_address", "route_address", "replay_verifier_address",
+            "mint_breaker_address",
+        ].map {
             try upperFixed(deployment, $0, bytes: 20)
         }
-        let hashes = try ["token_code_hash", "verifier_code_hash", "verifier_key_hash", "route_code_hash"].map {
+        let hashes = try [
+            "token_code_hash", "verifier_code_hash", "verifier_key_hash", "route_code_hash",
+            "replay_verifier_code_hash", "mint_breaker_code_hash",
+        ].map {
             try upperFixed(deployment, $0, bytes: 32)
         }
         guard Set(addresses).count == addresses.count, Set(hashes).count == hashes.count else {
             throw SccpV1Error.invalid("\(label).deployment reuses a role-separated address or hash")
+        }
+        for (index, field) in [
+            "token_code_hash", "verifier_code_hash", "route_code_hash",
+            "replay_verifier_code_hash", "mint_breaker_code_hash",
+        ].enumerated() {
+            let hashIndex = index < 2 ? index : index + 1
+            try requireRuntimeCodeHash(hashes[hashIndex], field: field)
         }
         let keyBytes = try verifyingKey(object(deployment, "verifying_key"), label: "\(label).deployment.verifying_key")
         guard irohaKeccak256(keyBytes) == hashes[2] else { throw SccpV1Error.invalid("\(label).deployment.verifier_key_hash does not match verifying_key") }
@@ -1294,7 +1470,11 @@ private enum SccpExactParser {
         guard try SccpStrictJSON.uint64(deployment, "taira_to_token_multiplier", minimum: 1_000_000_000) == 1_000_000_000 else {
             throw SccpV1Error.invalid("\(label).deployment has the wrong Taira/token multiplier")
         }
-        let maxWrappedSupply = try SccpStrictJSON.uint128(deployment, "max_wrapped_supply")
+        let maxWrappedSupply = try unsignedIntegerText(
+            deployment,
+            "max_wrapped_supply",
+            maximum: maximumUInt128
+        )
         let partial = SccpEvmTronDestinationDeploymentV1(
             tokenAddress: addresses[0],
             tokenCodeHash: hashes[0],
@@ -1304,6 +1484,10 @@ private enum SccpExactParser {
             outboundProofPolicy: policy,
             routeAddress: addresses[2],
             routeCodeHash: hashes[3],
+            replayVerifierAddress: addresses[3],
+            replayVerifierCodeHash: hashes[4],
+            mintBreakerAddress: addresses[4],
+            mintBreakerCodeHash: hashes[5],
             tairaToTokenMultiplier: 1_000_000_000,
             maxWrappedSupply: maxWrappedSupply,
             destinationBindingHash: Data()
@@ -1319,6 +1503,10 @@ private enum SccpExactParser {
             outboundProofPolicy: partial.outboundProofPolicy,
             routeAddress: partial.routeAddress,
             routeCodeHash: partial.routeCodeHash,
+            replayVerifierAddress: partial.replayVerifierAddress,
+            replayVerifierCodeHash: partial.replayVerifierCodeHash,
+            mintBreakerAddress: partial.mintBreakerAddress,
+            mintBreakerCodeHash: partial.mintBreakerCodeHash,
             tairaToTokenMultiplier: partial.tairaToTokenMultiplier,
             maxWrappedSupply: partial.maxWrappedSupply,
             destinationBindingHash: binding
@@ -1331,7 +1519,7 @@ private enum SccpExactParser {
         lane: SccpLaneIdV1,
         label: String
     ) throws -> SccpDestinationDeploymentV1 {
-        guard lane.source == .tonMainnet || lane.source == .tonTestnet else {
+        guard lane.source == .tonMainnet else {
             throw SccpV1Error.invalid("\(label) TON family does not match its lane")
         }
         try SccpStrictJSON.exactFields(deployment, [
@@ -1339,8 +1527,8 @@ private enum SccpExactParser {
             "jetton_wallet_code_hash", "route_address", "route_code_hash",
             "route_initial_data_hash", "embedded_verifier_code_hash",
             "verifier_circuit_hash", "verifying_key", "verifier_key_hash",
-            "proof_profile_commitment", "outbound_proof_policy", "taira_to_token_multiplier",
-            "max_wrapped_supply",
+            "proof_profile_commitment", "mint_breaker_guardian_keys", "outbound_proof_policy",
+            "taira_to_token_multiplier", "max_wrapped_supply",
         ], label: label)
         let master = try tonAddress(object(deployment, "jetton_master_address"), label: "\(label).jetton_master_address")
         let route = try tonAddress(object(deployment, "route_address"), label: "\(label).route_address")
@@ -1354,6 +1542,19 @@ private enum SccpExactParser {
         let circuit = try upperFixed(deployment, "verifier_circuit_hash", bytes: 32)
         let keyHash = try upperFixed(deployment, "verifier_key_hash", bytes: 32)
         let profileCommitment = try upperFixed(deployment, "proof_profile_commitment", bytes: 32)
+        let guardianObject = try object(deployment, "mint_breaker_guardian_keys")
+        try SccpStrictJSON.exactFields(
+            guardianObject,
+            ["guardian_0", "guardian_1", "guardian_2", "guardian_3", "guardian_4"],
+            label: "\(label).mint_breaker_guardian_keys"
+        )
+        let guardians = try SccpTonMintBreakerGuardianKeysV1(
+            guardian0: upperFixed(guardianObject, "guardian_0", bytes: 32),
+            guardian1: upperFixed(guardianObject, "guardian_1", bytes: 32),
+            guardian2: upperFixed(guardianObject, "guardian_2", bytes: 32),
+            guardian3: upperFixed(guardianObject, "guardian_3", bytes: 32),
+            guardian4: upperFixed(guardianObject, "guardian_4", bytes: 32)
+        )
         let keyBytes = try bls12381VerifyingKey(
             object(deployment, "verifying_key"),
             label: "\(label).verifying_key"
@@ -1376,7 +1577,11 @@ private enum SccpExactParser {
         guard try SccpStrictJSON.uint64(deployment, "taira_to_token_multiplier", minimum: 1) == 1 else {
             throw SccpV1Error.invalid("\(label) TON multiplier must be exactly 1")
         }
-        let maxWrappedSupply = try SccpStrictJSON.uint128(deployment, "max_wrapped_supply")
+        let maxWrappedSupply = try unsignedIntegerText(
+            deployment,
+            "max_wrapped_supply",
+            maximum: maximumTonCoins
+        )
         let partial = SccpTonDestinationDeploymentV1(
             jettonMasterAddress: master,
             jettonMasterCodeHash: masterCode,
@@ -1389,6 +1594,7 @@ private enum SccpExactParser {
             verifierCircuitHash: circuit,
             verifierKeyHash: keyHash,
             proofProfileCommitment: profileCommitment,
+            mintBreakerGuardianKeys: guardians,
             outboundProofPolicy: policy,
             tairaToTokenMultiplier: 1,
             maxWrappedSupply: maxWrappedSupply,
@@ -1407,6 +1613,7 @@ private enum SccpExactParser {
             verifierCircuitHash: partial.verifierCircuitHash,
             verifierKeyHash: partial.verifierKeyHash,
             proofProfileCommitment: partial.proofProfileCommitment,
+            mintBreakerGuardianKeys: partial.mintBreakerGuardianKeys,
             outboundProofPolicy: partial.outboundProofPolicy,
             tairaToTokenMultiplier: partial.tairaToTokenMultiplier,
             maxWrappedSupply: partial.maxWrappedSupply,
@@ -1703,7 +1910,7 @@ private enum SccpExactParser {
             let runtime = try upperFixed(identity, "runtime_code_hash", bytes: 32)
             let configuration = try upperFixed(identity, "route_config_hash", bytes: 32)
             return try .validatedTron(address: address, runtimeCodeHash: runtime, routeConfigHash: configuration)
-        case "ton" where expectedLane.source == .tonMainnet || expectedLane.source == .tonTestnet:
+        case "ton" where expectedLane.source == .tonMainnet:
             try SccpStrictJSON.exactFields(identity, ["address", "code_hash", "route_config_hash"], label: "\(label).emitter.identity")
             return try .validatedTon(
                 address: tonAddress(object(identity, "address"), label: "\(label).emitter.identity.address"),
@@ -1788,8 +1995,8 @@ private enum SccpExactParser {
             "recipient", "route_id_codec", "route_id",
         ], label: "SCCP transfer payload")
         guard try SccpStrictJSON.uint64(item, "version", minimum: 1) == 1,
-              try SccpStrictJSON.uint32(item, "source_domain", minimum: 0, maximum: 5) == lane.source.domainId,
-              try SccpStrictJSON.uint32(item, "dest_domain", minimum: 0, maximum: 5) == lane.target.domainId,
+              try SccpStrictJSON.uint32(item, "source_domain", minimum: 0, maximum: 4) == lane.source.domainId,
+              try SccpStrictJSON.uint32(item, "dest_domain", minimum: 0, maximum: 4) == lane.target.domainId,
               try SccpStrictJSON.uint32(item, "route_revision", minimum: 1, maximum: UInt32.max) > 0
         else { throw SccpV1Error.invalid("SCCP transfer payload does not match its exact lane") }
         _ = try decimalUInt64(item, "nonce", minimum: 0)
@@ -1836,12 +2043,11 @@ private enum SccpExactParser {
         }
     }
 
-    private static func destinationBindingHash(lane: SccpLaneIdV1, destination: SccpDestinationDeploymentV1) throws -> Data {
+    static func destinationBindingHash(lane: SccpLaneIdV1, destination: SccpDestinationDeploymentV1) throws -> Data {
         if case let .ton(ton) = destination {
             let globalId: Int32
             switch lane.source {
             case .tonMainnet: globalId = -239
-            case .tonTestnet: globalId = -3
             default: throw SccpV1Error.invalid("TON binding requires a TON lane")
             }
             var payload = Data("iroha:sccp:ton-destination-binding:v1".utf8)
@@ -1858,16 +2064,19 @@ private enum SccpExactParser {
             payload.append(ton.verifierCircuitHash)
             payload.append(ton.verifierKeyHash)
             payload.append(ton.proofProfileCommitment)
+            for guardian in ton.mintBreakerGuardianKeys.ordered {
+                payload.append(guardian)
+            }
             payload.append(ton.outboundProofPolicy.semanticProfile.profileHash)
             payload.append(ton.outboundProofPolicy.soraFinalityAnchor.anchorHash)
             return Data(SHA256.hash(data: payload))
         }
 
-        let legacy: SccpEvmTronDestinationDeploymentV1
+        let evmTron: SccpEvmTronDestinationDeploymentV1
         let isTron: Bool
         switch destination {
-        case let .evm(value): legacy = value; isTron = false
-        case let .tron(value): legacy = value; isTron = true
+        case let .evm(value): evmTron = value; isTron = false
+        case let .tron(value): evmTron = value; isTron = true
         case .ton: preconditionFailure("handled above")
         }
         let domain = lane.source.domainId
@@ -1876,8 +2085,6 @@ private enum SccpExactParser {
             let networkId: UInt32
             switch lane.source {
             case .tronMainnet: networkId = 0x2b66_53dc
-            case .tronNile: networkId = 0xcd86_90dc
-            case .tronShasta: networkId = 0x94a9_059e
             default: throw SccpV1Error.invalid("TRON binding requires a TRON lane")
             }
             networkWord = abiWord(UInt64(networkId))
@@ -1885,9 +2092,7 @@ private enum SccpExactParser {
             let chainId: UInt64
             switch lane.source {
             case .ethereumMainnet: chainId = 1
-            case .ethereumSepolia: chainId = 11_155_111
             case .bscMainnet: chainId = 56
-            case .bscTestnet: chainId = 97
             default: throw SccpV1Error.invalid("EVM binding requires an EVM lane")
             }
             networkWord = abiWord(chainId)
@@ -1899,16 +2104,20 @@ private enum SccpExactParser {
         payload.append(networkWord)
         payload.append(abiWord(0))
         payload.append(abiWord(UInt64(domain)))
-        payload.append(isTron ? abiTronAddress(legacy.verifierAddress) : abiAddress(legacy.verifierAddress))
-        payload.append(isTron ? abiTronAddress(legacy.routeAddress) : abiAddress(legacy.routeAddress))
-        payload.append(legacy.verifierCodeHash)
-        payload.append(legacy.verifierKeyHash)
-        payload.append(legacy.outboundProofPolicy.semanticProfile.profileHash)
-        payload.append(legacy.outboundProofPolicy.soraFinalityAnchor.anchorHash)
+        payload.append(isTron ? abiTronAddress(evmTron.verifierAddress) : abiAddress(evmTron.verifierAddress))
+        payload.append(isTron ? abiTronAddress(evmTron.routeAddress) : abiAddress(evmTron.routeAddress))
+        payload.append(evmTron.verifierCodeHash)
+        payload.append(evmTron.verifierKeyHash)
+        payload.append(evmTron.outboundProofPolicy.semanticProfile.profileHash)
+        payload.append(evmTron.outboundProofPolicy.soraFinalityAnchor.anchorHash)
+        payload.append(isTron ? abiTronAddress(evmTron.replayVerifierAddress) : abiAddress(evmTron.replayVerifierAddress))
+        payload.append(evmTron.replayVerifierCodeHash)
+        payload.append(isTron ? abiTronAddress(evmTron.mintBreakerAddress) : abiAddress(evmTron.mintBreakerAddress))
+        payload.append(evmTron.mintBreakerCodeHash)
         return irohaKeccak256(payload)
     }
 
-    private static func routeConfigurationHash(
+    static func routeConfigurationHash(
         lane: SccpLaneIdV1,
         routeId: String,
         assetKey: String,
@@ -1923,7 +2132,6 @@ private enum SccpExactParser {
             let globalId: Int32
             switch lane.source {
             case .tonMainnet: globalId = -239
-            case .tonTestnet: globalId = -3
             default: throw SccpV1Error.invalid("TON route requires a TON lane")
             }
             let sourceHash = SccpV1.laneHash(lane)
@@ -1947,6 +2155,9 @@ private enum SccpExactParser {
             deployment.append(ton.verifierCircuitHash)
             deployment.append(ton.verifierKeyHash)
             deployment.append(ton.proofProfileCommitment)
+            for guardian in ton.mintBreakerGuardianKeys.ordered {
+                deployment.append(guardian)
+            }
             deployment.append(semantic)
             deployment.append(anchor)
             deployment.append(binding)
@@ -1956,10 +2167,7 @@ private enum SccpExactParser {
             appendBytes(Data("taira_ton_xor".utf8), to: &assetRoute)
             appendUInt32LE(revision, to: &assetRoute)
             appendUInt64LE(ton.tairaToTokenMultiplier, to: &assetRoute)
-            guard let cap = SccpUInt128.littleEndianData(ton.maxWrappedSupply) else {
-                throw SccpV1Error.invalid("SCCP TON wrapped supply cap is invalid")
-            }
-            assetRoute.append(cap)
+            try appendUInt128LE(ton.maxWrappedSupply, to: &assetRoute)
             let assetRouteHash = Data(SHA256.hash(data: assetRoute))
             var payload = Data("sccp:concrete-route-config:v1".utf8)
             payload.append(1)
@@ -1973,51 +2181,49 @@ private enum SccpExactParser {
             return Data(SHA256.hash(data: payload))
         }
 
-        let legacy: SccpEvmTronDestinationDeploymentV1
+        let evmTron: SccpEvmTronDestinationDeploymentV1
         switch destination {
-        case let .evm(value), let .tron(value): legacy = value
+        case let .evm(value), let .tron(value): evmTron = value
         case .ton: preconditionFailure("handled above")
         }
         let expectedRoute: String
         let networkValue: UInt64
         switch lane.source {
         case .ethereumMainnet: expectedRoute = "taira_eth_xor"; networkValue = 1
-        case .ethereumSepolia: expectedRoute = "taira_eth_xor"; networkValue = 11_155_111
         case .bscMainnet: expectedRoute = "taira_bsc_xor"; networkValue = 56
-        case .bscTestnet: expectedRoute = "taira_bsc_xor"; networkValue = 97
         case .tronMainnet: expectedRoute = "taira_tron_xor"; networkValue = 0x2b66_53dc
-        case .tronNile: expectedRoute = "taira_tron_xor"; networkValue = 0xcd86_90dc
-        case .tronShasta: expectedRoute = "taira_tron_xor"; networkValue = 0x94a9_059e
         default: throw SccpV1Error.invalid("SCCP route external profile is unsupported")
         }
         guard routeId == expectedRoute else { throw SccpV1Error.invalid("SCCP route id does not match its exact deployment") }
         let sourceHash = SccpV1.laneHash(lane)
         let reverseHash = SccpV1.laneHash(try SccpLaneIdV1(source: lane.target, target: lane.source))
-        var roles = [sourceHash, reverseHash, legacy.tokenCodeHash, legacy.verifierCodeHash,
-                     legacy.verifierKeyHash,
-                     legacy.outboundProofPolicy.semanticProfile.profileHash,
-                     legacy.outboundProofPolicy.soraFinalityAnchor.anchorHash]
+        var roles = [sourceHash, reverseHash, evmTron.tokenCodeHash, evmTron.verifierCodeHash,
+                     evmTron.verifierKeyHash, evmTron.routeCodeHash,
+                     evmTron.replayVerifierCodeHash, evmTron.mintBreakerCodeHash,
+                     evmTron.outboundProofPolicy.semanticProfile.profileHash,
+                     evmTron.outboundProofPolicy.soraFinalityAnchor.anchorHash]
         if destination.family == .tronGroth16Bn254 {
-            roles.append(legacy.destinationBindingHash)
+            roles.append(evmTron.destinationBindingHash)
         }
         guard Set(roles).count == roles.count else { throw SccpV1Error.invalid("SCCP route reuses a hash role") }
-        var deployment = abiAddress(legacy.tokenAddress)
-        deployment.append(legacy.tokenCodeHash)
-        deployment.append(abiAddress(legacy.verifierAddress))
-        deployment.append(legacy.verifierCodeHash)
-        deployment.append(legacy.verifierKeyHash)
-        deployment.append(legacy.outboundProofPolicy.semanticProfile.profileHash)
-        deployment.append(legacy.outboundProofPolicy.soraFinalityAnchor.anchorHash)
-        if destination.family == .tronGroth16Bn254 { deployment.append(legacy.destinationBindingHash) }
+        var deployment = abiAddress(evmTron.tokenAddress)
+        deployment.append(evmTron.tokenCodeHash)
+        deployment.append(abiAddress(evmTron.verifierAddress))
+        deployment.append(evmTron.verifierCodeHash)
+        deployment.append(evmTron.verifierKeyHash)
+        deployment.append(evmTron.outboundProofPolicy.semanticProfile.profileHash)
+        deployment.append(evmTron.outboundProofPolicy.soraFinalityAnchor.anchorHash)
+        if destination.family == .tronGroth16Bn254 { deployment.append(evmTron.destinationBindingHash) }
+        deployment.append(abiAddress(evmTron.replayVerifierAddress))
+        deployment.append(evmTron.replayVerifierCodeHash)
+        deployment.append(abiAddress(evmTron.mintBreakerAddress))
+        deployment.append(evmTron.mintBreakerCodeHash)
         let deploymentHash = irohaKeccak256(deployment)
         var assetRoute = irohaKeccak256(Data("xor".utf8))
         assetRoute.append(irohaKeccak256(Data(routeId.utf8)))
         assetRoute.append(abiWord(UInt64(revision)))
-        assetRoute.append(abiWord(legacy.tairaToTokenMultiplier))
-        guard let cap = SccpUInt128.abiWord(legacy.maxWrappedSupply) else {
-            throw SccpV1Error.invalid("SCCP EVM/TRON wrapped supply cap is invalid")
-        }
-        assetRoute.append(cap)
+        assetRoute.append(abiWord(evmTron.tairaToTokenMultiplier))
+        assetRoute.append(try abiWord(evmTron.maxWrappedSupply))
         let assetRouteHash = irohaKeccak256(assetRoute)
         var payload = irohaKeccak256(Data("sccp:concrete-route-config:v1".utf8))
         payload.append(abiWord(UInt64(lane.source.domainId)))
@@ -2103,6 +2309,11 @@ private enum SccpExactParser {
         return out
     }
 
+    private static func abiWord(_ value: String) throws -> Data {
+        let little = try uint128LittleEndian(value)
+        return Data(repeating: 0, count: 16) + Data(little.reversed())
+    }
+
     private static func appendUInt16LE(_ value: UInt16, to out: inout Data) {
         var little = value.littleEndian
         withUnsafeBytes(of: &little) { out.append(contentsOf: $0) }
@@ -2121,6 +2332,36 @@ private enum SccpExactParser {
     private static func appendUInt64LE(_ value: UInt64, to out: inout Data) {
         var little = value.littleEndian
         withUnsafeBytes(of: &little) { out.append(contentsOf: $0) }
+    }
+
+    private static func appendUInt128LE(_ value: String, to out: inout Data) throws {
+        out.append(contentsOf: try uint128LittleEndian(value))
+    }
+
+    private static func uint128LittleEndian(_ value: String) throws -> [UInt8] {
+        guard !value.isEmpty,
+              value.first != "0",
+              value.utf8.allSatisfy({ (48...57).contains($0) }),
+              value.count < maximumUInt128.count
+                  || value.count == maximumUInt128.count && value <= maximumUInt128
+        else { throw SccpV1Error.invalid("value must be a canonical positive UInt128") }
+        var digits = value.utf8.map { Int($0 - 48) }
+        var bytes: [UInt8] = []
+        while !digits.isEmpty {
+            var quotient: [Int] = []
+            var remainder = 0
+            for digit in digits {
+                let current = remainder * 10 + digit
+                let next = current / 256
+                remainder = current % 256
+                if !quotient.isEmpty || next != 0 { quotient.append(next) }
+            }
+            bytes.append(UInt8(remainder))
+            digits = quotient
+        }
+        guard bytes.count <= 16 else { throw SccpV1Error.invalid("value exceeds UInt128") }
+        bytes.append(contentsOf: repeatElement(0, count: 16 - bytes.count))
+        return bytes
     }
 
     private static func appendBytes(_ value: Data, to out: inout Data) {
@@ -2209,6 +2450,36 @@ private enum SccpExactParser {
         return data
     }
 
+    private static func requireRuntimeCodeHash(_ value: Data, field: String) throws {
+        guard value != keccak256EmptyBytes else {
+            throw SccpV1Error.invalid("\(field) must not identify empty runtime bytecode")
+        }
+    }
+
+    private static func unsignedIntegerText(
+        _ item: [String: Any],
+        _ field: String,
+        maximum: String
+    ) throws -> String {
+        let value: String
+        if let exact = item[field] as? SccpStrictJSON.ExactUnsignedInteger {
+            value = exact.text
+        } else if let number = item[field] as? NSNumber,
+                  CFGetTypeID(number) != CFBooleanGetTypeID(),
+                  !CFNumberIsFloatType(number)
+        {
+            value = number.stringValue
+        } else {
+            throw SccpV1Error.invalid("\(field) must be a canonical positive integer")
+        }
+        guard !value.isEmpty,
+              value.first != "0",
+              value.utf8.allSatisfy({ (48...57).contains($0) }),
+              value.count < maximum.count || value.count == maximum.count && value <= maximum
+        else { throw SccpV1Error.invalid("\(field) is outside its canonical positive range") }
+        return value
+    }
+
     private static func variableHex(_ item: [String: Any], _ field: String) throws -> Data {
         let value = try SccpStrictJSON.text(item, field)
         guard value.hasPrefix("0x"), value.count > 2, (value.count - 2).isMultiple(of: 2),
@@ -2265,7 +2536,7 @@ private enum SccpExactParser {
         try SccpStrictJSON.exactFields(transfer, fields, label: "\(label).Transfer")
         guard try SccpStrictJSON.uint64(transfer, "version", minimum: 1) == 1,
               try SccpStrictJSON.uint32(transfer, "source_domain", minimum: 0, maximum: 0) == 0,
-              try SccpStrictJSON.uint32(transfer, "dest_domain", minimum: 1, maximum: 5) == expectedDestinationDomain,
+              try SccpStrictJSON.uint32(transfer, "dest_domain", minimum: 1, maximum: 4) == expectedDestinationDomain,
               try SccpStrictJSON.uint32(transfer, "asset_home_domain", minimum: 0, maximum: 0) == 0
         else { throw SccpV1Error.invalid("\(label).Transfer domains or version do not match the recent message") }
         guard let nonceNumber = transfer["nonce"] as? NSNumber,
@@ -2275,15 +2546,13 @@ private enum SccpExactParser {
         else { throw SccpV1Error.invalid("\(label).Transfer.nonce must be a canonical UInt64 integer") }
         _ = try SccpStrictJSON.uint32(transfer, "route_revision", minimum: 1, maximum: UInt32.max)
 
-        guard let amountNumber = transfer["amount"] as? NSNumber,
-              CFGetTypeID(amountNumber) != CFBooleanGetTypeID()
-        else { throw SccpV1Error.invalid("\(label).Transfer.amount must be a positive UInt128 integer") }
-        let amount = amountNumber.stringValue
         let maximumUInt128 = "340282366920938463463374607431768211455"
-        guard amount.first.map({ $0 != "0" }) == true,
-              amount.allSatisfy(\.isNumber),
-              amount.count < maximumUInt128.count || amount.count == maximumUInt128.count && amount <= maximumUInt128,
-              amount == expectedAmount
+        let amount = try unsignedIntegerText(
+            transfer,
+            "amount",
+            maximum: maximumUInt128
+        )
+        guard amount == expectedAmount
         else { throw SccpV1Error.invalid("\(label).Transfer.amount must equal the positive UInt128 readback amount") }
 
         try normalizedCanonicalText(transfer, field: "asset_id", expected: "xor", label: label)
@@ -2303,7 +2572,7 @@ private enum SccpExactParser {
             destinationDomain: expectedDestinationDomain,
             label: label
         )
-        return try JSONSerialization.data(withJSONObject: projection, options: [.sortedKeys])
+        return try SccpStrictJSON.canonicalData(projection)
     }
 
     private static func normalizedCanonicalText(
@@ -2347,17 +2616,17 @@ private enum SccpExactParser {
             else { throw SccpV1Error.invalid("\(label).Transfer.\(field) is not a canonical TON account") }
             return
         }
-        let tag = destinationDomain == 5 ? "TronAddress21" : "EvmAddress20"
+        let tag = destinationDomain == 3 ? "TronAddress21" : "EvmAddress20"
         try SccpStrictJSON.exactFields(tagged, [tag], label: "\(label).Transfer.\(field)")
         let content = try object(tagged, tag)
         try SccpStrictJSON.exactFields(content, ["bytes"], label: "\(label).Transfer.\(field).\(tag)")
         let bytes = try SccpStrictJSON.text(content, "bytes")
         let hex = bytes.dropFirst(2)
-        let expectedHexCount = destinationDomain == 5 ? 42 : 40
-        guard bytes.hasPrefix(destinationDomain == 5 ? "0x41" : "0x"),
+        let expectedHexCount = destinationDomain == 3 ? 42 : 40
+        guard bytes.hasPrefix(destinationDomain == 3 ? "0x41" : "0x"),
               hex.count == expectedHexCount,
               hex.allSatisfy({ $0 >= "0" && $0 <= "9" || $0 >= "a" && $0 <= "f" }),
-              (destinationDomain == 5 ? hex.dropFirst(2) : hex).contains(where: { $0 != "0" })
+              (destinationDomain == 3 ? hex.dropFirst(2) : hex).contains(where: { $0 != "0" })
         else { throw SccpV1Error.invalid("\(label).Transfer.\(field) does not match its destination address codec") }
     }
 

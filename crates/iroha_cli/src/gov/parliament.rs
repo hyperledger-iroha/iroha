@@ -1,6 +1,6 @@
 //! Attempt-based SORA Parliament draft and read commands.
 
-use std::{collections::BTreeMap, net::IpAddr};
+use std::collections::BTreeMap;
 
 use super::shared::print_with_summary;
 use crate::{Run, RunContext};
@@ -28,7 +28,7 @@ use iroha_data_model::isi::governance::{
     ParliamentFinalizeOpenedBallotV1, ParliamentLifecycleTransitionV1,
     ParliamentTleFinalReleaseSignatureV1, SubmitParliamentLifecycleTransitionV1,
 };
-use url::Url;
+use url::{Host, Url};
 
 const MAX_RELEASE_PEERS_V1: usize = 31;
 
@@ -61,11 +61,10 @@ fn parse_release_peer_url(input: &str) -> Result<Url, String> {
         && matches!(url.path(), "" | "/")
         && (url.scheme() == "https"
             || (url.scheme() == "http"
-                && url.host_str().is_some_and(|host| {
-                    host.eq_ignore_ascii_case("localhost")
-                        || host
-                            .parse::<IpAddr>()
-                            .is_ok_and(|address| address.is_loopback())
+                && url.host().is_some_and(|host| match host {
+                    Host::Domain(domain) => domain.eq_ignore_ascii_case("localhost"),
+                    Host::Ipv4(address) => address.is_loopback(),
+                    Host::Ipv6(address) => address.is_loopback(),
                 })))
     {
         return Ok(url);

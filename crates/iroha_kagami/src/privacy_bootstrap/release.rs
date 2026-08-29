@@ -22,8 +22,7 @@ use iroha_data_model::{
         },
     },
     privacy::{
-        BootleLanternIssuerPolicyLifecycleV1, PRIVACY_RETIRED_PROTOCOL_LABELS_V1,
-        PrivacyProtocolIdV1, privacy_exact12_matrix_bytes_v1,
+        BootleLanternIssuerPolicyLifecycleV1, PrivacyProtocolIdV1, privacy_exact12_matrix_bytes_v1,
     },
 };
 use iroha_genesis::{RawGenesisTransaction, validate_genesis_manifest_json};
@@ -53,9 +52,10 @@ const POLICY_ID_DOMAIN_V1: &[u8] = b"iroha.taira.privacy.bootle-lantern.policy.v
 const BROKER_EXPORT_SCHEMA_V1: &str = "iroha.taira.privacy.bootle-lantern-broker-public.v1";
 const ROLLOUT_PLAN_PATH_V1: &str = "configs/soranexus/taira/privacy_rollout_plan_v1.json";
 const ROLLOUT_PLAN_SHA256_V1: &str =
-    "19654e999793036517f56eb61d8b0d4906c7c686504264ecb83bbb6e65b0f92f";
+    "3ee465268b21d40f50223d250d6653f441ab90d494a70e596b19a9a67a65e6fd";
 const CANONICAL_ROLLOUT_PLAN_V1: &[u8] =
     include_bytes!("../../../../configs/soranexus/taira/privacy_rollout_plan_v1.json");
+const CANONICAL_CARGO_LOCK_V1: &[u8] = include_bytes!("../../../../Cargo.lock");
 const CANONICAL_PLAN_TEMPLATE_V1: &[u8] =
     include_bytes!("../../../../configs/soranexus/taira/privacy_bootstrap_plan.json");
 const CANONICAL_CONFIG_TEMPLATE_V1: &[u8] =
@@ -1024,6 +1024,7 @@ fn validate_staging_plan_v1(plan: &JsonValue) -> color_eyre::Result<()> {
             "canonical Taira privacy rollout plan SHA-256 differs from its compiled pin: expected {ROLLOUT_PLAN_SHA256_V1}, got {actual_rollout_plan_sha256}"
         );
     }
+    validate_rollout_plan_v1(CANONICAL_ROLLOUT_PLAN_V1)?;
     if rollout
         .get("controller_observation_required")
         .and_then(JsonValue::as_bool)
@@ -1181,6 +1182,184 @@ fn validate_staging_plan_v1(plan: &JsonValue) -> color_eyre::Result<()> {
     }
     Ok(())
 }
+
+fn validate_rollout_plan_v1(bytes: &[u8]) -> color_eyre::Result<()> {
+    let value: JsonValue = norito::json::from_slice(bytes)
+        .wrap_err("failed to decode the canonical Taira privacy rollout plan")?;
+    let root = object_v1(&value, "privacy rollout plan")?;
+    expect_exact_keys_v1(
+        root,
+        &[
+            "activation_contract",
+            "canary_contract",
+            "capability_gate",
+            "cargo_lock_sha256",
+            "chain_id",
+            "endpoints",
+            "halt_conditions",
+            "intervals",
+            "post_cutover_contract",
+            "protocol_matrix_sha256",
+            "protocols",
+            "publication_contract",
+            "resource_ceilings",
+            "restart_contract",
+            "rollback_contract",
+            "schema",
+            "schema_version",
+            "waves",
+            "wire_contract",
+        ],
+        "privacy rollout plan",
+    )?;
+    expect_string_v1(
+        root,
+        "schema",
+        "iroha.taira.privacy_rollout_plan.v1",
+        "privacy rollout plan",
+    )?;
+    expect_u64_v1(root, "schema_version", 1, "privacy rollout plan")?;
+    expect_string_v1(root, "chain_id", CHAIN_ID_V1, "privacy rollout plan")?;
+    expect_string_v1(
+        root,
+        "cargo_lock_sha256",
+        &hex::encode(sha256(CANONICAL_CARGO_LOCK_V1)),
+        "privacy rollout plan",
+    )?;
+    let matrix = privacy_exact12_matrix_bytes_v1()
+        .map_err(|source| eyre!("failed to derive the native exact-12 matrix: {source}"))?;
+    expect_string_v1(
+        root,
+        "protocol_matrix_sha256",
+        &hex::encode(sha256(&matrix)),
+        "privacy rollout plan",
+    )?;
+
+    let wire = object_field_v1(root, "wire_contract", "privacy rollout plan")?;
+    expect_exact_keys_v1(
+        wire,
+        &[
+            "catalog_commitment_le_hex",
+            "catalog_size",
+            "proof_envelope_magic_hex",
+        ],
+        "privacy rollout wire contract",
+    )?;
+    expect_u64_v1(
+        wire,
+        "catalog_size",
+        PrivacyProtocolIdV1::COUNT as u64,
+        "privacy rollout wire contract",
+    )?;
+    expect_string_v1(
+        wire,
+        "catalog_commitment_le_hex",
+        "e037f13904a0307c00db15d85cfb406bd79772d20144a949def0f3fda78e342e747f65787cbfbffac94f11c369e2bbff",
+        "privacy rollout wire contract",
+    )?;
+    expect_string_v1(
+        wire,
+        "proof_envelope_magic_hex",
+        "4952485a4b31a55a",
+        "privacy rollout wire contract",
+    )?;
+
+    let gate = object_field_v1(root, "capability_gate", "privacy rollout plan")?;
+    expect_exact_keys_v1(
+        gate,
+        &[
+            "all_exact12_rows_required",
+            "authenticated_committed_state_required",
+            "authoritative_route",
+            "caller_asserted_readiness_forbidden",
+            "required_readiness",
+        ],
+        "privacy rollout capability gate",
+    )?;
+    expect_string_v1(
+        gate,
+        "authoritative_route",
+        "/v1/privacy/capabilities",
+        "privacy rollout capability gate",
+    )?;
+    expect_string_v1(
+        gate,
+        "required_readiness",
+        "production-qualified",
+        "privacy rollout capability gate",
+    )?;
+    for flag in [
+        "all_exact12_rows_required",
+        "authenticated_committed_state_required",
+        "caller_asserted_readiness_forbidden",
+    ] {
+        if gate.get(flag).and_then(JsonValue::as_bool) != Some(true) {
+            bail!("privacy rollout capability gate `{flag}` must be true");
+        }
+    }
+
+    let protocols = root
+        .get("protocols")
+        .and_then(JsonValue::as_array)
+        .ok_or_else(|| eyre!("privacy rollout plan `protocols` must be an array"))?;
+    if protocols.len() != PrivacyProtocolIdV1::COUNT {
+        bail!("privacy rollout plan must contain exactly twelve protocol rows");
+    }
+    for (index, (value, protocol)) in protocols.iter().zip(PrivacyProtocolIdV1::ALL).enumerate() {
+        let row = object_v1(value, "privacy rollout protocol row")?;
+        expect_exact_keys_v1(
+            row,
+            &["index", "label", "security_model"],
+            "privacy rollout protocol row",
+        )?;
+        expect_u64_v1(row, "index", index as u64, "privacy rollout protocol row")?;
+        expect_string_v1(
+            row,
+            "label",
+            protocol.canonical_label(),
+            "privacy rollout protocol row",
+        )?;
+        expect_string_v1(
+            row,
+            "security_model",
+            protocol.security_model().canonical_label(),
+            "privacy rollout protocol row",
+        )?;
+    }
+
+    let waves = root
+        .get("waves")
+        .and_then(JsonValue::as_array)
+        .ok_or_else(|| eyre!("privacy rollout plan `waves` must be an array"))?;
+    if waves.len() != 4 {
+        bail!("privacy rollout plan must contain exactly four waves");
+    }
+    let mut scheduled = BTreeSet::new();
+    for (index, value) in waves.iter().enumerate() {
+        let wave = object_v1(value, "privacy rollout wave")?;
+        expect_exact_keys_v1(
+            wave,
+            &["index", "label", "protocols"],
+            "privacy rollout wave",
+        )?;
+        expect_u64_v1(wave, "index", (index + 1) as u64, "privacy rollout wave")?;
+        for label in string_array_field_v1(wave, "protocols", "privacy rollout wave")? {
+            if !PrivacyProtocolIdV1::ALL
+                .iter()
+                .any(|protocol| protocol.canonical_label() == label)
+            {
+                bail!("privacy rollout wave contains an unknown protocol label");
+            }
+            if !scheduled.insert(label) {
+                bail!("privacy rollout wave schedules a protocol more than once");
+            }
+        }
+    }
+    if scheduled.len() != PrivacyProtocolIdV1::COUNT {
+        bail!("privacy rollout waves must schedule every Exact12 protocol exactly once");
+    }
+    Ok(())
+}
 fn validate_catalog_inventory_v1(catalog: &JsonMap) -> color_eyre::Result<()> {
     expect_exact_keys_v1(
         catalog,
@@ -1189,7 +1368,6 @@ fn validate_catalog_inventory_v1(catalog: &JsonMap) -> color_eyre::Result<()> {
             "matrix_version",
             "protocols",
             "registry_sha256",
-            "retired_labels",
         ],
         "privacy catalog",
     )?;
@@ -1240,14 +1418,6 @@ fn validate_catalog_inventory_v1(catalog: &JsonMap) -> color_eyre::Result<()> {
             protocol.canonical_typed_variant_label(),
             "privacy catalog row",
         )?;
-    }
-    let retired = string_array_field_v1(catalog, "retired_labels", "privacy catalog")?;
-    let expected = PRIVACY_RETIRED_PROTOCOL_LABELS_V1
-        .iter()
-        .map(ToString::to_string)
-        .collect::<Vec<_>>();
-    if retired != expected {
-        bail!("privacy catalog retirement inventory differs from exact first release");
     }
     Ok(())
 }
@@ -2121,11 +2291,13 @@ mod tests {
         assert!(!String::from_utf8_lossy(&first.genesis).contains("principal_seed"));
     }
     #[test]
-    fn rollout_plan_hash_and_fail_closed_rows_are_source_bound() {
+    fn rollout_plan_binds_the_hard_cut_catalog_and_evidence_derived_gate() {
         let bootstrap: JsonValue =
             norito::json::from_slice(PLAN_TEMPLATE_V1).expect("parse staging plan");
         validate_staging_plan_v1(&bootstrap)
             .expect("bootstrap anchor, compiled pin, and rollout bytes must agree");
+        validate_rollout_plan_v1(CANONICAL_ROLLOUT_PLAN_V1)
+            .expect("canonical rollout plan must satisfy the native hard-cut contract");
 
         let rollout: JsonValue = norito::json::from_slice(CANONICAL_ROLLOUT_PLAN_V1)
             .expect("parse canonical rollout plan");
@@ -2134,52 +2306,36 @@ mod tests {
             .and_then(JsonValue::as_array)
             .expect("rollout protocol rows");
         assert_eq!(protocols.len(), PrivacyProtocolIdV1::COUNT);
-        let unavailable = [
-            (
-                "zk-ace-pq-authorization-v0",
-                "ZkAceNativeErrorV1::EngineUnavailable",
-            ),
-            ("iroha-zk-ams-v1", "ZkAmsMkheErrorV1::ReleaseUnavailable"),
-            (
-                "vega-existing-credential-zk-v0",
-                "MissingGovernedFigure9ProverArtifacts",
-            ),
-            (
-                "iroha-zk-x509-stark-p256-v0",
-                "ZkX509ProfileErrorV1::EngineIncomplete",
-            ),
-        ];
-        let waves = rollout
-            .get("waves")
-            .and_then(JsonValue::as_array)
-            .expect("rollout waves");
-        assert_eq!(waves.len(), 4);
-        for (label, blocker) in unavailable {
-            let row = protocols
-                .iter()
-                .find(|row| row.get("label").and_then(JsonValue::as_str) == Some(label))
-                .unwrap_or_else(|| panic!("missing rollout row `{label}`"));
+        for (row, protocol) in protocols.iter().zip(PrivacyProtocolIdV1::ALL) {
             assert_eq!(
-                row.get("assurance").and_then(JsonValue::as_str),
-                Some("unavailable")
+                row.get("label").and_then(JsonValue::as_str),
+                Some(protocol.canonical_label())
             );
             assert_eq!(
-                row.get("release_status").and_then(JsonValue::as_str),
-                Some("retained-required")
+                row.get("security_model").and_then(JsonValue::as_str),
+                Some(protocol.security_model().canonical_label())
             );
-            let missing_evidence = row
-                .get("missing_evidence")
-                .and_then(JsonValue::as_array)
-                .expect("missing-evidence array");
-            assert_eq!(missing_evidence.len(), 1);
-            assert_eq!(missing_evidence[0].as_str(), Some(blocker));
-            let scheduled = waves
-                .iter()
-                .filter_map(|wave| wave.get("protocols").and_then(JsonValue::as_array))
-                .flatten()
-                .filter(|protocol| protocol.as_str() == Some(label))
-                .count();
-            assert_eq!(scheduled, 1, "`{label}` must remain in exactly one wave");
+        }
+        assert_eq!(
+            rollout
+                .pointer("/capability_gate/required_readiness")
+                .and_then(JsonValue::as_str),
+            Some("production-qualified")
+        );
+        let rollout_text = std::str::from_utf8(CANONICAL_ROLLOUT_PLAN_V1)
+            .expect("canonical rollout plan must be UTF-8");
+        for removed in [
+            "available-experimental",
+            "assurance",
+            "legacy_policy",
+            "missing_evidence",
+            "release_status",
+            "retired_labels",
+        ] {
+            assert!(
+                !rollout_text.contains(removed),
+                "removed rollout field or value `{removed}` must not survive"
+            );
         }
     }
     #[test]

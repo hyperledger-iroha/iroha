@@ -520,8 +520,7 @@ pub use rns_native_profile::{
     ZK_AMS_MKHE_RNS_NATIVE_WORK_MAX_V1, ZK_AMS_MKHE_RNS_NATIVE_WORKSPACE_MAX_BYTES_V1,
     ZkAmsMkheRnsNativeFamilyV1, ZkAmsMkheRnsNativeProfileManifestV1, ZkAmsMkheRnsNativeProfileV1,
     ZkAmsMkheRnsNativeTopologyV1, zk_ams_mkhe_rns_native_profile_manifest_v1,
-    zk_ams_mkhe_rns_native_profile_v1, zk_ams_mkhe_rns_native_release_candidate_digest_v1,
-    zk_ams_mkhe_rns_native_topology_v1,
+    zk_ams_mkhe_rns_native_profile_v1, zk_ams_mkhe_rns_native_topology_v1,
 };
 pub use rns_native_section_codec::{
     ZK_AMS_MKHE_RNS_NATIVE_SECTION_CODEC_VERSION_V1,

@@ -31,10 +31,10 @@ pub(super) fn fixture_update_requested() -> bool {
         .unwrap_or_else(|message| panic!("{message}"))
 }
 
-/// Construct the deterministic mixed-operation batch shared by V1 proof fixtures.
+/// Construct the deterministic mixed-operation batch shared by transcript and parity tests.
 #[cfg(feature = "dev-tools")]
 pub(super) fn v1_fixture_batch(rows: usize, public_inputs: PublicInputs) -> TransitionBatch {
-    let mut batch = TransitionBatch::new("fastpq-lane-balanced", public_inputs);
+    let mut batch = TransitionBatch::new("fastpq-state-transition-stark-v1", public_inputs);
     let mut transcripts = Vec::new();
     let mut row_idx = 0usize;
     let mut transfer_idx = 0usize;

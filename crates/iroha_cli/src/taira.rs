@@ -7063,13 +7063,14 @@ mod tests {
             (1_000, 301, 1_300),
             (u64::MAX, 1, u64::MAX),
         ] {
-            validate_prepared_transaction_time_window(creation, ttl, expiry, "fixture")
-                .expect_err("invalid immutable prepared-transaction window must fail closed");
+            let _error =
+                validate_prepared_transaction_time_window(creation, ttl, expiry, "fixture")
+                    .expect_err("invalid immutable prepared-transaction window must fail closed");
         }
 
-        validate_live_prepared_transaction_freshness(1_000, 200, 1_200, "fixture")
+        let _error = validate_live_prepared_transaction_freshness(1_000, 200, 1_200, "fixture")
             .expect_err("an expired transaction must not create a new forward effect");
-        validate_live_prepared_transaction_freshness(
+        let _error = validate_live_prepared_transaction_freshness(
             1_000 + PREPARED_TRANSACTION_CLOCK_SKEW_MS + 1,
             200,
             1_000,
@@ -7088,7 +7089,7 @@ mod tests {
             .expect("the exact selected payer and gas bound are accepted");
 
         let substituted_gas = FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(1));
-        validate_expected_prepared_fee_payment(&selected, &substituted_gas)
+        let _error = validate_expected_prepared_fee_payment(&selected, &substituted_gas)
             .expect_err("a substituted gas bound must fail closed");
     }
 
@@ -7104,19 +7105,19 @@ mod tests {
 
         let mut missing_authority = fixture_write_canary_args(WriteCanaryOperation::Faucet);
         missing_authority.faucet_authority = None;
-        missing_authority
+        let _error = missing_authority
             .faucet_policy()
             .expect_err("missing faucet authority must fail closed");
 
         let mut alias_asset = fixture_write_canary_args(WriteCanaryOperation::Faucet);
         alias_asset.faucet_asset_id = Some("xor#universal".to_owned());
-        alias_asset
+        let _error = alias_asset
             .faucet_policy()
             .expect_err("an asset alias must not replace the exact canonical asset definition");
 
         let mut zero_amount = fixture_write_canary_args(WriteCanaryOperation::Faucet);
         zero_amount.faucet_amount = Some("0".to_owned());
-        zero_amount
+        let _error = zero_amount
             .faucet_policy()
             .expect_err("zero faucet amount must fail closed");
     }
@@ -10484,7 +10485,7 @@ mod tests {
     #[test]
     fn faucet_challenge_rejects_noncanonical_anchor_hash_hex() {
         let network_id = crate::fallback_config().network_id;
-        build_faucet_challenge(
+        let _error = build_faucet_challenge(
             "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
             &network_id,
             7,

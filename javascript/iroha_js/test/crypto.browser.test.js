@@ -156,7 +156,7 @@ test("mapped browser crypto keeps the native-only local catalog fail closed", ()
   }
 });
 
-test("broad browser facade omits the native catalog and retains the live Torii parser subpath", () => {
+test("browser graphs expose no legacy JSON privacy capability surface", () => {
   for (const [label, browser] of [
     ["src", srcBrowserFacade],
     ["dist", distBrowserFacade],
@@ -173,14 +173,19 @@ test("broad browser facade omits the native catalog and retains the live Torii p
     ["dist", distPrivacyCapabilities],
   ]) {
     assert.equal(
-      typeof capabilities.getPrivacyCapabilitiesV1,
+      typeof capabilities.getPrivacyExact12CapabilityManifestV1,
       "function",
-      `${label} keeps the live Torii capability client`,
+      `${label} keeps the fail-closed native Exact12 entry point`,
     );
     assert.equal(
-      typeof capabilities.parsePrivacyCapabilitySnapshotV1,
-      "function",
-      `${label} keeps the authoritative snapshot parser`,
+      Object.hasOwn(capabilities, "getPrivacyCapabilitiesV1"),
+      false,
+      `${label} removes the legacy JSON fetch`,
+    );
+    assert.equal(
+      Object.hasOwn(capabilities, "parsePrivacyCapabilitySnapshotV1"),
+      false,
+      `${label} removes the legacy JSON parser`,
     );
   }
 });

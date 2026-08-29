@@ -1,0 +1,254 @@
+# github.com/bits-and-blooms/bitset v1.24.6
+## explicit; go 1.16
+github.com/bits-and-blooms/bitset
+# github.com/blang/semver/v4 v4.0.0
+## explicit; go 1.14
+github.com/blang/semver/v4
+# github.com/consensys/gnark v0.16.3
+## explicit; go 1.25.7
+github.com/consensys/gnark
+github.com/consensys/gnark/backend
+github.com/consensys/gnark/backend/groth16
+github.com/consensys/gnark/backend/groth16/bls12-377
+github.com/consensys/gnark/backend/groth16/bls12-381
+github.com/consensys/gnark/backend/groth16/bn254
+github.com/consensys/gnark/backend/groth16/bw6-761
+github.com/consensys/gnark/backend/groth16/internal
+github.com/consensys/gnark/backend/plonk
+github.com/consensys/gnark/backend/plonk/bls12-377
+github.com/consensys/gnark/backend/plonk/bls12-381
+github.com/consensys/gnark/backend/plonk/bn254
+github.com/consensys/gnark/backend/plonk/bw6-761
+github.com/consensys/gnark/backend/plonk/internal
+github.com/consensys/gnark/backend/solidity
+github.com/consensys/gnark/backend/witness
+github.com/consensys/gnark/constraint
+github.com/consensys/gnark/constraint/babybear
+github.com/consensys/gnark/constraint/bls12-377
+github.com/consensys/gnark/constraint/bls12-381
+github.com/consensys/gnark/constraint/bn254
+github.com/consensys/gnark/constraint/bw6-761
+github.com/consensys/gnark/constraint/grumpkin
+github.com/consensys/gnark/constraint/koalabear
+github.com/consensys/gnark/constraint/solver
+github.com/consensys/gnark/constraint/tinyfield
+github.com/consensys/gnark/debug
+github.com/consensys/gnark/frontend
+github.com/consensys/gnark/frontend/cs
+github.com/consensys/gnark/frontend/cs/r1cs
+github.com/consensys/gnark/frontend/cs/scs
+github.com/consensys/gnark/frontend/internal/expr
+github.com/consensys/gnark/frontend/schema
+github.com/consensys/gnark/frontend/schema/internal/reflectwalk
+github.com/consensys/gnark/internal/backend/ioutils
+github.com/consensys/gnark/internal/circuitdefer
+github.com/consensys/gnark/internal/compilelogger
+github.com/consensys/gnark/internal/frontendtype
+github.com/consensys/gnark/internal/gkr/bls12-377
+github.com/consensys/gnark/internal/gkr/bls12-381
+github.com/consensys/gnark/internal/gkr/bn254
+github.com/consensys/gnark/internal/gkr/bw6-761
+github.com/consensys/gnark/internal/gkr/gkrcore
+github.com/consensys/gnark/internal/hints
+github.com/consensys/gnark/internal/kvstore
+github.com/consensys/gnark/internal/smallfields
+github.com/consensys/gnark/internal/smallfields/tinyfield
+github.com/consensys/gnark/internal/utils
+github.com/consensys/gnark/internal/widecommitter
+github.com/consensys/gnark/io
+github.com/consensys/gnark/logger
+github.com/consensys/gnark/profile
+github.com/consensys/gnark/profile/internal/graph
+github.com/consensys/gnark/profile/internal/measurement
+github.com/consensys/gnark/profile/internal/report
+github.com/consensys/gnark/std/algebra/algopts
+github.com/consensys/gnark/std/algebra/emulated/fields_bls12381
+github.com/consensys/gnark/std/algebra/emulated/sw_bls12381
+github.com/consensys/gnark/std/algebra/emulated/sw_emulated
+github.com/consensys/gnark/std/conversion
+github.com/consensys/gnark/std/gkrapi/gkr
+github.com/consensys/gnark/std/hash
+github.com/consensys/gnark/std/hash/expand
+github.com/consensys/gnark/std/hash/sha2
+github.com/consensys/gnark/std/hash/sha3
+github.com/consensys/gnark/std/internal/fieldextension
+github.com/consensys/gnark/std/internal/limbcomposition
+github.com/consensys/gnark/std/internal/logderivarg
+github.com/consensys/gnark/std/internal/logderivprecomp
+github.com/consensys/gnark/std/internal/mimc
+github.com/consensys/gnark/std/math/bits
+github.com/consensys/gnark/std/math/bitslice
+github.com/consensys/gnark/std/math/cmp
+github.com/consensys/gnark/std/math/emulated
+github.com/consensys/gnark/std/math/emulated/emparams
+github.com/consensys/gnark/std/math/uints
+github.com/consensys/gnark/std/multicommit
+github.com/consensys/gnark/std/permutation/keccakf
+github.com/consensys/gnark/std/permutation/sha2
+github.com/consensys/gnark/std/rangecheck
+github.com/consensys/gnark/std/selector
+github.com/consensys/gnark/test
+github.com/consensys/gnark/test/unsafekzg
+# github.com/consensys/gnark-crypto v0.21.0
+## explicit; go 1.25.7
+github.com/consensys/gnark-crypto/algebra/lattice
+github.com/consensys/gnark-crypto/ecc
+github.com/consensys/gnark-crypto/ecc/bls12-377
+github.com/consensys/gnark-crypto/ecc/bls12-377/fp
+github.com/consensys/gnark-crypto/ecc/bls12-377/fr
+github.com/consensys/gnark-crypto/ecc/bls12-377/fr/fft
+github.com/consensys/gnark-crypto/ecc/bls12-377/fr/hash_to_field
+github.com/consensys/gnark-crypto/ecc/bls12-377/fr/iop
+github.com/consensys/gnark-crypto/ecc/bls12-377/fr/mimc
+github.com/consensys/gnark-crypto/ecc/bls12-377/fr/pedersen
+github.com/consensys/gnark-crypto/ecc/bls12-377/fr/polynomial
+github.com/consensys/gnark-crypto/ecc/bls12-377/hash_to_curve
+github.com/consensys/gnark-crypto/ecc/bls12-377/internal/fptower
+github.com/consensys/gnark-crypto/ecc/bls12-377/kzg
+github.com/consensys/gnark-crypto/ecc/bls12-377/mpcsetup
+github.com/consensys/gnark-crypto/ecc/bls12-381
+github.com/consensys/gnark-crypto/ecc/bls12-381/fp
+github.com/consensys/gnark-crypto/ecc/bls12-381/fr
+github.com/consensys/gnark-crypto/ecc/bls12-381/fr/fft
+github.com/consensys/gnark-crypto/ecc/bls12-381/fr/hash_to_field
+github.com/consensys/gnark-crypto/ecc/bls12-381/fr/iop
+github.com/consensys/gnark-crypto/ecc/bls12-381/fr/mimc
+github.com/consensys/gnark-crypto/ecc/bls12-381/fr/pedersen
+github.com/consensys/gnark-crypto/ecc/bls12-381/fr/polynomial
+github.com/consensys/gnark-crypto/ecc/bls12-381/hash_to_curve
+github.com/consensys/gnark-crypto/ecc/bls12-381/internal/fptower
+github.com/consensys/gnark-crypto/ecc/bls12-381/kzg
+github.com/consensys/gnark-crypto/ecc/bls12-381/mpcsetup
+github.com/consensys/gnark-crypto/ecc/bls24-315
+github.com/consensys/gnark-crypto/ecc/bls24-315/fp
+github.com/consensys/gnark-crypto/ecc/bls24-315/fr
+github.com/consensys/gnark-crypto/ecc/bls24-315/hash_to_curve
+github.com/consensys/gnark-crypto/ecc/bls24-315/internal/fptower
+github.com/consensys/gnark-crypto/ecc/bls24-315/kzg
+github.com/consensys/gnark-crypto/ecc/bls24-315/mpcsetup
+github.com/consensys/gnark-crypto/ecc/bls24-317
+github.com/consensys/gnark-crypto/ecc/bls24-317/fp
+github.com/consensys/gnark-crypto/ecc/bls24-317/fr
+github.com/consensys/gnark-crypto/ecc/bls24-317/hash_to_curve
+github.com/consensys/gnark-crypto/ecc/bls24-317/internal/fptower
+github.com/consensys/gnark-crypto/ecc/bls24-317/kzg
+github.com/consensys/gnark-crypto/ecc/bls24-317/mpcsetup
+github.com/consensys/gnark-crypto/ecc/bn254
+github.com/consensys/gnark-crypto/ecc/bn254/fp
+github.com/consensys/gnark-crypto/ecc/bn254/fr
+github.com/consensys/gnark-crypto/ecc/bn254/fr/fft
+github.com/consensys/gnark-crypto/ecc/bn254/fr/hash_to_field
+github.com/consensys/gnark-crypto/ecc/bn254/fr/iop
+github.com/consensys/gnark-crypto/ecc/bn254/fr/mimc
+github.com/consensys/gnark-crypto/ecc/bn254/fr/pedersen
+github.com/consensys/gnark-crypto/ecc/bn254/fr/polynomial
+github.com/consensys/gnark-crypto/ecc/bn254/hash_to_curve
+github.com/consensys/gnark-crypto/ecc/bn254/internal/fptower
+github.com/consensys/gnark-crypto/ecc/bn254/kzg
+github.com/consensys/gnark-crypto/ecc/bn254/mpcsetup
+github.com/consensys/gnark-crypto/ecc/bw6-633
+github.com/consensys/gnark-crypto/ecc/bw6-633/fp
+github.com/consensys/gnark-crypto/ecc/bw6-633/fr
+github.com/consensys/gnark-crypto/ecc/bw6-633/hash_to_curve
+github.com/consensys/gnark-crypto/ecc/bw6-633/internal/fptower
+github.com/consensys/gnark-crypto/ecc/bw6-633/kzg
+github.com/consensys/gnark-crypto/ecc/bw6-633/mpcsetup
+github.com/consensys/gnark-crypto/ecc/bw6-761
+github.com/consensys/gnark-crypto/ecc/bw6-761/fp
+github.com/consensys/gnark-crypto/ecc/bw6-761/fr
+github.com/consensys/gnark-crypto/ecc/bw6-761/fr/fft
+github.com/consensys/gnark-crypto/ecc/bw6-761/fr/hash_to_field
+github.com/consensys/gnark-crypto/ecc/bw6-761/fr/iop
+github.com/consensys/gnark-crypto/ecc/bw6-761/fr/mimc
+github.com/consensys/gnark-crypto/ecc/bw6-761/fr/pedersen
+github.com/consensys/gnark-crypto/ecc/bw6-761/fr/polynomial
+github.com/consensys/gnark-crypto/ecc/bw6-761/hash_to_curve
+github.com/consensys/gnark-crypto/ecc/bw6-761/internal/fptower
+github.com/consensys/gnark-crypto/ecc/bw6-761/kzg
+github.com/consensys/gnark-crypto/ecc/bw6-761/mpcsetup
+github.com/consensys/gnark-crypto/ecc/grumpkin/fr
+github.com/consensys/gnark-crypto/ecc/secp256k1
+github.com/consensys/gnark-crypto/ecc/secp256k1/fp
+github.com/consensys/gnark-crypto/ecc/secp256k1/fr
+github.com/consensys/gnark-crypto/ecc/secp256k1/hash_to_curve
+github.com/consensys/gnark-crypto/ecc/secp256r1
+github.com/consensys/gnark-crypto/ecc/secp256r1/fp
+github.com/consensys/gnark-crypto/ecc/secp256r1/fr
+github.com/consensys/gnark-crypto/ecc/secp256r1/hash_to_curve
+github.com/consensys/gnark-crypto/ecc/secp256r1/internal/fptower
+github.com/consensys/gnark-crypto/ecc/stark-curve
+github.com/consensys/gnark-crypto/ecc/stark-curve/fp
+github.com/consensys/gnark-crypto/ecc/stark-curve/fr
+github.com/consensys/gnark-crypto/ecc/stark-curve/hash_to_curve
+github.com/consensys/gnark-crypto/fiat-shamir
+github.com/consensys/gnark-crypto/field/asm/element_10w
+github.com/consensys/gnark-crypto/field/asm/element_12w
+github.com/consensys/gnark-crypto/field/asm/element_31b
+github.com/consensys/gnark-crypto/field/asm/element_4w
+github.com/consensys/gnark-crypto/field/asm/element_5w
+github.com/consensys/gnark-crypto/field/asm/element_6w
+github.com/consensys/gnark-crypto/field/babybear
+github.com/consensys/gnark-crypto/field/goldilocks
+github.com/consensys/gnark-crypto/field/hash
+github.com/consensys/gnark-crypto/field/koalabear
+github.com/consensys/gnark-crypto/field/koalabear/extensions
+github.com/consensys/gnark-crypto/field/pool
+github.com/consensys/gnark-crypto/hash
+github.com/consensys/gnark-crypto/kzg
+github.com/consensys/gnark-crypto/parallel
+github.com/consensys/gnark-crypto/utils
+github.com/consensys/gnark-crypto/utils/cpu
+github.com/consensys/gnark-crypto/utils/unsafe
+# github.com/davecgh/go-spew v1.1.1
+## explicit
+github.com/davecgh/go-spew/spew
+# github.com/fxamacker/cbor/v2 v2.9.2
+## explicit; go 1.20
+github.com/fxamacker/cbor/v2
+# github.com/google/pprof v0.0.0-20260802141513-ef3492d7dac3
+## explicit; go 1.25.0
+github.com/google/pprof/profile
+# github.com/kr/text v0.2.0
+## explicit
+# github.com/mattn/go-colorable v0.1.15
+## explicit; go 1.18
+github.com/mattn/go-colorable
+# github.com/mattn/go-isatty v0.0.24
+## explicit; go 1.20
+github.com/mattn/go-isatty
+# github.com/pmezard/go-difflib v1.0.0
+## explicit
+github.com/pmezard/go-difflib/difflib
+# github.com/rogpeppe/go-internal v1.16.0
+## explicit; go 1.25
+# github.com/ronanh/intcomp v1.1.1
+## explicit; go 1.19
+github.com/ronanh/intcomp
+# github.com/rs/zerolog v1.35.1
+## explicit; go 1.23
+github.com/rs/zerolog
+github.com/rs/zerolog/internal/cbor
+github.com/rs/zerolog/internal/json
+# github.com/stretchr/testify v1.11.1
+## explicit; go 1.17
+github.com/stretchr/testify/assert
+github.com/stretchr/testify/assert/yaml
+github.com/stretchr/testify/require
+# github.com/x448/float16 v0.8.4
+## explicit; go 1.11
+github.com/x448/float16
+# golang.org/x/crypto v0.54.0
+## explicit; go 1.25.0
+golang.org/x/crypto/blake2b
+golang.org/x/crypto/sha3
+# golang.org/x/sync v0.22.0
+## explicit; go 1.25.0
+golang.org/x/sync/errgroup
+# golang.org/x/sys v0.47.0
+## explicit; go 1.25.0
+golang.org/x/sys/cpu
+golang.org/x/sys/unix
+golang.org/x/sys/windows
+# gopkg.in/yaml.v3 v3.0.1
+## explicit
+gopkg.in/yaml.v3

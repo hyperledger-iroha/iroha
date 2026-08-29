@@ -373,14 +373,18 @@ public final class TransactionSubmissionCompatibilityTests {
                 200,
                 lastCapability.getBytes(StandardCharsets.UTF_8),
                 "",
-                Collections.emptyMap()));
+                Collections.emptyMap(),
+                null,
+                false));
       }
       if (!postResponses.isEmpty()) {
         lastPostStatus = postResponses.removeFirst();
       }
       return CompletableFuture.completedFuture(
           new TransportResponse(
-              lastPostStatus, new byte[0], "", Collections.emptyMap()));
+              lastPostStatus, new byte[0], "", Collections.emptyMap(),
+              null,
+              false));
     }
 
     private List<String> requests() {
@@ -403,7 +407,9 @@ public final class TransactionSubmissionCompatibilityTests {
                 200,
                 capabilities(4, expectedSchemaHash()).getBytes(StandardCharsets.UTF_8),
                 "",
-                Collections.emptyMap()));
+                Collections.emptyMap(),
+                null,
+                false));
       }
       final CompletableFuture<TransportResponse> failed = new CompletableFuture<>();
       failed.completeExceptionally(new RuntimeException("simulated network failure"));

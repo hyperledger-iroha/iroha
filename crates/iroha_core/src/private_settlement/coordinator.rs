@@ -609,6 +609,7 @@ mod tests {
         let mut coordinator =
             PrivateSettlementBundleCoordinatorV1::new(manifest.clone(), authorities.clone())
                 .expect("coordinator");
+        assert_eq!(coordinator.manifest(), &manifest);
         assert_eq!(
             coordinator.record_audited(0, Hash::new(b"audit-0"), 12),
             Ok(PrivateSettlementCoordinatorOutcomeV1::Stored)

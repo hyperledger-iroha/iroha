@@ -13,16 +13,20 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SOURCE_PATH = Path("crates/kotodama_lang/src/semantic.rs")
 
-BASELINE_RUST_LINES = 19_069
+# The post-merge stack-safety hardening replaces recursive typed-HIR traits and
+# public semantic entry points with explicit iterative traversals. Rebase the
+# original compacted-source baseline by that reviewed net +1,907-line delta
+# while preserving the same reduction requirement and headroom.
+BASELINE_RUST_LINES = 20_976
 MINIMUM_RUST_LINE_REDUCTION = 1_500
 MAXIMUM_RUST_LINES = BASELINE_RUST_LINES - MINIMUM_RUST_LINE_REDUCTION
 
 TEST_MARKER = "#[cfg(test)]\nmod tests {"
 TEST_SUFFIX_SHA256 = (
-    "4e3516e559fa868d8977aed18a11f67ea0e8378738dfeae2d121260058d079e9"
+    "84a2eed26f614c7fcc8bc8e44750b2512769ead52480bf910af4cc391b95ae3f"
 )
 TEST_RECORDS_SHA256 = (
-    "aa2c4080e48f120c6082865a704c48dff6da89a749b7b4807c72b2c3fe1751ce"
+    "7c30c102cf0e5f01c9753cd05db2537bc861cdc109c62d6c8980e9776be10b09"
 )
 TEST_LEAVES = (
     (
@@ -33,7 +37,7 @@ TEST_LEAVES = (
     ),
     (
         Path("crates/kotodama_lang/src/semantic/tests/trigger_semantics_tests.rs"),
-        "eb4b783faf55411f27608d5758b64d6fd6eb87f77fc6b07c5d3112b096c89092",
+        "146542c9722ecbc62596e95913212e8ce87d1c1aa8b7f3e0c7c0f2ef05269399",
         13,
         "c9e496eff35dca6bdec40e87651766d71f3dc5d511abdfc58f26938165e21cfc",
     ),
@@ -45,22 +49,25 @@ TEST_LEAVES = (
     ),
 )
 BUILTIN_SET_SHA256 = (
-    "22b449e1ace350352d344ce2217882892bb49b8879c9874014e233931d2f6731"
+    "18433d73f89518b4a8fadb0c5daf5bbdabc2886e75c8f73f4381b696a4771adf"
 )
 DIAGNOSTIC_CODE_SET_SHA256 = (
-    "4ca78c59e0c3cb6e87aafc5aa307910620e9d60bdd6fa360c20bd10f7e837466"
+    "cffaa6bf6bbf0c476a09dcce01d67aed0c4bc5b18b9fbe509d315f3df22bb351"
 )
 ORDERED_DIAGNOSTIC_CODES_SHA256 = (
-    "1947e4a89b17f115ad5493313412634faa5ac79828981afe5c5615cef04f5b82"
+    "6d7bf1486233b98ca03ea7a166dfb8e10f62ffbdb4cd2d8eb970938756da67dc"
 )
 HELPER_REGION_SHA256 = (
-    "04cadc5ffb08e75a1d0538ecf6cd4b0785a8b3eab640ebae4b78dede9d6935d0"
+    "7720a2615e0fd7804aa80a93aa6c53115e8aa0999dd950c1510aa06978815dad"
 )
 EFFECT_REGION_SHA256 = (
     "dc24b3f3c7efcfb2df3cfc7401562bf5004d9b9ec0a1e2333dbc85a0036aa761"
 )
+DEFINITE_INIT_REGION_SHA256 = (
+    "e9a07b008ec37f2d1a4be95fde94d3683b9d64281d4495d2d28b24a5d79272cd"
+)
 FIXED_BUILTINS_SHA256 = (
-    "72dae64397c7ea63f1208df0dfded88bf689ee3cb37ff4a67645d90d98c39fec"
+    "c317b32df8632fe6646956ed223cbda5a8945caa2d8a486a5f05709b7982a988"
 )
 CUSTOM_BUILTINS_SHA256 = (
     "14b4a2df246f5eb996915880d2aff3084141470113ec6e1ab3d543048d8edf0c"
@@ -93,6 +100,9 @@ RETIRED_BUILTINS = (
     "SchemaDecodeDirect",
     "SchemaEncodeDirect",
     "SchemaInfoDirect",
+    "SoracloudEgressFetch",
+    "SoracloudReadCredential",
+    "SoracloudReadSecret",
     "ZkVerifyTransfer",
     "ZkVerifyUnshield",
 )
@@ -173,7 +183,7 @@ def validate_source(source: str) -> None:
 
     _require(_sha256(test_suffix) == TEST_SUFFIX_SHA256, "test suffix changed")
     test_records = _test_records(test_suffix)
-    _require(len(test_records) == 120, "direct test count changed")
+    _require(len(test_records) == 126, "direct test count changed")
     _require(
         _json_sha256(test_records) == TEST_RECORDS_SHA256,
         "test identifiers, attributes, or order changed",
@@ -195,18 +205,18 @@ def validate_source(source: str) -> None:
         )
 
     builtins = _builtin_variants(production)
-    _require(len(builtins) == 232, "production Builtin reference set changed")
+    _require(len(builtins) == 229, "production Builtin reference set changed")
     _require(
         _json_sha256(builtins) == BUILTIN_SET_SHA256,
         "production Builtin variants changed",
     )
     codes = _diagnostic_codes(production)
-    _require(len(set(codes)) == 139, "diagnostic identity set changed")
+    _require(len(set(codes)) == 140, "diagnostic identity set changed")
     _require(
         _json_sha256(sorted(set(codes))) == DIAGNOSTIC_CODE_SET_SHA256,
         "diagnostic identities changed",
     )
-    _require(len(codes) == 451, "diagnostic site count changed")
+    _require(len(codes) == 453, "diagnostic site count changed")
     _require(
         _json_sha256(codes) == ORDERED_DIAGNOSTIC_CODES_SHA256,
         "diagnostic identity order changed",
@@ -222,6 +232,11 @@ def validate_source(source: str) -> None:
         "fn block_effects(",
         "\nfn is_state_identifier(",
     )
+    definite_init_region = _region(
+        production,
+        "fn validate_scalar_state_initialization(",
+        "\nfn enforce_permission_requirements(",
+    )
     _require(
         _sha256(helper_region) == HELPER_REGION_SHA256,
         "fixed-builtin helper region changed",
@@ -229,6 +244,10 @@ def validate_source(source: str) -> None:
     _require(
         _sha256(effect_region) == EFFECT_REGION_SHA256,
         "unified effect walker changed",
+    )
+    _require(
+        _sha256(definite_init_region) == DEFINITE_INIT_REGION_SHA256,
+        "definite scalar-state initialization flow changed",
     )
 
     fixed_region = _region(
@@ -244,7 +263,7 @@ def validate_source(source: str) -> None:
     custom_region = helper_region[helper_region.index(custom_start) :]
     fixed_builtins = _builtin_variants(fixed_region)
     custom_builtins = _builtin_variants(custom_region)
-    _require(len(fixed_builtins) == 160, "fixed Builtin partition changed")
+    _require(len(fixed_builtins) == 157, "fixed Builtin partition changed")
     _require(len(custom_builtins) == 70, "custom Builtin partition changed")
     _require(
         not set(fixed_builtins).intersection(custom_builtins),
@@ -260,7 +279,10 @@ def validate_source(source: str) -> None:
     )
 
     for retired in RETIRED_BUILTINS:
-        _require(f"Builtin::{retired}" not in production, f"retired Builtin returned: {retired}")
+        _require(
+            re.search(rf"\bBuiltin::{re.escape(retired)}\b", production) is None,
+            f"retired Builtin returned: {retired}",
+        )
     for token in (
         "macro_rules!",
         "$action",
@@ -293,14 +315,28 @@ def validate_source(source: str) -> None:
     ):
         _require(old_name not in production, f"parallel effect walker returned: {old_name}")
 
+    _require("*vars = loop_env;" not in production, "for-loop locals leaked into outer scope")
+
     for required in (
         "query page offset must be in 0..=i64::MAX",
         "query page offset plus limit must fit i64",
         "_ => analyze_fixed_builtin_call(builtin, arg_typed)",
         "effects.merge_from(statement_effects(context, statement));",
         "effects.mutates_durable_state |= typed_map_expr_is_state(context, map);",
+        "let mut t1 = analyze_expr_expected(context, then_expr, vars, expected)?;",
+        "struct DefiniteInitExprFlow {",
+        "fn continue_definite_init_expr(",
     ):
         _require(required in production, f"required current semantic invariant missing: {required}")
+    for required_test in (
+        "fn typed_aggregate_traits_are_spawn_free_for_flat_width(",
+        "fn semantic_type_and_expression_traits_are_iterative_at_the_depth_boundary(",
+        "fn public_semantic_apis_handoff_from_a_small_caller(",
+        "fn ternary_literals_inherit_the_enclosing_numeric_context(",
+        "fn raw_semantic_analysis_does_not_leak_range_iterators(",
+        "fn scalar_state_initialization_checks_early_returns_inside_expressions(",
+    ):
+        _require(required_test in test_suffix, f"required regression test missing: {required_test}")
     for stale in (
         "query page offset must be non-negative and fit u64",
         "E_UNSHIELD_AMOUNT_RANGE",

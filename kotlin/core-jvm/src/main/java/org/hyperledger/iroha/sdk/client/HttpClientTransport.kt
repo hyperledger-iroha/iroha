@@ -1182,33 +1182,6 @@ class HttpClientTransport(
     }
 
     /**
-     * Retained source-compatible overload that fails closed without a trusted draft intent.
-     *
-     * Use the overload accepting [ContractCallDraftIntent]; response echoes cannot establish the
-     * exact contract invocation or final metadata that a caller intends to sign.
-     */
-    fun prepareContractCall(
-        authority: String,
-        feePayment: FeePaymentIntent,
-        contractAddress: String? = null,
-        contractAlias: String? = null,
-        entrypoint: String,
-        payload: Any? = null,
-    ): CompletableFuture<ContractCallResponse> {
-        buildContractCallDraftPayload(
-            authority,
-            feePayment,
-            contractAddress,
-            contractAlias,
-            entrypoint,
-            payload,
-        )
-        throw IllegalStateException(
-            "prepareContractCall requires a caller-trusted ContractCallDraftIntent",
-        )
-    }
-
-    /**
      * Prepares and verifies an unsigned contract call against an off-wire caller-trusted intent.
      *
      * The intent must contain the exact resolved invocation and complete final transaction
@@ -3442,44 +3415,10 @@ class HttpClientTransport(
             val authority = fields["authority"] as? String
                 ?: throw IllegalArgumentException("authority is required and must be canonical")
             requireCanonicalSccpAuthority(authority)
-            val feePayment = FeePaymentJson.parse(
+            FeePaymentJson.parse(
                 fields["fee_payment"],
                 "bridge submit payload.fee_payment",
             )
-            val hasSignature = fields.containsKey("signature_b64")
-            val signature = fields["signature_b64"]
-            if (hasSignature) {
-                require(signature is String) { "signature_b64 must be canonical padded base64" }
-                normalizeOptionalSignature(signature)
-            }
-            val hasTransactionPayload = fields.containsKey("transaction_payload_b64")
-            val transactionPayload = fields["transaction_payload_b64"]
-            if (hasTransactionPayload) {
-                require(transactionPayload is String) {
-                    "transaction_payload_b64 must be canonical padded base64"
-                }
-            }
-            var creationTimeMs: Long? = null
-            if (fields.containsKey("creation_time_ms")) {
-                val value = fields["creation_time_ms"]
-                require(value is Number && value.toLong() > 0 && value.toString() == value.toLong().toString()) {
-                    "creation_time_ms must be a positive integer"
-                }
-                creationTimeMs = value.toLong()
-            }
-            validateSccpDetachedSigningState(
-                signature as? String,
-                transactionPayload as? String,
-                creationTimeMs,
-            )
-            if (transactionPayload is String) {
-                normalizeOptionalTransactionPayload(
-                    transactionPayload,
-                    creationTimeMs,
-                    authority,
-                    feePayment,
-                )
-            }
             val artifactField = if (path == "/v1/bridge/messages") {
                 "native_proof_b64"
             } else {
@@ -3501,6 +3440,14 @@ class HttpClientTransport(
                     SCCP_NATIVE_INBOUND_PROOF_SCHEMA_NAME
                 },
             )
+            if (path == "/v1/bridge/messages") {
+                val replayWitness = optionalSccpArtifact(fields, "replay_witness_b64")
+                    ?: throw IllegalArgumentException("replay_witness_b64 is required")
+                validateCanonicalSccpReplayWitnessBase64(
+                    replayWitness,
+                    "replay_witness_b64",
+                )
+            }
         }
         @JvmStatic internal fun normalizeHex16(value: String, field: String): String { val normalized = normalizeEvenLengthHex(value, field); require(normalized.length == 32) { "$field must contain 32 hex characters" }; return normalized }
         @JvmStatic internal fun normalizeHex32(value: String, field: String): String { val normalized = normalizeEvenLengthHex(value, field); require(normalized.length == 64) { "$field must contain 64 hex characters" }; return normalized }
@@ -3647,14 +3594,11 @@ class HttpClientTransport(
         }
 
         private val SCCP_PROOF_SUBMIT_FIELDS = setOf(
-            "authority", "fee_payment", "signature_b64", "transaction_payload_b64",
-            "destination_proof_b64", "creation_time_ms",
+            "authority", "fee_payment", "destination_proof_b64",
         )
         private val SCCP_MESSAGE_SUBMIT_FIELDS = setOf(
-            "authority", "fee_payment", "signature_b64", "transaction_payload_b64",
-            "native_proof_b64", "creation_time_ms",
+            "authority", "fee_payment", "native_proof_b64", "replay_witness_b64",
         )
-        private const val SCCP_MAX_NATIVE_PROOF_BYTES = 16 * 1024 * 1024
 
         private fun optionalSccpArtifact(fields: Map<*, *>, field: String): String? =
             when (val value = fields[field]) {

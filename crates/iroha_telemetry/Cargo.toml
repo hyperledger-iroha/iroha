@@ -18,8 +18,6 @@ event-exporter = [
     "dep:chrono",
     "dep:futures",
     "dep:iroha_logger",
-    "dep:libc",
-    "dep:rustix",
     "dep:tokio",
     "dep:tokio-tungstenite",
     "dep:url",
@@ -37,8 +35,6 @@ dev-telemetry = [
     "dep:chrono",
     "dep:iroha_futures",
     "dep:iroha_logger",
-    "dep:libc",
-    "dep:rustix",
     "dep:tokio",
     "iroha_futures/telemetry",
     "tokio/fs",
@@ -58,6 +54,11 @@ telegram = [
     "tokio/sync",
     "tokio/time",
 ]
+otel-exporter = [
+    "dep:opentelemetry",
+    "dep:opentelemetry_sdk",
+    "dep:opentelemetry_otlp",
+]
 
 [dependencies]
 norito = { workspace = true, default-features = false, features = ["node-codec"] }
@@ -69,21 +70,23 @@ iroha_futures = { workspace = true, optional = true }
 iroha_schema = { workspace = true }
 iroha_data_model = { workspace = true, default-features = false, features = ["json"] }
 
+async-trait = { workspace = true }
 chrono = { version = "0.4.38", optional = true }
 eyre = { workspace = true }
 futures = { workspace = true, features = ["std", "async-await"], optional = true }
+streaming-stats = "0.2.3"
 tokio = { workspace = true, optional = true }
+tokio-stream = { workspace = true, features = ["fs", "sync"] }
 tokio-tungstenite = { workspace = true, optional = true, features = ["rustls-tls-native-roots"] }
 url = { workspace = true, optional = true }
 prometheus = { workspace = true }
-reqwest = { version = "0.12.24", default-features = false, features = ["rustls-tls-native-roots"], optional = true }
+reqwest = { version = "0.12.24", default-features = false, features = ["json", "rustls-tls-native-roots"], optional = true }
+opentelemetry = { version = "0.31", default-features = false, features = ["metrics"], optional = true }
+opentelemetry_sdk = { version = "0.31", default-features = false, features = ["metrics", "rt-tokio"], optional = true }
+opentelemetry_otlp = { package = "opentelemetry-otlp", version = "0.31", default-features = false, features = ["metrics", "grpc-tonic"], optional = true }
 blake3 = { workspace = true }
 thiserror = { workspace = true }
 hex = { workspace = true }
-
-[target.'cfg(unix)'.dependencies]
-libc = { version = "0.2.177", optional = true }
-rustix = { version = "1.1.4", features = ["process"], optional = true }
 
 [build-dependencies]
 build-support = { path = "../build-support", default-features = false }

@@ -802,6 +802,7 @@ run_cargo() {
   local locked_count=0
   local offline_count=0
   local cargo_exit_code
+  local verus_job_bound_inserted=0
   local policy_python="${IROHA_RELEASE_POLICY_PYTHON:-python3}"
   local -a pinned_arguments
 
@@ -909,6 +910,23 @@ PY
   if [[ "$subcommand" == "--version" || "$subcommand" == "version" \
     || "$subcommand" == "fmt" ]]; then
     pinned_arguments=("$@")
+  elif [[ "$subcommand" == "verus" ]]; then
+    if [[ "${2:-}" != "verify" ]]; then
+      echo "run_cargo accepts only the pinned cargo verus verify action" >&2
+      return "$SUMERAGI_V2_RELEASE_POLICY_ERROR_STATUS"
+    fi
+    pinned_arguments=("$subcommand" "$2")
+    shift 2
+    for argument in "$@"; do
+      if ((!verus_job_bound_inserted)) && [[ "$argument" == "--" ]]; then
+        pinned_arguments+=(-j1)
+        verus_job_bound_inserted=1
+      fi
+      pinned_arguments+=("$argument")
+    done
+    if ((!verus_job_bound_inserted)); then
+      pinned_arguments+=(-j1)
+    fi
   else
     pinned_arguments=("$subcommand" -j1)
     shift

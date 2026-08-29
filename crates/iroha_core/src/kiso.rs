@@ -1039,6 +1039,7 @@ mod tests {
                 peer_geo: iroha_config::parameters::actual::ToriiPeerGeo::default(),
                 soranet_privacy_ingest: iroha_config::parameters::actual::SoranetPrivacyIngest::default(),
                 privacy_bootle_lantern_issuer: None,
+                sccp_replay_archive: None,
                 debug_match_filters: false,
                 webhooks_enabled: iroha_config::parameters::defaults::torii::WEBHOOKS_ENABLED,
                 zk_attachments_enabled:
@@ -2089,8 +2090,8 @@ mod tests {
     async fn soranet_handshake_update_applies() {
         let config = test_config();
         let (kiso, _) = KisoHandle::start(config);
-        let descriptor_hex = "0123456789abcdef".to_string();
-        let resume_hex = "feedface".to_string();
+        let descriptor_hex = "01".repeat(iroha_crypto::Hash::LENGTH);
+        let resume_hex = "fe".repeat(iroha_crypto::Hash::LENGTH);
         let descriptor_bytes = hex::decode(&descriptor_hex).expect("descriptor hex");
         let resume_bytes = hex::decode(&resume_hex).expect("resume hex");
         let mut handshake_rx = kiso
@@ -2123,8 +2124,8 @@ mod tests {
                 descriptor_commit_hex: Some(descriptor_hex.clone()),
                 client_capabilities_hex: None,
                 relay_capabilities_hex: None,
-                kem_id: Some(3),
-                sig_id: Some(7),
+                kem_id: Some(2),
+                sig_id: Some(1),
                 resume_hash_hex: Some(ResumeHashDirective::Set(resume_hex.clone())),
                 pow: Some(SoranetHandshakePowUpdate {
                     difficulty: Some(6),
@@ -2154,8 +2155,8 @@ mod tests {
             observed.descriptor_commit.value(),
             descriptor_bytes.as_slice()
         );
-        assert_eq!(observed.kem_id, 3);
-        assert_eq!(observed.sig_id, 7);
+        assert_eq!(observed.kem_id, 2);
+        assert_eq!(observed.sig_id, 1);
         let resume = observed
             .resume_hash
             .as_ref()
@@ -2173,8 +2174,8 @@ mod tests {
         let dto = kiso.get_dto().await.expect("fetch handshake dto");
         let handshake = dto.network.soranet_handshake;
         assert_eq!(handshake.descriptor_commit_hex, descriptor_hex);
-        assert_eq!(handshake.kem_id, 3);
-        assert_eq!(handshake.sig_id, 7);
+        assert_eq!(handshake.kem_id, 2);
+        assert_eq!(handshake.sig_id, 1);
         assert_eq!(handshake.resume_hash_hex, Some(resume_hex.clone()));
         assert_eq!(handshake.pow.difficulty, 6);
         assert_eq!(handshake.pow.max_future_skew_secs, 1200);

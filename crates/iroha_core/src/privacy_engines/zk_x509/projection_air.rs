@@ -748,7 +748,7 @@ fn compile_invocations_v1(
             });
         }
     }
-    let statement_digest = PrivacyStatementV1::IrohaZkX509StarkP256V0(statement.clone())
+    let statement_digest = PrivacyStatementV1::IrohaZkX509StarkP256V1(statement.clone())
         .digest()
         .map_err(|_| ZkX509ProjectionAirErrorV1::Encoding)?;
     let account = norito::to_bytes(&statement.wallet_account)

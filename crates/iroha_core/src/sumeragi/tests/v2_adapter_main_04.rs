@@ -1112,7 +1112,7 @@ fn authentication_rejects_valid_commitment_conflicts_without_mutating_adapter() 
     };
     let mut conflicting_groups = vec![
         timeout_group(unbound_qc_a, vec![0, 1]),
-        timeout_group(unbound_qc_b, vec![2, 3]),
+        timeout_group(unbound_qc_b, vec![2]),
     ];
     conflicting_groups.sort_by_key(|group| {
         group

@@ -37,6 +37,62 @@ fn globally_bound_absent_registry_blocks_selection_and_preserves_exact_fifo() {
         vec![hash, follower_hash]
     );
     drop(lease);
+
+    // A durable autonomous owner leaves the physical FIFO but keeps its
+    // immutable ordinal. That virtual predecessor must fence an ordinary
+    // follower until the reservation reaches a terminal release.
+    let fixture = globally_bound_guard_fixture();
+    let hash = fixture.transaction.hash_as_entrypoint();
+    let follower_hash = fixture.follower_transaction.hash_as_entrypoint();
+    fixture
+        .queue
+        .push_with_lane_with_state(fixture.follower_transaction.clone(), &fixture.state)
+        .expect("enqueue virtual-cut follower");
+    install_queue_plan_registry_value_for_test(&fixture.state, &fixture.binding);
+    install_test_reservation_journal(&fixture.queue, &fixture._dir);
+    let reserved = fixture
+        .queue
+        .reserve_transactions_for_lane(
+            &fixture.state,
+            lane_reservation_scope(
+                &fixture.state,
+                b"virtual-fifo-cut-owner",
+                b"virtual-fifo-cut-proposal",
+            ),
+            nonzero!(1_usize),
+        )
+        .expect("reserve the QueuePlan FIFO predecessor");
+    assert_eq!(reserved.len(), 1);
+    assert_eq!(reserved[0].key().entrypoint_hash, hash);
+    assert_eq!(fixture.queue.fifo_snapshot_for_test(), vec![follower_hash]);
+    assert_eq!(
+        fixture.queue.live_lane_reservations(),
+        vec![*reserved[0].key()]
+    );
+    let predecessor_order = fixture
+        .queue
+        .fifo_order_by_hash
+        .get(&hash)
+        .expect("reserved predecessor retains its FIFO identity")
+        .ordinal;
+    let follower_order = fixture
+        .queue
+        .fifo_order_by_hash
+        .get(&follower_hash)
+        .expect("ordinary follower retains its FIFO identity")
+        .ordinal;
+    assert!(predecessor_order < follower_order);
+
+    let (pending, lease) = fixture
+        .queue
+        .bounded_pending_snapshot(&fixture.state.view(), nonzero!(2_usize))
+        .expect("a live autonomous FIFO cut is a healthy selection wait");
+    assert!(
+        pending.is_empty(),
+        "ordinary work must not overtake the reservation"
+    );
+    assert!(fixture.queue.global_selection_owners.lock().is_empty());
+    drop(lease);
 }
 
 #[test]

@@ -23,6 +23,15 @@ pub const SCCP_REPLAY_SMT_SHARD_COUNT_V1: usize = 256;
 pub const SCCP_REPLAY_SMT_DEPTH_V1: usize = 248;
 /// Maximum number of explicitly encoded non-default siblings.
 pub const SCCP_REPLAY_SMT_MAX_SIBLINGS_V1: usize = SCCP_REPLAY_SMT_DEPTH_V1;
+/// Maximum canonical Norito size accepted for one sparse replay witness.
+///
+/// The largest V1 witness carries 248 explicit 32-byte siblings; 16 KiB leaves
+/// ample fixed headroom for the Norito header and collection framing without
+/// making an untrusted HTTP allocation input-dependent.
+pub const SCCP_REPLAY_WITNESS_MAX_ENCODED_BYTES_V1: usize = 16 * 1024;
+/// Maximum canonical padded-base64 length of one sparse replay witness.
+pub const SCCP_REPLAY_WITNESS_MAX_BASE64_BYTES_V1: usize =
+    4 * SCCP_REPLAY_WITNESS_MAX_ENCODED_BYTES_V1.div_ceil(3);
 
 /// Closed replay boundary and operation inventory.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
@@ -163,26 +172,26 @@ impl SccpReplayActorV1 {
 #[norito(tag = "principal", content = "identity")]
 pub enum SccpReplayPrincipalV1 {
     /// Canonical domainless SORA account identifier.
-    #[codec(index = 1)]
+    #[codec(index = 0)]
     SoraAccount(AccountId),
     /// Raw 20-byte EVM address.
-    #[codec(index = 2)]
+    #[codec(index = 1)]
     Evm([u8; 20]),
     /// Raw 20-byte TRON account payload, excluding the `0x41` prefix.
-    #[codec(index = 3)]
+    #[codec(index = 2)]
     Tron([u8; 20]),
     /// Canonical TON workchain and account identifier.
-    #[codec(index = 4)]
+    #[codec(index = 3)]
     Ton(SccpTonAccountV1),
 }
 
 impl SccpReplayPrincipalV1 {
     fn canonical_parts(&self) -> Result<(u8, Vec<u8>), SccpReplayAccumulatorError> {
         let (kind, bytes) = match self {
-            Self::SoraAccount(account) => (1, account.encode()),
-            Self::Evm(address) => (2, address.to_vec()),
-            Self::Tron(address) => (3, address.to_vec()),
-            Self::Ton(account) => (4, account.canonical_bytes().to_vec()),
+            Self::SoraAccount(account) => (0, account.encode()),
+            Self::Evm(address) => (1, address.to_vec()),
+            Self::Tron(address) => (2, address.to_vec()),
+            Self::Ton(account) => (3, account.canonical_bytes().to_vec()),
         };
         if bytes.is_empty() || u16::try_from(bytes.len()).is_err() {
             return Err(SccpReplayAccumulatorError::InvalidPrincipal);
@@ -238,16 +247,16 @@ pub struct SccpReplayRecordV1 {
     pub replay_id: [u8; 32],
     /// SHA-256 of exact canonical SCCP payload bytes.
     pub payload_sha256: [u8; 32],
-    /// Unsigned 256-bit big-endian amount in canonical SCCP units.
-    pub amount_be: [u8; 32],
+    /// Positive scale-9 amount in canonical SCCP units.
+    pub amount: u128,
     /// Economic recipient or owner.
     pub principal: SccpReplayPrincipalV1,
-    /// Operation-specific canonical security identity.
-    pub auxiliary: Vec<u8>,
+    /// SHA-256 of the operation-specific canonical auxiliary identity.
+    pub auxiliary_identity_sha256: [u8; 32],
 }
 
 /// Canonically compressed sparse-Merkle membership or non-membership witness.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
@@ -261,6 +270,31 @@ pub struct SccpSparseMerkleWitnessV1 {
     pub sibling_bitmap: [u8; 32],
     /// Non-default siblings in strictly increasing leaf-up level order.
     pub siblings: Vec<[u8; 32]>,
+}
+
+impl SccpSparseMerkleWitnessV1 {
+    /// Construct the unique canonical non-membership witness for an empty shard.
+    #[must_use]
+    pub fn empty_shard() -> Self {
+        Self {
+            expected_shard_root: sccp_replay_empty_hashes_v1()[SCCP_REPLAY_SMT_DEPTH_V1],
+            prior_record_digest: [0; 32],
+            sibling_bitmap: [0; 32],
+            siblings: Vec::new(),
+        }
+    }
+
+    /// Validate the canonical compressed sibling representation.
+    ///
+    /// This checks the representation independently of a particular replay
+    /// key or current shard root. State-dependent path checks remain part of
+    /// [`SccpReplayForestV1::occupy`] and the membership verifiers.
+    pub fn validate(&self) -> Result<(), SccpReplayAccumulatorError> {
+        if self.expected_shard_root == [0; 32] {
+            return Err(SccpReplayAccumulatorError::NonCanonicalWitness);
+        }
+        validate_and_expand_siblings(self, &sccp_replay_empty_hashes_v1()).map(|_| ())
+    }
 }
 
 /// Constant-size consensus replay state for one route boundary.
@@ -289,7 +323,7 @@ impl Default for SccpReplayForestV1 {
 }
 
 /// Authenticated replay transition emitted to rebuild witness indexes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
@@ -322,9 +356,6 @@ pub enum SccpReplayAccumulatorError {
     /// Principal has an empty or oversized canonical representation.
     #[error("invalid SCCP replay principal")]
     InvalidPrincipal,
-    /// Auxiliary identity exceeds the canonical two-byte length bound.
-    #[error("invalid SCCP replay auxiliary identity")]
-    InvalidAuxiliary,
     /// Replay identifier, payload commitment, or amount is zero.
     #[error("invalid SCCP replay record")]
     InvalidRecord,
@@ -361,17 +392,11 @@ fn sha256(parts: &[&[u8]]) -> [u8; 32] {
 
 fn network_tag(network: SccpNetworkV1) -> u32 {
     match network {
-        SccpNetworkV1::SoraTaira => 1,
-        SccpNetworkV1::EthereumMainnet => 2,
-        SccpNetworkV1::EthereumSepolia => 3,
-        SccpNetworkV1::BscMainnet => 4,
-        SccpNetworkV1::BscTestnet => 5,
-        SccpNetworkV1::TronMainnet => 10,
-        SccpNetworkV1::TronNile => 11,
-        SccpNetworkV1::TronShasta => 12,
-        SccpNetworkV1::SolanaTestnet => 13,
-        SccpNetworkV1::TonMainnet => 14,
-        SccpNetworkV1::TonTestnet => 15,
+        SccpNetworkV1::SoraTaira => 0x40,
+        SccpNetworkV1::EthereumMainnet => 0x41,
+        SccpNetworkV1::BscMainnet => 0x42,
+        SccpNetworkV1::TronMainnet => 0x43,
+        SccpNetworkV1::TonMainnet => 0x44,
     }
 }
 
@@ -437,6 +462,8 @@ pub fn sccp_replay_domain_hash_v1(
     {
         return Err(SccpReplayAccumulatorError::InvalidDomain);
     }
+    let source_network_tag = network_tag(domain.source_network);
+    let target_network_tag = network_tag(domain.target_network);
     let (actor_kind, actor) = domain.actor.canonical_parts();
     let actor_len = u16::try_from(actor.len())
         .map_err(|_| SccpReplayAccumulatorError::InvalidDomain)?
@@ -444,8 +471,8 @@ pub fn sccp_replay_domain_hash_v1(
     Ok(sha256(&[
         SCCP_REPLAY_SMT_MAGIC_V1,
         &[0x00],
-        &network_tag(domain.source_network).to_be_bytes(),
-        &network_tag(domain.target_network).to_be_bytes(),
+        &source_network_tag.to_be_bytes(),
+        &target_network_tag.to_be_bytes(),
         &[domain.boundary.tag()],
         &domain.route_revision.to_be_bytes(),
         &domain.route_configuration_hash,
@@ -467,8 +494,8 @@ pub fn sccp_replay_record_digest_v1(
 ) -> Result<[u8; 32], SccpReplayAccumulatorError> {
     if record.replay_id == [0; 32]
         || record.payload_sha256 == [0; 32]
-        || record.amount_be == [0; 32]
-        || record.auxiliary.is_empty()
+        || record.amount == 0
+        || record.auxiliary_identity_sha256 == [0; 32]
     {
         return Err(SccpReplayAccumulatorError::InvalidRecord);
     }
@@ -482,21 +509,17 @@ pub fn sccp_replay_record_digest_v1(
         &principal_len,
         &principal,
     ]);
-    let auxiliary_len = u16::try_from(record.auxiliary.len())
-        .map_err(|_| SccpReplayAccumulatorError::InvalidAuxiliary)?
-        .to_be_bytes();
     let auxiliary_digest = sha256(&[
         SCCP_REPLAY_SMT_MAGIC_V1,
         &[0x04, record.operation.tag()],
-        &auxiliary_len,
-        &record.auxiliary,
+        &record.auxiliary_identity_sha256,
     ]);
     let digest = sha256(&[
         SCCP_REPLAY_SMT_MAGIC_V1,
         &[0x02, record.operation.tag()],
         &record.replay_id,
         &record.payload_sha256,
-        &record.amount_be,
+        &record.amount.to_be_bytes(),
         &principal_digest,
         &auxiliary_digest,
     ]);
@@ -613,7 +636,8 @@ impl SccpReplayForestV1 {
                 .values()
                 .any(|root| *root == empty_root)
             || (self.leaf_count == 0) != self.nonempty_shard_roots.is_empty()
-            || self.update_sequence < self.leaf_count
+            || self.leaf_count < u64::try_from(self.nonempty_shard_roots.len()).unwrap_or(u64::MAX)
+            || self.update_sequence != self.leaf_count
         {
             return Err(SccpReplayAccumulatorError::InvalidForest);
         }
@@ -701,6 +725,67 @@ impl SccpReplayForestV1 {
         }
         Ok(())
     }
+
+    /// Verify an exact replay key and prior-record digest without re-deriving
+    /// either value from higher-level protocol fields.
+    ///
+    /// This is the narrow verifier used at untrusted witness-service
+    /// boundaries. A zero `record_digest` proves non-membership; a nonzero
+    /// digest proves membership. Every other witness-canonicality and current
+    /// shard-root rule is identical to [`Self::occupy`]. The complete 256-bit
+    /// key space is valid, including the all-zero key if SHA-256 happens to
+    /// derive it.
+    pub fn verify_key_digest(
+        &self,
+        key: [u8; 32],
+        record_digest: [u8; 32],
+        witness: &SccpSparseMerkleWitnessV1,
+    ) -> Result<(), SccpReplayAccumulatorError> {
+        self.validate()?;
+        if witness.prior_record_digest != record_digest {
+            return Err(SccpReplayAccumulatorError::InvalidPath);
+        }
+        let current_root = self.shard_root(key[0]);
+        if witness.expected_shard_root != current_root {
+            return Err(SccpReplayAccumulatorError::StaleRoot);
+        }
+        let empty = sccp_replay_empty_hashes_v1();
+        let siblings = validate_and_expand_siblings(witness, &empty)?;
+        let leaf = if record_digest == [0; 32] {
+            empty[0]
+        } else {
+            occupied_leaf_hash(key, record_digest)
+        };
+        if fold_path(&key, leaf, &siblings) != current_root {
+            return Err(SccpReplayAccumulatorError::InvalidPath);
+        }
+        Ok(())
+    }
+
+    /// Verify exact non-membership without mutating the forest.
+    pub fn verify_non_membership(
+        &self,
+        domain: &SccpReplayDomainV1,
+        replay_id: [u8; 32],
+        witness: &SccpSparseMerkleWitnessV1,
+    ) -> Result<(), SccpReplayAccumulatorError> {
+        self.validate()?;
+        if replay_id == [0; 32] || witness.prior_record_digest != [0; 32] {
+            return Err(SccpReplayAccumulatorError::InvalidPath);
+        }
+        let domain_hash = sccp_replay_domain_hash_v1(domain)?;
+        let key = sccp_replay_key_v1(domain_hash, replay_id);
+        let current_root = self.shard_root(key[0]);
+        if witness.expected_shard_root != current_root {
+            return Err(SccpReplayAccumulatorError::StaleRoot);
+        }
+        let empty = sccp_replay_empty_hashes_v1();
+        let siblings = validate_and_expand_siblings(witness, &empty)?;
+        if fold_path(&key, empty[0], &siblings) != current_root {
+            return Err(SccpReplayAccumulatorError::InvalidPath);
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -719,25 +804,66 @@ mod tests {
     }
 
     fn record(boundary: SccpReplayBoundaryV1) -> SccpReplayRecordV1 {
-        let mut amount_be = [0; 32];
-        amount_be[31] = 9;
         SccpReplayRecordV1 {
             operation: boundary,
             replay_id: [0x11; 32],
             payload_sha256: [0x22; 32],
-            amount_be,
+            amount: 9,
             principal: SccpReplayPrincipalV1::Evm([0x33; 20]),
-            auxiliary: vec![0x55; 32],
+            auxiliary_identity_sha256: [0x55; 32],
         }
     }
 
     fn empty_witness() -> SccpSparseMerkleWitnessV1 {
-        SccpSparseMerkleWitnessV1 {
-            expected_shard_root: sccp_replay_empty_hashes_v1()[SCCP_REPLAY_SMT_DEPTH_V1],
-            prior_record_digest: [0; 32],
-            sibling_bitmap: [0; 32],
-            siblings: Vec::new(),
-        }
+        SccpSparseMerkleWitnessV1::empty_shard()
+    }
+
+    fn hex32(value: &str) -> [u8; 32] {
+        let mut bytes = [0; 32];
+        hex::decode_to_slice(value, &mut bytes).expect("golden hash is canonical hex");
+        bytes
+    }
+
+    #[test]
+    fn matches_cross_language_golden_vector() {
+        // Keep in lockstep with fixtures/sccp/replay_forest_v1.json.
+        let domain = domain(SccpReplayBoundaryV1::SoraOutboundLock);
+        let record = record(SccpReplayBoundaryV1::SoraOutboundLock);
+        let domain_hash = sccp_replay_domain_hash_v1(&domain).expect("golden domain is valid");
+        assert_eq!(
+            domain_hash,
+            hex32("de11cbd183f55063fe715fcf120773d799dfb1185e057f758c126306832fdc3d")
+        );
+        assert_eq!(
+            sccp_replay_key_v1(domain_hash, record.replay_id),
+            hex32("139f57881d055a13ecf390d7441dadfc065ded40181c42a7aa3ab0a27469f17b")
+        );
+        assert_eq!(
+            sccp_replay_record_digest_v1(&record).expect("golden record is valid"),
+            hex32("31e4f2267d63d21101ab070e04aefe660df9681d3e12b263b61676e07c6f4aa5")
+        );
+        assert_eq!(
+            empty_witness().expected_shard_root,
+            hex32("cefd4f39c0d2ba5c33835008c6c3e7bca47d6ea1c4da5bfc8a63f09dbc66651f")
+        );
+        let mut forest = SccpReplayForestV1::default();
+        let delta = forest
+            .occupy(&domain, &record, &empty_witness())
+            .expect("golden leaf occupies an empty shard");
+        assert_eq!(delta.shard, 19);
+        assert_eq!(
+            delta.new_root,
+            hex32("d9c75ee102ec40076d903d6d5a0c3b0f9a9fa006ea9a2638274be11712ffb849")
+        );
+    }
+
+    #[test]
+    fn replay_network_tags_are_mainnet_only_and_final_v1() {
+        assert_eq!(network_tag(SccpNetworkV1::SoraTaira), 0x40);
+        assert_eq!(network_tag(SccpNetworkV1::EthereumMainnet), 0x41);
+        assert_eq!(network_tag(SccpNetworkV1::BscMainnet), 0x42);
+        assert_eq!(network_tag(SccpNetworkV1::TronMainnet), 0x43);
+        assert_eq!(network_tag(SccpNetworkV1::TonMainnet), 0x44);
     }
 
     #[test]
@@ -803,6 +929,66 @@ mod tests {
     }
 
     #[test]
+    fn standalone_witness_validation_checks_canonical_shape() {
+        let mut witness = empty_witness();
+        witness.expected_shard_root = [0; 32];
+        assert_eq!(
+            witness.validate(),
+            Err(SccpReplayAccumulatorError::NonCanonicalWitness)
+        );
+
+        witness.expected_shard_root = [0x88; 32];
+        witness
+            .validate()
+            .expect("standalone validation does not require the current state root");
+
+        witness.sibling_bitmap[0] = 1;
+        witness.siblings.push([0x77; 32]);
+        assert_eq!(
+            witness.validate(),
+            Err(SccpReplayAccumulatorError::NonCanonicalWitness)
+        );
+    }
+
+    #[test]
+    fn exact_non_membership_rejects_occupied_and_wrong_paths() {
+        let boundary = SccpReplayBoundaryV1::SoraOutboundLock;
+        let domain = domain(boundary);
+        let record = record(boundary);
+        let mut forest = SccpReplayForestV1::default();
+        forest
+            .verify_non_membership(&domain, record.replay_id, &empty_witness())
+            .expect("empty forest proves exact non-membership");
+        let delta = forest
+            .occupy(&domain, &record, &empty_witness())
+            .expect("record occupies its leaf");
+        let occupied = SccpSparseMerkleWitnessV1 {
+            expected_shard_root: delta.new_root,
+            prior_record_digest: delta.record_digest,
+            ..empty_witness()
+        };
+        assert_eq!(
+            forest.verify_non_membership(&domain, record.replay_id, &occupied),
+            Err(SccpReplayAccumulatorError::InvalidPath)
+        );
+    }
+
+    #[test]
+    fn generic_key_digest_verifier_accepts_the_complete_key_space() {
+        let forest = SccpReplayForestV1::default();
+        forest
+            .verify_key_digest([0; 32], [0; 32], &empty_witness())
+            .expect("the all-zero derived key is not a sentinel");
+
+        let mut wrong_digest = empty_witness();
+        wrong_digest.prior_record_digest = [0x55; 32];
+        assert_eq!(
+            forest.verify_key_digest([0; 32], [0; 32], &wrong_digest),
+            Err(SccpReplayAccumulatorError::InvalidPath)
+        );
+    }
+
+    #[test]
     fn domain_and_record_changes_are_separated() {
         let boundary = SccpReplayBoundaryV1::SoraOutboundLock;
         let base_domain = domain(boundary);
@@ -818,10 +1004,24 @@ mod tests {
         );
 
         let mut other_record = base_record;
-        other_record.amount_be[31] += 1;
+        other_record.amount += 1;
         assert_ne!(
             record_hash,
             sccp_replay_record_digest_v1(&other_record).expect("valid changed record")
+        );
+
+        let mut invalid_domain = base_domain;
+        invalid_domain.target_network = SccpNetworkV1::SoraTaira;
+        assert_eq!(
+            sccp_replay_domain_hash_v1(&invalid_domain),
+            Err(SccpReplayAccumulatorError::InvalidDomain)
+        );
+
+        let mut invalid_record = record(boundary);
+        invalid_record.auxiliary_identity_sha256 = [0; 32];
+        assert_eq!(
+            sccp_replay_record_digest_v1(&invalid_record),
+            Err(SccpReplayAccumulatorError::InvalidRecord)
         );
     }
 
@@ -835,6 +1035,15 @@ mod tests {
         };
         assert_eq!(
             malformed.validate(),
+            Err(SccpReplayAccumulatorError::InvalidForest)
+        );
+        let impossible_shard_count = SccpReplayForestV1 {
+            nonempty_shard_roots: BTreeMap::from([(3, [0x88; 32]), (4, [0x99; 32])]),
+            leaf_count: 1,
+            update_sequence: 1,
+        };
+        assert_eq!(
+            impossible_shard_count.validate(),
             Err(SccpReplayAccumulatorError::InvalidForest)
         );
 

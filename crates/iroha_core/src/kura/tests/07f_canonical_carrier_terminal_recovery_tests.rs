@@ -154,6 +154,9 @@ fn canonical_terminal_payload_for_test(
             Level::INFO,
             format!("canonical terminal carrier lane {salt}"),
         )])
+        .with_admission_intent(
+            iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
+        )
         .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
     let entrypoint = TransactionEntrypoint::External(transaction);
 

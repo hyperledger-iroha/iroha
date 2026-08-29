@@ -607,7 +607,7 @@ fn store_genesis_and_build_merge_carrier(
     (carrier, entry)
 }
 #[test]
-fn pending_certified_merge_sidecar_is_scoped_to_exact_carrier_round() {
+fn pending_certified_merge_sidecar_is_scoped_to_carrier_lineage() {
     #[cfg(unix)]
     {
         use std::os::unix::fs::symlink;
@@ -785,7 +785,7 @@ fn pending_certified_merge_sidecar_is_scoped_to_exact_carrier_round() {
     for (height, parent, view, drift) in [
         (8, carrier_parent, 3, "height"),
         (7, wrong_parent, 3, "parent"),
-        (7, carrier_parent, 4, "view"),
+        (7, carrier_parent, 2, "future view"),
     ] {
         kura.persist_pending_certified_merge_entry(&entry)
             .expect("persist exact-round pending merge fixture");
@@ -804,16 +804,16 @@ fn pending_certified_merge_sidecar_is_scoped_to_exact_carrier_round() {
     }
     let entry_hash = kura
         .persist_pending_certified_merge_entry(&entry)
-        .expect("persist exact pending merge sidecar");
+        .expect("persist historical pending merge sidecar");
     assert_eq!(
-        kura.prune_pending_certified_merge_entries_not_bound_to(7, carrier_parent, 3)
-            .expect("retain exact pending merge fixture"),
+        kura.prune_pending_certified_merge_entries_not_bound_to(7, carrier_parent, 4)
+            .expect("retain same-parent historical pending merge fixture"),
         0
     );
     let (selected_hash, selected) = kura
         .select_pending_certified_merge_entry()
         .expect("pending merge store remains readable")
-        .expect("exact round retains the sidecar");
+        .expect("same-parent successor view retains the historical sidecar");
     assert_eq!(selected_hash, entry_hash);
     assert_eq!(selected, entry);
 }
@@ -1162,7 +1162,7 @@ fn bounded_pending_merge_hash_scan_filters_orders_and_reports_overflow() {
     );
 }
 #[test]
-fn late_stale_pending_merge_sidecar_does_not_evict_current_round() {
+fn historical_pending_merge_sidecar_survives_view_rollover_until_finalization() {
     let kura = Kura::blank_kura_for_testing();
     let carrier_parent =
         HashOf::from_untyped_unchecked(Hash::new(b"current pending merge carrier parent"));
@@ -1218,13 +1218,33 @@ fn late_stale_pending_merge_sidecar_does_not_evict_current_round() {
     );
     assert_eq!(
         kura.prune_pending_certified_merge_entries_not_bound_to(9, carrier_parent, 4)
-            .expect("explicitly prune outside the current carrier round"),
-        1
+            .expect("retain the same-parent historical carrier lineage"),
+        0
     );
     let pending = kura
         .pending_certified_merge_entries()
-        .expect("pending merge store remains readable after pruning");
-    assert_eq!(pending, vec![(current_hash, current)]);
+        .expect("pending merge store remains readable after view rollover");
+    assert_eq!(pending.len(), 2);
+    assert!(
+        pending
+            .iter()
+            .any(|(hash, entry)| *hash == current_hash && entry == &current)
+    );
+    assert!(
+        pending
+            .iter()
+            .any(|(hash, entry)| *hash == stale_hash && entry == &stale)
+    );
+    assert_eq!(
+        kura.prune_finalized_pending_certified_merge_entries(9)
+            .expect("retire the finalized carrier lineage"),
+        2
+    );
+    assert!(
+        kura.pending_certified_merge_entries()
+            .expect("read pending merge store after finalization")
+            .is_empty()
+    );
 }
 #[test]
 fn bounded_pending_merge_selection_skips_committed_prefix_without_underfill() {
@@ -1255,13 +1275,17 @@ fn bounded_pending_merge_selection_skips_committed_prefix_without_underfill() {
     );
 }
 #[test]
-fn locked_and_finalized_carrier_cleanup_preserves_only_authorized_sidecars() {
+fn locked_and_finalized_carrier_cleanup_preserves_historical_lineage() {
     let kura = Kura::blank_kura_for_testing();
     let parent = HashOf::from_untyped_unchecked(Hash::new(b"cleanup carrier parent"));
     let mut locked = sample_merge_entry(1);
     locked.merge_qc.carrier_height = 9;
     locked.merge_qc.carrier_parent_hash = parent;
     locked.merge_qc.view = 2;
+    let mut historical = sample_merge_entry(4);
+    historical.merge_qc.carrier_height = 9;
+    historical.merge_qc.carrier_parent_hash = parent;
+    historical.merge_qc.view = 1;
     let mut losing = sample_merge_entry(2);
     losing.merge_qc.carrier_height = 9;
     losing.merge_qc.carrier_parent_hash = parent;
@@ -1271,26 +1295,31 @@ fn locked_and_finalized_carrier_cleanup_preserves_only_authorized_sidecars() {
     future.merge_qc.carrier_parent_hash =
         HashOf::from_untyped_unchecked(Hash::new(b"future cleanup parent"));
     future.merge_qc.view = 0;
-    for entry in [&locked, &losing, &future] {
+    let mut wrong_parent = sample_merge_entry(5);
+    wrong_parent.merge_qc.carrier_height = 9;
+    wrong_parent.merge_qc.carrier_parent_hash =
+        HashOf::from_untyped_unchecked(Hash::new(b"wrong cleanup parent"));
+    wrong_parent.merge_qc.view = 1;
+    for entry in [&locked, &historical, &losing, &future, &wrong_parent] {
         kura.persist_pending_certified_merge_entry(entry)
             .expect("persist cleanup fixture");
     }
-    let reference = CertifiedMergeLedgerReference::new(&locked);
     assert_eq!(
-        kura.retain_pending_certified_merge_entry_for_locked_carrier(9, Some(&reference))
-            .expect("retain exact locked sidecar"),
-        1
+        kura.retain_pending_certified_merge_entry_for_locked_carrier(9, Some(parent), 2)
+            .expect("retain locked carrier history"),
+        2
     );
     let pending = kura
         .pending_certified_merge_entries()
         .expect("read retained locked sidecars");
-    assert_eq!(pending.len(), 2);
+    assert_eq!(pending.len(), 3);
     assert!(pending.iter().any(|(_, entry)| entry == &locked));
+    assert!(pending.iter().any(|(_, entry)| entry == &historical));
     assert!(pending.iter().any(|(_, entry)| entry == &future));
     assert_eq!(
         kura.prune_finalized_pending_certified_merge_entries(9)
             .expect("retire finalized carrier sidecars"),
-        1
+        2
     );
     assert_eq!(
         kura.pending_certified_merge_entries()

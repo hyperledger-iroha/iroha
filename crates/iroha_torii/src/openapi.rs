@@ -266,8 +266,12 @@ mod tests {
         "PRTRY:QUEUE_LATENCY",
         "PRTRY:QUEUE_RATE",
     ];
-    const TRANSACTION_SUBMISSION_UNAVAILABLE_REJECT_CODES: &[&str] =
-        &["transaction_admission_worker_failed", "route_unavailable"];
+    const TRANSACTION_SUBMISSION_UNAVAILABLE_REJECT_CODES: &[&str] = &[
+        "transaction_admission_worker_failed",
+        "route_unavailable",
+        "PRTRY:QUEUE_PLAN_JOURNAL_UNAVAILABLE",
+        "PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN",
+    ];
     const OFFLINE_COMMAND_FORBIDDEN_REJECT_CODES: &[&str] = &[
         "offline_auth_header_unsupported",
         "PRTRY:QUEUE_GOVERNANCE_REJECTED",
@@ -2303,6 +2307,134 @@ mod tests {
             12
         );
         assert_eq!(protocols["items"].as_bool(), Some(false));
+        let row_properties = schemas["PrivacyExact12CapabilityRowV1"]["properties"]
+            .as_object()
+            .expect("Exact12 row properties");
+        assert_eq!(
+            row_properties
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                "activation",
+                "compiled_profile",
+                "execution_mode",
+                "operation_schema",
+                "privacy_feature_mask",
+                "protocol_id",
+                "readiness",
+            ])
+        );
+        let readiness_variants = schemas["PrivacyCapabilityReadinessV1"]["oneOf"]
+            .as_array()
+            .expect("Exact12 readiness variants");
+        assert_eq!(
+            readiness_variants
+                .iter()
+                .map(|variant| {
+                    variant["properties"]["readiness"]["const"]
+                        .as_str()
+                        .expect("Exact12 readiness tag")
+                })
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from(["production-qualified", "unavailable"])
+        );
+        let activation_properties = schemas["PrivacyProtocolActivationRecordV1"]["properties"]
+            .as_object()
+            .expect("privacy activation properties");
+        assert!(!activation_properties.contains_key("production_qualification"));
+        assert!(!activation_properties.contains_key("assurance"));
+        for retired in [
+            "PrivacyAssuranceV1",
+            "PrivacyCapabilityActivationStateV1",
+            "PrivacyCapabilityLimitationV1",
+        ] {
+            assert!(
+                !schemas.contains_key(retired),
+                "retired pre-release privacy schema remains: {retired}"
+            );
+        }
+        let unavailable_variants = schemas["PrivacyCapabilityUnavailableReasonV1"]["oneOf"]
+            .as_array()
+            .expect("Exact12 unavailable-reason variants");
+        assert_eq!(
+            unavailable_variants
+                .iter()
+                .map(|variant| {
+                    variant["properties"]["reason"]["const"]
+                        .as_str()
+                        .expect("Exact12 unavailable-reason tag")
+                })
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                "compiled-profile",
+                "invalid-production-qualification",
+                "missing-production-qualification",
+                "not-registered",
+                "proposed",
+                "retired",
+                "suspended",
+            ])
+        );
+        let qualification = schemas["PrivacyExact12QualificationRecordV1"]["properties"]
+            .as_object()
+            .expect("production qualification properties");
+        assert_eq!(
+            qualification
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from(["deployment_qualification", "release_manifest",])
+        );
+        let manifest_properties = schemas["PrivacyExact12CapabilityManifestV1"]["properties"]
+            .as_object()
+            .expect("Exact12 manifest properties");
+        assert!(manifest_properties.contains_key("qualification"));
+        assert!(!schemas.contains_key("PrivacyProtocolProductionQualificationV1"));
+        let security_claim = schemas["PrivacySecurityClaimV1"]["properties"]
+            .as_object()
+            .expect("security claim properties");
+        assert_eq!(
+            security_claim
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                "achieved_security_bits",
+                "audit_bundle_digest",
+                "catalog_commitment",
+                "parameter_digest",
+                "protocol_id",
+                "reduction_digest",
+                "security_model",
+                "target_security_bits",
+                "verifier_digest",
+            ])
+        );
+        assert_eq!(
+            schemas["PrivacySecurityModelV1"]["properties"]["security_model"]["enum"]
+                .as_array()
+                .expect("closed privacy security models")
+                .iter()
+                .map(|value| value.as_str().expect("security-model label"))
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from(["classical-rom", "pq-qrom"])
+        );
+        let catalog_commitment = schemas["PrivacyExact12CatalogCommitmentV1"]["const"]
+            .as_array()
+            .expect("pinned Exact12 catalog commitment")
+            .iter()
+            .map(|byte| {
+                u8::try_from(byte.as_u64().expect("catalog commitment byte"))
+                    .expect("catalog commitment byte fits u8")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            catalog_commitment,
+            iroha_data_model::privacy::PrivacyExact12CatalogCommitmentV1::canonical()
+                .digest()
+                .to_le_bytes()
+        );
         let details = openapi_operation(&document, "/v1/pipeline/transactions/details", "post");
         assert_eq!(
             operation_request_schema_ref(details, "transaction details"),
@@ -5501,6 +5633,84 @@ mod tests {
                 && conflict_description.contains("already present"),
             "a duplicate response must be documented as existing admission state"
         );
+    }
+    #[test]
+    fn transaction_submission_503s_document_exact_outcome_unknown_identity() {
+        let document = canonical_document();
+        for path in [
+            uri::TRANSACTION,
+            uri::TRANSACTION_ENTRYPOINT,
+            uri::KAGEMUSHA_LIFECYCLE_TRANSACTION,
+        ] {
+            let operation = openapi_operation(&document, path, "post");
+            assert_eq!(
+                operation_response_schema_ref(operation, "503", path),
+                "#/components/schemas/ErrorEnvelope"
+            );
+            let unavailable = operation
+                .get("responses")
+                .and_then(Value::as_object)
+                .and_then(|responses| responses.get("503"))
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("POST {path} HTTP 503 response"));
+            let description = unavailable
+                .get("description")
+                .and_then(Value::as_str)
+                .unwrap_or_else(|| panic!("POST {path} HTTP 503 description"));
+            for required_text in [
+                "PRTRY:QUEUE_PLAN_JOURNAL_UNAVAILABLE",
+                "PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN",
+                "ErrorEnvelope.details.entrypoint_hash",
+                "ErrorEnvelope.details.tx_hash",
+                "does not fabricate queue-pressure",
+            ] {
+                assert!(
+                    description.contains(required_text),
+                    "POST {path} HTTP 503 must document {required_text}"
+                );
+            }
+            let headers = unavailable
+                .get("headers")
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("POST {path} HTTP 503 headers"));
+            for (header_name, detail_name) in [
+                ("x-iroha-entrypoint-hash", "entrypoint_hash"),
+                ("x-iroha-signed-transaction-hash", "tx_hash"),
+            ] {
+                let header = headers
+                    .get(header_name)
+                    .and_then(Value::as_object)
+                    .unwrap_or_else(|| panic!("POST {path} HTTP 503 {header_name}"));
+                let header_description = header
+                    .get("description")
+                    .and_then(Value::as_str)
+                    .unwrap_or_else(|| panic!("POST {path} HTTP 503 {header_name} description"));
+                assert!(
+                    header_description.contains(
+                        "Present exactly once only for PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN"
+                    ) && header_description.contains(detail_name),
+                    "POST {path} HTTP 503 {header_name} must document its conditional exact body binding"
+                );
+                if path == uri::TRANSACTION_ENTRYPOINT
+                    && header_name == "x-iroha-signed-transaction-hash"
+                {
+                    assert!(
+                        header_description.contains("External or SealedReveal")
+                            && header_description.contains("inner SignedTransaction"),
+                        "POST {path} HTTP 503 signed identity must be conditional on an inner signed transaction"
+                    );
+                }
+                assert_eq!(
+                    header
+                        .get("schema")
+                        .and_then(Value::as_object)
+                        .and_then(|schema| schema.get("pattern"))
+                        .and_then(Value::as_str),
+                    Some("^[0-9a-f]{64}$"),
+                    "POST {path} HTTP 503 {header_name} exact hash syntax"
+                );
+            }
+        }
     }
     #[test]
     fn signed_transaction_reject_code_inventory_matches_runtime_metadata() {

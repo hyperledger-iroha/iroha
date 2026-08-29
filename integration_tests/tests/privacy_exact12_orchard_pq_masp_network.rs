@@ -56,7 +56,7 @@ use std::{
 };
 use tokio::time::{Instant, sleep, timeout};
 const ORCHARD_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::OrchardHalo2ActionsV1;
-const PQ_MASP_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::PqMaspStarkV0;
+const PQ_MASP_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::PqMaspStarkV1;
 const SUBMISSION_TIMEOUT: Duration = Duration::from_secs(180);
 const PROVER_TIMEOUT: Duration = Duration::from_secs(900);
 const PEER_CONVERGENCE_TIMEOUT: Duration = Duration::from_secs(180);
@@ -425,7 +425,7 @@ fn independently_resign_corrupted_proof(
         .ok_or_else(|| eyre!("canonical action omitted its privacy submission"))?;
     let mut envelope = submission.envelope.clone();
     let proof = match &mut envelope.proof {
-        PrivacyProofV1::OrchardHalo2ActionsV1(proof) | PrivacyProofV1::PqMaspStarkV0(proof) => {
+        PrivacyProofV1::OrchardHalo2ActionsV1(proof) | PrivacyProofV1::PqMaspStarkV1(proof) => {
             proof
         }
         _ => return Err(eyre!("canonical action carried a different proof variant")),

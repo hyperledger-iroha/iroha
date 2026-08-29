@@ -3356,6 +3356,205 @@ fn recovered_decision_fetch_store_retirement_cancels_ranked_request_output() {
     assert!(!output_guard.restart_required());
 }
 #[test]
+fn recovered_decision_fetch_refanout_reaches_live_peer_after_topology_ticket_cancellation() {
+    let (mut service, keys) = fixture();
+    allow_fixture_block_payload(&mut service.context);
+    let (canonical_wire, _, proposal) = proposal_body_and_payload(&service.context, &keys);
+    let (authenticated_request, _) = production_authenticated_serve_request(
+        &service.context,
+        &keys,
+        &keys[0],
+        proposal.round,
+        proposal.subject,
+        wire::GlobalPhase::Commit,
+        &[0, 1, 2],
+    );
+    let exact_request = authenticated_request.request().clone();
+    let frozen_source = service.context.roster[1].validator.clone();
+    let rotated_key = KeyPair::try_from_seed(vec![0xE7; 32], Algorithm::BlsNormal)
+        .expect("deterministic rotated archive key");
+    let rotated_peer = PeerId::new(rotated_key.public_key().clone());
+    assert!(
+        !service
+            .context
+            .roster
+            .iter()
+            .any(|entry| entry.validator == rotated_peer)
+    );
+    let key =
+        RecoveredDecisionFetchDispatchKeyV1::for_height_context_test(&service.context, 67, 0xD7);
+    let frozen_sources = service
+        .context
+        .roster
+        .iter()
+        .map(|entry| entry.validator.clone())
+        .collect();
+    let owner = RecoveredDecisionFetchRequestOwnerV1::for_test(
+        key,
+        EventTag::new(
+            service.context.height,
+            proposal.round.view,
+            Generation::new(service.context.height),
+        ),
+        frozen_sources,
+        authenticated_request,
+    );
+    let request_hash = owner.request_hash();
+    assert_eq!(request_hash, HashOf::new(&exact_request));
+
+    let (network, configured_peers) =
+        crate::IrohaNetwork::closed_for_tests_with_configured_peer_snapshot();
+    service.network = network;
+    configured_peers.replace(vec![frozen_source.clone()]);
+    let first_fanout = service
+        .recovered_decision_fetch_fanout(&owner)
+        .expect("construct the initial recovered Fetch fanout")
+        .expect("the frozen archive is initially configured");
+    assert_eq!(first_fanout.peers, vec![frozen_source.clone()]);
+    {
+        let mut pending = service
+            .lock_pending_exact_output()
+            .expect("lock the recovered Fetch exact-output corridor");
+        assert_eq!(
+            pending.enqueue(first_fanout),
+            Ok(ExactFanoutOwnership::Owned)
+        );
+    }
+
+    let topology_removed = Arc::new(AtomicBool::new(false));
+    let topology_removed_for_hook = Arc::clone(&topology_removed);
+    let old_ticket_fixture = Arc::new(Mutex::new(None));
+    let old_ticket_fixture_for_hook = Arc::clone(&old_ticket_fixture);
+    let observed_requests = Arc::new(Mutex::new(Vec::new()));
+    let observed_requests_for_hook = Arc::clone(&observed_requests);
+    let frozen_source_for_hook = frozen_source.clone();
+    let rotated_peer_for_hook = rotated_peer.clone();
+    let exact_request_for_hook = exact_request.clone();
+    let admitted_rotated_peer = Arc::new(AtomicBool::new(false));
+    let admitted_rotated_peer_for_hook = Arc::clone(&admitted_rotated_peer);
+    service.set_exact_output_admission_hook(move |post, ticket| {
+        let NetworkMessage::SumeragiBlock(envelope) = &post.data else {
+            panic!("recovered Fetch fanout must retain one Sumeragi block message")
+        };
+        let BlockMessage::V2(message) = envelope.as_message() else {
+            panic!("recovered Fetch fanout must retain one v2 message")
+        };
+        let wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request) = &message.payload
+        else {
+            panic!("recovered Fetch fanout must retain its certified request")
+        };
+        assert_eq!(request, &exact_request_for_hook);
+        observed_requests_for_hook
+            .lock()
+            .expect("record exact recovered Fetch request")
+            .push(request.clone());
+
+        if post.peer_id == frozen_source_for_hook {
+            if topology_removed_for_hook.load(Ordering::Acquire) {
+                let ticket = ticket.expect("the removed target retains its old-generation ticket");
+                assert_eq!(
+                    ticket.rank(),
+                    None,
+                    "topology reconciliation cancels the old membership rank"
+                );
+                drop(ticket);
+                return Err(NetworkActorAdmissionError::Backpressured {
+                    message: post,
+                    ticket: None,
+                    rank: 1,
+                });
+            }
+            assert!(ticket.is_none());
+            let (fixture, ticket) = NetworkActorAdmissionTicketTestFixture::for_topology(&post);
+            *old_ticket_fixture_for_hook
+                .lock()
+                .expect("retain old recovered Fetch ticket fixture") = Some(fixture);
+            return Err(NetworkActorAdmissionError::Backpressured {
+                message: post,
+                ticket: Some(ticket),
+                rank: 1,
+            });
+        }
+
+        assert_eq!(post.peer_id, rotated_peer_for_hook);
+        assert!(ticket.is_none());
+        admitted_rotated_peer_for_hook.store(true, Ordering::Release);
+        Ok(())
+    });
+    assert!(
+        service
+            .retry_pending_exact_output()
+            .expect("retain the initially backpressured recovered Fetch")
+    );
+    {
+        let fixture = old_ticket_fixture
+            .lock()
+            .expect("inspect old recovered Fetch ticket fixture")
+            .clone()
+            .expect("the frozen source owns one actor ticket");
+        assert_eq!(fixture.waiter_count(), 1);
+        configured_peers.replace(vec![rotated_peer.clone()]);
+        assert_eq!(
+            fixture.cancel_topology_membership(),
+            1,
+            "removing the old topology tenure cancels its exact actor waiter"
+        );
+        assert_eq!(fixture.waiter_count(), 0);
+    }
+    topology_removed.store(true, Ordering::Release);
+    assert!(
+        !service
+            .retry_pending_exact_output()
+            .expect("ticketless topology rejection releases the reconstructible occurrence")
+    );
+    assert!(
+        !service
+            .has_pending_exact_output()
+            .expect("the removed target no longer occupies exact-output capacity")
+    );
+
+    let retry_fanout = service
+        .recovered_decision_fetch_fanout(&owner)
+        .expect("recreate the exact recovered Fetch after topology rotation")
+        .expect("the live rotated archive is configured");
+    assert_eq!(retry_fanout.peers, vec![rotated_peer.clone()]);
+    {
+        let mut pending = service
+            .lock_pending_exact_output()
+            .expect("lock the recovered Fetch exact-output corridor");
+        assert_eq!(
+            pending.enqueue(retry_fanout),
+            Ok(ExactFanoutOwnership::Owned)
+        );
+    }
+    assert!(
+        !service
+            .retry_pending_exact_output()
+            .expect("the live rotated archive admits the recovered Fetch")
+    );
+    assert!(admitted_rotated_peer.load(Ordering::Acquire));
+    let observed = observed_requests
+        .lock()
+        .expect("inspect recovered Fetch request identity");
+    assert_eq!(observed.len(), 3);
+    assert!(observed.iter().all(|request| request == &exact_request));
+    drop(observed);
+
+    let mut response = wire::CertifiedBodyResponse {
+        request_hash,
+        manifest: proposal.manifest,
+        body: canonical_wire,
+        responder: rotated_peer.clone(),
+        signature: Vec::new(),
+    };
+    response.signature = Signature::new(rotated_key.private_key(), &response.signature_preimage())
+        .payload()
+        .to_vec();
+    let _ = owner
+        .authenticate_response(&service.context, response, &rotated_peer)
+        .expect("the unchanged request authority accepts the live rotated archive response");
+}
+#[test]
 fn certified_fetch_success_commit_retires_backpressured_request() {
     let (mut service, keys) = fixture();
     allow_fixture_block_payload(&mut service.context);

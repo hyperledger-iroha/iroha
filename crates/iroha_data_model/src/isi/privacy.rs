@@ -5,15 +5,15 @@
 use super::*;
 use crate::privacy::{
     BootleLanternIssuerPolicyV1, PrivacyBootleLanternIssuerPolicyDigestV1,
-    PrivacyConsensusLimitsV1, PrivacyOrchardPoolBootstrapV1, PrivacyPgcAccountBootstrapV1,
-    PrivacyPgcBootstrapProofBytesV1, PrivacyProofEnvelopeV1, PrivacyProofManagedPoolBootstrapV1,
-    PrivacyProtocolActivationLimitsV1, PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1,
-    PrivacyProtocolLifecycleV1, PrivacyRootPublicationV1, PrivacyVegaIssuerRecordDigestV1,
-    PrivacyVegaIssuerRecordV1, PrivacyZkAcePolicyRecordDigestV1, PrivacyZkAcePolicyRecordV1,
-    PrivacyZkAmsRegistryBootstrapV1, PrivacyZkX509CertificatePolicyRecordDigestV1,
-    PrivacyZkX509CertificatePolicyRecordV1, PrivacyZkX509CrlRecordDigestV1,
-    PrivacyZkX509CrlRecordV1, PrivacyZkX509TrustAnchorRecordDigestV1,
-    PrivacyZkX509TrustAnchorRecordV1,
+    PrivacyConsensusLimitsV1, PrivacyExact12QualificationRecordV1, PrivacyOrchardPoolBootstrapV1,
+    PrivacyPgcAccountBootstrapV1, PrivacyPgcBootstrapProofBytesV1, PrivacyProofEnvelopeV1,
+    PrivacyProofManagedPoolBootstrapV1, PrivacyProtocolActivationLimitsV1,
+    PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1,
+    PrivacyRootPublicationV1, PrivacyVegaIssuerRecordDigestV1, PrivacyVegaIssuerRecordV1,
+    PrivacyZkAcePolicyRecordDigestV1, PrivacyZkAcePolicyRecordV1, PrivacyZkAmsRegistryBootstrapV1,
+    PrivacyZkX509CertificatePolicyRecordDigestV1, PrivacyZkX509CertificatePolicyRecordV1,
+    PrivacyZkX509CrlRecordDigestV1, PrivacyZkX509CrlRecordV1,
+    PrivacyZkX509TrustAnchorRecordDigestV1, PrivacyZkX509TrustAnchorRecordV1,
 };
 #[cfg(feature = "json")]
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
@@ -33,6 +33,24 @@ impl RegisterPrivacyProtocolActivationV1 {
     #[must_use]
     pub fn new(activation: PrivacyProtocolActivationRecordV1) -> Self {
         Self { activation }
+    }
+}
+isi! {
+    /// Register the one immutable Exact12 release and deployment qualification.
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+    pub struct RegisterPrivacyExact12QualificationV1 {
+        /// Full portable release and target-network deployment evidence.
+        pub qualification: PrivacyExact12QualificationRecordV1,
+    }
+}
+impl crate::seal::Instruction for RegisterPrivacyExact12QualificationV1 {}
+impl RegisterPrivacyExact12QualificationV1 {
+    /// Canonical first-release Norito instruction identifier.
+    pub const WIRE_ID: &'static str = "iroha.privacy.register_exact12_qualification.v1";
+    /// Construct the singleton qualification-registration instruction.
+    #[must_use]
+    pub fn new(qualification: PrivacyExact12QualificationRecordV1) -> Self {
+        Self { qualification }
     }
 }
 isi! {
@@ -692,6 +710,9 @@ macro_rules! impl_privacy_decode_from_slice {
 impl_privacy_decode_from_slice!(RegisterPrivacyProtocolActivationV1 {
     activation: PrivacyProtocolActivationRecordV1,
 });
+impl_privacy_decode_from_slice!(RegisterPrivacyExact12QualificationV1 {
+    qualification: PrivacyExact12QualificationRecordV1,
+});
 impl_privacy_decode_from_slice!(SchedulePrivacyConsensusPolicyTighteningV1 {
     effective_at_height: u64,
     next_limits: PrivacyConsensusLimitsV1,
@@ -806,22 +827,22 @@ mod tests {
             BootleLanternIssuerPolicyLifecycleV1, BootleLanternIssuerPublicMatrixV1,
             BootleLanternPolynomialV1, IROHA_JINDO_LATTICE_COMMITMENT_BYTES_V1,
             IrohaJindoPolynomialCommitmentStatementV1, JindoActivationLimitsV1,
-            PrivacyActiveLifecycleV1, PrivacyAssuranceV1, PrivacyBootleLanternIssuerPolicyDigestV1,
-            PrivacyCommitmentV1, PrivacyConsensusLimitsV1, PrivacyEngineManifestDigestV1,
-            PrivacyFcmpOutputTupleV1, PrivacyFcmpPoolBootstrapV1, PrivacyIssuerIdV1,
-            PrivacyJindoFieldElementV1, PrivacyJindoLatticeCommitmentV1, PrivacyNamespaceScopeV1,
-            PrivacyNamespaceV1, PrivacyOrchardPoolBootstrapV1, PrivacyP256CiphertextV1,
-            PrivacyP256PointV1, PrivacyParameterDigestV1, PrivacyParameterIdV1,
-            PrivacyPgcAccountBootstrapV1, PrivacyPgcAccountV1, PrivacyPolicyDigestV1,
-            PrivacyPolicyIdV1, PrivacyPoolIdV1, PrivacyPoolNamespaceV1, PrivacyProofBytesV1,
-            PrivacyProofManagedPoolBootstrapV1, PrivacyProofV1, PrivacyProposedLifecycleV1,
-            PrivacyProtocolActivationLimitsV1, PrivacyRootRoleV1, PrivacyRootV1,
-            PrivacyStatementContextV1, PrivacyStatementSchemaDigestV1, PrivacyStatementV1,
-            PrivacyTransactionIntentDigestV1, PrivacyVegaIssuerRecordLifecycleV1,
-            PrivacyVegaMdlDigestAlgorithmV1, PrivacyVegaMdlNamespaceV1,
-            PrivacyVegaMdlSignatureAlgorithmV1, PrivacyVerifierDigestV1, PrivacyX509CrlDerDigestV1,
-            PrivacyX509CrlIssuerSpkiDigestV1, PrivacyX509ExtendedKeyUsageV1,
-            PrivacyX509KeyUsageRequirementV1, PrivacyX509KeyUsageV1, PrivacyX509TrustStoreDigestV1,
+            PrivacyActiveLifecycleV1, PrivacyBootleLanternIssuerPolicyDigestV1,
+            PrivacyConsensusLimitsV1, PrivacyEngineManifestDigestV1, PrivacyFcmpOutputTupleV1,
+            PrivacyFcmpPoolBootstrapV1, PrivacyIssuerIdV1, PrivacyJindoFieldElementV1,
+            PrivacyJindoLatticeCommitmentV1, PrivacyNamespaceScopeV1, PrivacyNamespaceV1,
+            PrivacyOrchardPoolBootstrapV1, PrivacyP256CiphertextV1, PrivacyP256PointV1,
+            PrivacyParameterDigestV1, PrivacyParameterIdV1, PrivacyPgcAccountBootstrapV1,
+            PrivacyPgcAccountV1, PrivacyPolicyDigestV1, PrivacyPolicyIdV1, PrivacyPoolIdV1,
+            PrivacyPoolNamespaceV1, PrivacyProofBytesV1, PrivacyProofManagedPoolBootstrapV1,
+            PrivacyProofV1, PrivacyProposedLifecycleV1, PrivacyProtocolActivationLimitsV1,
+            PrivacyRootRoleV1, PrivacyRootV1, PrivacyStatementContextV1,
+            PrivacyStatementSchemaDigestV1, PrivacyStatementV1, PrivacyTransactionIntentDigestV1,
+            PrivacyVegaIssuerRecordLifecycleV1, PrivacyVegaMdlDigestAlgorithmV1,
+            PrivacyVegaMdlNamespaceV1, PrivacyVegaMdlSignatureAlgorithmV1, PrivacyVerifierDigestV1,
+            PrivacyX509CrlDerDigestV1, PrivacyX509CrlIssuerSpkiDigestV1,
+            PrivacyX509ExtendedKeyUsageV1, PrivacyX509KeyUsageRequirementV1, PrivacyX509KeyUsageV1,
+            PrivacyX509TrustStoreDigestV1, PrivacyZkAceIdentityCommitmentV1,
             PrivacyZkAcePolicyLifecycleV1, PrivacyZkAmsRegistryIdV1,
             PrivacyZkX509RecordLifecycleV1,
         },
@@ -829,8 +850,9 @@ mod tests {
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use norito::core::DecodeFromSlice;
     use std::str::FromStr as _;
-    const PRIVACY_ISI_WIRE_IDS_V1: [&str; 28] = [
+    const PRIVACY_ISI_WIRE_IDS_V1: [&str; 29] = [
         RegisterPrivacyProtocolActivationV1::WIRE_ID,
+        RegisterPrivacyExact12QualificationV1::WIRE_ID,
         SchedulePrivacyConsensusPolicyTighteningV1::WIRE_ID,
         SchedulePrivacyProtocolLimitsTighteningV1::WIRE_ID,
         TransitionPrivacyProtocolLifecycleV1::WIRE_ID,
@@ -897,7 +919,7 @@ mod tests {
         })
     }
     fn activation() -> PrivacyProtocolActivationRecordV1 {
-        let protocol_id = PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0;
+        let protocol_id = PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1;
         PrivacyProtocolActivationRecordV1 {
             protocol_id,
             proof_system_id: protocol_id.expected_proof_system(),
@@ -911,13 +933,12 @@ mod tests {
                 proposed_at_height: 100,
                 activate_at_height: 400,
             }),
-            protocol_limits: PrivacyProtocolActivationLimitsV1::IrohaJindoPolynomialCommitmentV0(
+            protocol_limits: PrivacyProtocolActivationLimitsV1::IrohaJindoPolynomialCommitmentV1(
                 JindoActivationLimitsV1 {
                     max_polynomial_count: 4,
                 },
             ),
             pending_protocol_limits_tightening: None,
-            assurance: PrivacyAssuranceV1::Experimental,
         }
     }
     fn envelope() -> PrivacyProofEnvelopeV1 {
@@ -950,7 +971,7 @@ mod tests {
                 PrivacyJindoFieldElementV1::new(encoding)
             })
             .collect();
-        let statement = PrivacyStatementV1::IrohaJindoPolynomialCommitmentV0(
+        let statement = PrivacyStatementV1::IrohaJindoPolynomialCommitmentV1(
             IrohaJindoPolynomialCommitmentStatementV1 {
                 context,
                 polynomial_commitments,
@@ -960,6 +981,8 @@ mod tests {
         );
         let statement_digest = statement.digest().expect("fixture statement encodes");
         PrivacyProofEnvelopeV1 {
+            wire_magic: Default::default(),
+            catalog_commitment: Default::default(),
             protocol_id: activation.protocol_id,
             proof_system_id: activation.proof_system_id,
             engine_id: activation.engine_id,
@@ -970,7 +993,7 @@ mod tests {
             engine_manifest_digest: activation.engine_manifest_digest,
             statement_digest,
             statement,
-            proof: PrivacyProofV1::IrohaJindoPolynomialCommitmentV0(PrivacyProofBytesV1::new(
+            proof: PrivacyProofV1::IrohaJindoPolynomialCommitmentV1(PrivacyProofBytesV1::new(
                 vec![9],
             )),
         }
@@ -1036,7 +1059,8 @@ mod tests {
         source_allowlist.sort_unstable();
         PrivacyZkAcePolicyRecordV1::new(
             PrivacyPolicyIdV1::new(digest(43)),
-            PrivacyCommitmentV1::new(digest(identity_seed)),
+            PrivacyZkAceIdentityCommitmentV1::new([u64::from(identity_seed) + 1; 6])
+                .expect("small fixture words are canonical Goldilocks elements"),
             PrivacyPolicyDigestV1::new(digest(44)),
             epoch,
             AssetDefinitionId::derive_from_components(
@@ -1272,7 +1296,7 @@ mod tests {
             $check!(SchedulePrivacyProtocolLimitsTighteningV1::WIRE_ID, {
                 let activation = activation();
                 let mut next_limits = activation.protocol_limits;
-                let PrivacyProtocolActivationLimitsV1::IrohaJindoPolynomialCommitmentV0(
+                let PrivacyProtocolActivationLimitsV1::IrohaJindoPolynomialCommitmentV1(
                     ref mut limits,
                 ) = next_limits
                 else {
@@ -1288,7 +1312,7 @@ mod tests {
             $check!(
                 TransitionPrivacyProtocolLifecycleV1::WIRE_ID,
                 TransitionPrivacyProtocolLifecycleV1::new(
-                    PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0,
+                    PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1,
                     PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
                         proposed_at_height: 100,
                         activated_at_height: 400,
@@ -1530,7 +1554,9 @@ mod tests {
             }};
         }
         for_each_privacy_isi_fixture!(check);
-        assert_eq!(fixture_count, PRIVACY_ISI_WIRE_IDS_V1.len());
+        // The full qualification record has its canonical roundtrip coverage in
+        // `privacy::tests::release_manifest`; do not duplicate that large fixture here.
+        assert_eq!(fixture_count + 1, PRIVACY_ISI_WIRE_IDS_V1.len());
     }
     #[test]
     fn privacy_isi_decoders_reject_trailing_and_truncated_payloads() {
@@ -1542,7 +1568,9 @@ mod tests {
             }};
         }
         for_each_privacy_isi_fixture!(check);
-        assert_eq!(fixture_count, PRIVACY_ISI_WIRE_IDS_V1.len());
+        // The full qualification record's malformed-wire coverage lives with
+        // the release/deployment manifest fixture.
+        assert_eq!(fixture_count + 1, PRIVACY_ISI_WIRE_IDS_V1.len());
         assert!(
             BootstrapPrivacyPgcAccountsV1::decode_from_slice(&pgc_bootstrap().encode()).is_err(),
             "the unreleased proofless bootstrap layout has no legacy decoder"
@@ -1591,12 +1619,12 @@ mod tests {
     }
     #[test]
     fn stable_wire_ids_have_no_retired_compatibility_names() {
-        assert_eq!(PRIVACY_ISI_WIRE_IDS_V1.len(), 28);
+        assert_eq!(PRIVACY_ISI_WIRE_IDS_V1.len(), 29);
         let mut sorted_wire_ids = PRIVACY_ISI_WIRE_IDS_V1;
         sorted_wire_ids.sort_unstable();
         assert!(
             sorted_wire_ids.windows(2).all(|pair| pair[0] != pair[1]),
-            "all 28 canonical first-release privacy ISIs must have unique wire IDs"
+            "all 29 canonical first-release privacy ISIs must have unique wire IDs"
         );
         for wire_id in PRIVACY_ISI_WIRE_IDS_V1 {
             assert!(wire_id.starts_with("iroha.privacy."));

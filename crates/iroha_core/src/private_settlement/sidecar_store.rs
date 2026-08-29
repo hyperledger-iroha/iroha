@@ -5,6 +5,8 @@
 //! to the exact four-validator committee and to governed auditors. No plaintext
 //! audit material is accepted or persisted by this module.
 
+#[cfg(test)]
+use super::state::private_settlement_approvals_digest_v1;
 use super::{
     protocol::{
         private_settlement_phase_body_v1, private_settlement_reserved_prepared_bundle_digest_v1,
@@ -13,7 +15,7 @@ use super::{
     },
     state::{
         PrivateSettlementDurableAvailabilityV1, PrivateSettlementStateErrorV1,
-        ValidatedPrivateSettlementLegV1, private_settlement_approvals_digest_v1,
+        ValidatedPrivateSettlementLegV1,
     },
 };
 
@@ -1240,11 +1242,12 @@ impl PrivateSettlementFileSidecarStoreV1 {
         Ok(PrivateSettlementSidecarStoreOutcomeV1::Stored)
     }
 
-    /// Re-open an immutable, fsync-committed sidecar and mint Prepare evidence.
+    /// Test-only direct access to fsync-backed Prepare evidence.
     ///
     /// This capability is crate-private: callers cannot manufacture it from a
     /// digest, byte count, or claimed filesystem write.  The full persisted
     /// immutable record is decoded and validated before evidence is returned.
+    #[cfg(test)]
     pub(crate) fn durable_availability_evidence(
         &self,
         digest: Hash,
@@ -1774,10 +1777,11 @@ impl PrivateSettlementFileSidecarStoreV1 {
         })
     }
 
-    /// Persist the exact canonical auditor threshold before any Prepare work.
+    /// Test-only bulk persistence of the exact canonical auditor threshold.
     ///
     /// The approvals are signature-verified against the stored policy and
     /// immutable sidecar. Exact retries are idempotent; substitutions fail.
+    #[cfg(test)]
     pub(crate) fn record_audited(
         &self,
         digest: Hash,
@@ -2371,30 +2375,6 @@ impl PrivateSettlementFileSidecarStoreV1 {
         durable.validate()?;
         self.persist_lifecycle_record_v1(&mut state, digest, &metadata, &durable)?;
         Ok(true)
-    }
-
-    /// Durably record marker-free authoritative height expiry.
-    ///
-    /// This crate-private compatibility entry point deliberately rejects every
-    /// other lifecycle, including abort. Production reconciliation supplies an
-    /// exact global abort marker through [`Self::reconcile_terminal_state`].
-    /// Repeating expiry at the same or a later height is idempotent.
-    ///
-    /// # Errors
-    ///
-    /// Returns unavailable, invalid-transition, corruption, or backend errors.
-    pub(crate) fn transition(
-        &self,
-        digest: Hash,
-        next: PrivateSettlementSidecarLifecycleV1,
-        authoritative_height: u64,
-    ) -> Result<(), PrivateSettlementSidecarStoreErrorV1> {
-        if next != PrivateSettlementSidecarLifecycleV1::Expired
-            || !self.expire_at_authoritative_height(digest, authoritative_height)?
-        {
-            return Err(PrivateSettlementSidecarStoreErrorV1::InvalidTransition);
-        }
-        Ok(())
     }
 
     fn persist_lifecycle_record_v1(
@@ -4618,10 +4598,6 @@ pub(crate) mod tests {
             store.fetch_for_auditor(digest, &unknown_auditor, 12),
             Err(PrivateSettlementSidecarStoreErrorV1::Unavailable)
         );
-        assert_eq!(
-            store.transition(digest, PrivateSettlementSidecarLifecycleV1::Prepared, 12,),
-            Err(PrivateSettlementSidecarStoreErrorV1::InvalidTransition)
-        );
         let approval = audit_approval(&store, &fixture, digest, 12);
         store
             .record_audited(digest, vec![approval.clone()], 12)
@@ -4662,10 +4638,6 @@ pub(crate) mod tests {
         let committee_debug = format!("{committee:?}");
         assert!(!committee_debug.contains("proof"));
         assert!(!committee_debug.contains(&hex::encode(&committee.proof)));
-        assert_eq!(
-            reopened.transition(digest, PrivateSettlementSidecarLifecycleV1::Finalized, 21,),
-            Err(PrivateSettlementSidecarStoreErrorV1::InvalidTransition)
-        );
         let abort = abort_receipt(
             &fixture,
             21,
@@ -4975,10 +4947,6 @@ pub(crate) mod tests {
                 .expect("finalized view")
                 .lifecycle,
             PrivateSettlementSidecarLifecycleV1::Finalized
-        );
-        assert_eq!(
-            store.transition(digest, PrivateSettlementSidecarLifecycleV1::Aborted, 16,),
-            Err(PrivateSettlementSidecarStoreErrorV1::InvalidTransition)
         );
         drop(store);
 
@@ -5682,20 +5650,27 @@ pub(crate) mod tests {
             Err(PrivateSettlementSidecarStoreErrorV1::Conflict)
         );
         assert_eq!(
-            store.transition(
-                digest,
-                PrivateSettlementSidecarLifecycleV1::Expired,
-                fixture.sidecar.manifest.expiry_height,
-            ),
-            Err(PrivateSettlementSidecarStoreErrorV1::InvalidTransition)
+            store
+                .reconcile_terminal_state(
+                    digest,
+                    None,
+                    None,
+                    fixture.sidecar.manifest.expiry_height,
+                )
+                .expect("at-expiry reconciliation"),
+            PrivateSettlementReconciliationOutcomeV1::Pending
         );
-        store
-            .transition(
-                digest,
-                PrivateSettlementSidecarLifecycleV1::Expired,
-                fixture.sidecar.manifest.expiry_height + 1,
-            )
-            .expect("post-expiry transition");
+        assert_eq!(
+            store
+                .reconcile_terminal_state(
+                    digest,
+                    None,
+                    None,
+                    fixture.sidecar.manifest.expiry_height + 1,
+                )
+                .expect("post-expiry reconciliation"),
+            PrivateSettlementReconciliationOutcomeV1::Expired
+        );
         let sidecar_debug = format!("{:?}", fixture.sidecar);
         assert!(!sidecar_debug.contains("proof"));
         assert!(!sidecar_debug.contains("ciphertext"));

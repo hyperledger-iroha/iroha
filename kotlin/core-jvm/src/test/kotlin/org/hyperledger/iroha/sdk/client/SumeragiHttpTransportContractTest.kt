@@ -71,12 +71,13 @@ class SumeragiHttpTransportContractTest {
     }
 
     @Test
-    fun `status and diagnostics reject missing parameterized or ambiguous JSON content types`() {
+    fun `status and diagnostics accept parameters and reject malformed or ambiguous JSON content types`() {
         val payload = statusJson().toByteArray(StandardCharsets.UTF_8)
+        val diagnosticsPayload = diagnosticsJson().toByteArray(StandardCharsets.UTF_8)
         assertFails("status endpoint must reject a diagnostics-shaped payload") {
             transport(
                 FixedResponseExecutor(
-                    jsonResponse(diagnosticsJson().toByteArray(StandardCharsets.UTF_8)),
+                    jsonResponse(diagnosticsPayload),
                 ),
             ).getSumeragiStatus().join()
         }
@@ -85,19 +86,63 @@ class SumeragiHttpTransportContractTest {
                 .getSumeragiDiagnostics()
                 .join()
         }
-        val invalidHeaders = listOf(
-            emptyMap(),
-            mapOf("Content-Type" to listOf("application/json; charset=utf-8")),
-            mapOf("Content-Type" to listOf("application/json", "application/json")),
+        val validHeaders = listOf(
+            mapOf("Content-Type" to listOf("Application/JSON; charset=utf-8")),
+            mapOf(
+                "content-type" to
+                    listOf("application/json; charset=\"UTF-8\"; profile=exact"),
+            ),
         )
-        invalidHeaders.forEach { headers ->
-            val response = TransportResponse.builder()
+        validHeaders.forEach { headers ->
+            val statusResponse = TransportResponse.builder()
                 .setStatusCode(200)
                 .setBody(payload)
                 .setHeaders(headers)
                 .build()
-            assertFails { transport(FixedResponseExecutor(response)).getSumeragiStatus().join() }
-            assertFails { transport(FixedResponseExecutor(response)).getSumeragiDiagnostics().join() }
+            assertEquals(
+                4,
+                transport(FixedResponseExecutor(statusResponse)).getSumeragiStatus().join().protocolVersion,
+            )
+
+            val diagnosticsResponse = TransportResponse.builder()
+                .setStatusCode(200)
+                .setBody(diagnosticsPayload)
+                .setHeaders(headers)
+                .build()
+            assertEquals(
+                BigInteger.ONE,
+                transport(FixedResponseExecutor(diagnosticsResponse))
+                    .getSumeragiDiagnostics()
+                    .join()
+                    .txQueueCapacity,
+            )
+        }
+        val invalidHeaders = listOf(
+            emptyMap(),
+            mapOf("Content-Type" to listOf("application/json", "application/json")),
+            mapOf("Content-Type" to listOf("application/problem+json")),
+            mapOf("Content-Type" to listOf("application/json, text/plain")),
+            mapOf("Content-Type" to listOf("application/json;")),
+            mapOf("Content-Type" to listOf("application/json; charset")),
+            mapOf("Content-Type" to listOf("application/json; profile=\"a,b\"")),
+        )
+        invalidHeaders.forEach { headers ->
+            val statusResponse = TransportResponse.builder()
+                .setStatusCode(200)
+                .setBody(payload)
+                .setHeaders(headers)
+                .build()
+            assertFails {
+                transport(FixedResponseExecutor(statusResponse)).getSumeragiStatus().join()
+            }
+            val diagnosticsResponse = TransportResponse.builder()
+                .setStatusCode(200)
+                .setBody(diagnosticsPayload)
+                .setHeaders(headers)
+                .build()
+            assertFails {
+                transport(FixedResponseExecutor(diagnosticsResponse)).getSumeragiDiagnostics().join()
+            }
         }
     }
 

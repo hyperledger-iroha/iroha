@@ -362,29 +362,30 @@ fn merge_application_receipt_is_first_release_retirement_admissible_and_fails_cl
     let lane_entry = lane_config.primary();
     let (mut kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
         .expect("initialize Kura");
-    let entrypoint = offline_top_up_entrypoint_for_index([0xC1; 32], [0xC2; 32]);
-    let mut merge_entry = merge_entry_with_indexed_entrypoint(entrypoint);
-    let execution = merge_entry
-        .execution_batch
-        .as_ref()
-        .and_then(|batch| batch.lanes.first())
-        .expect("merge execution fixture");
-    let descriptor = execution.proposal.descriptor.clone();
+    let signer = KeyPair::try_from_seed(vec![0xC1; 32], Algorithm::BlsNormal)
+        .expect("derive deterministic merge receipt fixture signer");
+    let height_context_id = HeightContextId(HashOf::<HeightContext>::from_untyped_unchecked(
+        Hash::new(b"kura-merge-receipt-height-context"),
+    ));
+    let payload = canonical_terminal_payload_for_test(lane_entry, height_context_id, &signer, 0xC2);
+    let descriptor = payload.origin_proposal.descriptor.clone();
     kura.install_lane_incarnation_marker_for_test(lane_entry, descriptor.lane_incarnation, 0)
         .expect("install merge receipt lane marker");
-    let mut blocks = DummyBlocks::new();
-    let parent = blocks.next();
-    let raw_carrier = blocks.next();
-    let batch = merge_entry
-        .execution_batch
-        .as_mut()
-        .expect("merge receipt fixture has an execution batch");
-    batch.application_block_header =
-        crate::merge::merge_application_header_from_carrier(&raw_carrier.header());
-    batch.batch_hash = crate::merge::merge_execution_batch_hash(batch);
-    let mut executed_carrier = raw_carrier.as_ref().clone();
-    attach_ok_results_to_block(&mut executed_carrier);
-    let carrier = bind_merge_entry_to_carrier(Arc::new(executed_carrier), &mut merge_entry);
+    let execution = canonical_terminal_merge_execution_for_test(&kura, &payload, &signer);
+    let local_peer = PeerId::new(signer.public_key().clone());
+    kura.bind_local_peer_id(local_peer.clone())
+        .expect("bind merge receipt lifecycle signer");
+    let generation = kura
+        .claim_autonomous_lifecycle_process_generation(payload.network_id, &local_peer)
+        .expect("claim merge receipt lifecycle process generation");
+    let (_, reservation_group) = install_live_lifecycle_cursor_for_terminal_test(
+        &kura,
+        &generation,
+        &payload,
+        height_context_id,
+        &signer,
+    );
+    let (parent, carrier, merge_entry) = canonical_terminal_merge_carrier_for_test(execution, 1);
     assert!(
         carrier.has_results(),
         "a canonical merge receipt carrier must contain execution results"
@@ -416,6 +417,30 @@ fn merge_application_receipt_is_first_release_retirement_admissible_and_fails_cl
     );
     kura.persist_merge_lane_block_application_receipts(&merge_entry, carrier_height, carrier_hash)
         .expect("persist marker-bound merge receipt");
+    let source_publication = kura
+        .persist_autonomous_lifecycle_canonical_terminal_outcomes_pending(&merge_entry)
+        .expect("persist merge receipt canonical terminal source outcome")
+        .expect("merge receipt execution publishes a canonical terminal source outcome");
+    let mut source_authorizations = source_publication
+        .consume_for_v2_apply(&merge_entry)
+        .expect("consume exact merge receipt source publication");
+    assert_eq!(source_authorizations.len(), 1);
+    let (published_group, source_authorization) = source_authorizations
+        .pop()
+        .expect("single-lane merge receipt source authorization");
+    let (authorized_group, ordered_keys, pending_outcome_hash) = source_authorization
+        .consume_for_queue()
+        .expect("consume merge receipt Queue source authorization");
+    assert_eq!(published_group, reservation_group);
+    assert_eq!(authorized_group, reservation_group);
+    assert_eq!(ordered_keys, payload.reservation_keys);
+    kura.complete_autonomous_lifecycle_terminal_outcome(
+        reservation_group,
+        canonical_terminal_projection_for_test(reservation_group),
+        true,
+        pending_outcome_hash,
+    )
+    .expect("complete merge receipt canonical terminal source outcome");
     assert_eq!(
         kura.read_lane_block_application_receipt(descriptor.lane_id, descriptor.lane_block_height,)
             .expect("read merge receipt")

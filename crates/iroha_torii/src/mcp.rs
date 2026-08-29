@@ -65,6 +65,7 @@ const MCP_REQUEST_TIMEOUT: i64 = -32003;
 const MCP_DISPATCH_CAPACITY_EXHAUSTED: i64 = -32004;
 const MCP_RATE_LIMITED: i64 = -32029;
 const MCP_CANCELLATION_FINGERPRINT_DOMAIN: &[u8] = b"iroha.mcp.cancellation.client.v1\0";
+const MCP_CANCELLATION_NONCE_META_KEY: &str = "iroha/cancellationNonce";
 const MAX_MCP_PROJECTION_KEYS: usize = 64;
 const MAX_MCP_PROJECTION_KEY_CHARS: usize = 128;
 /// First-release ceiling for the explicitly advertised `tools/call_batch` extension.
@@ -94,6 +95,7 @@ pub(crate) const MCP_BODY_READ_TIMEOUT: Duration = Duration::from_secs(10);
 pub(crate) const MCP_ROUTE_EXECUTION_TIMEOUT: Duration = Duration::from_secs(10 * 60 + 15);
 const MCP_TOOL_NOT_ALLOWED: &str = "tool_not_allowed";
 const MCP_TOOL_NOT_FOUND: &str = "tool_not_found";
+const MCP_TOOL_UNAVAILABLE: &str = "tool_unavailable";
 const MCP_TOOL_EXECUTION_ERROR_CODE: &str = "tool_execution_error";
 const MCP_BATCH_TOO_LARGE_CODE: &str = "batch_too_large";
 const MCP_RESPONSE_TOO_LARGE_CODE: &str = "response_too_large";
@@ -128,6 +130,9 @@ impl ExactJsonRpcId {
             Value::String(value) => ExactJsonRpcIdKind::String(value.clone()),
             Value::Number(json::native::Number::I64(value)) => ExactJsonRpcIdKind::I64(*value),
             Value::Number(json::native::Number::U64(value)) => ExactJsonRpcIdKind::U64(*value),
+            Value::Number(json::native::Number::U128(value)) => {
+                ExactJsonRpcIdKind::U64(u64::try_from(*value).ok()?)
+            }
             _ => return None,
         };
         Some(Self { kind })
@@ -141,7 +146,7 @@ struct McpInflightKey {
 }
 
 struct McpInflightEntry {
-    generation: Arc<()>,
+    cancellation_nonce: [u8; 32],
     cancellation: tokio::sync::watch::Sender<bool>,
 }
 
@@ -155,12 +160,12 @@ pub(crate) struct McpInflightRegistry {
 enum McpInflightRegistrationError {
     Duplicate,
     Capacity,
+    InvalidNonce,
 }
 
 struct McpInflightRegistration {
     registry: Arc<McpInflightRegistry>,
     key: McpInflightKey,
-    generation: Arc<()>,
     cancellation: tokio::sync::watch::Receiver<bool>,
 }
 
@@ -168,6 +173,7 @@ impl McpInflightRegistry {
     fn register(
         self: &Arc<Self>,
         key: McpInflightKey,
+        cancellation_nonce: [u8; 32],
         capacity: usize,
     ) -> Result<McpInflightRegistration, McpInflightRegistrationError> {
         let mut entries = self
@@ -180,12 +186,11 @@ impl McpInflightRegistry {
         if entries.len() >= capacity {
             return Err(McpInflightRegistrationError::Capacity);
         }
-        let generation = Arc::new(());
         let (cancellation, receiver) = tokio::sync::watch::channel(false);
         entries.insert(
             key.clone(),
             McpInflightEntry {
-                generation: Arc::clone(&generation),
+                cancellation_nonce,
                 cancellation,
             },
         );
@@ -193,12 +198,11 @@ impl McpInflightRegistry {
         Ok(McpInflightRegistration {
             registry: Arc::clone(self),
             key,
-            generation,
             cancellation: receiver,
         })
     }
 
-    fn cancel(&self, key: &McpInflightKey) -> bool {
+    fn cancel(&self, key: &McpInflightKey, cancellation_nonce: &[u8; 32]) -> bool {
         let entries = self
             .entries
             .lock()
@@ -206,6 +210,9 @@ impl McpInflightRegistry {
         let Some(entry) = entries.get(key) else {
             return false;
         };
+        if entry.cancellation_nonce != *cancellation_nonce {
+            return false;
+        }
         entry.cancellation.send_replace(true);
         true
     }
@@ -231,12 +238,7 @@ impl Drop for McpInflightRegistration {
             .entries
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if entries
-            .get(&self.key)
-            .is_some_and(|entry| Arc::ptr_eq(&entry.generation, &self.generation))
-        {
-            entries.remove(&self.key);
-        }
+        entries.remove(&self.key);
     }
 }
 
@@ -1023,6 +1025,27 @@ fn visible_tools_for_policy<'a>(
         .filter(|tool| is_tool_allowed_by_policy(cfg, tool))
         .collect()
 }
+
+fn tool_is_runtime_available(app: &SharedAppState, tool: &ToolSpec) -> bool {
+    if matches!(
+        tool.name.as_str(),
+        "iroha.accounts.faucet.prepare" | "iroha.accounts.faucet.submit"
+    ) {
+        #[cfg(feature = "app_api")]
+        return app.account_faucet.is_some();
+        #[cfg(not(feature = "app_api"))]
+        return false;
+    }
+    true
+}
+
+fn visible_tools_for_app(app: &SharedAppState) -> Vec<&ToolSpec> {
+    visible_tools_for_policy(&app.mcp, app.mcp_tools.as_slice())
+        .into_iter()
+        .filter(|tool| tool_is_runtime_available(app, tool))
+        .collect()
+}
+
 pub(crate) fn capabilities_payload(tools: &[&ToolSpec]) -> Value {
     let toolset_version = compute_toolset_version(tools);
     let mut server_info = Map::new();
@@ -1045,6 +1068,12 @@ pub(crate) fn capabilities_payload(tools: &[&ToolSpec]) -> Value {
                     "callBatch": {
                         "method": "tools/call_batch",
                         "maxDispatches": MAX_JSONRPC_BATCH_DISPATCHES
+                    },
+                    "cancellation": {
+                        "notification": "notifications/cancelled",
+                        "nonceMetaKey": (MCP_CANCELLATION_NONCE_META_KEY),
+                        "nonceEncoding": "base64url-no-pad-32-byte",
+                        "requiresApiToken": true
                     }
                 }
             }
@@ -1165,7 +1194,7 @@ fn manual_tool_effect_from_name(name: &str) -> ToolEffect {
     if let Some(definition) = musubi_v1_tool_definition(name) {
         return definition.effect;
     }
-    if is_manual_read_tool_name(name) {
+    if is_audited_manual_read_tool_name(name) {
         return ToolEffect::Read;
     }
     ToolEffect::Write
@@ -1173,78 +1202,52 @@ fn manual_tool_effect_from_name(name: &str) -> ToolEffect {
 fn is_operator_tool_name(name: &str) -> bool {
     name == "iroha.gov.protected_namespaces.update"
 }
-fn is_manual_read_tool_name(name: &str) -> bool {
+fn is_audited_manual_read_tool_name(name: &str) -> bool {
     matches!(
         name,
-        "iroha.connect.ws.ticket"
-            | "iroha.connect.session.status"
+        "iroha.connect.session.status"
+            | "iroha.vpn.profile"
+            | "iroha.vpn.sessions.get"
+            | "iroha.vpn.receipts.list"
             | "iroha.health"
-            | "iroha.accounts.qr"
-            | "iroha.accounts.transactions"
-            | "iroha.accounts.history"
-            | "iroha.accounts.onboard.plan"
-            | "iroha.da.commitments.prove"
-            | "iroha.da.pin_intents.prove"
+            | "iroha.parameters.get"
+            | "iroha.node.capabilities"
             | "iroha.node.query_projection_checkpoint"
-            | "iroha.node.query_projection_checkpoint_plan"
-            | "iroha.node.query_projection_shard_catalog"
-            | "iroha.queries.submit"
+            | "iroha.da.proof_policies"
+            | "iroha.da.proof_policy_snapshot"
+            | "iroha.runtime.abi.active"
+            | "iroha.runtime.abi.hash"
+            | "iroha.runtime.metrics"
+            | "iroha.runtime.upgrades.list"
+            | "iroha.gov.proposals.get"
+            | "iroha.gov.locks.get"
+            | "iroha.gov.referenda.get"
+            | "iroha.gov.tally.get"
+            | "iroha.gov.protected_namespaces.list"
+            | "iroha.gov.unlocks.stats"
+            | "iroha.gov.council.current"
+            | "iroha.gov.citizens.count"
+            | "iroha.nfts.chain.list"
+            | "iroha.rwas.chain.list"
+            | "iroha.iso20022.status.get"
+            | "iroha.da.commitments.list"
+            | "iroha.da.commitments.prove"
+            | "iroha.da.commitments.verify"
+            | "iroha.da.pin_intents.list"
+            | "iroha.da.pin_intents.prove"
+            | "iroha.da.pin_intents.verify"
+            | "iroha.proofs.query"
+            | "iroha.gov.parliament.ballots.timed_ovn_casting_proof.get"
             | "iroha.gov.ballots.zk_v1"
             | "iroha.gov.ballots.zk_v1.ballot_proof"
             | "iroha.gov.ballots.plain"
-    ) || name.ends_with(".get")
-        || name.ends_with(".list")
-        || name.ends_with(".query")
-        || name.ends_with(".status")
-        || name.ends_with(".profile")
-        || name.ends_with(".capabilities")
-        || name.ends_with(".versions")
-        || name.ends_with(".current")
-        || name.ends_with(".stats")
-        || name.ends_with(".audit")
-        || name.ends_with(".proof")
-        || name.ends_with(".bundle")
-        || name.ends_with(".bundles")
-        || name.ends_with(".retention")
-        || name.ends_with(".metrics")
-        || name.ends_with(".active")
-        || name.ends_with(".hash")
-        || name.ends_with(".rbc")
-        || name.ends_with(".phases")
-        || name.ends_with(".params")
-        || name.ends_with(".leader")
-        || name.ends_with(".qc")
-        || name.ends_with(".checkpoints")
-        || name.ends_with(".consensus_keys")
-        || name.ends_with(".bls_keys")
-        || name.ends_with(".telemetry")
-        || name.ends_with(".sessions")
-        || name.ends_with(".collectors")
-        || name.ends_with(".count")
-        || name.ends_with(".penalties")
-        || name.ends_with(".epoch")
-        || name.ends_with(".proof_policies")
-        || name.ends_with(".proof_policy_snapshot")
-        || name.ends_with(".verify")
-        || name.ends_with(".resolve")
-        || name.ends_with(".resolve_index")
-        || name.ends_with(".by_account")
-        || name.ends_with(".search")
-        || name.ends_with(".releases")
-        || name.ends_with(".instructions")
-        || name.ends_with(".assets")
-        || name.ends_with(".permissions")
-        || name.ends_with(".portfolio")
-        || name.ends_with(".holders")
-        || name.ends_with(".definitions")
-        || name.ends_with(".chain.list")
-        || name.ends_with(".wait")
+            | "iroha.transactions.query"
+            | "iroha.transactions.visible.query"
+            | "iroha.queries.submit"
+    )
 }
 pub(crate) fn jsonrpc_invalid_request(message: &str) -> Value {
     jsonrpc_error_response(None, JSONRPC_INVALID_REQUEST, message, None)
-}
-pub(crate) fn jsonrpc_parse_error(message: &str) -> Value {
-    jsonrpc_error_response(None, JSONRPC_PARSE_ERROR, message, None)
 }
 /// Return the number of rate-limit tokens represented by one parsed MCP request.
 ///
@@ -1382,13 +1385,42 @@ fn authenticated_cancellation_client_fingerprint(
     Some(*hasher.finalize().as_bytes())
 }
 
+fn cancellation_nonce_from_params(params: &Map) -> Result<Option<[u8; 32]>, ()> {
+    let Some(meta) = params.get("_meta") else {
+        return Ok(None);
+    };
+    let Some(meta) = meta.as_object() else {
+        return Err(());
+    };
+    let Some(encoded) = meta.get(MCP_CANCELLATION_NONCE_META_KEY) else {
+        return Ok(None);
+    };
+    let Some(encoded) = encoded.as_str() else {
+        return Err(());
+    };
+    let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(encoded)
+        .map_err(|_| ())?;
+    let nonce: [u8; 32] = decoded.try_into().map_err(|_| ())?;
+    if base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(nonce) != encoded {
+        return Err(());
+    }
+    Ok(Some(nonce))
+}
+
 fn register_authenticated_inflight_request(
     app: &SharedAppState,
     headers: &HeaderMap,
     id: Option<&Value>,
+    params: &Map,
 ) -> Result<Option<McpInflightRegistration>, McpInflightRegistrationError> {
     let Some(client_fingerprint) = authenticated_cancellation_client_fingerprint(app, headers)
     else {
+        return Ok(None);
+    };
+    let cancellation_nonce = cancellation_nonce_from_params(params)
+        .map_err(|()| McpInflightRegistrationError::InvalidNonce)?;
+    let Some(cancellation_nonce) = cancellation_nonce else {
         return Ok(None);
     };
     let Some(request_id) = id.and_then(ExactJsonRpcId::from_value) else {
@@ -1400,6 +1432,7 @@ fn register_authenticated_inflight_request(
                 client_fingerprint,
                 request_id,
             },
+            cancellation_nonce,
             app.mcp.max_inflight_dispatches.get(),
         )
         .map(Some)
@@ -1428,6 +1461,17 @@ fn cancellation_registration_error(
     error: McpInflightRegistrationError,
     capacity: usize,
 ) -> JsonRpcRequestOutcome {
+    if error == McpInflightRegistrationError::InvalidNonce {
+        return JsonRpcRequestOutcome::Response(jsonrpc_error_response(
+            id,
+            JSONRPC_INVALID_PARAMS,
+            "cancellation nonce must be canonical unpadded base64url encoding exactly 32 bytes",
+            Some(norito::json!({
+                "error_code": "invalid_cancellation_nonce",
+                "meta_key": (MCP_CANCELLATION_NONCE_META_KEY)
+            })),
+        ));
+    }
     let (message, error_code) = match error {
         McpInflightRegistrationError::Duplicate => (
             "an authenticated MCP request with this id is already in flight",
@@ -1437,6 +1481,7 @@ fn cancellation_registration_error(
             "the authenticated MCP cancellation registry is at capacity",
             "cancellation_registry_capacity_exhausted",
         ),
+        McpInflightRegistrationError::InvalidNonce => unreachable!("handled above"),
     };
     JsonRpcRequestOutcome::Response(jsonrpc_error_response(
         id,
@@ -1510,7 +1555,7 @@ pub(crate) async fn handle_jsonrpc_request(
                     })),
                 ));
             }
-            let visible_tools = visible_tools_for_policy(&app.mcp, app.mcp_tools.as_slice());
+            let visible_tools = visible_tools_for_app(&app);
             JsonRpcRequestOutcome::Response(jsonrpc_result_response(
                 id,
                 capabilities_payload(&visible_tools),
@@ -1521,17 +1566,21 @@ pub(crate) async fn handle_jsonrpc_request(
         }
         "tools/list" => JsonRpcRequestOutcome::Response(handle_tools_list(id, &app, &params)),
         "tools/call_batch" | "tools/call" => {
-            let registration =
-                match register_authenticated_inflight_request(&app, inbound_headers, id.as_ref()) {
-                    Ok(registration) => registration,
-                    Err(error) => {
-                        return cancellation_registration_error(
-                            id,
-                            error,
-                            app.mcp.max_inflight_dispatches.get(),
-                        );
-                    }
-                };
+            let registration = match register_authenticated_inflight_request(
+                &app,
+                inbound_headers,
+                id.as_ref(),
+                &params,
+            ) {
+                Ok(registration) => registration,
+                Err(error) => {
+                    return cancellation_registration_error(
+                        id,
+                        error,
+                        app.mcp.max_inflight_dispatches.get(),
+                    );
+                }
+            };
             if method == "tools/call_batch" {
                 finish_cancellable_dispatch(
                     registration,
@@ -1630,10 +1679,16 @@ pub(crate) fn handle_cancelled_notification(
     let Some(request_id) = params.get("requestId").and_then(ExactJsonRpcId::from_value) else {
         return;
     };
-    let _ = app.mcp_inflight_requests.cancel(&McpInflightKey {
-        client_fingerprint,
-        request_id,
-    });
+    let Ok(Some(cancellation_nonce)) = cancellation_nonce_from_params(params) else {
+        return;
+    };
+    let _ = app.mcp_inflight_requests.cancel(
+        &McpInflightKey {
+            client_fingerprint,
+            request_id,
+        },
+        &cancellation_nonce,
+    );
 }
 
 /// Return true when a payload is a syntactically valid JSON-RPC response.
@@ -1658,13 +1713,18 @@ pub(crate) fn is_jsonrpc_response(response: &Value) -> bool {
 }
 
 fn is_jsonrpc_id(id: &Value) -> bool {
-    id.is_string() || id.is_number()
+    match id {
+        Value::String(_) => true,
+        Value::Number(json::native::Number::U128(value)) => u64::try_from(*value).is_ok(),
+        Value::Number(_) => true,
+        _ => false,
+    }
 }
 fn is_jsonrpc_integer(value: &Value) -> bool {
     value.as_f64().is_some_and(|number| number.fract() == 0.0)
 }
 fn handle_tools_list(id: Option<Value>, app: &SharedAppState, params: &Map) -> Value {
-    let visible_tools = visible_tools_for_policy(&app.mcp, app.mcp_tools.as_slice());
+    let visible_tools = visible_tools_for_app(app);
     let toolset_version = compute_toolset_version(&visible_tools);
     let list_changed = params
         .get("toolset_version")
@@ -1769,6 +1829,25 @@ async fn handle_named_tool_call(
             Some(norito::json!({ "name": (name), "error_code": (MCP_TOOL_NOT_ALLOWED) })),
         );
     }
+    if !tool_is_runtime_available(&app, tool_spec) {
+        return jsonrpc_error_response(
+            id,
+            JSONRPC_INVALID_PARAMS,
+            "tool is unavailable in this node's runtime configuration",
+            Some(norito::json!({ "name": (name), "error_code": (MCP_TOOL_UNAVAILABLE) })),
+        );
+    }
+    if let Err(message) = validate_tool_arguments(tool_spec, arguments) {
+        return jsonrpc_error_response(
+            id,
+            JSONRPC_INVALID_PARAMS,
+            message.as_str(),
+            Some(norito::json!({
+                "name": name,
+                "error_code": "tool_schema_validation_failed"
+            })),
+        );
+    }
     let _long_poll_permit = if is_long_poll_tool(name) {
         match app.mcp_long_poll_inflight.clone().try_acquire_owned() {
             Ok(permit) => Some(permit),
@@ -1802,17 +1881,6 @@ async fn handle_named_tool_call(
             );
         }
     };
-    if let Err(message) = validate_tool_arguments(tool_spec, arguments) {
-        return jsonrpc_error_response(
-            id,
-            JSONRPC_INVALID_PARAMS,
-            message.as_str(),
-            Some(norito::json!({
-                "name": name,
-                "error_code": "tool_schema_validation_failed"
-            })),
-        );
-    }
     let tool_result = match name {
         "iroha.connect.ws.ticket" => build_connect_ws_ticket(arguments, inbound_headers)
             .map(mcp_tool_success)
@@ -8290,6 +8358,7 @@ fn forward_onboarding_auth_header(out: &mut HeaderMap, inbound: &HeaderMap) -> R
     out.insert(header_name, value);
     Ok(())
 }
+#[cfg(test)]
 fn apply_extra_headers(out: &mut HeaderMap, value: Option<&Value>) -> Result<(), String> {
     apply_extra_headers_with_policy(out, value, ExtraHeaderPolicy::Default)
 }
@@ -8368,7 +8437,8 @@ fn apply_extra_headers_with_policy(
             policy,
             ExtraHeaderPolicy::CanonicalAccountAuthentication
                 | ExtraHeaderPolicy::OperatorAuthentication
-        ) {
+        ) || (policy == ExtraHeaderPolicy::ConnectManagement && lowered == "authorization")
+        {
             header_value.set_sensitive(true);
         }
         out.insert(header_name, header_value);
@@ -10464,17 +10534,6 @@ pub(crate) fn oversized_payload_response(max_request_bytes: usize) -> (StatusCod
         ),
     )
 }
-/// Build the JSON-RPC payload for internal dispatch failures.
-pub(crate) fn internal_error_payload(message: &str) -> Value {
-    jsonrpc_error_response(
-        None,
-        MCP_TOOL_EXECUTION_ERROR,
-        message,
-        Some(norito::json!({
-            "kind": "dispatch_error"
-        })),
-    )
-}
 pub(crate) fn invalid_json_payload(err: &json::Error) -> Value {
     let mut msg = String::from("invalid json payload: ");
     let _ = write!(msg, "{err}");
@@ -10487,6 +10546,22 @@ mod tests {
     include!("mcp/iso20022_operator_auth_tests.rs");
     include!("mcp/body_builder_tests.rs");
     include!("mcp/bounds_tests.rs");
+
+    #[test]
+    fn jsonrpc_numeric_ids_reject_u128_above_u64() {
+        let largest_supported = Value::Number(json::native::Number::U128(u64::MAX.into()));
+        assert!(is_jsonrpc_id(&largest_supported));
+        assert_eq!(
+            ExactJsonRpcId::from_value(&largest_supported),
+            Some(ExactJsonRpcId {
+                kind: ExactJsonRpcIdKind::U64(u64::MAX),
+            })
+        );
+
+        let too_large = Value::Number(json::native::Number::U128(u128::from(u64::MAX) + 1));
+        assert!(!is_jsonrpc_id(&too_large));
+        assert_eq!(ExactJsonRpcId::from_value(&too_large), None);
+    }
 
     #[test]
     fn parliament_attempt_draft_tool_caps_attempt_sequence_at_retry_limit() {

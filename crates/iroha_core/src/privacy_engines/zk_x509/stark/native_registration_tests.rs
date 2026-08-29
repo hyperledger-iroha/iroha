@@ -11,6 +11,7 @@ fn der_reduced_retained_commitment_openings_and_deep_are_byte_exact() {
     let initial_indices = [1, 9, 31];
     let mut replayable_rng = StdRng::from_seed([0xE1; 32]);
     let (replayable_commitment, masks) = aggregate::commit_masked_trace_columns_v1(
+        ZK_X509_DIGEST_CONTEXT_V1,
         b"zk-x509-der-reduced-retained-leaf",
         b"zk-x509-der-reduced-retained-node",
         0,
@@ -25,6 +26,7 @@ fn der_reduced_retained_commitment_openings_and_deep_are_byte_exact() {
     .expect("replayable reduced commitment");
     let mut retained_rng = StdRng::from_seed([0xE1; 32]);
     let (retained_commitment, polynomials) = aggregate::commit_masked_trace_polynomial_columns_v1(
+        ZK_X509_DIGEST_CONTEXT_V1,
         b"zk-x509-der-reduced-retained-leaf",
         b"zk-x509-der-reduced-retained-node",
         0,
@@ -40,6 +42,7 @@ fn der_reduced_retained_commitment_openings_and_deep_are_byte_exact() {
     assert_eq!(retained_commitment, replayable_commitment);
     let replay_indices = [0, 7, 17, 63];
     let replayable_openings = aggregate::replay_masked_trace_columns_v1(
+        ZK_X509_DIGEST_CONTEXT_V1,
         b"zk-x509-der-reduced-retained-leaf",
         b"zk-x509-der-reduced-retained-node",
         0,
@@ -49,6 +52,7 @@ fn der_reduced_retained_commitment_openings_and_deep_are_byte_exact() {
     )
     .expect("replayable reduced openings");
     let retained_openings = aggregate::replay_masked_trace_polynomial_columns_v1(
+        ZK_X509_DIGEST_CONTEXT_V1,
         b"zk-x509-der-reduced-retained-leaf",
         b"zk-x509-der-reduced-retained-node",
         0,
@@ -71,6 +75,7 @@ fn der_reduced_retained_commitment_openings_and_deep_are_byte_exact() {
     mutated_columns[0][0] = mutated_columns[0][0].add(F::ONE);
     let mut mutation_rng = StdRng::from_seed([0xE1; 32]);
     let (mutated_commitment, _) = aggregate::commit_masked_trace_polynomial_columns_v1(
+        ZK_X509_DIGEST_CONTEXT_V1,
         b"zk-x509-der-reduced-retained-leaf",
         b"zk-x509-der-reduced-retained-node",
         0,
@@ -528,16 +533,16 @@ fn native_log19_der_proof_roundtrips_and_rejects_cross_layer_mutations() {
     );
     let mut mutations = Vec::new();
     let mut changed = aggregate.clone();
-    changed.trace_groups[0].base_root[0] ^= 1;
+    mutate_stark_digest_v1(&mut changed.trace_groups[0].base_root);
     mutations.push(changed);
     changed = aggregate.clone();
-    changed.trace_groups[0].aux_root[0] ^= 1;
+    mutate_stark_digest_v1(&mut changed.trace_groups[0].aux_root);
     mutations.push(changed);
     changed = aggregate.clone();
-    changed.composition_roots[0][0] ^= 1;
+    mutate_stark_digest_v1(&mut changed.composition_roots[0]);
     mutations.push(changed);
     changed = aggregate.clone();
-    changed.fri_lanes[0].roots[0][0] ^= 1;
+    mutate_stark_digest_v1(&mut changed.fri_lanes[0].roots[0]);
     mutations.push(changed);
     changed = aggregate.clone();
     changed.fri_lanes[0].terminal_values[0][0] ^= 1;
@@ -1163,9 +1168,13 @@ fn p256_terminal_registration_and_transcript_reject_all_role_mutations() {
     let terminals = p256_terminal_fixture(role);
     let challenge = |registration: &P256TraceRegistrationV1,
                      terminals: &P256TerminalRegistrationV1| {
-        let mut transcript =
-            TransparentTranscriptV1::new(b"p256-registration-test", &[0x91; 32], &[0x37; 32])
-                .expect("registration transcript");
+        let mut transcript = TransparentTranscriptV1::new(
+            ZK_X509_DIGEST_CONTEXT_V1,
+            b"p256-registration-test",
+            &test_stark_digest_v1(0x91),
+            &test_stark_digest_v1(0x37),
+        )
+        .expect("registration transcript");
         absorb_p256_registration_v1(&mut transcript, registration)
             .expect("static P-256 registration");
         absorb_p256_terminal_registration_v1(&mut transcript, registration.role, terminals)
@@ -1191,9 +1200,13 @@ fn p256_terminal_registration_and_transcript_reject_all_role_mutations() {
                     forged.cross_sources[index].terminal[1].add(F::ONE);
             }
             assert!(forged.validate(role).is_err());
-            let mut transcript =
-                TransparentTranscriptV1::new(b"p256-registration-test", &[0x91; 32], &[0x37; 32])
-                    .expect("registration transcript");
+            let mut transcript = TransparentTranscriptV1::new(
+                ZK_X509_DIGEST_CONTEXT_V1,
+                b"p256-registration-test",
+                &test_stark_digest_v1(0x91),
+                &test_stark_digest_v1(0x37),
+            )
+            .expect("registration transcript");
             absorb_p256_registration_v1(&mut transcript, &registration)
                 .expect("static registration");
             assert!(absorb_p256_terminal_registration_v1(&mut transcript, role, &forged).is_err());
@@ -1237,9 +1250,13 @@ fn p256_terminal_registration_and_transcript_reject_all_role_mutations() {
         "role, segment multiplicity, and terminal-role count are transcript-bound"
     );
     assert_ne!(p256_aggregate_challenges_fixture().value, {
-        let mut changed =
-            TransparentTranscriptV1::new(b"p256-aggregate-test", &[0x31; 32], &[0x57; 32])
-                .expect("P-256 aggregate transcript");
+        let mut changed = TransparentTranscriptV1::new(
+            ZK_X509_DIGEST_CONTEXT_V1,
+            b"p256-aggregate-test",
+            &test_stark_digest_v1(0x31),
+            &test_stark_digest_v1(0x57),
+        )
+        .expect("P-256 aggregate transcript");
         changed
             .absorb(b"adversarial-prefix", &[b"role-splice"])
             .expect("prefix mutation");

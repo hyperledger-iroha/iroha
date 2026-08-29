@@ -29,6 +29,40 @@ pub const MAX_REMOTE_SPEND_INTENT_COMMITMENTS_V1: usize = 65_536;
 /// outer ceiling leaves one additional MiB for the envelope and binding while
 /// keeping every proof-envelope decode bounded at the shared data-model layer.
 pub const MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES: usize = 2 * 1024 * 1024;
+/// Domain separator for one finalized source-state anchor digest.
+pub const AXT_FINALIZED_SPEND_ANCHOR_DIGEST_DOMAIN_V1: &[u8] =
+    b"iroha:axt:finalized-spend-anchor:digest:v1\0";
+/// Domain separator for the exact proof carried by one anchored spend.
+pub const AXT_ANCHORED_SPEND_PROOF_DIGEST_DOMAIN_V1: &[u8] =
+    b"iroha:axt:anchored-spend:proof:digest:v1\0";
+/// Domain separator for the exact reusable handle carried by one anchored spend.
+pub const AXT_ANCHORED_SPEND_HANDLE_DIGEST_DOMAIN_V1: &[u8] =
+    b"iroha:axt:anchored-spend:handle:digest:v1\0";
+/// Domain separator for a fresh issuer signature over one exact anchored spend.
+pub const AXT_ANCHORED_SPEND_ISSUER_SIGNATURE_DOMAIN_V1: &[u8] =
+    b"iroha:axt:anchored-spend:issuer-signature:v1\0";
+
+fn axt_logical_hash_is_zero(bytes: &[u8; Hash::LENGTH]) -> bool {
+    bytes[..Hash::LENGTH - 1].iter().all(|byte| *byte == 0) && bytes[Hash::LENGTH - 1] & !1 == 0
+}
+
+fn axt_framed_digest_v1<T: Encode>(domain: &[u8], value: &T) -> [u8; Hash::LENGTH] {
+    let encoded = encode_adaptive(value);
+    let mut preimage = Vec::with_capacity(
+        domain
+            .len()
+            .saturating_add(std::mem::size_of::<u64>())
+            .saturating_add(encoded.len()),
+    );
+    preimage.extend_from_slice(domain);
+    preimage.extend_from_slice(
+        &u64::try_from(encoded.len())
+            .expect("Norito output length fits u64 on supported targets")
+            .to_le_bytes(),
+    );
+    preimage.extend_from_slice(&encoded);
+    Hash::new(preimage).into()
+}
 /// Canonical 32-byte binding derived from an AXT descriptor.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -541,6 +575,144 @@ impl AxtAssetIncarnationV1 {
     pub const fn into_hash(self) -> Hash {
         self.0
     }
+}
+/// Exact finalized source-state anchor authorized by one V1 AXT spend.
+///
+/// Every digest is reconstructed from committed consensus state. Submitted
+/// spend bytes select an already-finalized record; they never define or extend
+/// the authoritative anchor.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
+pub struct AxtFinalizedSpendAnchorV1 {
+    /// Exact genesis-derived network identity.
+    pub network_id: NetworkId,
+    /// Exact genesis hash; validation requires byte equality with `network_id`.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    pub genesis_hash: [u8; Hash::LENGTH],
+    /// Source dataspace whose finalized state authorizes the spend.
+    pub dataspace_id: DataSpaceId,
+    /// Source execution lane.
+    pub lane_id: LaneId,
+    /// Exact active lane incarnation at `finalized_height`.
+    pub lane_incarnation: Hash,
+    /// Positive finalized global/catalog height.
+    pub finalized_height: u64,
+    /// Hash of the exact canonical finalized block header.
+    pub block_header_hash: HashOf<BlockHeader>,
+    /// Digest of the exact commit quorum certificate.
+    pub quorum_certificate_digest: Hash,
+    /// Digest of the exact ordered `3f + 1` committee and key lineages.
+    pub committee_digest: Hash,
+    /// State root before the anchored transaction set executed.
+    pub pre_state_root: Hash,
+    /// State root after the anchored transaction set executed.
+    pub post_state_root: Hash,
+    /// Digest of the exact ordered canonical transaction-wire set.
+    pub transaction_set_digest: Hash,
+    /// Digest of the exact signed RS16 data-availability manifest.
+    pub da_manifest_digest: Hash,
+}
+
+impl AxtFinalizedSpendAnchorV1 {
+    /// Validate the closed non-zero source-state anchor shape.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a network/genesis mismatch, height zero, or any absent
+    /// consensus, state, transaction-set, or data-availability binding.
+    pub fn validate(&self) -> Result<(), AxtFinalizedSpendAnchorValidationErrorV1> {
+        if self.network_id.as_bytes() != &self.genesis_hash {
+            return Err(AxtFinalizedSpendAnchorValidationErrorV1::NetworkGenesis);
+        }
+        if self.finalized_height == 0 {
+            return Err(AxtFinalizedSpendAnchorValidationErrorV1::ZeroHeight);
+        }
+        let bindings = [
+            (
+                AxtFinalizedSpendAnchorFieldV1::LaneIncarnation,
+                self.lane_incarnation.as_ref(),
+            ),
+            (
+                AxtFinalizedSpendAnchorFieldV1::BlockHeader,
+                self.block_header_hash.as_ref(),
+            ),
+            (
+                AxtFinalizedSpendAnchorFieldV1::QuorumCertificate,
+                self.quorum_certificate_digest.as_ref(),
+            ),
+            (
+                AxtFinalizedSpendAnchorFieldV1::Committee,
+                self.committee_digest.as_ref(),
+            ),
+            (
+                AxtFinalizedSpendAnchorFieldV1::PreStateRoot,
+                self.pre_state_root.as_ref(),
+            ),
+            (
+                AxtFinalizedSpendAnchorFieldV1::PostStateRoot,
+                self.post_state_root.as_ref(),
+            ),
+            (
+                AxtFinalizedSpendAnchorFieldV1::TransactionSet,
+                self.transaction_set_digest.as_ref(),
+            ),
+            (
+                AxtFinalizedSpendAnchorFieldV1::DaManifest,
+                self.da_manifest_digest.as_ref(),
+            ),
+        ];
+        for (field, bytes) in bindings {
+            if axt_logical_hash_is_zero(bytes) {
+                return Err(AxtFinalizedSpendAnchorValidationErrorV1::ZeroBinding { field });
+            }
+        }
+        Ok(())
+    }
+
+    /// Compute the canonical content identity of this complete anchor.
+    #[must_use]
+    pub fn digest_v1(&self) -> [u8; Hash::LENGTH] {
+        axt_framed_digest_v1(AXT_FINALIZED_SPEND_ANCHOR_DIGEST_DOMAIN_V1, self)
+    }
+}
+
+/// Finalized anchor field selected by deterministic validation diagnostics.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AxtFinalizedSpendAnchorFieldV1 {
+    /// Active lane incarnation commitment.
+    LaneIncarnation,
+    /// Canonical finalized block header.
+    BlockHeader,
+    /// Commit quorum certificate.
+    QuorumCertificate,
+    /// Exact validator committee.
+    Committee,
+    /// Pre-execution state root.
+    PreStateRoot,
+    /// Post-execution state root.
+    PostStateRoot,
+    /// Exact ordered transaction set.
+    TransactionSet,
+    /// Signed RS16 data-availability manifest.
+    DaManifest,
+}
+
+/// Structural validation failure for [`AxtFinalizedSpendAnchorV1`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+pub enum AxtFinalizedSpendAnchorValidationErrorV1 {
+    /// The explicit genesis hash differs from the genesis-derived network id.
+    #[error("AXT finalized anchor network and genesis hash differ")]
+    NetworkGenesis,
+    /// Height zero cannot identify a finalized source block.
+    #[error("AXT finalized anchor height must be non-zero")]
+    ZeroHeight,
+    /// One required finalized-state binding is the logical zero sentinel.
+    #[error("AXT finalized anchor has zero {field:?} binding")]
+    ZeroBinding {
+        /// Missing binding.
+        field: AxtFinalizedSpendAnchorFieldV1,
+    },
 }
 /// Immutable admission context for one V1 AXT issuer signature.
 ///
@@ -1328,6 +1500,348 @@ pub struct RemoteSpendIntent {
     pub asset_dsid: DataSpaceId,
     /// Operation payload.
     pub op: SpendOp,
+}
+/// Fresh, issuer-selected nonce for exactly one anchored AXT spend.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[repr(transparent)]
+pub struct AxtSpendNonceV1([u8; 32]);
+
+impl AxtSpendNonceV1 {
+    /// Validate and wrap a non-zero nonce.
+    ///
+    /// # Errors
+    ///
+    /// Rejects the all-zero absence sentinel.
+    pub fn try_new(bytes: [u8; 32]) -> Result<Self, AxtSpendNonceValidationErrorV1> {
+        if bytes.iter().all(|byte| *byte == 0) {
+            return Err(AxtSpendNonceValidationErrorV1::Zero);
+        }
+        Ok(Self(bytes))
+    }
+
+    /// Borrow the exact nonce bytes.
+    #[must_use]
+    pub const fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+
+    /// Validate a decoded nonce.
+    ///
+    /// # Errors
+    ///
+    /// Rejects the all-zero absence sentinel.
+    pub fn validate(&self) -> Result<(), AxtSpendNonceValidationErrorV1> {
+        Self::try_new(self.0).map(|_| ())
+    }
+}
+
+/// Validation failure for [`AxtSpendNonceV1`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+pub enum AxtSpendNonceValidationErrorV1 {
+    /// The nonce is the reserved zero sentinel.
+    #[error("AXT anchored-spend nonce must be non-zero")]
+    Zero,
+}
+
+/// Unsigned exact spend facts that an issuer authorizes for one finalized anchor.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
+pub struct AxtAnchoredSpendDraftV1 {
+    /// Reusable issuer-authenticated capability consumed by this spend.
+    pub handle: AssetHandle,
+    /// Exact destination-side operation.
+    pub intent: RemoteSpendIntent,
+    /// Exact proof whose canonical bytes are authenticated by the spend signature.
+    #[norito(required)]
+    pub proof: Option<ProofBlob>,
+    /// Clear amount mirror, or `None` for a proof-hidden amount.
+    #[norito(required)]
+    pub amount: Option<Quantity>,
+    /// Hidden-amount commitment mirror, when applicable.
+    #[norito(required)]
+    pub amount_commitment: Option<[u8; 32]>,
+}
+
+/// Canonical payload covered by the fresh issuer signature on one AXT spend.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
+pub struct AxtAnchoredSpendIssuerPayloadV1 {
+    /// Exact replay identity of the reusable handle.
+    pub handle_replay_key: AxtHandleReplayKey,
+    /// Digest of the complete canonical signed handle.
+    pub handle_digest: [u8; 32],
+    /// Exact destination-side operation.
+    pub intent: RemoteSpendIntent,
+    /// Digest of the complete canonical proof blob, including its expiry mirror.
+    pub proof_digest: [u8; 32],
+    /// Clear amount mirror, or `None` for a proof-hidden amount.
+    #[norito(required)]
+    pub amount: Option<Quantity>,
+    /// Hidden-amount commitment mirror, when applicable.
+    #[norito(required)]
+    pub amount_commitment: Option<[u8; 32]>,
+    /// Exact authoritative finalized source-state anchor.
+    pub anchor: AxtFinalizedSpendAnchorV1,
+    /// Exact positive expiry authenticated for this spend.
+    pub expiry_slot: u64,
+    /// Fresh nonce whose durable replay key may be consumed only once.
+    pub nonce: AxtSpendNonceV1,
+}
+
+/// Fresh issuer authorization attached to one exact anchored AXT spend.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
+pub struct AxtAnchoredSpendIssuerAuthorizationV1 {
+    /// Exact authoritative finalized source-state anchor.
+    pub anchor: AxtFinalizedSpendAnchorV1,
+    /// Exact positive expiry authenticated for this spend.
+    pub expiry_slot: u64,
+    /// Fresh issuer nonce.
+    pub nonce: AxtSpendNonceV1,
+    /// Issuer signature over [`AxtAnchoredSpendIssuerPayloadV1`].
+    pub issuer_signature: Signature,
+}
+
+/// Admission-ready AXT spend with a mandatory finalized anchor and fresh signature.
+// TODO: replace the envelope's `AxtHandleFragment` collection with this type and
+// route block admission, CoreHost, and the IVM syscall through one WSV resolver
+// once the qualification/state tranche has finished changing shared Core state.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
+pub struct AxtAnchoredSpendV1 {
+    /// Exact spend facts authenticated by the issuer.
+    pub draft: AxtAnchoredSpendDraftV1,
+    /// Fresh finalized-anchor authorization.
+    pub authorization: AxtAnchoredSpendIssuerAuthorizationV1,
+}
+
+/// Durable identity of one fresh issuer spend authorization.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
+pub struct AxtAnchoredSpendReplayKeyV1 {
+    /// Complete committed issuer context, including network and asset incarnation.
+    pub issuer_context: AxtHandleIssuerContextV1,
+    /// Fresh nonce consumed by this exact spend.
+    pub nonce: AxtSpendNonceV1,
+}
+
+impl AxtAnchoredSpendDraftV1 {
+    fn validate_binding_v1(
+        &self,
+        anchor: AxtFinalizedSpendAnchorV1,
+        expiry_slot: u64,
+        nonce: AxtSpendNonceV1,
+    ) -> Result<AxtAnchoredSpendIssuerPayloadV1, AxtAnchoredSpendValidationErrorV1> {
+        anchor
+            .validate()
+            .map_err(AxtAnchoredSpendValidationErrorV1::Anchor)?;
+        nonce
+            .validate()
+            .map_err(AxtAnchoredSpendValidationErrorV1::Nonce)?;
+        if expiry_slot == 0
+            || self.handle.expiry_slot != expiry_slot
+            || self.proof.as_ref().and_then(|proof| proof.expiry_slot) != Some(expiry_slot)
+        {
+            return Err(AxtAnchoredSpendValidationErrorV1::Expiry);
+        }
+        if self.handle.issuer_context.network_id != anchor.network_id {
+            return Err(AxtAnchoredSpendValidationErrorV1::Network);
+        }
+        if self.handle.issuer_context.asset_dsid != anchor.dataspace_id
+            || self.intent.asset_dsid != anchor.dataspace_id
+        {
+            return Err(AxtAnchoredSpendValidationErrorV1::Dataspace);
+        }
+        if self.handle.target_lane != anchor.lane_id {
+            return Err(AxtAnchoredSpendValidationErrorV1::Lane);
+        }
+        if self.handle.asset_definition_id != self.intent.op.asset_definition_id {
+            return Err(AxtAnchoredSpendValidationErrorV1::AssetDefinition);
+        }
+        let proof = self
+            .proof
+            .as_ref()
+            .ok_or(AxtAnchoredSpendValidationErrorV1::Proof)?;
+        if !proof_envelope_shape_matches_manifest(
+            proof,
+            anchor.dataspace_id,
+            self.handle.manifest_view_root,
+        ) {
+            return Err(AxtAnchoredSpendValidationErrorV1::Proof);
+        }
+        let envelope = norito::decode_canonical::<AxtProofEnvelope>(&proof.payload)
+            .map_err(|_| AxtAnchoredSpendValidationErrorV1::Proof)?;
+        if envelope.da_commitment != Some(anchor.da_manifest_digest.into()) {
+            return Err(AxtAnchoredSpendValidationErrorV1::DaManifest);
+        }
+        let expected_transaction_set = hex::encode(anchor.transaction_set_digest.as_ref());
+        if envelope
+            .fastpq_binding
+            .as_ref()
+            .is_none_or(|binding| binding.source_tx_commitment != expected_transaction_set)
+        {
+            return Err(AxtAnchoredSpendValidationErrorV1::TransactionSet);
+        }
+        Ok(AxtAnchoredSpendIssuerPayloadV1 {
+            handle_replay_key: AxtHandleReplayKey::from_handle(anchor.dataspace_id, &self.handle),
+            handle_digest: axt_framed_digest_v1(
+                AXT_ANCHORED_SPEND_HANDLE_DIGEST_DOMAIN_V1,
+                &self.handle,
+            ),
+            intent: self.intent.clone(),
+            proof_digest: axt_framed_digest_v1(AXT_ANCHORED_SPEND_PROOF_DIGEST_DOMAIN_V1, proof),
+            amount: self.amount.clone(),
+            amount_commitment: self.amount_commitment,
+            anchor,
+            expiry_slot,
+            nonce,
+        })
+    }
+
+    /// Sign this exact spend with the committed issuer key.
+    ///
+    /// # Errors
+    ///
+    /// Rejects incomplete or inconsistent spend bindings and cryptographic
+    /// signing failure.
+    pub fn sign_by_issuer_v1(
+        self,
+        anchor: AxtFinalizedSpendAnchorV1,
+        expiry_slot: u64,
+        nonce: AxtSpendNonceV1,
+        issuer: &PrivateKey,
+    ) -> Result<AxtAnchoredSpendV1, AxtAnchoredSpendValidationErrorV1> {
+        let payload = self.validate_binding_v1(anchor, expiry_slot, nonce)?;
+        let preimage = anchored_spend_signature_preimage_v1(&payload);
+        let issuer_signature = Signature::try_new(issuer, &preimage)
+            .map_err(|_| AxtAnchoredSpendValidationErrorV1::Cryptography)?;
+        Ok(AxtAnchoredSpendV1 {
+            draft: self,
+            authorization: AxtAnchoredSpendIssuerAuthorizationV1 {
+                anchor,
+                expiry_slot,
+                nonce,
+                issuer_signature,
+            },
+        })
+    }
+}
+
+impl AxtAnchoredSpendV1 {
+    /// Reconstruct the canonical issuer-signed payload from the carried fields.
+    ///
+    /// # Errors
+    ///
+    /// Rejects any inconsistent anchor, proof, handle, amount, expiry, or nonce.
+    pub fn issuer_payload_v1(
+        &self,
+    ) -> Result<AxtAnchoredSpendIssuerPayloadV1, AxtAnchoredSpendValidationErrorV1> {
+        self.draft.validate_binding_v1(
+            self.authorization.anchor,
+            self.authorization.expiry_slot,
+            self.authorization.nonce,
+        )
+    }
+
+    /// Verify both the reusable handle signature and fresh spend signature.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a mismatch with authoritative WSV context or anchor, malformed
+    /// spend bindings, or either invalid issuer signature.
+    pub fn verify_issuer_signatures_v1(
+        &self,
+        authoritative_context: AxtHandleIssuerContextV1,
+        authoritative_anchor: AxtFinalizedSpendAnchorV1,
+        issuer: &PublicKey,
+    ) -> Result<(), AxtAnchoredSpendValidationErrorV1> {
+        if self.authorization.anchor != authoritative_anchor {
+            return Err(AxtAnchoredSpendValidationErrorV1::AnchorMismatch);
+        }
+        self.draft
+            .handle
+            .verify_issuer_signature_v1(authoritative_context, issuer)
+            .map_err(|_| AxtAnchoredSpendValidationErrorV1::HandleSignature)?;
+        let payload = self.issuer_payload_v1()?;
+        self.authorization
+            .issuer_signature
+            .verify(issuer, &anchored_spend_signature_preimage_v1(&payload))
+            .map_err(|_| AxtAnchoredSpendValidationErrorV1::SpendSignature)
+    }
+
+    /// Return the durable once-only issuer nonce identity.
+    #[must_use]
+    pub const fn replay_key_v1(&self) -> AxtAnchoredSpendReplayKeyV1 {
+        AxtAnchoredSpendReplayKeyV1 {
+            issuer_context: self.draft.handle.issuer_context,
+            nonce: self.authorization.nonce,
+        }
+    }
+}
+
+fn anchored_spend_signature_preimage_v1(payload: &AxtAnchoredSpendIssuerPayloadV1) -> Vec<u8> {
+    let encoded = encode_adaptive(payload);
+    let mut preimage = Vec::with_capacity(
+        AXT_ANCHORED_SPEND_ISSUER_SIGNATURE_DOMAIN_V1
+            .len()
+            .saturating_add(encoded.len()),
+    );
+    preimage.extend_from_slice(AXT_ANCHORED_SPEND_ISSUER_SIGNATURE_DOMAIN_V1);
+    preimage.extend_from_slice(&encoded);
+    preimage
+}
+
+/// Validation failure for a finalized, issuer-signed AXT spend.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+pub enum AxtAnchoredSpendValidationErrorV1 {
+    /// Finalized source-state anchor is structurally invalid.
+    #[error("AXT anchored spend has an invalid finalized anchor: {0}")]
+    Anchor(AxtFinalizedSpendAnchorValidationErrorV1),
+    /// Submitted anchor differs from the exact WSV-resolved record.
+    #[error("AXT anchored spend does not match the authoritative finalized anchor")]
+    AnchorMismatch,
+    /// Fresh nonce is invalid.
+    #[error("AXT anchored spend has an invalid nonce: {0}")]
+    Nonce(AxtSpendNonceValidationErrorV1),
+    /// Expiry is absent or differs across the handle, proof, and spend authorization.
+    #[error("AXT anchored spend expiry binding is invalid")]
+    Expiry,
+    /// Anchor and issuer context target different networks.
+    #[error("AXT anchored spend network binding is invalid")]
+    Network,
+    /// Anchor, handle, and intent target different dataspaces.
+    #[error("AXT anchored spend dataspace binding is invalid")]
+    Dataspace,
+    /// Anchor and handle target different lanes.
+    #[error("AXT anchored spend lane binding is invalid")]
+    Lane,
+    /// Handle and intent target different asset definitions.
+    #[error("AXT anchored spend asset-definition binding is invalid")]
+    AssetDefinition,
+    /// Proof is absent, oversized, malformed, or bound to another policy manifest.
+    #[error("AXT anchored spend proof binding is invalid")]
+    Proof,
+    /// Proof and finalized anchor bind different DA manifests.
+    #[error("AXT anchored spend DA-manifest binding is invalid")]
+    DaManifest,
+    /// Proof and finalized anchor bind different exact transaction sets.
+    #[error("AXT anchored spend transaction-set binding is invalid")]
+    TransactionSet,
+    /// Reusable handle signature is invalid for authoritative WSV context.
+    #[error("AXT anchored spend handle signature is invalid")]
+    HandleSignature,
+    /// Fresh issuer signature is invalid for the exact spend payload.
+    #[error("AXT anchored spend issuer signature is invalid")]
+    SpendSignature,
+    /// Issuer signing failed.
+    #[error("AXT anchored spend signing failed")]
+    Cryptography,
 }
 /// Canonical claim binding one proof-resolved remote spend to one authenticated handle use.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
@@ -2252,6 +2766,64 @@ mod tests {
             )
             .expect("sign sample handle")
     }
+    fn sample_finalized_spend_anchor(
+        network_id: NetworkId,
+        dataspace_id: DataSpaceId,
+        lane_id: LaneId,
+    ) -> AxtFinalizedSpendAnchorV1 {
+        AxtFinalizedSpendAnchorV1 {
+            network_id,
+            genesis_hash: *network_id.as_bytes(),
+            dataspace_id,
+            lane_id,
+            lane_incarnation: Hash::new(b"axt-finalized-anchor-lane-incarnation"),
+            finalized_height: 42,
+            block_header_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                b"axt-finalized-anchor-block-header",
+            )),
+            quorum_certificate_digest: Hash::new(b"axt-finalized-anchor-commit-qc"),
+            committee_digest: Hash::new(b"axt-finalized-anchor-committee"),
+            pre_state_root: Hash::new(b"axt-finalized-anchor-pre-state"),
+            post_state_root: Hash::new(b"axt-finalized-anchor-post-state"),
+            transaction_set_digest: Hash::new(b"axt-finalized-anchor-transaction-set"),
+            da_manifest_digest: Hash::new(b"axt-finalized-anchor-da-manifest"),
+        }
+    }
+    fn sample_anchored_spend_draft(
+        handle: AssetHandle,
+        anchor: AxtFinalizedSpendAnchorV1,
+    ) -> AxtAnchoredSpendDraftV1 {
+        let mut binding = sample_fastpq_binding(anchor.dataspace_id);
+        binding.source_tx_commitment = hex::encode(anchor.transaction_set_digest.as_ref());
+        let envelope = AxtProofEnvelope {
+            dsid: anchor.dataspace_id,
+            manifest_root: handle.manifest_view_root,
+            da_commitment: Some(anchor.da_manifest_digest.into()),
+            proof: vec![0xA5, 0x5A],
+            fastpq_binding: Some(binding),
+            committed_amount: Some(5),
+            amount_commitment: None,
+        };
+        AxtAnchoredSpendDraftV1 {
+            intent: RemoteSpendIntent {
+                asset_dsid: anchor.dataspace_id,
+                op: SpendOp {
+                    asset_definition_id: handle.asset_definition_id.clone(),
+                    kind: "transfer".to_owned(),
+                    from: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".to_owned(),
+                    to: "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76".to_owned(),
+                    amount: Some(Quantity::from(5_u64)),
+                },
+            },
+            handle,
+            proof: Some(ProofBlob {
+                payload: norito::to_bytes(&envelope).expect("encode anchored-spend proof"),
+                expiry_slot: Some(100),
+            }),
+            amount: Some(Quantity::from(5_u64)),
+            amount_commitment: None,
+        }
+    }
     fn budget_key_for_replay_key(key: &AxtHandleReplayKey) -> AxtHandleBudgetKey {
         let mut handle = sample_asset_handle();
         handle.issuer_context.asset_dsid = key.asset_dsid;
@@ -2267,6 +2839,192 @@ mod tests {
         assert!(
             decode_from_bytes::<AssetHandle>(&encoded).is_err(),
             "the admission wire type must require its issuer context and signature"
+        );
+    }
+    #[test]
+    fn finalized_spend_anchor_and_nonce_reject_every_absence_sentinel() {
+        let network = test_network_id(b"finalized-anchor-network");
+        let anchor = sample_finalized_spend_anchor(network, DataSpaceId::new(7), LaneId::new(2));
+        assert_eq!(anchor.validate(), Ok(()));
+        assert_ne!(anchor.digest_v1(), [0; 32]);
+        assert_eq!(
+            AxtSpendNonceV1::try_new([0; 32]),
+            Err(AxtSpendNonceValidationErrorV1::Zero)
+        );
+        assert_eq!(
+            AxtSpendNonceV1::try_new([0x77; 32])
+                .expect("non-zero nonce")
+                .validate(),
+            Ok(())
+        );
+
+        let mut wrong_network = anchor;
+        wrong_network.genesis_hash[0] ^= 1;
+        assert_eq!(
+            wrong_network.validate(),
+            Err(AxtFinalizedSpendAnchorValidationErrorV1::NetworkGenesis)
+        );
+        let mut zero_height = anchor;
+        zero_height.finalized_height = 0;
+        assert_eq!(
+            zero_height.validate(),
+            Err(AxtFinalizedSpendAnchorValidationErrorV1::ZeroHeight)
+        );
+        let mutations = [
+            (AxtFinalizedSpendAnchorFieldV1::LaneIncarnation, {
+                let mut value = anchor;
+                value.lane_incarnation = Hash::prehashed([0; Hash::LENGTH]);
+                value
+            }),
+            (AxtFinalizedSpendAnchorFieldV1::BlockHeader, {
+                let mut value = anchor;
+                value.block_header_hash =
+                    HashOf::from_untyped_unchecked(Hash::prehashed([0; Hash::LENGTH]));
+                value
+            }),
+            (AxtFinalizedSpendAnchorFieldV1::QuorumCertificate, {
+                let mut value = anchor;
+                value.quorum_certificate_digest = Hash::prehashed([0; Hash::LENGTH]);
+                value
+            }),
+            (AxtFinalizedSpendAnchorFieldV1::Committee, {
+                let mut value = anchor;
+                value.committee_digest = Hash::prehashed([0; Hash::LENGTH]);
+                value
+            }),
+            (AxtFinalizedSpendAnchorFieldV1::PreStateRoot, {
+                let mut value = anchor;
+                value.pre_state_root = Hash::prehashed([0; Hash::LENGTH]);
+                value
+            }),
+            (AxtFinalizedSpendAnchorFieldV1::PostStateRoot, {
+                let mut value = anchor;
+                value.post_state_root = Hash::prehashed([0; Hash::LENGTH]);
+                value
+            }),
+            (AxtFinalizedSpendAnchorFieldV1::TransactionSet, {
+                let mut value = anchor;
+                value.transaction_set_digest = Hash::prehashed([0; Hash::LENGTH]);
+                value
+            }),
+            (AxtFinalizedSpendAnchorFieldV1::DaManifest, {
+                let mut value = anchor;
+                value.da_manifest_digest = Hash::prehashed([0; Hash::LENGTH]);
+                value
+            }),
+        ];
+        for (field, mutation) in mutations {
+            assert_eq!(
+                mutation.validate(),
+                Err(AxtFinalizedSpendAnchorValidationErrorV1::ZeroBinding { field })
+            );
+        }
+    }
+    #[test]
+    fn anchored_spend_signature_binds_proof_amount_anchor_expiry_and_nonce() {
+        let issuer = KeyPair::from_seed(vec![0x33; 32], Algorithm::Ed25519);
+        let context = issuer_context(test_network_id(b"sequence-network"), DataSpaceId::new(7));
+        let handle = sample_asset_handle_draft()
+            .sign_by_issuer_v1(context, issuer.private_key())
+            .expect("sign reusable handle");
+        let anchor = sample_finalized_spend_anchor(
+            context.network_id,
+            context.asset_dsid,
+            handle.target_lane,
+        );
+        let nonce = AxtSpendNonceV1::try_new([0x77; 32]).expect("non-zero nonce");
+        let signed = sample_anchored_spend_draft(handle, anchor)
+            .sign_by_issuer_v1(anchor, 100, nonce, issuer.private_key())
+            .expect("sign exact anchored spend");
+        assert_eq!(
+            signed.verify_issuer_signatures_v1(context, anchor, issuer.public_key()),
+            Ok(())
+        );
+        assert_eq!(
+            signed.replay_key_v1(),
+            AxtAnchoredSpendReplayKeyV1 {
+                issuer_context: context,
+                nonce,
+            }
+        );
+
+        let mut changed_intent = signed.clone();
+        changed_intent.draft.intent.op.to.push_str("-substitution");
+        assert_eq!(
+            changed_intent.verify_issuer_signatures_v1(context, anchor, issuer.public_key()),
+            Err(AxtAnchoredSpendValidationErrorV1::SpendSignature)
+        );
+        let mut changed_proof = signed.clone();
+        let proof = changed_proof
+            .draft
+            .proof
+            .as_mut()
+            .expect("signed spend carries proof");
+        let mut envelope: AxtProofEnvelope =
+            norito::decode_canonical(&proof.payload).expect("decode proof envelope");
+        envelope.proof.push(0x11);
+        proof.payload = norito::to_bytes(&envelope).expect("re-encode proof envelope");
+        assert_eq!(
+            changed_proof.verify_issuer_signatures_v1(context, anchor, issuer.public_key()),
+            Err(AxtAnchoredSpendValidationErrorV1::SpendSignature)
+        );
+        let mut changed_amount = signed.clone();
+        changed_amount.draft.amount = Some(Quantity::from(6_u64));
+        assert_eq!(
+            changed_amount.verify_issuer_signatures_v1(context, anchor, issuer.public_key()),
+            Err(AxtAnchoredSpendValidationErrorV1::SpendSignature)
+        );
+        let mut changed_commitment = signed.clone();
+        changed_commitment.draft.amount_commitment = Some([0x44; 32]);
+        assert_eq!(
+            changed_commitment.verify_issuer_signatures_v1(context, anchor, issuer.public_key()),
+            Err(AxtAnchoredSpendValidationErrorV1::SpendSignature)
+        );
+        let mut changed_anchor = signed.clone();
+        changed_anchor.authorization.anchor.committee_digest =
+            Hash::new(b"substituted finalized committee");
+        let substituted_anchor = changed_anchor.authorization.anchor;
+        assert_eq!(
+            changed_anchor.verify_issuer_signatures_v1(
+                context,
+                substituted_anchor,
+                issuer.public_key()
+            ),
+            Err(AxtAnchoredSpendValidationErrorV1::SpendSignature)
+        );
+        let mut changed_expiry = signed.clone();
+        changed_expiry.authorization.expiry_slot = 101;
+        assert_eq!(
+            changed_expiry.verify_issuer_signatures_v1(context, anchor, issuer.public_key()),
+            Err(AxtAnchoredSpendValidationErrorV1::Expiry)
+        );
+        let mut changed_nonce = signed.clone();
+        changed_nonce.authorization.nonce =
+            AxtSpendNonceV1::try_new([0x78; 32]).expect("non-zero nonce");
+        assert_eq!(
+            changed_nonce.verify_issuer_signatures_v1(context, anchor, issuer.public_key()),
+            Err(AxtAnchoredSpendValidationErrorV1::SpendSignature)
+        );
+        let impostor = KeyPair::from_seed(vec![0x34; 32], Algorithm::Ed25519);
+        assert_eq!(
+            signed.verify_issuer_signatures_v1(context, anchor, impostor.public_key()),
+            Err(AxtAnchoredSpendValidationErrorV1::HandleSignature)
+        );
+        let mut wrong_authoritative_anchor = anchor;
+        wrong_authoritative_anchor.finalized_height += 1;
+        assert_eq!(
+            signed.verify_issuer_signatures_v1(
+                context,
+                wrong_authoritative_anchor,
+                issuer.public_key()
+            ),
+            Err(AxtAnchoredSpendValidationErrorV1::AnchorMismatch)
+        );
+
+        let retired_wire = norito::to_bytes(&signed.draft).expect("encode unsigned retired wire");
+        assert!(
+            norito::decode_from_bytes::<AxtAnchoredSpendV1>(&retired_wire).is_err(),
+            "a pre-anchor spend draft must not decode as the admission wire"
         );
     }
     #[test]
@@ -3156,7 +3914,7 @@ mod tests {
     }
     fn sample_fastpq_binding(dsid: DataSpaceId) -> AxtFastpqBinding {
         AxtFastpqBinding {
-            parameter: "fastpq-lane-balanced".to_string(),
+            parameter: "fastpq-state-transition-stark-v1".to_string(),
             source_dsid: dsid.as_u64(),
             source_dataspace: format!("test-dataspace-{}", dsid.as_u64()),
             source_receipt_id: format!("receipt-{}", dsid.as_u64()),

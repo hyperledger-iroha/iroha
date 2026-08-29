@@ -95,14 +95,34 @@ class SccpRecentQueryValidationTest {
     }
 
     @Test
-    fun sccpJsonRequiresExact200AndUnambiguousCanonicalContentType() {
+    fun sccpJsonRequiresExact200AndOneUnambiguousApplicationJsonMediaType() {
+        for (contentType in listOf(
+            "application/json",
+            "Application/JSON; charset=utf-8",
+            "application/json; charset=\"UTF-8\"; profile=exact",
+        )) {
+            val executor = CountingExecutor(response(200, listOf(contentType)))
+            assertTrue(
+                transport(executor)
+                    .getSccpRecentMessages(BigInteger.ONE, null, 1)
+                    .join()
+                    .items
+                    .isEmpty(),
+            )
+            assertEquals(1, executor.requests.size)
+        }
+
         val invalidResponses = listOf(
             response(201, listOf("application/json")),
             response(204, listOf("application/json"), ByteArray(0)),
             response(200, listOf("text/html")),
             response(200, null),
             response(200, listOf("application/json", "application/json")),
-            response(200, listOf("application/json; charset=utf-8")),
+            response(200, listOf("application/problem+json")),
+            response(200, listOf("application/json, text/plain")),
+            response(200, listOf("application/json;")),
+            response(200, listOf("application/json; charset")),
+            response(200, listOf("application/json; profile=\"a,b\"")),
         )
         for (response in invalidResponses) {
             val executor = CountingExecutor(response)

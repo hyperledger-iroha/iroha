@@ -415,7 +415,14 @@ class HttpClientTransportHijiriQuoteTest {
             lastRequest = request
             if (!includeProvenance) {
                 return CompletableFuture.completedFuture(
-                    TransportResponse(statusCode, responseBody, "ok", responseHeaders),
+                    TransportResponse(
+                        statusCode,
+                        responseBody,
+                        "ok",
+                        responseHeaders,
+                        null,
+                        false,
+                    ),
                 )
             }
             return CompletableFuture.completedFuture(

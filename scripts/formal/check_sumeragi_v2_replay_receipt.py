@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import ast
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -22,15 +23,49 @@ import stat
 import sys
 from typing import Any, Iterable, Union
 
-from sumeragi_v2_replay_signing import (
-    MAX_RECEIPT_BYTES,
-    SignatureInputs,
-    SigningError,
-    read_snapshot as read_signing_snapshot,
-    require_unchanged,
-    validate_signing_contract,
-    verify_external_signature,
+
+def _load_local_module(module_name: str, filename: str) -> Any:
+    """Load one authenticated sibling without relying on ambient import paths."""
+
+    path = Path(__file__).absolute().parent / filename
+    if path.is_symlink() or not path.is_file():
+        raise RuntimeError(f"replay support module is unavailable: {path}")
+    canonical_path = path.resolve(strict=True)
+    if canonical_path != path:
+        raise RuntimeError(f"replay support module path is not canonical: {path}")
+    path = canonical_path
+    loaded = sys.modules.get(module_name)
+    if loaded is not None:
+        loaded_path = Path(getattr(loaded, "__file__", "")).resolve()
+        if loaded_path != path:
+            raise RuntimeError(
+                f"replay support module identity differs: {loaded_path} != {path}"
+            )
+        return loaded
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load replay support module: {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(module_name, None)
+        raise
+    return module
+
+
+_REPLAY_SIGNING = _load_local_module(
+    "sumeragi_v2_replay_signing",
+    "sumeragi_v2_replay_signing.py",
 )
+MAX_RECEIPT_BYTES = _REPLAY_SIGNING.MAX_RECEIPT_BYTES
+SignatureInputs = _REPLAY_SIGNING.SignatureInputs
+SigningError = _REPLAY_SIGNING.SigningError
+read_signing_snapshot = _REPLAY_SIGNING.read_snapshot
+require_unchanged = _REPLAY_SIGNING.require_unchanged
+validate_signing_contract = _REPLAY_SIGNING.validate_signing_contract
+verify_external_signature = _REPLAY_SIGNING.verify_external_signature
 
 
 SCHEMA_NAME = "iroha-sumeragi-v2-replay-receipt-v1"

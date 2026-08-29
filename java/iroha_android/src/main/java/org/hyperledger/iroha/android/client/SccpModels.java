@@ -18,8 +18,108 @@ public final class SccpModels {
 
   private static final BigInteger U64_MAX =
       BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE);
+  private static final BigInteger TON_COINS_MAX =
+      BigInteger.ONE.shiftLeft(120).subtract(BigInteger.ONE);
 
   private SccpModels() {}
+
+  /** Validate one TON value-moving amount against its immutable first-release cap. */
+  public static BigInteger requireTonAmountWithinCapV1(
+      final BigInteger amount, final BigInteger maxWrappedSupply) {
+    if (maxWrappedSupply == null
+        || maxWrappedSupply.signum() <= 0
+        || maxWrappedSupply.compareTo(TON_COINS_MAX) > 0) {
+      throw new IllegalArgumentException("TON max_wrapped_supply must be in 1..2^120-1");
+    }
+    if (amount == null || amount.signum() <= 0 || amount.compareTo(maxWrappedSupply) > 0) {
+      throw new IllegalArgumentException(
+          "TON amount must be positive and no greater than max_wrapped_supply");
+    }
+    return amount;
+  }
+
+  /** Canonical portable verification-key identity for SORA-side execution proofs. */
+  public static final class PortableVerifyingKeyReferenceV1 {
+    public final String backend;
+    public final String name;
+    public final long version;
+    public final String commitment;
+
+    PortableVerifyingKeyReferenceV1(
+        final String backend,
+        final String name,
+        final long version,
+        final String commitment) {
+      this.backend = backend;
+      this.name = name;
+      this.version = version;
+      this.commitment = commitment;
+    }
+  }
+
+  /** Mandatory proved burn-and-record execution policy for a governed SCCP route. */
+  public static final class SoraOutboundExecutionPolicyV1 {
+    public final int version;
+    public final String semantics;
+    public final String contractArtifactSha256;
+    public final PortableVerifyingKeyReferenceV1 verifyingKeyReference;
+    public final long gasLimit;
+
+    SoraOutboundExecutionPolicyV1(
+        final int version,
+        final String semantics,
+        final String contractArtifactSha256,
+        final PortableVerifyingKeyReferenceV1 verifyingKeyReference,
+        final long gasLimit) {
+      this.version = version;
+      this.semantics = semantics;
+      this.contractArtifactSha256 = contractArtifactSha256;
+      this.verifyingKeyReference = verifyingKeyReference;
+      this.gasLimit = gasLimit;
+    }
+  }
+
+  /** Exact ordered five-key TON mint-breaker guardian set. */
+  public static final class TonMintBreakerGuardianKeysV1 {
+    public final String guardian0;
+    public final String guardian1;
+    public final String guardian2;
+    public final String guardian3;
+    public final String guardian4;
+
+    public TonMintBreakerGuardianKeysV1(
+        final String guardian0,
+        final String guardian1,
+        final String guardian2,
+        final String guardian3,
+        final String guardian4) {
+      this.guardian0 = requireGuardian(guardian0);
+      this.guardian1 = requireGuardian(guardian1);
+      this.guardian2 = requireGuardian(guardian2);
+      this.guardian3 = requireGuardian(guardian3);
+      this.guardian4 = requireGuardian(guardian4);
+      final List<String> keys = ordered();
+      for (int index = 1; index < keys.size(); index++) {
+        if (keys.get(index - 1).compareTo(keys.get(index)) >= 0) {
+          throw new IllegalArgumentException(
+              "TON mint-breaker guardian keys must be strictly increasing");
+        }
+      }
+    }
+
+    /** Keys in canonical TON StateInit and SCCP hash-preimage order. */
+    public List<String> ordered() {
+      return List.of(guardian0, guardian1, guardian2, guardian3, guardian4);
+    }
+
+    private static String requireGuardian(final String value) {
+      if (value == null || !value.matches("[0-9A-F]{64}") || value.matches("0{64}")) {
+        throw new IllegalArgumentException(
+            "TON mint-breaker guardian keys must be nonzero uppercase 32-byte hex");
+      }
+      return value;
+    }
+  }
 
   /** The sole payload admitted by SCCP V1. */
   public enum PayloadKindV1 {
@@ -162,6 +262,7 @@ public final class SccpModels {
     public final String messageBundlePath;
     public final String proofRequestPath;
     public final String recentMessagesPath;
+    public final String soraOutboundMaterialPath;
     public final RegistryLimits registryLimits;
     public final ResourceLimits resourceLimits;
     public final String proofSubmitPath;
@@ -174,6 +275,7 @@ public final class SccpModels {
         final String messageBundlePath,
         final String proofRequestPath,
         final String recentMessagesPath,
+        final String soraOutboundMaterialPath,
         final RegistryLimits registryLimits,
         final ResourceLimits resourceLimits,
         final String proofSubmitPath,
@@ -184,6 +286,7 @@ public final class SccpModels {
       this.messageBundlePath = messageBundlePath;
       this.proofRequestPath = proofRequestPath;
       this.recentMessagesPath = recentMessagesPath;
+      this.soraOutboundMaterialPath = soraOutboundMaterialPath;
       this.registryLimits = registryLimits;
       this.resourceLimits = resourceLimits;
       this.proofSubmitPath = proofSubmitPath;

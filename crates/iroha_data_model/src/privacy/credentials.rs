@@ -449,7 +449,7 @@ pub enum PrivacyZkAcePolicyLifecycleV1 {
 #[norito(schema_name = "iroha.privacy.zk-ace.policy-digest-material.v1")]
 struct PrivacyZkAcePolicyDigestMaterialV1 {
     policy_id: PrivacyPolicyIdV1,
-    identity_commitment: PrivacyCommitmentV1,
+    identity_commitment: PrivacyZkAceIdentityCommitmentV1,
     policy_digest: PrivacyPolicyDigestV1,
     authorization_epoch: u64,
     asset_definition_id: AssetDefinitionId,
@@ -468,7 +468,7 @@ pub struct PrivacyZkAcePolicyRecordV1 {
     /// Stable lookup key for this policy lineage.
     pub policy_id: PrivacyPolicyIdV1,
     /// Exact identity commitment authorized by the current policy epoch.
-    pub identity_commitment: PrivacyCommitmentV1,
+    pub identity_commitment: PrivacyZkAceIdentityCommitmentV1,
     /// Digest of the governed authorization policy.
     pub policy_digest: PrivacyPolicyDigestV1,
     /// Strictly increasing governance epoch.
@@ -491,7 +491,7 @@ impl PrivacyZkAcePolicyRecordV1 {
     /// duplicate allowlist; or a digest encoding failure.
     pub fn new(
         policy_id: PrivacyPolicyIdV1,
-        identity_commitment: PrivacyCommitmentV1,
+        identity_commitment: PrivacyZkAceIdentityCommitmentV1,
         policy_digest: PrivacyPolicyDigestV1,
         authorization_epoch: u64,
         asset_definition_id: AssetDefinitionId,
@@ -800,7 +800,7 @@ pub struct ZkAcePqAuthorizationStatementV1 {
     /// Shared chain and governed-artifact binding.
     pub context: PrivacyStatementContextV1,
     /// Identity commitment authorized by the policy.
-    pub identity_commitment: PrivacyCommitmentV1,
+    pub identity_commitment: PrivacyZkAceIdentityCommitmentV1,
     /// Exact authorization policy identifier.
     pub policy_id: PrivacyPolicyIdV1,
     /// Digest of the authorization policy.
@@ -818,7 +818,7 @@ pub struct ZkAcePqAuthorizationStatementV1 {
     /// Ledger epoch used by authorization policy checks.
     pub authorization_epoch: u64,
     /// Per-action replay nullifier.
-    pub replay_nullifier: PrivacyNullifierV1,
+    pub replay_nullifier: PrivacyZkAceReplayNullifierV1,
 }
 /// Anonymous PGC k-out-of-n private payment statement.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]

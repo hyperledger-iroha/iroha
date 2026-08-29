@@ -1,5 +1,46 @@
 # Executed lexically in sumeragi_v2_proof_ledger_test.py; do not collect directly.
 
+
+def test_merge_sidecar_holder_semantics_survive_item_digest_refresh(
+    tmp_path: Path,
+) -> None:
+    """Resealing cannot hide weakened certified-sidecar custody authority."""
+
+    module = load_checker()
+    exact_output_production_fixture(tmp_path)
+    lane_path = tmp_path / "crates/iroha_core/src/sumeragi/v2_lane_work.rs"
+    item_name = "service_next_certified_merge_sidecar_materialization"
+    context = (("impl", "V2LaneWorkAdapter"),)
+    mutate_rust_item_source_in_context(
+        module,
+        lane_path,
+        item_name,
+        context,
+        "|| preferred_merge_sidecar_holder(&self.context, &reference)",
+        "&& preferred_merge_sidecar_holder(&self.context, &reference)",
+    )
+    qualified = f"V2LaneWorkAdapter::{item_name}"
+    original = rebind_reviewed_rust_item_digests(
+        module,
+        lane_path,
+        item_name,
+        context,
+        ((module._PRODUCTION_LANE_ACK_SEAM_ITEM_SHA256, qualified),),
+    )
+    try:
+        errors = module._transport_hardening_production_source_fidelity_errors(
+            tmp_path
+        )
+    finally:
+        restore_reviewed_rust_item_digests(original)
+
+    assert any(
+        "local QC-holder or exact proposal-leader custody" in error
+        and "exact reviewed token digest" not in error
+        for error in errors
+    ), errors
+
+
 @pytest.mark.parametrize(
     ("relative", "item_name", "old", "new", "expected_error"),
     (
@@ -246,7 +287,7 @@
             ),
         ),
         (
-            Path("crates/iroha_p2p/src/network.rs"),
+            Path("crates/iroha_p2p/src/network/reliable_actor.rs"),
             "release_cancelled_targets",
             "entry.publish_ready_exact_reply_before_terminal_drop();",
             "let _unfenced = &entry;",
@@ -696,7 +737,12 @@ def test_transport_geometry_source_fidelity_rejects_reply_flush_ack_mutants(
         tmp_path, module, "SumeragiV2AsyncNetwork.tla"
     )
     repo_root = formal_dir.parents[2]
-    network_path = repo_root / "crates" / "iroha_p2p" / "src" / "network.rs"
+    network_relative = (
+        Path("crates/iroha_p2p/src/network/reliable_actor.rs")
+        if item_name in {"into_dispatch_parts", "retain_after_dispatch_attempt"}
+        else Path("crates/iroha_p2p/src/network.rs")
+    )
+    network_path = repo_root / network_relative
     mutate_rust_item_source(module, network_path, item_name, old, new)
 
     errors = module._transport_geometry_production_source_fidelity_errors(repo_root)
@@ -718,7 +764,7 @@ def test_transport_geometry_source_fidelity_rejects_reply_flush_ack_mutants(
             ),
         ),
         (
-            Path("crates/iroha_p2p/src/network.rs"),
+            Path("crates/iroha_p2p/src/network/reliable_actor.rs"),
             "new_targeted_post",
             (("impl", "<", "T", ">", "AdmittedNetworkMessage", "<", "T", ">"),),
             "pending_flush_acks: HashMap::new(),\n"
@@ -735,7 +781,7 @@ def test_transport_geometry_source_fidelity_rejects_reply_flush_ack_mutants(
             ),
         ),
         (
-            Path("crates/iroha_p2p/src/network.rs"),
+            Path("crates/iroha_p2p/src/network/reliable_actor.rs"),
             "push_back",
             (
                 (
@@ -761,7 +807,7 @@ def test_transport_geometry_source_fidelity_rejects_reply_flush_ack_mutants(
             ),
         ),
         (
-            Path("crates/iroha_p2p/src/network.rs"),
+            Path("crates/iroha_p2p/src/network/reliable_actor.rs"),
             "retry_back",
             (
                 (
@@ -1520,10 +1566,101 @@ def test_core_runtime_moved_helper_semantics_survive_digest_refresh(
     repo_root = formal_dir.parents[2]
     path = reviewed_rust_item_provider(module, repo_root, relative, item_name)
     mutate_rust_item_source(module, path, item_name, old, new)
+    if item_name == "fair_v2_ingress_queue_gate_verdict":
+        mutate_rust_item_source(
+            module,
+            path,
+            item_name,
+            "height != 0 && height < owner.token.identity.height",
+            "height < owner.token.identity.height",
+        )
+        core_path = repo_root / relative
+        for history_item, history_old, history_new in (
+            (
+                "matches_configured_network",
+                "configured_network_id == Some(&network_id)",
+                "configured_network_id != Some(&network_id)",
+            ),
+            (
+                "fair_v2_ingress_history_serve_request",
+                "v2_transport::authenticate_commit_certificate_request_identity(\n"
+                "                request,\n"
+                "                inbound.sender(),\n"
+                "            )\n"
+                "            .is_ok()",
+                "v2_transport::authenticate_commit_certificate_request_identity(\n"
+                "                request,\n"
+                "                inbound.sender(),\n"
+                "            )\n"
+                "            .is_err()",
+            ),
+            (
+                "new_with_source_geometry_and_transport_frame_caps",
+                "configured_network_id: None,",
+                "configured_network_id: Some(NetworkId::default()),",
+            ),
+            (
+                "configure_roster_for_context",
+                "roster,\n            Some(*network_id),",
+                "roster,\n            None,",
+            ),
+            (
+                "configure_roster_with_byte_requirements",
+                "state.configured_network_id = configured_network_id;",
+                "state.configured_network_id = None;",
+            ),
+            (
+                "try_push_at",
+                "request.matches_configured_network("
+                "state.configured_network_id.as_ref())",
+                "true",
+            ),
+        ):
+            mutate_rust_item_source(
+                module,
+                core_path,
+                history_item,
+                history_old,
+                history_new,
+            )
+        core_source = core_path.read_text(encoding="utf-8")
+        for history_item in (
+            "new_with_source_geometry_and_transport_frame_caps",
+            "configure_roster_for_context",
+            "configure_roster_with_byte_requirements",
+            "try_push_at",
+        ):
+            history_item_source = next(
+                candidate
+                for candidate in module.rust_items(core_source, history_item)
+                if candidate.brace_context == (("impl", "FairV2Ingress"),)
+            )
+            module._PRODUCTION_FAIR_V2_INGRESS_IMPL_ITEM_SHA256[
+                history_item
+            ] = module._rust_item_token_sha256(history_item_source)
+        history_network = next(
+            candidate
+            for candidate in module.rust_items(
+                core_source, "matches_configured_network"
+            )
+            if candidate.brace_context
+            == (("impl", "FairV2IngressHistoryServeRequest"),)
+        )
+        module._PRODUCTION_FAIR_V2_INGRESS_HISTORY_ITEM_SHA256[
+            "FairV2IngressHistoryServeRequest::matches_configured_network"
+        ] = module._rust_item_token_sha256(history_network)
+        history_request = module.rust_items(
+            core_source, "fair_v2_ingress_history_serve_request"
+        )[0]
+        module._PRODUCTION_FAIR_V2_INGRESS_HISTORY_ITEM_SHA256[
+            "fair_v2_ingress_history_serve_request"
+        ] = module._rust_item_token_sha256(history_request)
     item = module.rust_items(path.read_text(encoding="utf-8"), item_name)[0]
     digest = module._rust_item_token_sha256(item)
     if seal.startswith("ingress::"):
         module._TIMEOUT_VOTE_EPISODE_RUST_ITEM_SHA256[seal] = digest
+        module._LEADER_WIRE_PHYSICAL_INGRESS_ITEM_SHA256[item_name] = digest
+        module._PRODUCTION_FAIR_V2_INGRESS_TOP_LEVEL_ITEM_SHA256[item_name] = digest
     else:
         module._PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256[seal] = digest
 
@@ -1532,6 +1669,26 @@ def test_core_runtime_moved_helper_semantics_survive_digest_refresh(
         expected_error in error and "exact reviewed token digest" not in error
         for error in errors
     ), errors
+    if item_name == "fair_v2_ingress_queue_gate_verdict":
+        assert any(
+            "historical replica release must require a nonzero older request"
+            in error
+            and "exact reviewed token digest" not in error
+            for error in errors
+        ), errors
+        for expected_history_error in (
+            "an unconfigured ingress must begin closed and without network",
+            "production context setup must atomically hand off the exact",
+            "roster rollover must close admission, retire prior owners",
+            "historical scheduling authority must be filtered against the exact",
+            "only exact signed body or commit-certificate requests may acquire",
+            "a signed request network must exactly equal the active",
+        ):
+            assert any(
+                expected_history_error in error
+                and "exact reviewed token digest" not in error
+                for error in errors
+            ), (expected_history_error, errors)
 
 
 @pytest.mark.parametrize(

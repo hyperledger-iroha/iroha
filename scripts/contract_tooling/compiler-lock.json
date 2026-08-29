@@ -47,6 +47,7 @@
       "contracts/evm/sccp/ISccpMessageVerifier.sol",
       "contracts/evm/sccp/SccpExactTransferCodec.sol",
       "contracts/evm/sccp/SccpGroth16Bn254MessageVerifier.sol",
+      "contracts/evm/sccp/SccpSha256ReplayForest.sol",
       "contracts/evm/sccp/TairaXorEvmToken.sol",
       "contracts/evm/sccp/TairaXorExactEvmSccpBridge.sol"
     ],
@@ -54,6 +55,7 @@
       "contracts/evm/sccp/ISccpMessageVerifier.sol",
       "contracts/evm/sccp/SccpExactTransferCodec.sol",
       "contracts/evm/sccp/SccpGroth16Bn254MessageVerifier.sol",
+      "contracts/evm/sccp/SccpSha256ReplayForest.sol",
       "contracts/tron/sccp/SccpTronGroth16Bn254MessageVerifier.sol",
       "contracts/tron/sccp/TairaXOR.sol",
       "contracts/tron/sccp/TairaXorSccpBridge.sol"

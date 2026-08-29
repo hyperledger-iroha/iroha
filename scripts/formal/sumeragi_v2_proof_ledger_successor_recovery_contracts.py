@@ -1009,6 +1009,12 @@ def _successor_activation_rank_source_fidelity_errors(
     return errors
 
 def _successor_production_recovery_finalization_tail(
+    launch_path: Path,
+    launch_source: str,
+    lifecycle_run_inner_path: Path,
+    lifecycle_run_inner_source: str,
+    finalized_output_path: Path,
+    finalized_output_source: str,
     ledger_path: Path,
     ledger_source: str,
     lifecycle_startup_test_path: Path,
@@ -1028,6 +1034,160 @@ def _successor_production_recovery_finalization_tail(
     require_literals: Any,
 ) -> None:
     """Bind production finalization publication and recovered refanout."""
+
+    finalization_readiness = region(
+        launch_path,
+        launch_source,
+        "shared lifecycle finalization readiness",
+        "fn ready_for_finalized_rollover(\n        &mut self,\n    ) -> Result<bool, ProductionLifecycleFinalizationErrorV1> {",
+        "impl ActivatedProductionLifecycleV1",
+    )
+    require_order(
+        launch_path,
+        "shared lifecycle finalization readiness",
+        finalization_readiness,
+        (
+            "let locally_ready =",
+            "self.executor.ready_to_finish()",
+            "!self.owner.has_recovered_lifecycle_outputs()",
+            "self.pending_kura_apply_replay.is_none()",
+            "self.recovered_local_proposal_attempt.is_none()",
+            "self.pending_lifecycle_completion.is_none()",
+            "self.pending_ingress_capacity.is_none()",
+            "self.completion_observer_activation.is_none()",
+            "exactly_covers_finalization_work(&self.owner.coordinator)",
+            "if !locally_ready",
+            "return Ok(false)",
+            "self.verify_published_store_marker_finalization_census()",
+            "ProductionLifecycleFinalizationErrorV1::StoreMarkerCensus",
+            "Ok(true)",
+        ),
+    )
+    activated_finalization = region(
+        launch_path,
+        launch_source,
+        "activated lifecycle finalization",
+        "fn into_finalized_rollover(",
+        "pub(in crate::sumeragi) fn retire_lifecycle_stores_for_test(",
+    )
+    require_order(
+        launch_path,
+        "activated lifecycle finalization",
+        activated_finalization,
+        (
+            "self.launched.ready_for_finalized_rollover()",
+            "let Self { mut launched, local_proposal, runner_activation, } = self",
+            "runner_activation.retire(&launched.leader_wire_ingress_binding.ingress)",
+            "drop(local_proposal)",
+            "launched.leader_wire_ingress_binding.retire()",
+            "executor.into_finalized_parts()",
+            "begin_fail_stop_operation()",
+            "runtime.into_driver().finish_height(&receipt, &artifact)",
+            "operation.complete()",
+            "FinalizedProductionLifecycleRolloverV1 {",
+        ),
+    )
+    require_tokens(
+        launch_path,
+        "activated lifecycle finalization quiescence",
+        activated_finalization,
+        (
+            "ProductionLifecycleFinalizationErrorV1::NotReady",
+            "finalized_adapter: finalized",
+        ),
+    )
+    require_order(
+        lifecycle_run_inner_path,
+        "runner lifecycle finalization preflight",
+        lifecycle_run_inner_source,
+        (
+            "let terminal_planning_fenced =",
+            "terminal_finalization_fenced || producer_claim.apply_terminal_settled()",
+            "if terminal_planning_fenced && !ready_to_finish",
+            "let producer_turn = if terminal_planning_fenced",
+            "if !terminal_planning_fenced",
+            "schedule_local_proposal(",
+            "let finalization_ready = if ready_to_finish",
+            "activated.ready_for_finalized_rollover(&mut active_runner)?",
+            "if ready_to_finish && !finalization_ready",
+            "let rollover_ready = if finalization_ready",
+            "preflight_finalized_lane_rollover(",
+            "if finalization_ready && !rollover_ready",
+            "if rollover_ready && terminal_exact_output_pending",
+            "close_runner_ingress_for_finalized_drain(",
+            "drain_decided_lane_recovery_ingress(",
+            "ensure_closed_drained_cut()",
+            "finalize_lifecycle_height(",
+        ),
+    )
+    output_rollover = region(
+        launch_path,
+        launch_source,
+        "typed lifecycle finalized-output rollover",
+        "impl FinalizedProductionLifecycleRolloverV1",
+        "impl ProductionLifecyclePostOutputHandoffV1",
+    )
+    require_order(
+        launch_path,
+        "typed lifecycle finalized-output rollover",
+        output_rollover,
+        (
+            "rollover_finalized_height_outputs_for_lifecycle(",
+            "ProductionLifecycleOutputRolloverPermitV1 {",
+            "finalized_adapter.retire_after_output_handoff()",
+            "refresh_live_serve_retirement_cut(&services, &retired_ingress)",
+            "ProductionLifecyclePostOutputHandoffV1 {",
+        ),
+    )
+    require_tokens(
+        finalized_output_path,
+        "sealed runner finalized-output reuse",
+        finalized_output_source,
+        (
+            "fn rollover_finalized_height_outputs_for_lifecycle(",
+            "_permit: super::v2_lifecycle_coordinator::ProductionLifecycleOutputRolloverPermitV1",
+            "rollover_finalized_height_outputs(",
+        ),
+    )
+    store_retirement = region(
+        launch_path,
+        launch_source,
+        "post-output lifecycle-store retirement",
+        "impl ProductionLifecyclePostOutputHandoffV1",
+        "impl ProductionLifecycleCleanupReadyV1",
+    )
+    require_order(
+        launch_path,
+        "post-output lifecycle-store retirement",
+        store_retirement,
+        (
+            "begin_fail_stop_operation()",
+            "retire_authenticated_cut(serve_payloads, &retained_serve_payloads)",
+            "reconcile_complete_tip_serve_retirement(&current, refreshed)",
+            "stage_finalized_height_all_row_retirement(reconciliation)",
+            "persist_exact_finalization_successor(staged)",
+            "publication.consume_owners(registry)",
+            "operation.complete()",
+            "ProductionLifecycleCleanupReadyV1 {",
+        ),
+    )
+    cleanup_ready = region(
+        launch_path,
+        launch_source,
+        "cleanup-ready lifecycle service teardown",
+        "impl ProductionLifecycleCleanupReadyV1",
+        "impl ProductionLifecycleOwnerV1",
+    )
+    require_order(
+        launch_path,
+        "cleanup-ready lifecycle service teardown",
+        cleanup_ready,
+        (
+            "self.services.allow_clean_shutdown()",
+            "self.services.finish_height(self.receipt, cleanup_timeout, supervisor)",
+            "ProductionLifecycleFinalizationOutcomeV1 {",
+        ),
+    )
 
     finalization_publication = region(
         ledger_path,

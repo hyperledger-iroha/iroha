@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Strict SCCP V1 public release-evidence and bundle primitives.
 
 This module deliberately contains no signing or deployment code.  Release
@@ -12,19 +11,20 @@ import base64
 import binascii
 import hashlib
 import html
+import ipaddress
 import json
 import os
 import re
 import stat
 import struct
 import subprocess
-import sys
 import tempfile
 import threading
 import unicodedata
 import urllib.parse
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path, PurePosixPath
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any
 
 try:
     from scripts import taira_constants
@@ -34,17 +34,23 @@ except ModuleNotFoundError as error:
     import taira_constants
 
 
-EVIDENCE_SCHEMA = "sccp-release-evidence-v1"
-BUNDLE_SCHEMA = "sccp-release-bundle-v1"
-READINESS_SCHEMA = "sccp-release-readiness-v1"
-TRUST_POLICY_SCHEMA = "sccp-release-trust-policy-v1"
-TEST_TRUST_POLICY_SCHEMA = "sccp-release-test-trust-policy-v1"
-RUST_VALIDATION_SCHEMA = "sccp-release-lane-validation-v1"
-SIGNING_DOMAIN = b"iroha:sccp:release-evidence:v1\x00"
-BUNDLE_HASH_DOMAIN = b"iroha:sccp:release-bundle:v1\x00"
-VALIDATOR_BUILD_ID_DOMAIN = b"sccp:release-evidence-validator-build:v1\x00"
+EVIDENCE_SCHEMA = "sccp-release-evidence-final-v1"
+BUNDLE_SCHEMA = "sccp-release-bundle-final-v1"
+READINESS_SCHEMA = "sccp-release-readiness-final-v1"
+TRUST_POLICY_SCHEMA = "sccp-release-trust-policy-final-v1"
+TEST_TRUST_POLICY_SCHEMA = "sccp-release-test-trust-policy-final-v1"
+RUST_VALIDATION_SCHEMA = "sccp-release-lane-validation-final-v1"
+VALIDATOR_BUILD_VERIFICATION_SCHEMA = "iroha.sccp.validator-build-verification.final-v1"
+FRESHNESS_REQUEST_SCHEMA = "sccp-release-freshness-request-final-v1"
+FRESHNESS_HEAD_SCHEMA = "sccp-release-freshness-head-final-v1"
+SIGNING_DOMAIN = b"iroha:sccp:release-evidence:final-v1\x00"
+BUNDLE_HASH_DOMAIN = b"iroha:sccp:release-bundle:final-v1\x00"
+VALIDATOR_BUILD_ID_DOMAIN = b"sccp:release-evidence-validator-build:final-v1\x00"
 PRODUCTION_VALIDATOR_FEATURES = ("dev-tools",)
-CIRCUIT_POLICY_SIGNING_DOMAIN = b"iroha:sccp:circuit-policy-audit:v1\x00"
+CIRCUIT_POLICY_SIGNING_DOMAIN = b"iroha:sccp:circuit-policy-audit:final-v1\x00"
+POLICY_ROOT_HASH_DOMAIN = b"iroha:sccp:release-policy-root:final-v1\x00"
+POLICY_ROOT_SIGNING_DOMAIN = b"iroha:sccp:release-policy-root-signature:final-v1\x00"
+FRESHNESS_SIGNING_DOMAIN = b"iroha:sccp:release-freshness-head:final-v1\x00"
 FORBIDDEN_ALGEBRAIC_SMOKE_VK = (
     "9ef8067d260532f88e60cfa4b458fe678fc46b9c242de18fc91ba646e0857fc4"
 )
@@ -125,11 +131,11 @@ MAX_EVIDENCE_BYTES = 2 * 1024 * 1024
 MAX_INDEX_BYTES = 512 * 1024
 MAX_ARTIFACT_BYTES = 16 * 1024 * 1024
 MAX_TRANSCRIPT_BYTES = 4 * 1024 * 1024
-MAX_SEMANTIC_ARTIFACT_BYTES = 64 * 1024 * 1024
+MAX_SEMANTIC_ARTIFACT_BYTES = 8 * 1024 * 1024 * 1024
 MAX_GROTH16_PROOF_ARTIFACT_BYTES = 16 * 1024 * 1024 + 64 * 1024
 MAX_AUDIT_REPORT_BYTES = 2 * 1024 * 1024
-MAX_TOTAL_ARTIFACT_BYTES = 256 * 1024 * 1024
-MAX_ARTIFACTS = 64
+MAX_TOTAL_ARTIFACT_BYTES = 32 * 1024 * 1024 * 1024
+MAX_ARTIFACTS = 128
 MAX_JSON_DEPTH = 32
 MAX_JSON_NODES = 32_768
 MAX_PUBLIC_ERROR_BYTES = 1024
@@ -138,7 +144,21 @@ MAX_VALIDATOR_BINARY_BYTES = 128 * 1024 * 1024
 MAX_VALIDATOR_OUTPUT_BYTES = 16 * 1024
 MAX_VALIDATOR_ERROR_BYTES = 4096
 MAX_VALIDATOR_SECONDS = 30
-MAX_DESTINATION_ATTESTATION_AGE_MS = 24 * 60 * 60 * 1000
+MAX_POLICY_LIFETIME_MS = 30 * 24 * 60 * 60 * 1000
+MAX_RELEASE_EVIDENCE_AGE_MS = 6 * 60 * 60 * 1000
+MAX_LANE_EVIDENCE_AGE_MS = 60 * 60 * 1000
+MAX_CANARY_EVIDENCE_AGE_MS = 60 * 60 * 1000
+MAX_DESTINATION_ATTESTATION_AGE_MS = 15 * 60 * 1000
+MAX_VALIDATOR_BUILD_AGE_MS = 7 * 24 * 60 * 60 * 1000
+MAX_CONTRACT_BUILD_AGE_MS = 7 * 24 * 60 * 60 * 1000
+MAX_CIRCUIT_AUDIT_AGE_MS = 180 * 24 * 60 * 60 * 1000
+MAX_FUTURE_SKEW_MS = 2 * 60 * 1000
+MAX_FRESHNESS_RESPONSE_LIFETIME_MS = 5 * 60 * 1000
+MAX_FRESHNESS_HEAD_SPREAD_MS = 30 * 1000
+MAX_FRESHNESS_HEAD_BYTES = 64 * 1024
+POLICY_ROOT_THRESHOLD = 2
+POLICY_ROOT_AUTHORITY_COUNT = 3
+FRESHNESS_AUTHORITY_COUNT = 3
 
 REQUIRED_PHASES = (
     "rust-sccp",
@@ -160,6 +180,28 @@ PROFILE_ORDER = (
     "bsc-mainnet",
     "tron-mainnet",
     "ton-mainnet",
+)
+
+VALIDATOR_BUILD_RECEIPT_HASH_FIELDS = (
+    "validator_builder_policy_sha256_hex",
+    "validator_source_archive_sha256_hex",
+    "validator_dependency_inventory_sha256_hex",
+    "validator_cargo_metadata_closure_sha256_hex",
+    "validator_sbom_sha256_hex",
+    "validator_toolchain_inventory_sha256_hex",
+    "validator_sysroot_inventory_sha256_hex",
+    "validator_linker_sha256_hex",
+    "validator_build_recipe_sha256_hex",
+    "validator_build_environment_sha256_hex",
+    "validator_container_manifest_sha256_hex",
+    "validator_builder_report_sha256_hex",
+    "validator_executable_sha256_hex",
+    "validator_complete_build_closure_sha256_hex",
+    "validator_output_lock_sha256_hex",
+)
+
+VALIDATOR_BUILD_VERIFICATION_HASH_FIELDS = tuple(
+    field.removesuffix("_hex") for field in VALIDATOR_BUILD_RECEIPT_HASH_FIELDS
 )
 
 PROOF_CURVES = (
@@ -297,9 +339,7 @@ UNAVAILABLE_INBOUND_REASONS = {
     for profile in PROFILE_ORDER
 }
 
-OUTBOUND_UNAVAILABLE_REASON = (
-    "authenticated-destination-state-is-unavailable"
-)
+OUTBOUND_UNAVAILABLE_REASON = "authenticated-destination-state-is-unavailable"
 
 EXPECTED_INBOUND_STATUS = {
     "ethereum-mainnet": "verified",
@@ -311,20 +351,66 @@ EXPECTED_INBOUND_STATUS = {
 EXPECTED_OUTBOUND_STATUS = {profile: "verified" for profile in PROFILE_ORDER}
 
 SEMANTIC_ARTIFACT_ROLES = (
-    ("circuit-artifact", "semantic-circuit", "circuit.bin"),
-    ("witness-generator", "witness-generator", "witness-generator.bin"),
-    ("verifying-key", "verifying-key", "verifying-key.bin"),
-    ("prover-build", "prover-build", "prover-build.bin"),
-    ("toolchain-lock", "toolchain-lock", "toolchain.lock"),
-    ("honest-witness", "honest-witness", "honest-witness.bin"),
-    ("honest-proof", "honest-proof", "honest-proof.norito"),
+    ("source-archive", "circuit-source-archive", "source.tar.zst"),
+    ("vendor-inventory", "circuit-vendor-inventory", "vendor.inventory.json"),
+    ("toolchain-inventory", "circuit-toolchain-inventory", "toolchain.inventory.json"),
+    ("sbom", "circuit-sbom", "sbom.spdx.json"),
+    ("message-r1cs", "r1cs", "message.r1cs"),
+    ("anchor-r1cs", "r1cs", "anchor.r1cs"),
+    ("message-proving-key", "proving-key", "message-proving-key.bin"),
+    ("anchor-proving-key", "proving-key", "anchor-proving-key.bin"),
+    ("message-verifying-key", "verifying-key", "message-verifying-key.bin"),
+    ("anchor-verifying-key", "verifying-key", "anchor-verifying-key.bin"),
+    ("phase1-transcript", "phase1-ceremony-transcript", "phase1.transcript"),
+    (
+        "message-phase2-transcript",
+        "phase2-ceremony-transcript",
+        "message-phase2.transcript",
+    ),
+    (
+        "anchor-phase2-transcript",
+        "phase2-ceremony-transcript",
+        "anchor-phase2.transcript",
+    ),
+    ("message-witness-compiler", "witness-compiler", "message-witness-compiler.bin"),
+    ("anchor-witness-compiler", "witness-compiler", "anchor-witness-compiler.bin"),
+    ("message-prover", "prover", "message-prover.bin"),
+    ("anchor-prover", "prover", "anchor-prover.bin"),
+    (
+        "message-fixed-key-verifier",
+        "fixed-key-verifier",
+        "message-fixed-key-verifier.bin",
+    ),
+    (
+        "anchor-fixed-key-verifier",
+        "fixed-key-verifier",
+        "anchor-fixed-key-verifier.bin",
+    ),
+    ("message-kat", "message-kat", "message-kat.norito"),
+    ("anchor-kat", "anchor-kat", "anchor-kat.norito"),
 )
 SEMANTIC_POLICY_HASH_FIELDS = {
-    "circuit-artifact": "circuit_artifact_sha256_hex",
-    "witness-generator": "witness_generator_sha256_hex",
-    "verifying-key": "verifying_key_sha256_hex",
-    "prover-build": "prover_build_sha256_hex",
-    "toolchain-lock": "toolchain_lock_sha256_hex",
+    "source-archive": "source_archive_sha256_hex",
+    "vendor-inventory": "vendor_inventory_sha256_hex",
+    "toolchain-inventory": "toolchain_inventory_sha256_hex",
+    "sbom": "sbom_sha256_hex",
+    "message-r1cs": "circuit_artifact_sha256_hex",
+    "anchor-r1cs": "anchor_circuit_artifact_sha256_hex",
+    "message-proving-key": "proving_key_sha256_hex",
+    "anchor-proving-key": "anchor_proving_key_sha256_hex",
+    "message-verifying-key": "verifying_key_sha256_hex",
+    "anchor-verifying-key": "anchor_verifying_key_sha256_hex",
+    "phase1-transcript": "phase1_transcript_sha256_hex",
+    "message-phase2-transcript": "phase2_transcript_sha256_hex",
+    "anchor-phase2-transcript": "anchor_phase2_transcript_sha256_hex",
+    "message-witness-compiler": "witness_generator_sha256_hex",
+    "anchor-witness-compiler": "anchor_witness_compiler_sha256_hex",
+    "message-prover": "prover_build_sha256_hex",
+    "anchor-prover": "anchor_prover_sha256_hex",
+    "message-fixed-key-verifier": "fixed_key_verifier_sha256_hex",
+    "anchor-fixed-key-verifier": "anchor_fixed_key_verifier_sha256_hex",
+    "message-kat": "message_kat_sha256_hex",
+    "anchor-kat": "anchor_kat_sha256_hex",
 }
 ARTIFACT_KINDS = frozenset(
     (
@@ -336,8 +422,9 @@ ARTIFACT_KINDS = frozenset(
 )
 PROVENANCE_ROLES = ("release-engineering", "release-security")
 CIRCUIT_AUDITOR_ROLES = (
-    "semantic-security-audit",
-    "prover-reproducibility-audit",
+    "semantic-cryptographic-audit",
+    "reproducibility-ceremony-audit",
+    "destination-integration-audit",
 )
 RUST_VALIDATOR_SOURCE = (
     Path(__file__).resolve().parents[1]
@@ -353,7 +440,7 @@ SCCP_BUILD_SCRIPT = REPOSITORY_ROOT / "crates" / "iroha_sccp" / "build.rs"
 WORKSPACE_MANIFEST = REPOSITORY_ROOT / "Cargo.toml"
 CARGO_LOCK = REPOSITORY_ROOT / "Cargo.lock"
 RUST_TOOLCHAIN_LOCK = REPOSITORY_ROOT / "rust-toolchain.toml"
-VALIDATOR_BUILD_HASH_FIELDS = (
+VALIDATOR_IDENTITY_HASH_FIELDS = (
     "source_sha256_hex",
     "crate_manifest_sha256_hex",
     "build_script_sha256_hex",
@@ -460,6 +547,49 @@ class SccpReleaseError(ValueError):
     """A bounded, public-safe SCCP release validation failure."""
 
 
+class _SecretScanBudget:
+    """One aggregate recursive-decoding budget shared across streamed chunks."""
+
+    __slots__ = (
+        "decoded_bytes",
+        "decoded_tokens",
+        "max_decoded_bytes",
+        "max_decoded_tokens",
+        "max_variants",
+        "variants",
+    )
+
+    def __init__(
+        self,
+        *,
+        max_variants: int,
+        max_decoded_bytes: int,
+        max_decoded_tokens: int,
+    ) -> None:
+        if min(max_variants, max_decoded_bytes, max_decoded_tokens) <= 0:
+            _secret_scan_limit()
+        self.max_variants = max_variants
+        self.max_decoded_bytes = max_decoded_bytes
+        self.max_decoded_tokens = max_decoded_tokens
+        self.variants = 0
+        self.decoded_bytes = 0
+        self.decoded_tokens = 0
+
+    def consume_variant(self, size: int) -> None:
+        self.variants += 1
+        self.decoded_bytes += size
+        if (
+            self.variants > self.max_variants
+            or self.decoded_bytes > self.max_decoded_bytes
+        ):
+            _secret_scan_limit()
+
+    def consume_token(self) -> None:
+        self.decoded_tokens += 1
+        if self.decoded_tokens > self.max_decoded_tokens:
+            _secret_scan_limit()
+
+
 def _rotl64(value: int, shift: int) -> int:
     if shift == 0:
         return value & _U64_MASK
@@ -472,7 +602,9 @@ def keccak256(payload: bytes) -> bytes:
     state = [0] * 25
     padded = bytearray(payload)
     padded.append(0x01)
-    padded.extend(b"\x00" * ((_KECCAK_RATE - len(padded) % _KECCAK_RATE) % _KECCAK_RATE))
+    padded.extend(
+        b"\x00" * ((_KECCAK_RATE - len(padded) % _KECCAK_RATE) % _KECCAK_RATE)
+    )
     padded[-1] |= 0x80
     for offset in range(0, len(padded), _KECCAK_RATE):
         block = padded[offset : offset + _KECCAK_RATE]
@@ -499,8 +631,7 @@ def keccak256(payload: bytes) -> bytes:
             for x in range(5):
                 for y in range(5):
                     state[x + 5 * y] = rotated[x + 5 * y] ^ (
-                        (~rotated[(x + 1) % 5 + 5 * y])
-                        & rotated[(x + 2) % 5 + 5 * y]
+                        (~rotated[(x + 1) % 5 + 5 * y]) & rotated[(x + 2) % 5 + 5 * y]
                     )
             state[0] ^= round_constant
     return b"".join(word.to_bytes(8, "little") for word in state)[:32]
@@ -524,7 +655,10 @@ def semantic_proof_profile_hash(
         for commitment in commitments
     ):
         _fail("semantic proof profile commitments must each be exactly 32 bytes")
-    if any(not any(commitment) for commitment in commitments) or len(set(commitments)) != 3:
+    if (
+        any(not any(commitment) for commitment in commitments)
+        or len(set(commitments)) != 3
+    ):
         _fail("semantic proof profile commitments must be nonzero and role-distinct")
     if proof_curve == "bn254":
         curve_tag = 0
@@ -647,7 +781,11 @@ def public_error(error: BaseException) -> str:
     # line and remove terminal controls (including bidi/zero-width format
     # characters) so an untrusted validator cannot forge another diagnostic.
     text = "".join(
-        " " if ch in "\r\n\t" else "?" if unicodedata.category(ch).startswith("C") else ch
+        " "
+        if ch in "\r\n\t"
+        else "?"
+        if unicodedata.category(ch).startswith("C")
+        else ch
         for ch in text
     )
     text = " ".join(text.split())
@@ -745,7 +883,11 @@ def require_canonical_json_file(data: bytes, value: Any, *, label: str) -> None:
 
 
 def _safe_relative_parts(value: Any, *, label: str) -> tuple[str, ...]:
-    if type(value) is not str or not value or len(value.encode("utf-8", "strict")) > 240:
+    if (
+        type(value) is not str
+        or not value
+        or len(value.encode("utf-8", "strict")) > 240
+    ):
         _fail(f"{label} must be a bounded relative POSIX path")
     reject_secret_material(value.encode("utf-8"), label="public artifact path")
     if value != value.strip() or "\\" in value or any(ord(ch) < 0x20 for ch in value):
@@ -754,7 +896,10 @@ def _safe_relative_parts(value: Any, *, label: str) -> tuple[str, ...]:
     if path.is_absolute() or str(path) != value:
         _fail(f"{label} must be a canonical relative POSIX path")
     parts = path.parts
-    if not parts or any(part in ("", ".", "..") or not _SAFE_SEGMENT_RE.fullmatch(part) for part in parts):
+    if not parts or any(
+        part in ("", ".", "..") or not _SAFE_SEGMENT_RE.fullmatch(part)
+        for part in parts
+    ):
         _fail(f"{label} contains an unsafe path component")
     return parts
 
@@ -859,6 +1004,109 @@ def read_relative_file(root: Path, relative: str, *, label: str, maximum: int) -
     return read_direct_file(current / parts[-1], label=label, maximum=maximum)
 
 
+def verify_relative_file_stream(
+    root: Path,
+    relative: str,
+    *,
+    label: str,
+    maximum: int,
+    expected_size: int,
+    expected_sha256_hex: str,
+    capture_maximum: int = MAX_ARTIFACT_BYTES,
+) -> bytes:
+    """Hash and secret-scan a signed artifact with bounded streaming memory.
+
+    Small structured artifacts are returned in full. Large opaque artifacts
+    return a nonzero verified marker; callers that need their bytes reopen them
+    through their own bounded, authenticated parser.
+    """
+
+    _require_direct_directory(root, label="artifact root")
+    parts = _safe_relative_parts(relative, label=label)
+    current = root
+    for part in parts[:-1]:
+        current = current / part
+        _require_direct_directory(current, label=f"{label} parent")
+    path = current / parts[-1]
+    try:
+        before = path.lstat()
+    except OSError:
+        _fail(f"{label} is not an accessible file")
+    if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
+        _fail(f"{label} must be a direct regular file")
+    if before.st_nlink != 1:
+        _fail(f"{label} must not be hard-linked")
+    if (
+        before.st_size != expected_size
+        or before.st_size <= 0
+        or before.st_size > maximum
+    ):
+        _fail(f"{label} does not match its signed size and SHA-256")
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError:
+        _fail(f"{label} could not be opened safely")
+    digest = hashlib.sha256()
+    captured = bytearray()
+    overlap = b""
+    total = 0
+    saw_nonzero = False
+    try:
+        opened = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or opened.st_nlink != 1
+            or (opened.st_dev, opened.st_ino, opened.st_size, opened.st_ctime_ns)
+            != (before.st_dev, before.st_ino, before.st_size, before.st_ctime_ns)
+        ):
+            _fail(f"{label} changed while opening")
+        while True:
+            chunk = os.read(descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > maximum or total > expected_size:
+                _fail(f"{label} exceeds its signed streaming bound")
+            digest.update(chunk)
+            saw_nonzero = saw_nonzero or any(chunk)
+            reject_secret_material(overlap + chunk, label=label)
+            overlap = (overlap + chunk)[-_SECRET_SCAN_MAX_TOKEN_CHARS:]
+            if expected_size <= capture_maximum:
+                captured.extend(chunk)
+        after_open = os.fstat(descriptor)
+    finally:
+        os.close(descriptor)
+    try:
+        after = path.lstat()
+    except OSError:
+        _fail(f"{label} disappeared while streaming")
+    identity = (
+        before.st_dev,
+        before.st_ino,
+        before.st_size,
+        before.st_mtime_ns,
+        before.st_ctime_ns,
+    )
+    if identity != (
+        after.st_dev,
+        after.st_ino,
+        after.st_size,
+        after.st_mtime_ns,
+        after.st_ctime_ns,
+    ) or identity != (
+        after_open.st_dev,
+        after_open.st_ino,
+        after_open.st_size,
+        after_open.st_mtime_ns,
+        after_open.st_ctime_ns,
+    ):
+        _fail(f"{label} changed while streaming")
+    if total != expected_size or digest.hexdigest() != expected_sha256_hex:
+        _fail(f"{label} does not match its signed size and SHA-256")
+    return bytes(captured) if captured else (b"\x01" if saw_nonzero else b"\x00")
+
+
 def enumerate_direct_files(root: Path) -> tuple[str, ...]:
     """Enumerate a bounded tree while refusing links and unsafe names."""
 
@@ -909,19 +1157,59 @@ def sha256_hex(data: bytes) -> str:
 
 
 def artifact_limit(kind: str) -> int:
-    """Return the closed byte limit for one signed release-artifact kind."""
+    """Return the hard streaming ceiling for one signed artifact kind.
+
+    Every final-V1 artifact also carries a smaller signed
+    ``declared_max_bytes`` value.  These ceilings only prevent an absurd
+    declaration from turning verification into an unbounded read; they are not
+    the old blanket 64 MiB semantic-artifact limit.
+    """
 
     if kind == "phase-transcript":
         return MAX_TRANSCRIPT_BYTES
     if kind == "circuit-audit-report":
         return MAX_AUDIT_REPORT_BYTES
-    if kind == "honest-proof":
+    if kind in ("message-kat", "anchor-kat"):
         return MAX_GROTH16_PROOF_ARTIFACT_BYTES
-    if kind in {entry[1] for entry in SEMANTIC_ARTIFACT_ROLES}:
+    if kind in {
+        "circuit-source-archive",
+        "circuit-vendor-inventory",
+        "circuit-toolchain-inventory",
+        "circuit-sbom",
+        "r1cs",
+        "proving-key",
+        "verifying-key",
+        "phase1-ceremony-transcript",
+        "phase2-ceremony-transcript",
+        "witness-compiler",
+        "prover",
+        "fixed-key-verifier",
+    }:
         return MAX_SEMANTIC_ARTIFACT_BYTES
     if kind == "lane-evidence":
         return MAX_ARTIFACT_BYTES
     _fail("artifact kind is not part of the SCCP V1 release schema")
+
+
+def artifact_stream_limit(entry: Mapping[str, Any]) -> int:
+    """Return a validated signed per-artifact streaming limit."""
+
+    hard_limit = artifact_limit(entry["kind"])
+    declared = _require_int(
+        entry.get("declared_max_bytes"),
+        label="artifact declared_max_bytes",
+        minimum=1,
+        maximum=hard_limit,
+    )
+    size = _require_int(
+        entry["size_bytes"],
+        label="artifact size_bytes",
+        minimum=1,
+        maximum=declared,
+    )
+    if declared < size:
+        _fail("artifact declared_max_bytes is smaller than its signed size")
+    return declared
 
 
 def _require_object(value: Any, *, label: str, keys: Iterable[str]) -> dict[str, Any]:
@@ -969,7 +1257,9 @@ def _require_id(value: Any, *, label: str) -> str:
     return text
 
 
-def _require_int(value: Any, *, label: str, minimum: int = 0, maximum: int = 2**63 - 1) -> int:
+def _require_int(
+    value: Any, *, label: str, minimum: int = 0, maximum: int = 2**63 - 1
+) -> int:
     if type(value) is not int or value < minimum or value > maximum:
         _fail(f"{label} must be an integer in [{minimum}, {maximum}]")
     return value
@@ -980,9 +1270,17 @@ def _require_true(value: Any, *, label: str) -> None:
         _fail(f"{label} must be true")
 
 
-def _require_hex(value: Any, *, label: str, byte_length: int, nonzero: bool = True) -> str:
-    if type(value) is not str or len(value) != byte_length * 2 or not _HEX_RE.fullmatch(value):
-        _fail(f"{label} must be exactly {byte_length} bytes of lowercase hex without 0x")
+def _require_hex(
+    value: Any, *, label: str, byte_length: int, nonzero: bool = True
+) -> str:
+    if (
+        type(value) is not str
+        or len(value) != byte_length * 2
+        or not _HEX_RE.fullmatch(value)
+    ):
+        _fail(
+            f"{label} must be exactly {byte_length} bytes of lowercase hex without 0x"
+        )
     if nonzero and not any(bytes.fromhex(value)):
         _fail(f"{label} must not be zero")
     return value
@@ -1102,9 +1400,7 @@ def _ed_scalar_multiply_extended(
 def _ed_extended_equal(
     left: tuple[int, int, int, int], right: tuple[int, int, int, int]
 ) -> bool:
-    return (
-        left[0] * right[2] - right[0] * left[2]
-    ) % _ED_Q == 0 and (
+    return (left[0] * right[2] - right[0] * left[2]) % _ED_Q == 0 and (
         left[1] * right[2] - right[1] * left[2]
     ) % _ED_Q == 0
 
@@ -1152,9 +1448,12 @@ def verify_ed25519(public_key: bytes, signature: bytes, message: bytes) -> bool:
         _ED_EXTENDED_IDENTITY,
     ):
         return False
-    challenge = int.from_bytes(
-        hashlib.sha512(signature[:32] + public_key + message).digest(), "little"
-    ) % _ED_L
+    challenge = (
+        int.from_bytes(
+            hashlib.sha512(signature[:32] + public_key + message).digest(), "little"
+        )
+        % _ED_L
+    )
     return _ed_extended_equal(
         _ed_scalar_multiply_extended(_ed_extended(_ED_BASE), scalar),
         _ed_add_extended(
@@ -1186,6 +1485,93 @@ def circuit_policy_signing_payload(
     )
 
 
+def policy_root_hash_hex(policy: Mapping[str, Any]) -> str:
+    """Derive the final-V1 offline policy root without circular fields."""
+
+    body = dict(policy)
+    body.pop("policy_root_sha256_hex", None)
+    body.pop("offline_policy_root_signatures", None)
+    return hashlib.sha256(
+        POLICY_ROOT_HASH_DOMAIN + canonical_json_bytes(body)
+    ).hexdigest()
+
+
+def policy_root_signing_payload(root_sha256_hex: str) -> bytes:
+    """Return the sole payload accepted from an offline policy-root signer."""
+
+    root = bytes.fromhex(
+        _require_hex(root_sha256_hex, label="policy root", byte_length=32)
+    )
+    return POLICY_ROOT_SIGNING_DOMAIN + root
+
+
+def freshness_request(
+    *, nonce: bytes, policy_root_sha256_hex: str, bundle_root_hash_hex: str
+) -> dict[str, Any]:
+    """Build the exact request sent independently to each freshness authority."""
+
+    if type(nonce) is not bytes or len(nonce) != 32 or not any(nonce):
+        _fail("freshness nonce must be exactly 32 nonzero freshly generated bytes")
+    return {
+        "schema": FRESHNESS_REQUEST_SCHEMA,
+        "nonce_hex": nonce.hex(),
+        "policy_root_sha256_hex": _require_hex(
+            policy_root_sha256_hex, label="freshness policy root", byte_length=32
+        ),
+        "bundle_root_hash_hex": _require_hex(
+            bundle_root_hash_hex, label="freshness bundle root", byte_length=32
+        ),
+    }
+
+
+def freshness_head_signing_payload(head: Mapping[str, Any]) -> bytes:
+    """Return the exact detached-signature payload for a freshness head."""
+
+    unsigned = dict(head)
+    unsigned.pop("signature_b64", None)
+    return FRESHNESS_SIGNING_DOMAIN + canonical_json_bytes(unsigned)
+
+
+def _validate_https_authority_endpoint(value: Any) -> str:
+    endpoint = _require_string(value, label="freshness authority endpoint", maximum=512)
+    try:
+        parsed = urllib.parse.urlsplit(endpoint)
+        port = parsed.port
+    except ValueError:
+        _fail("freshness authority endpoint is not a canonical HTTPS URL")
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or port is not None
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or parsed.path in ("", "/")
+        or parsed.geturl() != endpoint
+    ):
+        _fail(
+            "freshness authority endpoint must be an exact credential-free HTTPS URL without a custom port"
+        )
+    host = parsed.hostname.rstrip(".").lower()
+    if host in ("localhost", "localhost.localdomain") or not host:
+        _fail("freshness authority endpoint must be independently hosted")
+    try:
+        address = ipaddress.ip_address(host.strip("[]"))
+    except ValueError:
+        address = None
+    if address is not None and (
+        address.is_private
+        or address.is_loopback
+        or address.is_link_local
+        or address.is_multicast
+        or address.is_unspecified
+        or address.is_reserved
+    ):
+        _fail("freshness authority endpoint must not use a local or reserved address")
+    return endpoint
+
+
 def _canonical_base64(value: Any, *, label: str, decoded_length: int) -> bytes:
     if type(value) is not str or value != value.strip() or not value.isascii():
         _fail(f"{label} must be canonical padded base64")
@@ -1193,7 +1579,10 @@ def _canonical_base64(value: Any, *, label: str, decoded_length: int) -> bytes:
         decoded = base64.b64decode(value, validate=True)
     except (binascii.Error, ValueError):
         _fail(f"{label} must be canonical padded base64")
-    if len(decoded) != decoded_length or base64.b64encode(decoded).decode("ascii") != value:
+    if (
+        len(decoded) != decoded_length
+        or base64.b64encode(decoded).decode("ascii") != value
+    ):
         _fail(f"{label} must decode to exactly {decoded_length} bytes")
     return decoded
 
@@ -1255,10 +1644,7 @@ def _printable_decoded_text(value: bytes) -> str | None:
         text = value.decode("utf-8", "strict")
     except UnicodeDecodeError:
         return None
-    if not text or any(
-        not (ch.isprintable() or ch in "\r\n\t")
-        for ch in text
-    ):
+    if not text or any(not (ch.isprintable() or ch in "\r\n\t") for ch in text):
         return None
     return text
 
@@ -1283,7 +1669,11 @@ def _decode_base64_token(token: str, *, urlsafe: bool) -> str | None:
     return _printable_decoded_text(decoded)
 
 
-def _decoded_token_variants(value: str) -> Iterable[str]:
+def _decoded_token_variants(
+    value: str,
+    *,
+    budget: _SecretScanBudget | None = None,
+) -> Iterable[str]:
     decoded_tokens = 0
     for match in _JWT_TOKEN_RE.finditer(value):
         for token in (part for part in match.groups() if part is not None):
@@ -1292,6 +1682,8 @@ def _decoded_token_variants(value: str) -> Iterable[str]:
                 decoded_tokens += 1
                 if decoded_tokens > _SECRET_SCAN_MAX_DECODED_TOKENS:
                     _secret_scan_limit()
+                if budget is not None:
+                    budget.consume_token()
                 yield decoded
     for match in _BASE64_TOKEN_RE.finditer(value):
         token = match.group(1)
@@ -1301,6 +1693,8 @@ def _decoded_token_variants(value: str) -> Iterable[str]:
             decoded_tokens += 1
             if decoded_tokens > _SECRET_SCAN_MAX_DECODED_TOKENS:
                 _secret_scan_limit()
+            if budget is not None:
+                budget.consume_token()
             yield decoded
     for match in _HEX_TOKEN_RE.finditer(value):
         token = match.group(1)
@@ -1313,10 +1707,17 @@ def _decoded_token_variants(value: str) -> Iterable[str]:
             decoded_tokens += 1
             if decoded_tokens > _SECRET_SCAN_MAX_DECODED_TOKENS:
                 _secret_scan_limit()
+            if budget is not None:
+                budget.consume_token()
             yield decoded
 
 
-def _secret_scan_variants(data: bytes, *, label: str) -> Iterable[str]:
+def _secret_scan_variants(
+    data: bytes,
+    *,
+    label: str,
+    budget: _SecretScanBudget | None = None,
+) -> Iterable[str]:
     del label  # Diagnostics intentionally never interpolate untrusted identifiers.
     text = data.decode("utf-8", "ignore")
     pending = [(text, 0)]
@@ -1337,11 +1738,10 @@ def _secret_scan_variants(data: bytes, *, label: str) -> Iterable[str]:
             continue
         seen.add(identity)
         decoded_bytes += len(encoded)
-        if (
-            len(seen) > _SECRET_SCAN_MAX_VARIANTS
-            or decoded_bytes > decoded_byte_limit
-        ):
+        if len(seen) > _SECRET_SCAN_MAX_VARIANTS or decoded_bytes > decoded_byte_limit:
             _secret_scan_limit()
+        if budget is not None:
+            budget.consume_variant(len(encoded))
         yield current
 
         transformed: set[str] = set()
@@ -1369,7 +1769,7 @@ def _secret_scan_variants(data: bytes, *, label: str) -> Iterable[str]:
         if any(ord(ch) > 0x7F for ch in current):
             transformed.add(unicodedata.normalize("NFKC", current))
             transformed.add(_without_format_characters(current))
-        transformed.update(_decoded_token_variants(current))
+        transformed.update(_decoded_token_variants(current, budget=budget))
         transformed.discard(current)
         transformed.discard("")
         unseen = [
@@ -1383,7 +1783,12 @@ def _secret_scan_variants(data: bytes, *, label: str) -> Iterable[str]:
         pending.extend((item, depth + 1) for item in unseen)
 
 
-def reject_secret_material(data: bytes, *, label: str) -> None:
+def reject_secret_material(
+    data: bytes,
+    *,
+    label: str,
+    _budget: _SecretScanBudget | None = None,
+) -> None:
     """Reject bounded recursively encoded concrete credential material.
 
     The scan deliberately has no entropy rule: public hashes, public keys,
@@ -1392,7 +1797,7 @@ def reject_secret_material(data: bytes, *, label: str) -> None:
     """
 
     first = True
-    for variant in _secret_scan_variants(data, label=label):
+    for variant in _secret_scan_variants(data, label=label, budget=_budget):
         if _contains_secret_marker(variant):
             _secret_scan_failure(encoded=not first)
         first = False
@@ -1409,26 +1814,80 @@ def validate_trust_policy_bytes(
     """
 
     reject_secret_material(data, label="release trust policy")
-    value = parse_json_bytes(data, label="release trust policy", maximum=MAX_TRUST_POLICY_BYTES)
+    value = parse_json_bytes(
+        data, label="release trust policy", maximum=MAX_TRUST_POLICY_BYTES
+    )
     require_canonical_json_file(data, value, label="release trust policy")
+    expected_schema = (
+        TEST_TRUST_POLICY_SCHEMA if allow_test_policy else TRUST_POLICY_SCHEMA
+    )
+    expected_environment = "test-fixture" if allow_test_policy else "production"
+    policy_keys = [
+        "schema",
+        "environment",
+        "policy_id",
+        "roles",
+        "destination_attestors",
+        "circuit_auditors",
+        "proof_systems",
+    ]
+    if not allow_test_policy:
+        policy_keys.extend(
+            (
+                "issued_at_unix_ms",
+                "expires_at_unix_ms",
+                "policy_root_sha256_hex",
+                "offline_policy_root_signers",
+                "offline_policy_root_signatures",
+                "freshness_authorities",
+            )
+        )
+    if (
+        type(value) is not dict
+        or value.get("schema") != expected_schema
+        or value.get("environment") != expected_environment
+    ):
+        _fail(
+            "release trust policy schema/environment is not valid for this entrypoint"
+        )
     policy = _require_object(
         value,
         label="release trust policy",
-        keys=(
-            "schema",
-            "environment",
-            "policy_id",
-            "roles",
-            "destination_attestors",
-            "circuit_auditors",
-            "proof_systems",
-        ),
+        keys=policy_keys,
     )
-    expected_schema = TEST_TRUST_POLICY_SCHEMA if allow_test_policy else TRUST_POLICY_SCHEMA
-    expected_environment = "test-fixture" if allow_test_policy else "production"
-    if policy["schema"] != expected_schema or policy["environment"] != expected_environment:
-        _fail("release trust policy schema/environment is not valid for this entrypoint")
+    if (
+        policy["schema"] != expected_schema
+        or policy["environment"] != expected_environment
+    ):
+        _fail(
+            "release trust policy schema/environment is not valid for this entrypoint"
+        )
     _require_id(policy["policy_id"], label="release trust policy policy_id")
+    if not allow_test_policy:
+        issued_at = _require_int(
+            policy["issued_at_unix_ms"],
+            label="release trust policy issued_at_unix_ms",
+            minimum=1,
+        )
+        expires_at = _require_int(
+            policy["expires_at_unix_ms"],
+            label="release trust policy expires_at_unix_ms",
+            minimum=1,
+        )
+        if expires_at <= issued_at or expires_at - issued_at > MAX_POLICY_LIFETIME_MS:
+            _fail("release trust policy lifetime must be positive and at most 30 days")
+        expected_root = policy_root_hash_hex(policy)
+        if (
+            _require_hex(
+                policy["policy_root_sha256_hex"],
+                label="release policy root",
+                byte_length=32,
+            )
+            != expected_root
+        ):
+            _fail(
+                "release policy root does not match the complete final-V1 policy body"
+            )
     # Retired fixtures should fail at their authoritative consensus-version
     # boundary even when the current policy schema has gained required fields.
     # This preflight does not make a legacy policy acceptable: every current
@@ -1442,7 +1901,9 @@ def validate_trust_policy_bytes(
             if type(raw_anchor) is dict and raw_anchor.get("protocol_version") != (
                 SORA_TAIRA_SUMERAGI_PROTOCOL_VERSION
             ):
-                _fail("SORA anchor protocol_version is not the authoritative wire revision")
+                _fail(
+                    "SORA anchor protocol_version is not the authoritative wire revision"
+                )
     roles = _require_list(policy["roles"], label="release trust policy roles", length=2)
     keys: set[str] = set()
     signer_ids: set[str] = set()
@@ -1455,7 +1916,9 @@ def validate_trust_policy_bytes(
         if entry["role"] != expected_role:
             _fail("release trust policy roles must be exact and ordered")
         signer_id = _require_id(entry["signer_id"], label="trusted signer_id")
-        key = _require_hex(entry["public_key_hex"], label="trusted public key", byte_length=32)
+        key = _require_hex(
+            entry["public_key_hex"], label="trusted public key", byte_length=32
+        )
         if (
             signer_id == key
             or signer_id in signer_ids
@@ -1488,7 +1951,9 @@ def validate_trust_policy_bytes(
             _fail("destination attestors must cover exact production profiles in order")
         attestor_id = _require_id(entry["attestor_id"], label="destination attestor_id")
         key = _require_hex(
-            entry["public_key_hex"], label="destination attestor public key", byte_length=32
+            entry["public_key_hex"],
+            label="destination attestor public key",
+            byte_length=32,
         )
         if (
             attestor_id == key
@@ -1546,7 +2011,9 @@ def validate_trust_policy_bytes(
         keys & FORBIDDEN_FIXTURE_PUBLIC_KEYS
         or any(identity.startswith("fixture-") for identity in signer_ids)
     ):
-        _fail("production trust policy contains a published fixture-only identity or key")
+        _fail(
+            "production trust policy contains a published fixture-only identity or key"
+        )
 
     proof_systems = _require_list(
         policy["proof_systems"],
@@ -1554,31 +2021,186 @@ def validate_trust_policy_bytes(
         length=len(PROFILE_ORDER),
     )
     audit_signatures: set[bytes] = set()
+    if not allow_test_policy:
+        root_signers = _require_list(
+            policy["offline_policy_root_signers"],
+            label="offline policy-root signers",
+            length=POLICY_ROOT_AUTHORITY_COUNT,
+        )
+        root_signer_by_id: dict[str, tuple[str, bytes]] = {}
+        for index, raw in enumerate(root_signers):
+            entry = _require_object(
+                raw,
+                label=f"offline policy-root signers[{index}]",
+                keys=("signer_id", "public_key_hex"),
+            )
+            signer_id = _require_id(
+                entry["signer_id"], label="offline policy-root signer_id"
+            )
+            key_hex = _require_hex(
+                entry["public_key_hex"],
+                label="offline policy-root public key",
+                byte_length=32,
+            )
+            key_bytes = bytes.fromhex(key_hex)
+            point = _ed_decode(key_bytes)
+            if (
+                point is None
+                or point == _ED_IDENTITY
+                or _ed_scalar_multiply(point, _ED_L) != _ED_IDENTITY
+                or signer_id in signer_ids
+                or signer_id in keys
+                or key_hex in signer_ids
+                or key_hex in keys
+                or signer_id in root_signer_by_id
+            ):
+                _fail(
+                    "offline policy-root identities and keys must be valid and independent"
+                )
+            signer_ids.add(signer_id)
+            keys.add(key_hex)
+            root_signer_by_id[signer_id] = (key_hex, key_bytes)
+
+        root_signatures = _require_list(
+            policy["offline_policy_root_signatures"],
+            label="offline policy-root signatures",
+        )
+        if (
+            not POLICY_ROOT_THRESHOLD
+            <= len(root_signatures)
+            <= POLICY_ROOT_AUTHORITY_COUNT
+        ):
+            _fail(
+                "offline policy root requires two or three signatures from its three signers"
+            )
+        used_root_signers: set[str] = set()
+        root_payload = policy_root_signing_payload(policy["policy_root_sha256_hex"])
+        for index, raw in enumerate(root_signatures):
+            entry = _require_object(
+                raw,
+                label=f"offline policy-root signatures[{index}]",
+                keys=("signer_id", "algorithm", "public_key_hex", "signature_b64"),
+            )
+            signer_id = _require_id(
+                entry["signer_id"], label="offline root signature signer_id"
+            )
+            trusted = root_signer_by_id.get(signer_id)
+            signature = _canonical_base64(
+                entry["signature_b64"],
+                label="offline policy-root signature",
+                decoded_length=64,
+            )
+            if (
+                trusted is None
+                or signer_id in used_root_signers
+                or entry["algorithm"] != "ed25519"
+                or entry["public_key_hex"] != trusted[0]
+                or signature in audit_signatures
+                or not verify_ed25519(trusted[1], signature, root_payload)
+            ):
+                _fail(
+                    "offline policy-root signature is untrusted, duplicated, or invalid"
+                )
+            used_root_signers.add(signer_id)
+            audit_signatures.add(signature)
+
+        authorities = _require_list(
+            policy["freshness_authorities"],
+            label="freshness authorities",
+            length=FRESHNESS_AUTHORITY_COUNT,
+        )
+        authority_hosts: set[str] = set()
+        for index, raw in enumerate(authorities):
+            entry = _require_object(
+                raw,
+                label=f"freshness authorities[{index}]",
+                keys=("authority_id", "https_endpoint", "public_key_hex"),
+            )
+            authority_id = _require_id(
+                entry["authority_id"], label="freshness authority_id"
+            )
+            key_hex = _require_hex(
+                entry["public_key_hex"],
+                label="freshness authority public key",
+                byte_length=32,
+            )
+            endpoint = _validate_https_authority_endpoint(entry["https_endpoint"])
+            host = urllib.parse.urlsplit(endpoint).hostname.rstrip(".").lower()
+            key_bytes = bytes.fromhex(key_hex)
+            point = _ed_decode(key_bytes)
+            if (
+                point is None
+                or point == _ED_IDENTITY
+                or _ed_scalar_multiply(point, _ED_L) != _ED_IDENTITY
+                or authority_id in signer_ids
+                or authority_id in keys
+                or key_hex in signer_ids
+                or key_hex in keys
+                or host in authority_hosts
+            ):
+                _fail(
+                    "freshness authorities must have independent hosts, identities, and keys"
+                )
+            signer_ids.add(authority_id)
+            keys.add(key_hex)
+            authority_hosts.add(host)
+        if keys & FORBIDDEN_FIXTURE_PUBLIC_KEYS or any(
+            identity.startswith("fixture-") for identity in signer_ids
+        ):
+            _fail(
+                "production trust policy contains a published fixture-only identity or key"
+            )
     audit_report_hashes: set[str] = set()
     global_hash_roles: dict[str, str] = {}
+    kat_hashes: set[str] = set()
+    validator_build_receipt_hashes: tuple[str, ...] | None = None
     for index, expected_profile in enumerate(PROFILE_ORDER):
+        proof_keys = [
+            "counterparty_profile",
+            "circuit_id",
+            "proof_curve",
+            "semantics",
+            "circuit_artifact_sha256_hex",
+            "witness_generator_sha256_hex",
+            "public_signal_schema_hash_hex",
+            "semantic_proof_profile_hash_hex",
+            "sora_finality_anchor",
+            "sora_finality_anchor_hash_hex",
+            "verifier_key_hash_hex",
+            "route_revision",
+            "verifying_key_sha256_hex",
+            "prover_build_sha256_hex",
+            "toolchain_lock_sha256_hex",
+            "destination_build",
+            "audit_attestations",
+        ]
+        if not allow_test_policy:
+            proof_keys.extend(
+                (
+                    "anchor_circuit_id",
+                    "source_archive_sha256_hex",
+                    "vendor_inventory_sha256_hex",
+                    "toolchain_inventory_sha256_hex",
+                    "sbom_sha256_hex",
+                    "proving_key_sha256_hex",
+                    "anchor_circuit_artifact_sha256_hex",
+                    "anchor_proving_key_sha256_hex",
+                    "anchor_verifying_key_sha256_hex",
+                    "phase1_transcript_sha256_hex",
+                    "phase2_transcript_sha256_hex",
+                    "anchor_phase2_transcript_sha256_hex",
+                    "anchor_witness_compiler_sha256_hex",
+                    "anchor_prover_sha256_hex",
+                    "fixed_key_verifier_sha256_hex",
+                    "anchor_fixed_key_verifier_sha256_hex",
+                    "message_kat_sha256_hex",
+                    "anchor_kat_sha256_hex",
+                )
+            )
         proof = _require_object(
             proof_systems[index],
             label=f"release trust policy proof_systems[{index}]",
-            keys=(
-                "counterparty_profile",
-                "circuit_id",
-                "proof_curve",
-                "semantics",
-                "circuit_artifact_sha256_hex",
-                "witness_generator_sha256_hex",
-                "public_signal_schema_hash_hex",
-                "semantic_proof_profile_hash_hex",
-                "sora_finality_anchor",
-                "sora_finality_anchor_hash_hex",
-                "verifier_key_hash_hex",
-                "route_revision",
-                "verifying_key_sha256_hex",
-                "prover_build_sha256_hex",
-                "toolchain_lock_sha256_hex",
-                "destination_build",
-                "audit_attestations",
-            ),
+            keys=proof_keys,
         )
         if proof["counterparty_profile"] != expected_profile:
             _fail("proof systems must cover exact production profiles in order")
@@ -1595,14 +2217,34 @@ def validate_trust_policy_bytes(
             for marker in ("smoke", "test", "signal-binding", "labeled-signal")
         ):
             _fail("production proof policy must not approve fixture-only circuits")
+        if not allow_test_policy:
+            anchor_circuit_id = _require_id(
+                proof["anchor_circuit_id"], label="anchor proof-system circuit_id"
+            )
+            expected_anchor_id = circuit_id.replace(
+                "-groth16-", "-anchor-update-groth16-"
+            )
+            if (
+                anchor_circuit_id != expected_anchor_id
+                or anchor_circuit_id == circuit_id
+                or any(
+                    marker in anchor_circuit_id
+                    for marker in ("smoke", "test", "signal-binding", "labeled-signal")
+                )
+            ):
+                _fail(
+                    "proof policy must bind an independent exact epoch-anchor circuit"
+                )
         semantics = _require_list(
             proof["semantics"],
             label="proof-system semantics",
             length=len(REQUIRED_SEMANTICS),
         )
         if tuple(semantics) != REQUIRED_SEMANTICS:
-            _fail("proof-system semantics do not prove the complete anchored SCCP statement")
-        for field in (
+            _fail(
+                "proof-system semantics do not prove the complete anchored SCCP statement"
+            )
+        hash_fields = [
             "circuit_artifact_sha256_hex",
             "witness_generator_sha256_hex",
             "public_signal_schema_hash_hex",
@@ -1612,8 +2254,36 @@ def validate_trust_policy_bytes(
             "verifying_key_sha256_hex",
             "prover_build_sha256_hex",
             "toolchain_lock_sha256_hex",
-        ):
+        ]
+        if not allow_test_policy:
+            hash_fields.extend(
+                (
+                    "source_archive_sha256_hex",
+                    "vendor_inventory_sha256_hex",
+                    "toolchain_inventory_sha256_hex",
+                    "sbom_sha256_hex",
+                    "proving_key_sha256_hex",
+                    "anchor_circuit_artifact_sha256_hex",
+                    "anchor_proving_key_sha256_hex",
+                    "anchor_verifying_key_sha256_hex",
+                    "phase1_transcript_sha256_hex",
+                    "phase2_transcript_sha256_hex",
+                    "anchor_phase2_transcript_sha256_hex",
+                    "anchor_witness_compiler_sha256_hex",
+                    "anchor_prover_sha256_hex",
+                    "fixed_key_verifier_sha256_hex",
+                    "anchor_fixed_key_verifier_sha256_hex",
+                    "message_kat_sha256_hex",
+                    "anchor_kat_sha256_hex",
+                )
+            )
+        for field in hash_fields:
             _require_hex(proof[field], label=f"proof-system {field}", byte_length=32)
+        if not allow_test_policy:
+            for field in ("message_kat_sha256_hex", "anchor_kat_sha256_hex"):
+                if proof[field] in kat_hashes:
+                    _fail("every profile must bind unique message and anchor KAT bytes")
+                kat_hashes.add(proof[field])
         circuit_artifact = bytes.fromhex(proof["circuit_artifact_sha256_hex"])
         witness_generator = bytes.fromhex(proof["witness_generator_sha256_hex"])
         public_signal_schema = bytes.fromhex(proof["public_signal_schema_hash_hex"])
@@ -1658,15 +2328,54 @@ def validate_trust_policy_bytes(
                 "route_artifact_sha256_hex",
                 "route_interface_sha256_hex",
                 "route_runtime_hash_hex",
+                "replay_verifier_artifact_sha256_hex",
+                "replay_verifier_interface_sha256_hex",
+                "replay_verifier_runtime_hash_hex",
+                "mint_breaker_artifact_sha256_hex",
+                "mint_breaker_interface_sha256_hex",
+                "mint_breaker_runtime_hash_hex",
+                "ton_builder_policy_sha256_hex",
+                "ton_source_closure_sha256_hex",
+                "ton_output_lock_sha256_hex",
+                "validator_builder_policy_sha256_hex",
+                "validator_source_archive_sha256_hex",
+                "validator_dependency_inventory_sha256_hex",
+                "validator_cargo_metadata_closure_sha256_hex",
+                "validator_sbom_sha256_hex",
+                "validator_toolchain_inventory_sha256_hex",
+                "validator_sysroot_inventory_sha256_hex",
+                "validator_linker_sha256_hex",
+                "validator_build_recipe_sha256_hex",
+                "validator_build_environment_sha256_hex",
+                "validator_container_manifest_sha256_hex",
+                "validator_builder_report_sha256_hex",
+                "validator_executable_sha256_hex",
+                "validator_complete_build_closure_sha256_hex",
+                "validator_output_lock_sha256_hex",
             ),
         )
         for field, digest in destination_build.items():
             _require_hex(digest, label=f"destination build {field}", byte_length=32)
+        if not allow_test_policy:
+            current_validator_build_receipt_hashes = tuple(
+                destination_build[field]
+                for field in VALIDATOR_BUILD_RECEIPT_HASH_FIELDS
+            )
+            if (
+                validator_build_receipt_hashes is not None
+                and current_validator_build_receipt_hashes
+                != validator_build_receipt_hashes
+            ):
+                _fail(
+                    "all production proof profiles must bind one identical "
+                    "validator build receipt"
+                )
+            validator_build_receipt_hashes = current_validator_build_receipt_hashes
         # Hash values with different semantic roles must never alias. Keeping a
         # single role table also prevents a digest from being relabelled across
         # the circuit, anchor, verifying-key, build, and deployment boundaries.
         anchor = proof["sora_finality_anchor"]
-        proof_hash_roles = (
+        proof_hash_roles = [
             ("circuit_artifact_sha256_hex", circuit_artifact.hex()),
             ("witness_generator_sha256_hex", witness_generator.hex()),
             ("public_signal_schema_hash_hex", public_signal_schema.hex()),
@@ -1683,15 +2392,19 @@ def validate_trust_policy_bytes(
             ("verifying_key_sha256_hex", proof["verifying_key_sha256_hex"]),
             ("prover_build_sha256_hex", proof["prover_build_sha256_hex"]),
             ("toolchain_lock_sha256_hex", proof["toolchain_lock_sha256_hex"]),
-            *tuple(destination_build.items()),
-        )
+        ]
+        if not allow_test_policy:
+            proof_hash_roles.extend((field, proof[field]) for field in hash_fields[9:])
+        proof_hash_roles.extend(destination_build.items())
         _require_pairwise_distinct(proof_hash_roles)
         for role, digest in proof_hash_roles:
             previous_role = global_hash_roles.setdefault(digest, role)
             if previous_role != role:
                 _fail("proof-system digest is aliased across profiles and roles")
         if proof["verifier_key_hash_hex"] == FORBIDDEN_ALGEBRAIC_SMOKE_VK:
-            _fail("algebraic SCCP smoke-test verifying key is forbidden in release policy")
+            _fail(
+                "algebraic SCCP smoke-test verifying key is forbidden in release policy"
+            )
         attestations = _require_list(
             proof["audit_attestations"],
             label="proof-system audit_attestations",
@@ -1709,6 +2422,11 @@ def validate_trust_policy_bytes(
                     "public_key_hex",
                     "report_sha256_hex",
                     "signature_b64",
+                    *(
+                        ("completed_at_unix_ms", "unresolved_findings")
+                        if not allow_test_policy
+                        else ()
+                    ),
                 ),
             )
             if (
@@ -1717,9 +2435,36 @@ def validate_trust_policy_bytes(
                 or audit["public_key_hex"] != trusted["public_key_hex"]
                 or audit["algorithm"] != "ed25519"
             ):
-                _fail("proof-system audit does not match the independent trusted auditor")
+                _fail(
+                    "proof-system audit does not match the independent trusted auditor"
+                )
+            if not allow_test_policy:
+                _require_int(
+                    audit["completed_at_unix_ms"],
+                    label="circuit audit completed_at_unix_ms",
+                    minimum=1,
+                )
+                findings = _require_object(
+                    audit["unresolved_findings"],
+                    label="circuit audit unresolved_findings",
+                    keys=("critical", "high", "medium"),
+                )
+                if any(
+                    _require_int(
+                        findings[severity],
+                        label=f"unresolved {severity}",
+                        maximum=2**32 - 1,
+                    )
+                    != 0
+                    for severity in ("critical", "high", "medium")
+                ):
+                    _fail(
+                        "circuit audit has an unresolved critical, high, or medium finding"
+                    )
             report_hash = _require_hex(
-                audit["report_sha256_hex"], label="circuit audit report hash", byte_length=32
+                audit["report_sha256_hex"],
+                label="circuit audit report hash",
+                byte_length=32,
             )
             if report_hash in audit_report_hashes:
                 _fail("each circuit audit role and profile must use a distinct report")
@@ -1751,7 +2496,9 @@ def load_trust_policy(
 ) -> tuple[dict[str, Any], bytes]:
     """Load and validate a canonical external role-to-key trust root."""
 
-    data = read_direct_file(path, label="release trust policy", maximum=MAX_TRUST_POLICY_BYTES)
+    data = read_direct_file(
+        path, label="release trust policy", maximum=MAX_TRUST_POLICY_BYTES
+    )
     return validate_trust_policy_bytes(data, allow_test_policy=allow_test_policy)
 
 
@@ -1816,7 +2563,7 @@ def validator_build_identity_hex(identity: Mapping[str, Any]) -> str:
     payload.extend(_push_u32(len(features)))
     for feature in features:
         payload.extend(_length_prefixed(feature.encode("ascii")))
-    for field in VALIDATOR_BUILD_HASH_FIELDS:
+    for field in VALIDATOR_IDENTITY_HASH_FIELDS:
         if field not in ("executable_sha256_hex", "build_identity_hex"):
             payload.extend(bytes.fromhex(identity[field]))
     return hashlib.sha256(payload).hexdigest()
@@ -1852,7 +2599,9 @@ def _validate_validator_identity(value: Any) -> dict[str, Any]:
     )
     if identity["crate_name"] != "iroha_sccp":
         _fail("validator crate_name must be exactly iroha_sccp")
-    crate_version = _require_string(identity["crate_version"], label="validator crate_version")
+    crate_version = _require_string(
+        identity["crate_version"], label="validator crate_version"
+    )
     if not crate_version.isascii() or not _SAFE_VERSION_RE.fullmatch(crate_version):
         _fail("validator crate_version must be a canonical semantic version")
     if crate_version != _workspace_crate_version():
@@ -1881,17 +2630,39 @@ def _validate_validator_identity(value: Any) -> dict[str, Any]:
         if marker in f"{profile} {target} {rustc_version}".lower():
             _fail("validator build metadata contains a forbidden placeholder")
 
-    for field in VALIDATOR_BUILD_HASH_FIELDS:
+    for field in VALIDATOR_IDENTITY_HASH_FIELDS:
         _require_hex(identity[field], label=f"validator {field}", byte_length=32)
-    _require_pairwise_distinct(tuple((field, identity[field]) for field in VALIDATOR_BUILD_HASH_FIELDS))
+    _require_pairwise_distinct(
+        tuple((field, identity[field]) for field in VALIDATOR_IDENTITY_HASH_FIELDS)
+    )
 
     local_files = (
-        ("source_sha256_hex", RUST_VALIDATOR_SOURCE, "canonical Rust release validator source", 2 * 1024 * 1024),
-        ("crate_manifest_sha256_hex", SCCP_CRATE_MANIFEST, "SCCP crate manifest", 256 * 1024),
+        (
+            "source_sha256_hex",
+            RUST_VALIDATOR_SOURCE,
+            "canonical Rust release validator source",
+            2 * 1024 * 1024,
+        ),
+        (
+            "crate_manifest_sha256_hex",
+            SCCP_CRATE_MANIFEST,
+            "SCCP crate manifest",
+            256 * 1024,
+        ),
         ("build_script_sha256_hex", SCCP_BUILD_SCRIPT, "SCCP build script", 256 * 1024),
-        ("workspace_manifest_sha256_hex", WORKSPACE_MANIFEST, "workspace Cargo manifest", 256 * 1024),
+        (
+            "workspace_manifest_sha256_hex",
+            WORKSPACE_MANIFEST,
+            "workspace Cargo manifest",
+            256 * 1024,
+        ),
         ("cargo_lock_sha256_hex", CARGO_LOCK, "workspace Cargo lock", 2 * 1024 * 1024),
-        ("toolchain_lock_sha256_hex", RUST_TOOLCHAIN_LOCK, "Rust toolchain lock", 16 * 1024),
+        (
+            "toolchain_lock_sha256_hex",
+            RUST_TOOLCHAIN_LOCK,
+            "Rust toolchain lock",
+            16 * 1024,
+        ),
     )
     for field, path, label, maximum in local_files:
         data = read_direct_file(path, label=label, maximum=maximum)
@@ -1903,21 +2674,33 @@ def _validate_validator_identity(value: Any) -> dict[str, Any]:
 
 
 def _validate_lanes(
-    value: Any, artifact_by_path: Mapping[str, Mapping[str, Any]]
+    value: Any,
+    artifact_by_path: Mapping[str, Mapping[str, Any]],
+    *,
+    production: bool,
 ) -> set[str]:
     lanes = _require_list(value, label="lanes", length=len(PROFILE_ORDER))
     referenced: set[str] = set()
     for index, expected_profile in enumerate(PROFILE_ORDER):
+        lane_keys = [
+            "counterparty_profile",
+            "counterparty_domain",
+            "inbound_status",
+            "outbound_status",
+            "evidence_artifact_path",
+        ]
+        if production:
+            lane_keys.extend(
+                (
+                    "lane_evidence_at_unix_ms",
+                    "canary_at_unix_ms",
+                    "destination_readback_at_unix_ms",
+                )
+            )
         lane = _require_object(
             lanes[index],
             label=f"lanes[{index}]",
-            keys=(
-                "counterparty_profile",
-                "counterparty_domain",
-                "inbound_status",
-                "outbound_status",
-                "evidence_artifact_path",
-            ),
+            keys=lane_keys,
         )
         if lane["counterparty_profile"] != expected_profile:
             _fail("lanes must contain exact production profiles in canonical order")
@@ -1940,10 +2723,30 @@ def _validate_lanes(
         if path in referenced:
             _fail("each SCCP profile must use a distinct typed lane-evidence artifact")
         referenced.add(path)
+        if production:
+            times = [
+                _require_int(
+                    lane[field], label=f"{expected_profile} {field}", minimum=1
+                )
+                for field in (
+                    "lane_evidence_at_unix_ms",
+                    "canary_at_unix_ms",
+                    "destination_readback_at_unix_ms",
+                )
+            ]
+            if any(
+                timestamp > artifact_by_path[path]["created_at_unix_ms"]
+                for timestamp in times
+            ):
+                _fail(
+                    "lane temporal evidence cannot postdate its signed artifact observation"
+                )
     return referenced
 
 
-def _validate_artifacts(value: Any) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]:
+def _validate_artifacts(
+    value: Any, *, production: bool
+) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]:
     artifacts = _require_list(value, label="artifacts")
     if not artifacts or len(artifacts) > MAX_ARTIFACTS:
         _fail(f"artifacts must contain between 1 and {MAX_ARTIFACTS} entries")
@@ -1956,7 +2759,13 @@ def _validate_artifacts(value: Any) -> tuple[list[dict[str, Any]], dict[str, dic
         item = _require_object(
             value_item,
             label=f"artifacts[{index}]",
-            keys=("path", "kind", "sha256_hex", "size_bytes"),
+            keys=(
+                "path",
+                "kind",
+                "sha256_hex",
+                "size_bytes",
+                *(("declared_max_bytes", "created_at_unix_ms") if production else ()),
+            ),
         )
         path = item["path"]
         _safe_relative_parts(path, label=f"artifacts[{index}].path")
@@ -1966,21 +2775,45 @@ def _validate_artifacts(value: Any) -> tuple[list[dict[str, Any]], dict[str, dic
         kind = _require_string(item["kind"], label=f"artifacts[{index}].kind")
         if kind not in ARTIFACT_KINDS:
             _fail("artifact kind is not part of the SCCP V1 release schema")
-        digest = _require_hex(item["sha256_hex"], label=f"artifacts[{index}].sha256_hex", byte_length=32)
+        digest = _require_hex(
+            item["sha256_hex"], label=f"artifacts[{index}].sha256_hex", byte_length=32
+        )
         limit = artifact_limit(kind)
-        size = _require_int(item["size_bytes"], label=f"artifacts[{index}].size_bytes", minimum=1, maximum=limit)
+        if production:
+            size = _require_int(
+                item["size_bytes"],
+                label=f"artifacts[{index}].size_bytes",
+                minimum=1,
+                maximum=artifact_stream_limit(item),
+            )
+            _require_int(
+                item["created_at_unix_ms"],
+                label=f"artifacts[{index}].created_at_unix_ms",
+                minimum=1,
+            )
+        else:
+            size = _require_int(
+                item["size_bytes"],
+                label=f"artifacts[{index}].size_bytes",
+                minimum=1,
+                maximum=limit,
+            )
         total += size
         if total > MAX_TOTAL_ARTIFACT_BYTES:
             _fail("artifact total size exceeds the SCCP release limit")
         if digest in seen_hashes:
-            _fail(f"artifact digest for {path} reuses the digest of {seen_hashes[digest]}")
+            _fail(
+                f"artifact digest for {path} reuses the digest of {seen_hashes[digest]}"
+            )
         seen_hashes[digest] = path
         by_path[path] = item
         parsed.append(item)
     return parsed, by_path
 
 
-def _validate_validation(value: Any, artifact_by_path: Mapping[str, Mapping[str, Any]]) -> set[str]:
+def _validate_validation(
+    value: Any, artifact_by_path: Mapping[str, Mapping[str, Any]]
+) -> set[str]:
     validation = _require_object(
         value,
         label="validation",
@@ -1988,7 +2821,9 @@ def _validate_validation(value: Any, artifact_by_path: Mapping[str, Mapping[str,
     )
     if validation["corridor"] != "sccp-production-corridor-v1":
         _fail("validation.corridor must select the exact V1 corridor")
-    phases = _require_list(validation["phases"], label="validation.phases", length=len(REQUIRED_PHASES))
+    phases = _require_list(
+        validation["phases"], label="validation.phases", length=len(REQUIRED_PHASES)
+    )
     referenced: set[str] = set()
     for index, expected_name in enumerate(REQUIRED_PHASES):
         phase = _require_object(
@@ -1999,10 +2834,14 @@ def _validate_validation(value: Any, artifact_by_path: Mapping[str, Mapping[str,
         if phase["name"] != expected_name or phase["status"] != "passed":
             _fail(f"validation phase {index} must be passed {expected_name}")
         path = phase["artifact_path"]
-        _safe_relative_parts(path, label=f"validation phase {expected_name} artifact path")
+        _safe_relative_parts(
+            path, label=f"validation phase {expected_name} artifact path"
+        )
         artifact = artifact_by_path.get(path)
         if artifact is None or artifact["kind"] != "phase-transcript":
-            _fail(f"validation phase {expected_name} must reference a phase-transcript artifact")
+            _fail(
+                f"validation phase {expected_name} must reference a phase-transcript artifact"
+            )
         if path in referenced:
             _fail("validation phases must reference distinct transcript artifacts")
         referenced.add(path)
@@ -2035,7 +2874,9 @@ def _validate_provenance(
         )
         if entry["role"] != expected_role:
             _fail("provenance roles must be exact, ordered, and independently signed")
-        signer_id = _require_id(entry["signer_id"], label=f"provenance[{index}].signer_id")
+        signer_id = _require_id(
+            entry["signer_id"], label=f"provenance[{index}].signer_id"
+        )
         if signer_id != trusted["signer_id"]:
             _fail(f"provenance[{index}] signer is not trusted for {expected_role}")
         if entry["algorithm"] != "ed25519":
@@ -2049,7 +2890,9 @@ def _validate_provenance(
             _fail(f"provenance[{index}] key is not trusted for {expected_role}")
         public_key = bytes.fromhex(public_key_hex)
         signature = _canonical_base64(
-            entry["signature_b64"], label=f"provenance[{index}].signature_b64", decoded_length=64
+            entry["signature_b64"],
+            label=f"provenance[{index}].signature_b64",
+            decoded_length=64,
         )
         if public_key in public_keys or signature in signatures:
             _fail("detached signatures must not be replayed across trust roles")
@@ -2082,7 +2925,9 @@ def _production_semantic_inventory_metadata(
     }
     if trust_policy["environment"] != "production":
         if semantic_paths:
-            _fail("test-fixture evidence must not contain production semantic artifacts")
+            _fail(
+                "test-fixture evidence must not contain production semantic artifacts"
+            )
         return set()
 
     known_paths: set[str] = set()
@@ -2119,13 +2964,21 @@ def _production_semantic_inventory_metadata(
         kind = artifact_by_path[path]["kind"]
         counts[kind] = counts.get(kind, 0) + 1
     expected_audit_reports = sum(
-        len(proof["audit_attestations"])
-        for proof in trust_policy["proof_systems"]
+        len(proof["audit_attestations"]) for proof in trust_policy["proof_systems"]
     )
     if counts.get("circuit-audit-report") != expected_audit_reports:
-        _fail("production evidence must contain exactly two independent audit reports per profile")
+        _fail(
+            "production evidence must contain exactly three independent audit reports per profile"
+        )
+    role_counts: dict[str, int] = {}
     for _, kind, _ in SEMANTIC_ARTIFACT_ROLES:
-        if not 1 <= counts.get(kind, 0) <= len(PROFILE_ORDER):
+        role_counts[kind] = role_counts.get(kind, 0) + 1
+    for kind, roles_per_profile in role_counts.items():
+        if (
+            not roles_per_profile
+            <= counts.get(kind, 0)
+            <= roles_per_profile * len(PROFILE_ORDER)
+        ):
             _fail(f"production evidence has an invalid {kind} artifact cardinality")
     if not known_paths <= semantic_paths:
         _fail("production evidence is missing policy-bound semantic artifacts")
@@ -2174,16 +3027,24 @@ def _validate_honest_proof_claim(
         _fail("honest proof claim selects the wrong source or destination profile")
     if claim["proof_curve"] != proof_system["proof_curve"]:
         _fail("honest proof claim selects the wrong proof curve")
-    if _require_int(
-        claim["target_domain"], label="honest proof target_domain", maximum=2**32 - 1
-    ) != PROFILE_DOMAINS[profile]:
+    if (
+        _require_int(
+            claim["target_domain"],
+            label="honest proof target_domain",
+            maximum=2**32 - 1,
+        )
+        != PROFILE_DOMAINS[profile]
+    ):
         _fail("honest proof claim selects the wrong target domain")
-    if _require_int(
-        claim["route_revision"],
-        label="honest proof route_revision",
-        minimum=1,
-        maximum=2**32 - 1,
-    ) != proof_system["route_revision"]:
+    if (
+        _require_int(
+            claim["route_revision"],
+            label="honest proof route_revision",
+            minimum=1,
+            maximum=2**32 - 1,
+        )
+        != proof_system["route_revision"]
+    ):
         _fail("honest proof claim selects the wrong governed route revision")
     _positive_u64_text(claim["finality_height"], label="honest proof finality_height")
     hash_fields = tuple(
@@ -2192,7 +3053,10 @@ def _validate_honest_proof_claim(
         if field.endswith("_hex") and field != "public_signal_words_hex"
     )
     hashes = [
-        (field, _require_hex(claim[field], label=f"honest proof {field}", byte_length=32))
+        (
+            field,
+            _require_hex(claim[field], label=f"honest proof {field}", byte_length=32),
+        )
         for field in hash_fields
     ]
     _require_pairwise_distinct(hashes)
@@ -2223,6 +3087,7 @@ def _validate_circuit_audit_report(
     profile: str,
     role: str,
     auditor_id: str,
+    audit_attestation: Mapping[str, Any],
     proof_system: Mapping[str, Any],
 ) -> tuple[tuple[dict[str, Any], ...], dict[str, Any]]:
     value = parse_json_bytes(
@@ -2240,12 +3105,14 @@ def _validate_circuit_audit_report(
             "circuit_id",
             "proof_curve",
             "semantics",
+            "completed_at_unix_ms",
+            "unresolved_findings",
             "artifacts",
             "honest_proof_claim",
         ),
     )
     if (
-        report["schema"] != "sccp-circuit-audit-report-v1"
+        report["schema"] != "sccp-circuit-audit-report-final-v1"
         or report["role"] != role
         or report["auditor_id"] != auditor_id
         or report["counterparty_profile"] != profile
@@ -2254,6 +3121,28 @@ def _validate_circuit_audit_report(
         or tuple(report["semantics"]) != REQUIRED_SEMANTICS
     ):
         _fail("circuit audit report scope does not match its trusted policy role")
+    completed_at = _require_int(
+        report["completed_at_unix_ms"],
+        label="circuit audit report completed_at_unix_ms",
+        minimum=1,
+    )
+    if completed_at != audit_attestation["completed_at_unix_ms"]:
+        _fail("circuit audit report completion time does not match signed policy")
+    findings = _require_object(
+        report["unresolved_findings"],
+        label="circuit audit report unresolved_findings",
+        keys=("critical", "high", "medium"),
+    )
+    if findings != audit_attestation["unresolved_findings"] or any(
+        _require_int(
+            findings[severity], label=f"unresolved {severity}", maximum=2**32 - 1
+        )
+        != 0
+        for severity in ("critical", "high", "medium")
+    ):
+        _fail(
+            "circuit audit report contains an unresolved critical, high, or medium finding"
+        )
     raw_artifacts = _require_list(
         report["artifacts"],
         label="circuit audit report artifacts",
@@ -2267,7 +3156,14 @@ def _validate_circuit_audit_report(
         artifact = _require_object(
             raw_artifacts[index],
             label=f"circuit audit report artifacts[{index}]",
-            keys=("role", "kind", "path", "sha256_hex", "size_bytes"),
+            keys=(
+                "role",
+                "kind",
+                "path",
+                "sha256_hex",
+                "size_bytes",
+                "declared_max_bytes",
+            ),
         )
         digest = _require_hex(
             artifact["sha256_hex"],
@@ -2281,12 +3177,7 @@ def _validate_circuit_audit_report(
             or artifact["path"] != expected_path
         ):
             _fail("circuit audit report artifact roles, kinds, and paths must be exact")
-        _require_int(
-            artifact["size_bytes"],
-            label=f"circuit audit report {expected_role} size",
-            minimum=1,
-            maximum=artifact_limit(expected_kind),
-        )
+        artifact_stream_limit(artifact)
         field = SEMANTIC_POLICY_HASH_FIELDS.get(expected_role)
         if field is not None and digest != proof_system[field]:
             _fail(f"circuit audit report {expected_role} hash does not match policy")
@@ -2317,7 +3208,7 @@ def verify_production_semantic_artifacts(
     semantic_paths = _production_semantic_inventory_metadata(
         artifact_by_path, trust_policy
     )
-    expected: dict[str, tuple[str, str, int]] = {}
+    expected: dict[str, tuple[str, str, int, int]] = {}
     proof_records: list[tuple[str, str, dict[str, Any]]] = []
     global_role_hashes: dict[str, str] = {}
     for proof_system in trust_policy["proof_systems"]:
@@ -2334,12 +3225,15 @@ def verify_production_semantic_artifacts(
                 profile=profile,
                 role=role,
                 auditor_id=trust_policy["circuit_auditors"][index]["auditor_id"],
+                audit_attestation=proof_system["audit_attestations"][index],
                 proof_system=proof_system,
             )
             if baseline_artifacts is None:
                 baseline_artifacts, baseline_claim = artifacts, claim
             elif artifacts != baseline_artifacts or claim != baseline_claim:
-                _fail("independent circuit auditors did not attest the same artifacts and claim")
+                _fail(
+                    "independent circuit auditors did not attest the same artifacts and claim"
+                )
         assert baseline_artifacts is not None
         assert baseline_claim is not None
         profile_proof_path: str | None = None
@@ -2347,19 +3241,33 @@ def verify_production_semantic_artifacts(
             path = artifact["path"]
             metadata = artifact_by_path.get(path)
             if metadata is None or (
-                metadata["kind"], metadata["sha256_hex"], metadata["size_bytes"]
+                metadata["kind"],
+                metadata["sha256_hex"],
+                metadata["size_bytes"],
+                metadata["declared_max_bytes"],
             ) != (
                 artifact["kind"],
                 artifact["sha256_hex"],
                 artifact["size_bytes"],
+                artifact["declared_max_bytes"],
             ):
-                _fail("audited semantic artifact does not match signed evidence inventory")
+                _fail(
+                    "audited semantic artifact does not match signed evidence inventory"
+                )
             previous = expected.setdefault(
                 path,
-                (artifact["kind"], artifact["sha256_hex"], artifact["size_bytes"]),
+                (
+                    artifact["kind"],
+                    artifact["sha256_hex"],
+                    artifact["size_bytes"],
+                    artifact["declared_max_bytes"],
+                ),
             )
             if previous != (
-                artifact["kind"], artifact["sha256_hex"], artifact["size_bytes"]
+                artifact["kind"],
+                artifact["sha256_hex"],
+                artifact["size_bytes"],
+                artifact["declared_max_bytes"],
             ):
                 _fail("semantic artifact path is reused for different audited bytes")
             previous_role = global_role_hashes.setdefault(
@@ -2374,11 +3282,13 @@ def verify_production_semantic_artifacts(
                 marker in content.lower()
                 for marker in (b"fixture-only", b"sccp:test:", b"smoke-test")
             ):
-                _fail("production semantic artifact contains zero or fixture-only material")
-            if artifact["role"] == "honest-proof":
+                _fail(
+                    "production semantic artifact contains zero or fixture-only material"
+                )
+            if artifact["role"] == "message-kat":
                 profile_proof_path = path
         if profile_proof_path is None:
-            _fail("circuit audit report does not bind an honest proof")
+            _fail("circuit audit report does not bind a unique message KAT")
         proof_records.append((profile, profile_proof_path, baseline_claim))
     report_paths = {
         _circuit_audit_report_path(profile, role)
@@ -2388,8 +3298,10 @@ def verify_production_semantic_artifacts(
     if semantic_paths != set(expected) | report_paths:
         _fail("production semantic artifact inventory is not closed")
     proof_paths = [path for _, path, _ in proof_records]
-    if len(proof_paths) != len(PROFILE_ORDER) or len(set(proof_paths)) != len(proof_paths):
-        _fail("production requires one distinct honest proof artifact per profile")
+    if len(proof_paths) != len(PROFILE_ORDER) or len(set(proof_paths)) != len(
+        proof_paths
+    ):
+        _fail("production requires one distinct message KAT artifact per profile")
     return tuple(proof_records)
 
 
@@ -2408,6 +3320,11 @@ _UNSIGNED_EVIDENCE_KEYS = (
     "validation",
 )
 
+_PRODUCTION_TEMPORAL_EVIDENCE_KEYS = (
+    "validator_built_at_unix_ms",
+    "contract_builds",
+)
+
 
 def _validate_evidence_body(
     evidence: dict[str, Any], trust_policy: Mapping[str, Any]
@@ -2424,11 +3341,16 @@ def _validate_evidence_body(
         maximum=1,
     )
     hub_profile = _require_string(evidence["hub_profile"], label="hub_profile")
-    if hub_profile not in HUB_CHAIN_IDS or evidence["hub_chain_id"] != HUB_CHAIN_IDS[hub_profile]:
+    if (
+        hub_profile not in HUB_CHAIN_IDS
+        or evidence["hub_chain_id"] != HUB_CHAIN_IDS[hub_profile]
+    ):
         _fail("hub profile and chain id must identify an exact SCCP V1 SORA network")
     _require_int(evidence["created_at_unix_ms"], label="created_at_unix_ms", minimum=1)
     if evidence["trust_policy_id"] != trust_policy["policy_id"]:
-        _fail("release evidence trust_policy_id does not match the external trust policy")
+        _fail(
+            "release evidence trust_policy_id does not match the external trust policy"
+        )
     trust_policy_hash = _require_hex(
         evidence["trust_policy_sha256_hex"],
         label="release evidence trust_policy_sha256_hex",
@@ -2437,11 +3359,53 @@ def _validate_evidence_body(
     if trust_policy_hash != sha256_hex(canonical_json_file_bytes(trust_policy)):
         _fail("release evidence does not bind the exact external trust policy")
     validator = _validate_validator_identity(evidence["validator"])
-    if trust_policy["environment"] == "production" and validator["build_profile"] != "release":
+    if (
+        trust_policy["environment"] == "production"
+        and validator["build_profile"] != "release"
+    ):
         _fail("production release evidence requires a release-profile validator build")
-    artifacts, artifact_by_path = _validate_artifacts(evidence["artifacts"])
+    production = trust_policy["environment"] == "production"
+    approved_validator_build = trust_policy["proof_systems"][0]["destination_build"]
+    if production and (
+        approved_validator_build["validator_executable_sha256_hex"]
+        != validator["executable_sha256_hex"]
+    ):
+        _fail("validator build receipt does not bind the signed validator executable")
+    if production:
+        validator_built_at = _require_int(
+            evidence["validator_built_at_unix_ms"],
+            label="validator_built_at_unix_ms",
+            minimum=1,
+        )
+        if validator_built_at > evidence["created_at_unix_ms"] + MAX_FUTURE_SKEW_MS:
+            _fail("validator build cannot postdate release evidence")
+        contract_builds = _require_list(
+            evidence["contract_builds"],
+            label="contract_builds",
+            length=len(PROFILE_ORDER),
+        )
+        for index, profile in enumerate(PROFILE_ORDER):
+            build = _require_object(
+                contract_builds[index],
+                label=f"contract_builds[{index}]",
+                keys=("counterparty_profile", "built_at_unix_ms"),
+            )
+            if build["counterparty_profile"] != profile:
+                _fail("contract_builds must cover exact production profiles in order")
+            built_at = _require_int(
+                build["built_at_unix_ms"],
+                label=f"{profile} contract build time",
+                minimum=1,
+            )
+            if built_at > evidence["created_at_unix_ms"] + MAX_FUTURE_SKEW_MS:
+                _fail("contract build cannot postdate release evidence")
+    _artifacts, artifact_by_path = _validate_artifacts(
+        evidence["artifacts"], production=production
+    )
     referenced = _validate_validation(evidence["validation"], artifact_by_path)
-    referenced |= _validate_lanes(evidence["lanes"], artifact_by_path)
+    referenced |= _validate_lanes(
+        evidence["lanes"], artifact_by_path, production=production
+    )
     referenced |= _production_semantic_inventory_metadata(
         artifact_by_path, trust_policy
     )
@@ -2478,15 +3442,16 @@ def validate_test_fixture_evidence_signing_candidate(
     return evidence
 
 
-def validate_evidence(
-    value: Any, trust_policy: Mapping[str, Any]
-) -> dict[str, Any]:
+def validate_evidence(value: Any, trust_policy: Mapping[str, Any]) -> dict[str, Any]:
     """Validate one complete SCCP release document against an external trust root."""
 
+    unsigned_keys = list(_UNSIGNED_EVIDENCE_KEYS)
+    if trust_policy.get("environment") == "production":
+        unsigned_keys.extend(_PRODUCTION_TEMPORAL_EVIDENCE_KEYS)
     evidence = _require_object(
         value,
         label="release evidence",
-        keys=(*_UNSIGNED_EVIDENCE_KEYS, "provenance"),
+        keys=(*unsigned_keys, "provenance"),
     )
     reject_secret_material(canonical_json_bytes(evidence), label="release evidence")
     _validate_evidence_body(evidence, trust_policy)
@@ -2510,20 +3475,24 @@ def verify_evidence_artifacts(
 
     contents: dict[str, bytes] = {}
     total = 0
+    production = all("declared_max_bytes" in entry for entry in evidence["artifacts"])
     for entry in evidence["artifacts"]:
-        limit = artifact_limit(entry["kind"])
-        data = read_relative_file(
+        limit = (
+            artifact_stream_limit(entry)
+            if production
+            else artifact_limit(entry["kind"])
+        )
+        data = verify_relative_file_stream(
             artifact_root,
             entry["path"],
             label=f"artifact {entry['path']}",
             maximum=limit,
+            expected_size=entry["size_bytes"],
+            expected_sha256_hex=entry["sha256_hex"],
         )
-        total += len(data)
+        total += entry["size_bytes"]
         if total > MAX_TOTAL_ARTIFACT_BYTES:
             _fail("artifact total size exceeds the SCCP release limit")
-        if len(data) != entry["size_bytes"] or sha256_hex(data) != entry["sha256_hex"]:
-            _fail(f"artifact {entry['path']} does not match its signed size and SHA-256")
-        reject_secret_material(data, label=f"artifact {entry['path']}")
         contents[entry["path"]] = data
     return contents
 
@@ -2542,6 +3511,181 @@ def _read_validator_executable(path: Path) -> bytes:
     )
 
 
+def validate_validator_build_verification(
+    value: Any,
+    trust_policy: Mapping[str, Any],
+    *,
+    trusted_policy_sha256: str,
+) -> tuple[Path, dict[str, str], int]:
+    """Bind a verified two-party validator build to every production profile.
+
+    ``sccp_validator_builder.verify_release_directory`` authenticates the
+    published directory and returns this value.  This independent consumer
+    pass keeps the API boundary exact, maps receipt names to the policy's
+    ``_hex`` fields, and authenticates the returned executable bytes before
+    any validator command is allowed to run.
+    """
+
+    if trust_policy.get("environment") != "production":
+        _fail("verified validator builds are required only for production policy")
+    verification = _require_object(
+        value,
+        label="validator build verification",
+        keys=(
+            "schema",
+            "source_commit",
+            "validator_built_at_unix_ms",
+            "validator_build_receipt_sha256",
+            "validator_executable_path",
+            "validator_executable_size_bytes",
+            "hashes",
+        ),
+    )
+    if verification["schema"] != VALIDATOR_BUILD_VERIFICATION_SCHEMA:
+        _fail(
+            "validator build verification schema must be exactly "
+            f"{VALIDATOR_BUILD_VERIFICATION_SCHEMA}"
+        )
+    source_commit = _require_string(
+        verification["source_commit"],
+        label="validator build source_commit",
+        maximum=64,
+    )
+    if not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", source_commit):
+        _fail("validator build source_commit must be one exact Git object id")
+    validator_built_at_unix_ms = _require_int(
+        verification["validator_built_at_unix_ms"],
+        label="validator build completion time",
+        minimum=1,
+        maximum=4_102_444_800_000,
+    )
+    _require_hex(
+        verification["validator_build_receipt_sha256"],
+        label="validator build receipt SHA-256",
+        byte_length=32,
+    )
+    executable_size = _require_int(
+        verification["validator_executable_size_bytes"],
+        label="validator build executable size",
+        minimum=1,
+        maximum=MAX_VALIDATOR_BINARY_BYTES,
+    )
+    path_text = verification["validator_executable_path"]
+    try:
+        path_bytes = (
+            path_text.encode("utf-8", "strict") if type(path_text) is str else b""
+        )
+    except UnicodeError:
+        path_bytes = b""
+    if (
+        type(path_text) is not str
+        or not path_text
+        or "\x00" in path_text
+        or not path_bytes
+        or len(path_bytes) > 4096
+        or any(
+            ord(character) < 0x20 or ord(character) == 0x7F for character in path_text
+        )
+    ):
+        _fail("validator build executable path must be bounded canonical text")
+    executable_path = Path(path_text)
+    if not executable_path.is_absolute() or any(
+        part in (".", "..") for part in executable_path.parts
+    ):
+        _fail("validator build executable path must be normalized and absolute")
+
+    trusted_builder_policy = _require_hex(
+        trusted_policy_sha256,
+        label="trusted validator builder policy SHA-256",
+        byte_length=32,
+    )
+    raw_hashes = _require_object(
+        verification["hashes"],
+        label="validator build verification hashes",
+        keys=VALIDATOR_BUILD_VERIFICATION_HASH_FIELDS,
+    )
+    mapped_hashes: dict[str, str] = {}
+    for receipt_field, policy_field in zip(
+        VALIDATOR_BUILD_VERIFICATION_HASH_FIELDS,
+        VALIDATOR_BUILD_RECEIPT_HASH_FIELDS,
+    ):
+        mapped_hashes[policy_field] = _require_hex(
+            raw_hashes[receipt_field],
+            label=f"validator build verification {receipt_field}",
+            byte_length=32,
+        )
+    _require_pairwise_distinct(tuple(mapped_hashes.items()))
+    if mapped_hashes["validator_builder_policy_sha256_hex"] != trusted_builder_policy:
+        _fail("validator build verification does not bind the trusted builder policy")
+
+    expected_profile_hashes = tuple(
+        mapped_hashes[field] for field in VALIDATOR_BUILD_RECEIPT_HASH_FIELDS
+    )
+    proof_systems = trust_policy.get("proof_systems")
+    if type(proof_systems) is not list or len(proof_systems) != len(PROFILE_ORDER):
+        _fail("production policy has no exact validator build profile inventory")
+    for index, expected_profile in enumerate(PROFILE_ORDER):
+        proof_system = proof_systems[index]
+        if (
+            type(proof_system) is not dict
+            or proof_system.get("counterparty_profile") != expected_profile
+            or type(proof_system.get("destination_build")) is not dict
+        ):
+            _fail("production policy validator build profiles are not in exact order")
+        actual_profile_hashes = tuple(
+            proof_system["destination_build"].get(field)
+            for field in VALIDATOR_BUILD_RECEIPT_HASH_FIELDS
+        )
+        if actual_profile_hashes != expected_profile_hashes:
+            _fail(
+                "validator build verification differs from a production proof profile"
+            )
+
+    executable = _read_validator_executable(executable_path)
+    if len(executable) != executable_size:
+        _fail("verified validator executable size differs from its build receipt")
+    if sha256_hex(executable) != mapped_hashes["validator_executable_sha256_hex"]:
+        _fail("verified validator executable differs from its build receipt")
+    return executable_path, mapped_hashes, validator_built_at_unix_ms
+
+
+def require_verified_validator_build_time(
+    evidence: Mapping[str, Any],
+    validator_built_at_unix_ms: int,
+) -> None:
+    """Bind signed release evidence to the oldest authenticated rebuild time."""
+
+    if evidence.get("validator_built_at_unix_ms") != validator_built_at_unix_ms:
+        _fail("release evidence validator build time differs from its build receipt")
+
+
+def verify_validator_build_release(
+    release_directory: Path,
+    trust_policy: Mapping[str, Any],
+    *,
+    trusted_policy_sha256: str,
+) -> tuple[Path, dict[str, str], int]:
+    """Verify and consume one published two-party validator build release."""
+
+    # Imported lazily because the standalone builder itself consumes this
+    # common module.  Production callers receive no path-only or caller-made
+    # verification escape hatch through this boundary.
+    import sccp_validator_builder as validator_builder
+
+    try:
+        verification = validator_builder.verify_release_directory(
+            release_directory,
+            trusted_policy_sha256=trusted_policy_sha256,
+        )
+    except validator_builder.ValidatorBuilderError as error:
+        _fail(f"published validator build failed authentication: {error}")
+    return validate_validator_build_verification(
+        verification,
+        trust_policy,
+        trusted_policy_sha256=trusted_policy_sha256,
+    )
+
+
 def authenticate_validator_executable(
     validator_path: Path, validator_identity: Mapping[str, Any]
 ) -> tuple[bytes, str]:
@@ -2550,7 +3694,9 @@ def authenticate_validator_executable(
     executable = _read_validator_executable(validator_path)
     digest = sha256_hex(executable)
     if digest != validator_identity["executable_sha256_hex"]:
-        _fail("selected Rust validator executable does not match signed release evidence")
+        _fail(
+            "selected Rust validator executable does not match signed release evidence"
+        )
     return executable, digest
 
 
@@ -2669,71 +3815,26 @@ def _invoke_validator_command(
     for name in ("SYSTEMROOT", "WINDIR"):
         if name in os.environ:
             safe_environment[name] = os.environ[name]
-    validator_descriptor: int | None = None
-    executed_validator_hash: str
-    if sys.platform.startswith("linux"):
-        flags = (
-            os.O_RDONLY
-            | getattr(os, "O_CLOEXEC", 0)
-            | getattr(os, "O_NOFOLLOW", 0)
-            | getattr(os, "O_NONBLOCK", 0)
-        )
-        try:
-            validator_descriptor = os.open(validator, flags)
-            metadata = os.fstat(validator_descriptor)
-            if (
-                not stat.S_ISREG(metadata.st_mode)
-                or metadata.st_nlink != 1
-                or metadata.st_size <= 0
-                or metadata.st_size > MAX_VALIDATOR_BINARY_BYTES
-                or metadata.st_mode & (stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH) == 0
-            ):
-                os.close(validator_descriptor)
-                validator_descriptor = None
-                _fail("canonical Rust release validator changed before execution")
-            chunks: list[bytes] = []
-            remaining = MAX_VALIDATOR_BINARY_BYTES + 1
-            while remaining:
-                chunk = os.read(validator_descriptor, min(1024 * 1024, remaining))
-                if not chunk:
-                    break
-                chunks.append(chunk)
-                remaining -= len(chunk)
-            executed_bytes = b"".join(chunks)
-            if len(executed_bytes) != metadata.st_size:
-                os.close(validator_descriptor)
-                validator_descriptor = None
-                _fail("canonical Rust release validator changed while opening")
-            executed_validator_hash = sha256_hex(executed_bytes)
-            os.lseek(validator_descriptor, 0, os.SEEK_SET)
-        except OSError:
-            if validator_descriptor is not None:
-                os.close(validator_descriptor)
-            _fail("canonical Rust release validator could not be opened for execution")
-        if executed_validator_hash != expected_executable_hash:
-            os.close(validator_descriptor)
-            _fail("canonical Rust release validator changed before execution")
+    executed_bytes = _read_validator_executable(validator)
+    executed_validator_hash = sha256_hex(executed_bytes)
+    if executed_validator_hash != expected_executable_hash:
+        _fail("canonical Rust release validator changed before execution")
+
+    # Never execute the published path or its mutable inode.  The authenticated
+    # bytes are copied into a fresh owner-only directory so an in-place write to
+    # the release directory after hashing cannot change what the kernel loads.
+    with tempfile.TemporaryDirectory(prefix="iroha-sccp-validator-") as directory:
+        name = "validator.exe" if os.name == "nt" else "validator"
+        staged = Path(directory) / name
+        _write_staged_validator(staged, executed_bytes)
+        staged_bytes = _read_validator_executable(staged)
+        if staged_bytes != executed_bytes:
+            _fail("authenticated Rust validator staging changed bytes")
         stdout, stderr, return_code = _run_bounded_validator_process(
-            f"/proc/self/fd/{validator_descriptor}",
+            str(staged),
             arguments,
             safe_environment,
-            popen_extra={"pass_fds": (validator_descriptor,)},
-            close_after_spawn=validator_descriptor,
         )
-    else:
-        executed_bytes = _read_validator_executable(validator)
-        executed_validator_hash = sha256_hex(executed_bytes)
-        if executed_validator_hash != expected_executable_hash:
-            _fail("canonical Rust release validator changed before execution")
-        with tempfile.TemporaryDirectory(prefix="iroha-sccp-validator-") as directory:
-            name = "validator.exe" if os.name == "nt" else "validator"
-            staged = Path(directory) / name
-            _write_staged_validator(staged, executed_bytes)
-            stdout, stderr, return_code = _run_bounded_validator_process(
-                str(staged),
-                arguments,
-                safe_environment,
-            )
     return stdout, stderr, return_code, executed_validator_hash
 
 
@@ -2851,10 +3952,15 @@ def verify_rust_release_signatures(
             "circuit_audit_signatures_verified",
             "destination_attestors_validated",
             "distinct_trust_identities",
+            "offline_policy_root_signatures_verified",
+            "freshness_authorities_validated",
+            "policy_root_sha256_hex",
+            "policy_issued_at_unix_ms",
+            "policy_expires_at_unix_ms",
         ),
     )
     if (
-        receipt["schema"] != "sccp-release-signature-validation-v1"
+        receipt["schema"] != "sccp-release-signature-validation-final-v1"
         or receipt["environment"] != environment
         or receipt["policy_id"] != trust_policy["policy_id"]
         or receipt["release_id"] != evidence["release_id"]
@@ -2863,8 +3969,7 @@ def verify_rust_release_signatures(
         or receipt["release_signatures_verified"] != len(trust_policy["roles"])
         or receipt["circuit_audit_signatures_verified"]
         != sum(
-            len(proof["audit_attestations"])
-            for proof in trust_policy["proof_systems"]
+            len(proof["audit_attestations"]) for proof in trust_policy["proof_systems"]
         )
         or receipt["destination_attestors_validated"]
         != len(trust_policy["destination_attestors"])
@@ -2873,7 +3978,18 @@ def verify_rust_release_signatures(
             len(trust_policy["roles"])
             + len(trust_policy["destination_attestors"])
             + len(trust_policy["circuit_auditors"])
+            + len(trust_policy.get("offline_policy_root_signers", ()))
+            + len(trust_policy.get("freshness_authorities", ()))
         )
+        or receipt["offline_policy_root_signatures_verified"]
+        != len(trust_policy.get("offline_policy_root_signatures", ()))
+        or receipt["freshness_authorities_validated"]
+        != len(trust_policy.get("freshness_authorities", ()))
+        or receipt["policy_root_sha256_hex"]
+        != trust_policy.get("policy_root_sha256_hex")
+        or receipt["policy_issued_at_unix_ms"] != trust_policy.get("issued_at_unix_ms")
+        or receipt["policy_expires_at_unix_ms"]
+        != trust_policy.get("expires_at_unix_ms")
     ):
         _fail("Rust release signature receipt does not match exact trusted inputs")
     if sha256_hex(_read_validator_executable(validator_path)) != executable_hash:
@@ -2904,8 +4020,7 @@ def verify_rust_semantic_proofs(
         _fail("production semantic proof validation requires every launch profile")
     artifact_by_path = {entry["path"]: entry for entry in evidence["artifacts"]}
     proof_system_by_profile = {
-        proof["counterparty_profile"]: proof
-        for proof in trust_policy["proof_systems"]
+        proof["counterparty_profile"]: proof for proof in trust_policy["proof_systems"]
     }
     receipts: list[dict[str, Any]] = []
     for expected_profile, proof_path, audited_claim in semantic_records:
@@ -2913,8 +4028,8 @@ def verify_rust_semantic_proofs(
         if proof_system is None:
             _fail("semantic proof record has no exact policy profile")
         metadata = artifact_by_path.get(proof_path)
-        if metadata is None or metadata["kind"] != "honest-proof":
-            _fail("audited honest proof is absent from signed evidence")
+        if metadata is None or metadata["kind"] != "message-kat":
+            _fail("audited message KAT is absent from signed evidence")
         stdout, stderr, return_code, executed_hash = _invoke_validator_command(
             validator_path,
             (
@@ -2961,7 +4076,7 @@ def verify_rust_semantic_proofs(
             ),
         )
         if (
-            receipt["schema"] != "sccp-semantic-proof-validation-v1"
+            receipt["schema"] != "sccp-semantic-proof-validation-final-v1"
             or receipt["environment"] != "production"
             or receipt["policy_id"] != trust_policy["policy_id"]
             or receipt["release_id"] != evidence["release_id"]
@@ -2976,9 +4091,15 @@ def verify_rust_semantic_proofs(
         ):
             _fail("Rust semantic proof receipt does not match the signed audited claim")
         receipts.append(receipt)
-    if tuple(receipt["claim"]["target_profile"] for receipt in receipts) != PROFILE_ORDER:
+    if (
+        tuple(receipt["claim"]["target_profile"] for receipt in receipts)
+        != PROFILE_ORDER
+    ):
         _fail("Rust semantic proof receipts are not in the exact launch-profile order")
-    if sha256_hex(_read_validator_executable(validator_path)) != expected_executable_hash:
+    if (
+        sha256_hex(_read_validator_executable(validator_path))
+        != expected_executable_hash
+    ):
         _fail("canonical Rust validator changed during semantic proof validation")
     return tuple(receipts)
 
@@ -3043,11 +4164,9 @@ def _validate_rust_receipt(
     identity = _validate_validator_identity(receipt["validator"])
     if identity != evidence["validator"]:
         _fail("Rust lane validator identity does not match signed evidence")
-    if (
-        receipt["release_id"] != evidence["release_id"]
-        or receipt["release_evidence_sha256_hex"]
-        != sha256_hex(canonical_json_file_bytes(evidence))
-    ):
+    if receipt["release_id"] != evidence["release_id"] or receipt[
+        "release_evidence_sha256_hex"
+    ] != sha256_hex(canonical_json_file_bytes(evidence)):
         _fail("Rust lane validator used different signed release evidence")
     _require_id(receipt["trust_policy_id"], label="Rust receipt trust_policy_id")
     _require_hex(
@@ -3082,7 +4201,9 @@ def _validate_rust_receipt(
     position = 0
     if receipt["outbound_status"] == "unavailable":
         if not reasons or reasons[0] != OUTBOUND_UNAVAILABLE_REASON:
-            _fail("Rust lane receipt does not use the exact outbound fail-closed reason")
+            _fail(
+                "Rust lane receipt does not use the exact outbound fail-closed reason"
+            )
         position = 1
     if receipt["inbound_status"] == "unavailable":
         expected = UNAVAILABLE_INBOUND_REASONS.get(lane["counterparty_profile"])
@@ -3166,7 +4287,10 @@ def _validate_rust_receipt(
         ]
         if circuit_id != expected_circuit_id:
             _fail("Rust receipt selected the wrong profile-specific semantic circuit")
-        if receipt["proof_curve"] != PROOF_CURVE_BY_PROFILE[lane["counterparty_profile"]]:
+        if (
+            receipt["proof_curve"]
+            != PROOF_CURVE_BY_PROFILE[lane["counterparty_profile"]]
+        ):
             _fail("Rust receipt selected the wrong profile-specific proof curve")
         for field in (
             "destination_statement_sha256_hex",
@@ -3202,8 +4326,16 @@ def _validate_rust_receipt(
             _fail("Rust receipt route_revision exceeds u32")
         observed = int(receipt["destination_observed_at_unix_ms"])
         created = evidence["created_at_unix_ms"]
-        if observed > created or created - observed > MAX_DESTINATION_ATTESTATION_AGE_MS:
+        if (
+            observed > created
+            or created - observed > MAX_DESTINATION_ATTESTATION_AGE_MS
+        ):
             _fail("destination state attestation is future-dated or stale")
+        if (
+            "destination_readback_at_unix_ms" in lane
+            and observed != lane["destination_readback_at_unix_ms"]
+        ):
+            _fail("destination readback time does not match the signed lane summary")
     return receipt
 
 
@@ -3235,8 +4367,7 @@ def verify_rust_lane_evidence(
         for entry in trust_policy["destination_attestors"]
     }
     proof_systems = {
-        entry["counterparty_profile"]: entry
-        for entry in trust_policy["proof_systems"]
+        entry["counterparty_profile"]: entry for entry in trust_policy["proof_systems"]
     }
     for lane in evidence["lanes"]:
         relative = lane["evidence_artifact_path"]
@@ -3304,7 +4435,9 @@ def verify_rust_lane_evidence(
                     or receipt["toolchain_lock_sha256_hex"]
                     != proof_system["toolchain_lock_sha256_hex"]
                     or receipt["destination_build_policy_sha256_hex"]
-                    != sha256_hex(canonical_json_bytes(proof_system["destination_build"]))
+                    != sha256_hex(
+                        canonical_json_bytes(proof_system["destination_build"])
+                    )
                 )
             )
         ):
@@ -3330,10 +4463,12 @@ def bundle_root_hash_hex(
     trust_policy_sha256_hex: str,
     validator: Mapping[str, Any],
     validator_executable_sha256_hex: str,
+    environment: str = "production",
 ) -> str:
     """Hash trust roots, validator identity, and sorted entries with framing."""
 
     payload = bytearray(BUNDLE_HASH_DOMAIN)
+    payload.extend(_length_prefixed(environment.encode("ascii")))
     payload.extend(_length_prefixed(trust_policy_id.encode("ascii")))
     payload.extend(bytes.fromhex(trust_policy_sha256_hex))
     payload.extend(_length_prefixed(canonical_json_bytes(validator)))
@@ -3351,6 +4486,9 @@ def bundle_root_hash_hex(
         payload.extend(_length_prefixed(path_bytes))
         payload.extend(_length_prefixed(kind_bytes))
         payload.extend(_push_u64(entry["size_bytes"]))
+        if kind != "release-evidence" and environment == "production":
+            payload.extend(_push_u64(entry["declared_max_bytes"]))
+            payload.extend(_push_u64(entry["created_at_unix_ms"]))
         payload.extend(bytes.fromhex(entry["sha256_hex"]))
     return hashlib.sha256(payload).hexdigest()
 
@@ -3365,7 +4503,7 @@ def _validate_bundle_artifact_kind_counts(kind_counts: Mapping[str, int]) -> Non
     if kind_counts["lane-evidence"] != len(PROFILE_ORDER):
         _fail("bundle lane-evidence count does not match the SCCP V1 profile set")
 
-    semantic_kinds = tuple(kind for _, kind, _ in SEMANTIC_ARTIFACT_ROLES)
+    semantic_kinds = tuple(sorted({kind for _, kind, _ in SEMANTIC_ARTIFACT_ROLES}))
     semantic_count = kind_counts["circuit-audit-report"] + sum(
         kind_counts[kind] for kind in semantic_kinds
     )
@@ -3375,13 +4513,18 @@ def _validate_bundle_artifact_kind_counts(kind_counts: Mapping[str, int]) -> Non
     if kind_counts["circuit-audit-report"] != (
         len(PROFILE_ORDER) * len(CIRCUIT_AUDITOR_ROLES)
     ):
-        _fail("production bundle must contain exactly two audit reports per profile")
+        _fail("production bundle must contain exactly three audit reports per profile")
+    role_counts: dict[str, int] = {}
+    for _, kind, _ in SEMANTIC_ARTIFACT_ROLES:
+        role_counts[kind] = role_counts.get(kind, 0) + 1
     for kind in semantic_kinds:
         count = kind_counts[kind]
-        if not 1 <= count <= len(PROFILE_ORDER):
+        if not role_counts[kind] <= count <= role_counts[kind] * len(PROFILE_ORDER):
             _fail(f"production bundle has an invalid {kind} entry count")
-    if kind_counts["honest-proof"] != len(PROFILE_ORDER):
-        _fail("production bundle must contain one distinct honest proof per profile")
+    if kind_counts["message-kat"] != len(PROFILE_ORDER):
+        _fail("production bundle must contain one distinct message KAT per profile")
+    if kind_counts["anchor-kat"] != len(PROFILE_ORDER):
+        _fail("production bundle must contain one distinct anchor KAT per profile")
 
 
 def validate_bundle_index(value: Any) -> dict[str, Any]:
@@ -3398,6 +4541,7 @@ def validate_bundle_index(value: Any) -> dict[str, Any]:
         label="bundle index",
         keys=(
             "schema",
+            "environment",
             "release_id",
             "evidence_path",
             "trust_policy_id",
@@ -3411,6 +4555,8 @@ def validate_bundle_index(value: Any) -> dict[str, Any]:
     reject_secret_material(canonical_json_bytes(index), label="bundle index")
     if index["schema"] != BUNDLE_SCHEMA:
         _fail(f"bundle index schema must be exactly {BUNDLE_SCHEMA}")
+    if index["environment"] not in ("production", "test-fixture"):
+        _fail("bundle index environment is invalid")
     _require_id(index["release_id"], label="bundle release_id")
     if index["evidence_path"] != "evidence.json":
         _fail("bundle evidence_path must be exactly evidence.json")
@@ -3440,10 +4586,25 @@ def validate_bundle_index(value: Any) -> dict[str, Any]:
     kind_counts = {kind: 0 for kind in allowed_kinds}
     total_size = 0
     for position, raw in enumerate(entries):
+        production_artifact = (
+            index["environment"] == "production"
+            and type(raw) is dict
+            and raw.get("kind") != "release-evidence"
+        )
         entry = _require_object(
             raw,
             label=f"bundle entries[{position}]",
-            keys=("path", "kind", "sha256_hex", "size_bytes"),
+            keys=(
+                "path",
+                "kind",
+                "sha256_hex",
+                "size_bytes",
+                *(
+                    ("declared_max_bytes", "created_at_unix_ms")
+                    if production_artifact
+                    else ()
+                ),
+            ),
         )
         path = entry["path"]
         _safe_relative_parts(path, label=f"bundle entries[{position}].path")
@@ -3455,12 +4616,22 @@ def validate_bundle_index(value: Any) -> dict[str, Any]:
             _fail("bundle entry kind is not part of the SCCP V1 schema")
         kind_counts[kind] += 1
         digest = _require_hex(
-            entry["sha256_hex"], label=f"bundle entries[{position}].sha256_hex", byte_length=32
+            entry["sha256_hex"],
+            label=f"bundle entries[{position}].sha256_hex",
+            byte_length=32,
         )
         if digest in seen_hashes:
             _fail("bundle entries must have distinct SHA-256 digests")
         seen_hashes.add(digest)
-        limit = MAX_EVIDENCE_BYTES if kind == "release-evidence" else artifact_limit(kind)
+        limit = (
+            MAX_EVIDENCE_BYTES
+            if kind == "release-evidence"
+            else (
+                artifact_stream_limit(entry)
+                if index["environment"] == "production"
+                else artifact_limit(kind)
+            )
+        )
         size = _require_int(
             entry["size_bytes"],
             label=f"bundle entries[{position}].size_bytes",
@@ -3471,7 +4642,9 @@ def validate_bundle_index(value: Any) -> dict[str, Any]:
         if total_size > MAX_TOTAL_ARTIFACT_BYTES + MAX_EVIDENCE_BYTES:
             _fail("bundle entries exceed the total SCCP release size bound")
     _validate_bundle_artifact_kind_counts(kind_counts)
-    evidence_entries = [entry for entry in entries if entry["kind"] == "release-evidence"]
+    evidence_entries = [
+        entry for entry in entries if entry["kind"] == "release-evidence"
+    ]
     if len(evidence_entries) != 1 or evidence_entries[0]["path"] != "evidence.json":
         _fail("bundle must contain exactly one release-evidence entry at evidence.json")
     root_hash = _require_hex(
@@ -3483,6 +4656,7 @@ def validate_bundle_index(value: Any) -> dict[str, Any]:
         trust_policy_sha256_hex=index["trust_policy_sha256_hex"],
         validator=index["validator"],
         validator_executable_sha256_hex=index["validator_executable_sha256_hex"],
+        environment=index["environment"],
     ):
         _fail("bundle_root_hash_hex does not match the canonical entry inventory")
     return index
@@ -3507,10 +4681,13 @@ def validate_bundle_index_against_evidence(
     expected_entries.sort(key=lambda entry: entry["path"])
     if index["release_id"] != evidence["release_id"]:
         _fail("bundle release_id does not match signed release evidence")
+    if (index["environment"] == "production") != (
+        "validator_built_at_unix_ms" in evidence
+    ):
+        _fail("bundle environment does not match signed release evidence")
     if (
         index["trust_policy_id"] != evidence["trust_policy_id"]
-        or index["trust_policy_sha256_hex"]
-        != evidence["trust_policy_sha256_hex"]
+        or index["trust_policy_sha256_hex"] != evidence["trust_policy_sha256_hex"]
     ):
         _fail("bundle trust-policy commitment does not match signed release evidence")
     if index["validator"] != evidence["validator"]:
@@ -3532,7 +4709,10 @@ def make_bundle_index(
     trust_policy_bytes: bytes,
     validator_executable_sha256_hex: str,
 ) -> dict[str, Any]:
-    if validator_executable_sha256_hex != evidence["validator"]["executable_sha256_hex"]:
+    if (
+        validator_executable_sha256_hex
+        != evidence["validator"]["executable_sha256_hex"]
+    ):
         _fail("bundle validator executable does not match signed release evidence")
     entries = [
         {
@@ -3546,6 +4726,7 @@ def make_bundle_index(
     entries.sort(key=lambda entry: entry["path"])
     index = {
         "schema": BUNDLE_SCHEMA,
+        "environment": trust_policy.get("environment", "test-fixture"),
         "release_id": evidence["release_id"],
         "evidence_path": "evidence.json",
         "trust_policy_id": trust_policy["policy_id"],
@@ -3560,6 +4741,7 @@ def make_bundle_index(
         trust_policy_sha256_hex=index["trust_policy_sha256_hex"],
         validator=index["validator"],
         validator_executable_sha256_hex=index["validator_executable_sha256_hex"],
+        environment=index["environment"],
     )
     validated = validate_bundle_index(index)
     validate_bundle_index_against_evidence(validated, evidence, evidence_bytes)
@@ -3585,9 +4767,9 @@ def open_direct_directory(path: Path, *, label: str) -> int:
     except OSError:
         _fail(f"{label} could not be opened safely")
     opened = os.fstat(descriptor)
-    if (
-        not stat.S_ISDIR(opened.st_mode)
-        or (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino)
+    if not stat.S_ISDIR(opened.st_mode) or (opened.st_dev, opened.st_ino) != (
+        before.st_dev,
+        before.st_ino,
     ):
         os.close(descriptor)
         _fail(f"{label} changed while opening")
@@ -3680,8 +4862,10 @@ def ensure_new_output_parent(output: Path) -> Path:
     return parent
 
 
-def readiness_summary(evidence: Mapping[str, Any], *, bundle_root_hash: str | None) -> dict[str, Any]:
-    """Build the small public readiness projection from validated evidence."""
+def readiness_summary(
+    evidence: Mapping[str, Any], *, bundle_root_hash: str | None
+) -> dict[str, Any]:
+    """Build a historical integrity projection that can never claim readiness."""
 
     lanes = []
     blockers: list[str] = []
@@ -3692,7 +4876,9 @@ def readiness_summary(evidence: Mapping[str, Any], *, bundle_root_hash: str | No
     lane_by_profile: dict[str, Mapping[str, Any]] = {}
     for lane in supplied_lanes:
         if type(lane) is not dict:
-            blockers.append("lane-inventory:malformed:requires:exact-production-profiles")
+            blockers.append(
+                "lane-inventory:malformed:requires:exact-production-profiles"
+            )
             continue
         profile = lane.get("counterparty_profile")
         if profile not in PROFILE_ORDER:
@@ -3716,7 +4902,9 @@ def readiness_summary(evidence: Mapping[str, Any], *, bundle_root_hash: str | No
         if inbound != expected_inbound:
             blockers.append(f"{profile}:inbound:{inbound}:requires:{expected_inbound}")
         if outbound != expected_outbound:
-            blockers.append(f"{profile}:outbound:{outbound}:requires:{expected_outbound}")
+            blockers.append(
+                f"{profile}:outbound:{outbound}:requires:{expected_outbound}"
+            )
         lanes.append(
             {
                 "counterparty_profile": profile,
@@ -3726,13 +4914,302 @@ def readiness_summary(evidence: Mapping[str, Any], *, bundle_root_hash: str | No
                 "required_outbound_status": expected_outbound,
             }
         )
+    blockers.append("live-freshness:absent:requires:fresh-two-of-three-authority-heads")
     return {
         "schema": READINESS_SCHEMA,
-        "ready": not blockers,
+        "mode": "historical",
+        "ready": False,
         "release_id": evidence["release_id"],
         "bundle_root_hash_hex": bundle_root_hash,
         "lanes": lanes,
         "blocking_capabilities": blockers,
         "validation_phases": list(REQUIRED_PHASES),
         "provenance_roles": list(PROVENANCE_ROLES),
+    }
+
+
+def validate_freshness_heads(
+    heads: Sequence[Mapping[str, Any]],
+    *,
+    policy: Mapping[str, Any],
+    request: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Authenticate a nonce-bound matching quorum of online freshness heads."""
+
+    if policy.get("environment") != "production":
+        _fail("live freshness is available only for the production final-V1 policy")
+    request = _require_object(
+        request,
+        label="freshness request",
+        keys=(
+            "schema",
+            "nonce_hex",
+            "policy_root_sha256_hex",
+            "bundle_root_hash_hex",
+        ),
+    )
+    if request["schema"] != FRESHNESS_REQUEST_SCHEMA:
+        _fail("freshness request has the wrong final-V1 schema")
+    nonce = _require_hex(request["nonce_hex"], label="freshness nonce", byte_length=32)
+    if nonce == "00" * 32:
+        _fail("freshness nonce must not be the all-zero value")
+    if request["policy_root_sha256_hex"] != policy["policy_root_sha256_hex"]:
+        _fail("freshness request does not bind the active policy root")
+    _require_hex(
+        request["bundle_root_hash_hex"], label="freshness bundle root", byte_length=32
+    )
+
+    trusted = {
+        entry["authority_id"]: entry for entry in policy["freshness_authorities"]
+    }
+    if not POLICY_ROOT_THRESHOLD <= len(heads) <= FRESHNESS_AUTHORITY_COUNT:
+        _fail(
+            "live readiness requires responses from at least two freshness authorities"
+        )
+    seen_authorities: set[str] = set()
+    seen_signatures: set[bytes] = set()
+    groups: dict[bytes, list[dict[str, Any]]] = {}
+    for position, raw in enumerate(heads):
+        head = _require_object(
+            raw,
+            label=f"freshness heads[{position}]",
+            keys=(
+                "schema",
+                "authority_id",
+                "nonce_hex",
+                "policy_root_sha256_hex",
+                "bundle_root_hash_hex",
+                "issued_at_unix_ms",
+                "trusted_time_unix_ms",
+                "expires_at_unix_ms",
+                "revocation_epoch",
+                "revoked_release_ids",
+                "signature_b64",
+            ),
+        )
+        authority_id = _require_id(head["authority_id"], label="freshness authority_id")
+        authority = trusted.get(authority_id)
+        if head["schema"] != FRESHNESS_HEAD_SCHEMA or authority is None:
+            _fail("freshness head schema or authority is not trusted")
+        if authority_id in seen_authorities:
+            _fail("freshness authority response is duplicated")
+        seen_authorities.add(authority_id)
+        for field in ("nonce_hex", "policy_root_sha256_hex", "bundle_root_hash_hex"):
+            _require_hex(head[field], label=f"freshness head {field}", byte_length=32)
+            if head[field] != request[field]:
+                _fail("freshness head does not bind the exact live request")
+        issued = _require_int(
+            head["issued_at_unix_ms"], label="freshness issued time", minimum=1
+        )
+        trusted_time = _require_int(
+            head["trusted_time_unix_ms"], label="freshness trusted time", minimum=1
+        )
+        expires = _require_int(
+            head["expires_at_unix_ms"], label="freshness expiry", minimum=1
+        )
+        if (
+            expires <= issued
+            or expires - issued > MAX_FRESHNESS_RESPONSE_LIFETIME_MS
+            or trusted_time < issued
+            or trusted_time > expires
+        ):
+            _fail("freshness response is not live for its bounded five-minute window")
+        _require_int(
+            head["revocation_epoch"],
+            label="freshness revocation epoch",
+            maximum=2**64 - 1,
+        )
+        revoked = _require_list(
+            head["revoked_release_ids"], label="revoked release ids"
+        )
+        if len(revoked) > 128:
+            _fail("freshness revocation list exceeds its bound")
+        previous = ""
+        for release_id in revoked:
+            release_id = _require_id(release_id, label="revoked release id")
+            if release_id <= previous:
+                _fail(
+                    "freshness revoked release ids must be strictly sorted and unique"
+                )
+            previous = release_id
+        signature = _canonical_base64(
+            head["signature_b64"], label="freshness head signature", decoded_length=64
+        )
+        if signature in seen_signatures or not verify_ed25519(
+            bytes.fromhex(authority["public_key_hex"]),
+            signature,
+            freshness_head_signing_payload(head),
+        ):
+            _fail("freshness head has a replayed or invalid signature")
+        seen_signatures.add(signature)
+        state = canonical_json_bytes(
+            {
+                "trusted_time_unix_ms": trusted_time,
+                "revocation_epoch": head["revocation_epoch"],
+                "revoked_release_ids": revoked,
+            }
+        )
+        groups.setdefault(state, []).append(head)
+
+    matching = [
+        group for group in groups.values() if len(group) >= POLICY_ROOT_THRESHOLD
+    ]
+    if len(matching) != 1:
+        _fail("freshness authorities did not return one matching two-of-three head")
+    quorum = matching[0]
+    issued_times = [head["issued_at_unix_ms"] for head in quorum]
+    if max(issued_times) - min(issued_times) > MAX_FRESHNESS_HEAD_SPREAD_MS:
+        _fail("matching freshness heads exceed the 30-second authority spread")
+    exemplar = quorum[0]
+    return {
+        "trusted_time_unix_ms": exemplar["trusted_time_unix_ms"],
+        "revocation_epoch": exemplar["revocation_epoch"],
+        "revoked_release_ids": list(exemplar["revoked_release_ids"]),
+        "authority_ids": sorted(head["authority_id"] for head in quorum),
+        "quorum": len(quorum),
+    }
+
+
+def select_valid_freshness_quorum(
+    heads: Sequence[Mapping[str, Any]],
+    *,
+    policy: Mapping[str, Any],
+    request: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Select a valid two-of-three quorum while tolerating one bad response."""
+
+    if not POLICY_ROOT_THRESHOLD <= len(heads) <= FRESHNESS_AUTHORITY_COUNT:
+        _fail(
+            "live readiness requires responses from at least two freshness authorities"
+        )
+    subsets: list[Sequence[Mapping[str, Any]]] = [heads]
+    if len(heads) == FRESHNESS_AUTHORITY_COUNT:
+        subsets.extend(
+            (
+                (heads[0], heads[1]),
+                (heads[0], heads[2]),
+                (heads[1], heads[2]),
+            )
+        )
+    accepted: dict[bytes, dict[str, Any]] = {}
+    for subset in subsets:
+        try:
+            state = validate_freshness_heads(subset, policy=policy, request=request)
+        except SccpReleaseError:
+            continue
+        identity = canonical_json_bytes(
+            {
+                "trusted_time_unix_ms": state["trusted_time_unix_ms"],
+                "revocation_epoch": state["revocation_epoch"],
+                "revoked_release_ids": state["revoked_release_ids"],
+            }
+        )
+        accepted.setdefault(identity, state)
+    if len(accepted) != 1:
+        _fail(
+            "freshness authorities did not yield one authenticated two-of-three state"
+        )
+    return next(iter(accepted.values()))
+
+
+def _freshness_age_blocker(
+    blockers: list[str], *, label: str, observed: int, now: int, maximum_age: int
+) -> None:
+    if observed > now + MAX_FUTURE_SKEW_MS:
+        blockers.append(f"{label}:future-dated")
+    elif now > observed and now - observed > maximum_age:
+        blockers.append(f"{label}:stale")
+
+
+def live_readiness_summary(
+    evidence: Mapping[str, Any],
+    *,
+    bundle_root_hash: str,
+    policy: Mapping[str, Any],
+    freshness_state: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Project readiness using only nonce-bound authority time and revocations."""
+
+    historical = readiness_summary(evidence, bundle_root_hash=bundle_root_hash)
+    blockers = [
+        blocker
+        for blocker in historical["blocking_capabilities"]
+        if not blocker.startswith("live-freshness:")
+    ]
+    now = _require_int(
+        freshness_state.get("trusted_time_unix_ms"),
+        label="trusted freshness time",
+        minimum=1,
+    )
+    if evidence["release_id"] in freshness_state.get("revoked_release_ids", ()):
+        blockers.append("release:revoked")
+    if now + MAX_FUTURE_SKEW_MS < policy["issued_at_unix_ms"]:
+        blockers.append("policy:not-yet-valid")
+    if now > policy["expires_at_unix_ms"]:
+        blockers.append("policy:expired")
+    _freshness_age_blocker(
+        blockers,
+        label="release-evidence",
+        observed=evidence["created_at_unix_ms"],
+        now=now,
+        maximum_age=MAX_RELEASE_EVIDENCE_AGE_MS,
+    )
+    _freshness_age_blocker(
+        blockers,
+        label="validator-build",
+        observed=evidence["validator_built_at_unix_ms"],
+        now=now,
+        maximum_age=MAX_VALIDATOR_BUILD_AGE_MS,
+    )
+    for build in evidence["contract_builds"]:
+        _freshness_age_blocker(
+            blockers,
+            label=f"{build['counterparty_profile']}:contract-build",
+            observed=build["built_at_unix_ms"],
+            now=now,
+            maximum_age=MAX_CONTRACT_BUILD_AGE_MS,
+        )
+    for lane in evidence["lanes"]:
+        profile = lane["counterparty_profile"]
+        _freshness_age_blocker(
+            blockers,
+            label=f"{profile}:lane-evidence",
+            observed=lane["lane_evidence_at_unix_ms"],
+            now=now,
+            maximum_age=MAX_LANE_EVIDENCE_AGE_MS,
+        )
+        _freshness_age_blocker(
+            blockers,
+            label=f"{profile}:canary",
+            observed=lane["canary_at_unix_ms"],
+            now=now,
+            maximum_age=MAX_CANARY_EVIDENCE_AGE_MS,
+        )
+        _freshness_age_blocker(
+            blockers,
+            label=f"{profile}:destination-readback",
+            observed=lane["destination_readback_at_unix_ms"],
+            now=now,
+            maximum_age=MAX_DESTINATION_ATTESTATION_AGE_MS,
+        )
+    for proof in policy["proof_systems"]:
+        for audit in proof["audit_attestations"]:
+            _freshness_age_blocker(
+                blockers,
+                label=f"{proof['counterparty_profile']}:{audit['role']}",
+                observed=audit["completed_at_unix_ms"],
+                now=now,
+                maximum_age=MAX_CIRCUIT_AUDIT_AGE_MS,
+            )
+    # TODO: Remove this blocker only after the Rust validator independently
+    # verifies the canonical epoch-anchor KAT for all four destination runtimes.
+    blockers.append("anchor-kat:runtime-verification-unavailable")
+    return {
+        **historical,
+        "mode": "live",
+        "ready": not blockers,
+        "blocking_capabilities": blockers,
+        "trusted_time_unix_ms": now,
+        "revocation_epoch": freshness_state["revocation_epoch"],
+        "freshness_authority_ids": list(freshness_state["authority_ids"]),
     }

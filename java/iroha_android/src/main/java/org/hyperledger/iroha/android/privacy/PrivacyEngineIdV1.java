@@ -5,7 +5,8 @@ package org.hyperledger.iroha.android.privacy;
 
 /** Closed first-release native-engine identity in canonical Norito discriminant order. */
 public enum PrivacyEngineIdV1 {
-  NATIVE_GOLDILOCKS_STARK_FRI("native-goldilocks-stark-fri"),
+  NATIVE_GOLDILOCKS_POSEIDON_X7_STARK_FRI_6X64_V1(
+      "native-goldilocks-poseidon-x7-stark-fri-6x64-v1"),
   NATIVE_ZK_AMS_MASKED_RELAXED_SPARTAN_T256_RISTRETTO255(
       "native-zk-ams-masked-relaxed-spartan-t256-ristretto255"),
   NATIVE_ANONYMOUS_PGC_P256("native-anonymous-pgc-p256"),

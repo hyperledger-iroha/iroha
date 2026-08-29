@@ -31,6 +31,7 @@ import org.hyperledger.iroha.sdk.norito.NoritoHeader
 import org.hyperledger.iroha.sdk.norito.SchemaHash
 import org.hyperledger.iroha.sdk.sccp.SccpLaneIdV1
 import org.hyperledger.iroha.sdk.sccp.SccpNetworkV1
+import org.hyperledger.iroha.sdk.sccp.SccpReplayV1
 import org.hyperledger.iroha.sdk.sccp.SccpV1
 import org.hyperledger.iroha.sdk.testing.TestEd25519Keys
 import org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapter
@@ -84,13 +85,38 @@ class SccpClientExactTest {
 
         val message = messageRequest(authority, nativeArtifact)
         assertEquals(
-            setOf("authority", "fee_payment", "native_proof_b64"),
+            setOf("authority", "fee_payment", "native_proof_b64", "replay_witness_b64"),
             message.toJsonMap().keys,
         )
         HttpClientTransport.preflightSccpBridgeSubmitJson(
             message.toJsonBytes(),
             "/v1/bridge/messages",
         )
+        val occupiedWitness = Base64.getEncoder().encodeToString(
+            canonicalReplayWitnessBytes(priorRecordDigest = ByteArray(32) { 1 }),
+        )
+        assertFailsWith<IllegalArgumentException> {
+            SccpNativeMessageSubmitRequest(
+                authority,
+                nativeArtifact,
+                occupiedWitness,
+                bridgeFeePayment,
+            )
+        }
+        val explicitDefaultWitness = Base64.getEncoder().encodeToString(
+            canonicalReplayWitnessBytes(
+                siblingBitmap = ByteArray(32).also { it[31] = 1 },
+                siblings = listOf(SccpReplayV1.emptyHashes().first()),
+            ),
+        )
+        assertFailsWith<IllegalArgumentException> {
+            SccpNativeMessageSubmitRequest(
+                authority,
+                nativeArtifact,
+                explicitDefaultWitness,
+                bridgeFeePayment,
+            )
+        }
 
         val transactionBytes = NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1).encodeTransaction(
             TransactionPayload(
@@ -125,44 +151,35 @@ class SccpClientExactTest {
             )
         }
         val signature = Base64.getEncoder().encodeToString(ByteArray(64) { 1 })
-        val genericSignature = Base64.getEncoder().encodeToString(ByteArray(65) { 1 })
-        assertEquals(genericSignature, normalizeOptionalSignature(genericSignature))
-        val signed = destinationRequest(
-            authority = authority,
-            destinationProofB64 = artifact,
-            signatureB64 = signature,
-            transactionPayloadB64 = transaction,
-            creationTimeMs = 7,
-        )
-        assertEquals(
-            setOf(
-                "authority", "fee_payment", "destination_proof_b64", "signature_b64",
-                "transaction_payload_b64", "creation_time_ms",
-            ),
-            signed.toJsonMap().keys,
-        )
-        HttpClientTransport.preflightSccpBridgeSubmitJson(
-            signed.toJsonBytes(),
-            "/v1/bridge/proofs/submit",
-        )
-        val signedMessage = messageRequest(
-            authority = authority,
-            nativeProofB64 = nativeArtifact,
-            signatureB64 = signature,
-            transactionPayloadB64 = transaction,
-            creationTimeMs = 7,
-        )
-        assertEquals(
-            setOf(
-                "authority", "fee_payment", "native_proof_b64", "signature_b64",
-                "transaction_payload_b64", "creation_time_ms",
-            ),
-            signedMessage.toJsonMap().keys,
-        )
-        HttpClientTransport.preflightSccpBridgeSubmitJson(
-            signedMessage.toJsonBytes(),
-            "/v1/bridge/messages",
-        )
+        assertFailsWith<IllegalArgumentException> {
+            destinationRequest(
+                authority = authority,
+                destinationProofB64 = artifact,
+                signatureB64 = signature,
+                transactionPayloadB64 = transaction,
+                creationTimeMs = 7,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            messageRequest(
+                authority = authority,
+                nativeProofB64 = nativeArtifact,
+                signatureB64 = signature,
+                transactionPayloadB64 = transaction,
+                creationTimeMs = 7,
+            )
+        }
+        val retiredSignedFields = proof.toJsonMap().toMutableMap().also {
+            it["signature_b64"] = signature
+            it["transaction_payload_b64"] = transaction
+            it["creation_time_ms"] = 7
+        }
+        assertFailsWith<IllegalArgumentException> {
+            HttpClientTransport.preflightSccpBridgeSubmitJson(
+                jsonBytes(retiredSignedFields),
+                "/v1/bridge/proofs/submit",
+            )
+        }
         val ordinaryTransaction = Base64.getEncoder().encodeToString(
             NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1).encodeTransaction(
                 NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1)
@@ -274,10 +291,9 @@ class SccpClientExactTest {
             )
 
         fun signedRequest(feePayment: FeePaymentIntent): SccpDestinationProofSubmitRequest =
-            SccpDestinationProofSubmitRequest(
-                authority = authority,
-                destinationProofB64 = canonicalArtifact(),
-                feePayment = expectedFeePayment,
+            destinationRequest(
+                authority,
+                canonicalArtifact(),
                 signatureB64 = signature,
                 transactionPayloadB64 = Base64.getEncoder()
                     .encodeToString(transactionBytes(feePayment)),
@@ -294,16 +310,7 @@ class SccpClientExactTest {
         assertTrue(codec.encodeTransaction(decoded).contentEquals(encoded))
         assertEquals(selector, program.literal())
 
-        val request = signedRequest(expectedFeePayment)
-        assertEquals(selector, (request.feePayment as FeePaymentIntent.Sponsor).programId.literal())
-        SccpNativeMessageSubmitRequest(
-            authority = authority,
-            nativeProofB64 = canonicalNativeArtifact(),
-            feePayment = expectedFeePayment,
-            signatureB64 = signature,
-            transactionPayloadB64 = Base64.getEncoder().encodeToString(encoded),
-            creationTimeMs = 7,
-        )
+        assertFailsWith<IllegalArgumentException> { signedRequest(expectedFeePayment) }
 
         val mutations = listOf(
             FeePaymentIntent.sponsor(
@@ -874,14 +881,12 @@ class SccpClientExactTest {
         signatureB64: String? = null,
         transactionPayloadB64: String? = null,
         creationTimeMs: Long? = null,
-    ): SccpDestinationProofSubmitRequest = SccpDestinationProofSubmitRequest(
-        authority,
-        destinationProofB64,
-        bridgeFeePayment,
-        signatureB64,
-        transactionPayloadB64,
-        creationTimeMs,
-    )
+    ): SccpDestinationProofSubmitRequest {
+        require(signatureB64 == null && transactionPayloadB64 == null && creationTimeMs == null) {
+            "signed SCCP request fields are not part of the first-release SDK surface"
+        }
+        return SccpDestinationProofSubmitRequest(authority, destinationProofB64, bridgeFeePayment)
+    }
 
     private fun messageRequest(
         authority: String,
@@ -889,14 +894,17 @@ class SccpClientExactTest {
         signatureB64: String? = null,
         transactionPayloadB64: String? = null,
         creationTimeMs: Long? = null,
-    ): SccpNativeMessageSubmitRequest = SccpNativeMessageSubmitRequest(
-        authority,
-        nativeProofB64,
-        bridgeFeePayment,
-        signatureB64,
-        transactionPayloadB64,
-        creationTimeMs,
-    )
+    ): SccpNativeMessageSubmitRequest {
+        require(signatureB64 == null && transactionPayloadB64 == null && creationTimeMs == null) {
+            "signed SCCP request fields are not part of the first-release SDK surface"
+        }
+        return SccpNativeMessageSubmitRequest(
+            authority,
+            nativeProofB64,
+            canonicalReplayWitnessArtifact(),
+            bridgeFeePayment,
+        )
+    }
 
     @Test
     fun registryValidatesElevenSignalKeySemanticPolicyAndExactFamilies() {
@@ -957,6 +965,16 @@ class SccpClientExactTest {
             SccpJsonParser.parseRegistry(jsonBytes(retired))
         }
 
+        val noncanonicalWireName = registry()
+        @Suppress("UNCHECKED_CAST")
+        val noncanonicalSource = (((noncanonicalWireName["lanes"] as MutableList<Any?>)[0]
+            as MutableMap<String, Any?>)["lane_id"] as MutableMap<String, Any?>)["source"]
+            as MutableMap<String, Any?>
+        noncanonicalSource["network"] = "bsc-mainnet"
+        assertFailsWith<IllegalArgumentException> {
+            SccpJsonParser.parseRegistry(jsonBytes(noncanonicalWireName))
+        }
+
         val missingPolicy = registry()
         deployment(missingPolicy).remove("outbound_proof_policy")
         assertFailsWith<IllegalArgumentException> {
@@ -973,73 +991,87 @@ class SccpClientExactTest {
         assertFailsWith<IllegalArgumentException> {
             SccpJsonParser.parseRegistry(jsonBytes(wrongSchema))
         }
-    }
 
-    @Test
-    fun registryRequiresExactU128SupplyCapAndOutstandingLiability() {
-        val exact = registry()
-        val parsed = SccpJsonParser.parseRegistry(jsonBytes(exact))
-        @Suppress("UNCHECKED_CAST")
-        val parsedRoute = ((parsed.lanes.single()["routes"] as List<Any?>).single()
-            as Map<String, Any?>)
-        @Suppress("UNCHECKED_CAST")
-        val parsedDeployment = ((parsedRoute["destination"] as Map<String, Any?>)["deployment"]
-            as Map<String, Any?>)
-        @Suppress("UNCHECKED_CAST")
-        val parsedSettlement = parsedRoute["settlement"] as Map<String, Any?>
-        assertEquals(MAX_WRAPPED_SUPPLY, parsedDeployment["max_wrapped_supply"])
-        assertEquals(
-            MAX_OUTSTANDING_LIABILITY,
-            BigInteger(parsedSettlement["max_outstanding_liability"].toString()),
-        )
-
-        val missingCap = registry()
-        deployment(missingCap).remove("max_wrapped_supply")
+        val replayAddressAlias = registry()
+        deployment(replayAddressAlias).let {
+            it["replay_verifier_address"] = it["route_address"]
+        }
         assertFailsWith<IllegalArgumentException> {
-            SccpJsonParser.parseRegistry(jsonBytes(missingCap))
+            SccpJsonParser.parseRegistry(jsonBytes(replayAddressAlias))
         }
 
-        val missingLiability = registry()
-        @Suppress("UNCHECKED_CAST")
-        (route(missingLiability)["settlement"] as MutableMap<String, Any?>)
-            .remove("max_outstanding_liability")
+        val replayAddressSubstitution = registry()
+        deployment(replayAddressSubstitution)["replay_verifier_address"] = upper(0x73, 20)
         assertFailsWith<IllegalArgumentException> {
-            SccpJsonParser.parseRegistry(jsonBytes(missingLiability))
+            SccpJsonParser.parseRegistry(jsonBytes(replayAddressSubstitution))
         }
 
-        val oversizedCap = registry()
-        deployment(oversizedCap)["max_wrapped_supply"] = MAX_U128_TEST.add(BigInteger.ONE)
+        val replayRuntimeSubstitution = registry()
+        deployment(replayRuntimeSubstitution)["replay_verifier_code_hash"] = upper(0x44, 32)
         assertFailsWith<IllegalArgumentException> {
-            SccpJsonParser.parseRegistry(jsonBytes(oversizedCap))
+            SccpJsonParser.parseRegistry(jsonBytes(replayRuntimeSubstitution))
         }
 
-        val zeroLiability = registry()
+        val breakerAddressSubstitution = registry()
+        deployment(breakerAddressSubstitution)["mint_breaker_address"] = upper(0x74, 20)
+        assertFailsWith<IllegalArgumentException> {
+            SccpJsonParser.parseRegistry(jsonBytes(breakerAddressSubstitution))
+        }
+
+        val breakerRuntimeSubstitution = registry()
+        deployment(breakerRuntimeSubstitution)["mint_breaker_code_hash"] = upper(0x45, 32)
+        assertFailsWith<IllegalArgumentException> {
+            SccpJsonParser.parseRegistry(jsonBytes(breakerRuntimeSubstitution))
+        }
+
+        val swappedRoles = registry()
+        deployment(swappedRoles).let {
+            val replayAddress = it.getValue("replay_verifier_address")
+            val replayCodeHash = it.getValue("replay_verifier_code_hash")
+            it["replay_verifier_address"] = it.getValue("mint_breaker_address")
+            it["replay_verifier_code_hash"] = it.getValue("mint_breaker_code_hash")
+            it["mint_breaker_address"] = replayAddress
+            it["mint_breaker_code_hash"] = replayCodeHash
+        }
+        assertFailsWith<IllegalArgumentException> {
+            SccpJsonParser.parseRegistry(jsonBytes(swappedRoles))
+        }
+
+        val emptyRuntimeHash = registry()
+        deployment(emptyRuntimeHash)["mint_breaker_code_hash"] =
+            "C5D2460186F7233C927E7DB2DCC703C0E500B653CA82273B7BFAD8045D85A470"
+        assertFailsWith<IllegalArgumentException> {
+            SccpJsonParser.parseRegistry(jsonBytes(emptyRuntimeHash))
+        }
+
+        val zeroCap = registry()
+        deployment(zeroCap)["max_wrapped_supply"] = 0
+        assertFailsWith<IllegalArgumentException> {
+            SccpJsonParser.parseRegistry(jsonBytes(zeroCap))
+        }
+
+        val missingExecutionPolicy = registry()
+        route(missingExecutionPolicy).remove("sora_outbound_execution_policy")
+        assertFailsWith<IllegalArgumentException> {
+            SccpJsonParser.parseRegistry(jsonBytes(missingExecutionPolicy))
+        }
+
+        val wrongExecutionSemantics = registry()
         @Suppress("UNCHECKED_CAST")
-        (route(zeroLiability)["settlement"] as MutableMap<String, Any?>)[
+        (route(wrongExecutionSemantics)["sora_outbound_execution_policy"] as MutableMap<String, Any?>)[
+            "semantics"
+        ] = "unproved_record_sccp_message_v1"
+        assertFailsWith<IllegalArgumentException> {
+            SccpJsonParser.parseRegistry(jsonBytes(wrongExecutionSemantics))
+        }
+
+        val wrongLiabilityCap = registry()
+        @Suppress("UNCHECKED_CAST")
+        (route(wrongLiabilityCap)["settlement"] as MutableMap<String, Any?>)[
             "max_outstanding_liability"
-        ] = BigInteger.ZERO
+        ] = 8
         assertFailsWith<IllegalArgumentException> {
-            SccpJsonParser.parseRegistry(jsonBytes(zeroLiability))
-        }
-
-        val mismatchedCap = registry()
-        deployment(mismatchedCap)["max_wrapped_supply"] = MAX_WRAPPED_SUPPLY.add(BigInteger.ONE)
-        sourceIdentity(route(mismatchedCap))["route_config_hash"] =
-            fixtureRouteConfigurationHash(route(mismatchedCap))
-        assertFailsWith<IllegalArgumentException> {
-            SccpJsonParser.parseRegistry(jsonBytes(mismatchedCap))
-        }
-
-        val overflowingLiability = registry()
-        deployment(overflowingLiability)["max_wrapped_supply"] = MAX_U128_TEST
-        @Suppress("UNCHECKED_CAST")
-        (route(overflowingLiability)["settlement"] as MutableMap<String, Any?>)[
-            "max_outstanding_liability"
-        ] = MAX_U128_TEST
-        sourceIdentity(route(overflowingLiability))["route_config_hash"] =
-            fixtureRouteConfigurationHash(route(overflowingLiability))
-        assertFailsWith<IllegalArgumentException> {
-            SccpJsonParser.parseRegistry(jsonBytes(overflowingLiability))
+            SccpJsonParser.parseRegistry(jsonBytes(wrongLiabilityCap))
         }
     }
 
@@ -1281,20 +1313,6 @@ class SccpClientExactTest {
         )
         SccpJsonParser.parseRegistry(jsonBytes(canonical))
 
-        val missingCap = tonRegistry()
-        routeDeployment(route(missingCap)).remove("max_wrapped_supply")
-        assertFailsWith<IllegalArgumentException> {
-            SccpJsonParser.parseRegistry(jsonBytes(missingCap))
-        }
-
-        val mismatchedLiability = tonRegistry()
-        (route(mismatchedLiability)["settlement"] as MutableMap<String, Any?>)[
-            "max_outstanding_liability"
-        ] = MAX_OUTSTANDING_LIABILITY.subtract(BigInteger.ONE)
-        assertFailsWith<IllegalArgumentException> {
-            SccpJsonParser.parseRegistry(jsonBytes(mismatchedLiability))
-        }
-
         val changedInitialData = tonRegistry()
         val changedInitialDataRoute = route(changedInitialData)
         val changedInitialDataDeployment = routeDeployment(changedInitialDataRoute)
@@ -1356,6 +1374,33 @@ class SccpClientExactTest {
         key["alpha1"] = "40${"00".repeat(47)}"
         assertFailsWith<IllegalArgumentException> {
             SccpJsonParser.parseRegistry(jsonBytes(malformedKey))
+        }
+
+        val unsortedGuardians = tonRegistry()
+        val unsorted = routeDeployment(route(unsortedGuardians))["mint_breaker_guardian_keys"]
+            as MutableMap<String, Any?>
+        unsorted["guardian_1"] = unsorted["guardian_0"]
+        assertFailsWith<IllegalArgumentException> {
+            SccpJsonParser.parseRegistry(jsonBytes(unsortedGuardians))
+        }
+
+        val zeroGuardian = tonRegistry()
+        val zero = routeDeployment(route(zeroGuardian))["mint_breaker_guardian_keys"]
+            as MutableMap<String, Any?>
+        zero["guardian_0"] = upper(0, 32)
+        assertFailsWith<IllegalArgumentException> {
+            SccpJsonParser.parseRegistry(jsonBytes(zeroGuardian))
+        }
+
+        val zeroCap = tonRegistry()
+        routeDeployment(route(zeroCap))["max_wrapped_supply"] = 0
+        assertFailsWith<IllegalArgumentException> {
+            SccpJsonParser.parseRegistry(jsonBytes(zeroCap))
+        }
+
+        requireSccpTonAmountWithinCapV1(BigInteger.valueOf(9), BigInteger.TEN)
+        assertFailsWith<IllegalArgumentException> {
+            requireSccpTonAmountWithinCapV1(BigInteger.valueOf(11), BigInteger.TEN)
         }
     }
 
@@ -1449,7 +1494,7 @@ class SccpClientExactTest {
         assertEquals(upper(0xa2, 32), request.soraFinalityAnchor.checkpointContextId)
         assertEquals(upper(0xa3, 32), request.soraFinalityAnchor.checkpointFinalityArtifactHash)
         assertEquals(
-            "0x4410ee4ccfd06f2d0e3a658615d516ac8cf65255d8a8716ce511ea95e135c8c3",
+            "0xcdbec097fed4ad21e44a354fe09a3c43ad489f4ac78cff8944ba8bb5cc2fd577",
             request.soraFinalityAnchor.anchorHash,
         )
         assertEquals("0x${finalityAnchorHash().lowercase()}", request.soraFinalityAnchor.anchorHash)
@@ -1672,13 +1717,13 @@ class SccpClientExactTest {
 
         val tronProjection = recent(9, MESSAGE_ID).also {
             it["target_profile"] = "tron-mainnet"
-            it["target_domain"] = 5
+            it["target_domain"] = 3
             it["route_id"] = "taira_tron_xor"
         }
         @Suppress("UNCHECKED_CAST")
         val tronTransfer = (tronProjection["payload_projection"] as MutableMap<String, Any?>)["Transfer"]
             as MutableMap<String, Any?>
-        tronTransfer["dest_domain"] = 5
+        tronTransfer["dest_domain"] = 3
         tronTransfer["recipient"] = linkedMapOf(
             "TronAddress21" to linkedMapOf("bytes" to "0x41${"11".repeat(20)}"),
         )
@@ -1877,6 +1922,7 @@ class SccpClientExactTest {
         "message_bundle_path" to "/v1/sccp/proofs/message/{message_id}",
         "proof_request_path" to "/v1/sccp/proof-requests/{message_id}",
         "recent_messages_path" to "/v1/sccp/messages/recent",
+        "sora_outbound_material_path" to "/v1/sccp/routes/{source_profile}/{route_id}/{asset_key}/{revision}/sora-outbound-material",
         "registry_limits" to linkedMapOf(
             "max_governed_lanes" to 16,
             "max_live_governed_routes" to 64,
@@ -1999,6 +2045,19 @@ class SccpClientExactTest {
         "sora_finality_anchor" to finalityAnchor(),
     )
 
+    private fun soraOutboundExecutionPolicy(): MutableMap<String, Any?> = linkedMapOf(
+        "version" to 1,
+        "semantics" to "ivm_proved_record_sccp_message_v1",
+        "contract_artifact_sha256" to upper(0xb1, 32),
+        "vk_ref" to linkedMapOf(
+            "backend" to "stark/fri/v1",
+            "name" to "ivm-execution-v1",
+            "version" to 1,
+            "commitment" to upper(0xb2, 32),
+        ),
+        "gas_limit" to 50_000_000,
+    )
+
     private fun registry(): MutableMap<String, Any?> {
         val key = verifyingKey()
         val routeAddress = upper(0x31, 20)
@@ -2033,15 +2092,19 @@ class SccpClientExactTest {
                     "outbound_proof_policy" to outboundPolicy(),
                     "route_address" to routeAddress,
                     "route_code_hash" to routeCodeHash,
+                    "replay_verifier_address" to upper(0x71, 20),
+                    "replay_verifier_code_hash" to upper(0x42, 32),
+                    "mint_breaker_address" to upper(0x72, 20),
+                    "mint_breaker_code_hash" to upper(0x43, 32),
                     "taira_to_token_multiplier" to 1_000_000_000,
-                    "max_wrapped_supply" to MAX_WRAPPED_SUPPLY,
+                    "max_wrapped_supply" to 9_000_000_000L,
                 ),
             ),
+            "sora_outbound_execution_policy" to soraOutboundExecutionPolicy(),
             "settlement" to linkedMapOf(
                 "asset_definition_id" to "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
-                "custody_owner" to "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                 "payload_amount_scale" to 9,
-                "max_outstanding_liability" to MAX_OUTSTANDING_LIABILITY,
+                "max_outstanding_liability" to 9,
             ),
         )
         assertEquals(DEFAULT_ROUTE_CONFIG_HASH, fixtureRouteConfigurationHash(route))
@@ -2120,17 +2183,23 @@ class SccpClientExactTest {
                     "verifying_key" to key,
                     "verifier_key_hash" to bls12381KeyHash(key),
                     "proof_profile_commitment" to tonProofProfileCommitment(),
+                    "mint_breaker_guardian_keys" to linkedMapOf(
+                        "guardian_0" to upper(1, 32),
+                        "guardian_1" to upper(2, 32),
+                        "guardian_2" to upper(3, 32),
+                        "guardian_3" to upper(4, 32),
+                        "guardian_4" to upper(5, 32),
+                    ),
                     "outbound_proof_policy" to tonOutboundPolicy(),
                     "taira_to_token_multiplier" to 1,
-                    "max_wrapped_supply" to MAX_OUTSTANDING_LIABILITY,
+                    "max_wrapped_supply" to 9_000_000_000L,
                 ),
             ),
+            "sora_outbound_execution_policy" to soraOutboundExecutionPolicy(),
             "settlement" to linkedMapOf(
                 "asset_definition_id" to "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
-                "custody_owner" to
-                    "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                 "payload_amount_scale" to 9,
-                "max_outstanding_liability" to MAX_OUTSTANDING_LIABILITY,
+                "max_outstanding_liability" to 9_000_000_000L,
             ),
         )
         sourceIdentity(route)["route_config_hash"] = fixtureTonRouteConfigurationHash(route)
@@ -2304,6 +2373,10 @@ class SccpClientExactTest {
         val routeAddress = deployment["route_address"] as String
         val verifierCodeHash = (deployment["verifier_code_hash"] as String).hexToBytes()
         val verifierKeyHash = (deployment["verifier_key_hash"] as String).hexToBytes()
+        val replayVerifierAddress = deployment["replay_verifier_address"] as String
+        val replayVerifierCodeHash = (deployment["replay_verifier_code_hash"] as String).hexToBytes()
+        val mintBreakerAddress = deployment["mint_breaker_address"] as String
+        val mintBreakerCodeHash = (deployment["mint_breaker_code_hash"] as String).hexToBytes()
         val destinationBindingHash = if (isTron) {
             keccak(
                 concatenate(
@@ -2319,6 +2392,10 @@ class SccpClientExactTest {
                         verifierKeyHash,
                         semanticHash,
                         anchorHash,
+                        abiTronAddress(replayVerifierAddress),
+                        replayVerifierCodeHash,
+                        abiTronAddress(mintBreakerAddress),
+                        mintBreakerCodeHash,
                     ),
                 ),
             )
@@ -2335,11 +2412,14 @@ class SccpClientExactTest {
             anchorHash,
         )
         destinationBindingHash?.let(deploymentWords::add)
+        deploymentWords.add(abiAddress(replayVerifierAddress))
+        deploymentWords.add(replayVerifierCodeHash)
+        deploymentWords.add(abiAddress(mintBreakerAddress))
+        deploymentWords.add(mintBreakerCodeHash)
         val deploymentConfigurationHash = keccak(concatenate(deploymentWords))
         val routeId = route["route_id"] as String
         val revision = (route["revision"] as Number).toLong()
         val multiplier = (deployment["taira_to_token_multiplier"] as Number).toLong()
-        val maxWrappedSupply = BigInteger(deployment["max_wrapped_supply"].toString())
         val assetRouteConfigurationHash = keccak(
             concatenate(
                 listOf(
@@ -2347,7 +2427,7 @@ class SccpClientExactTest {
                     keccak(routeId.toByteArray(Charsets.US_ASCII)),
                     abiWord(revision),
                     abiWord(multiplier),
-                    abiWord(maxWrappedSupply),
+                    abiWord((deployment["max_wrapped_supply"] as Number).toLong()),
                 ),
             ),
         )
@@ -2386,6 +2466,7 @@ class SccpClientExactTest {
             output.write((deployment["verifier_circuit_hash"] as String).hexToBytes())
             output.write((deployment["verifier_key_hash"] as String).hexToBytes())
             output.write((deployment["proof_profile_commitment"] as String).hexToBytes())
+            guardianKeys(deployment).forEach(output::write)
             output.write(tonSemanticProfileHash().hexToBytes())
             output.write(finalityAnchorHash().hexToBytes())
             output.write(binding.hexToBytes())
@@ -2430,10 +2511,17 @@ class SccpClientExactTest {
             output.write((deployment["verifier_circuit_hash"] as String).hexToBytes())
             output.write((deployment["verifier_key_hash"] as String).hexToBytes())
             output.write((deployment["proof_profile_commitment"] as String).hexToBytes())
+            guardianKeys(deployment).forEach(output::write)
             output.write(tonSemanticProfileHash().hexToBytes())
             output.write(finalityAnchorHash().hexToBytes())
         }.toByteArray()
         return sha256(payload).toUpperHex()
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun guardianKeys(deployment: Map<String, Any?>): List<ByteArray> {
+        val guardians = deployment["mint_breaker_guardian_keys"] as Map<String, Any?>
+        return (0..4).map { (guardians["guardian_$it"] as String).hexToBytes() }
     }
 
     private fun transferPayload(): MutableMap<String, Any?> = linkedMapOf(
@@ -2443,14 +2531,14 @@ class SccpClientExactTest {
         "nonce" to "7",
         "route_revision" to 1,
         "asset_home_domain" to 0,
-        "asset_id_codec" to 1,
+        "asset_id_codec" to 0,
         "asset_id" to "0x786f72",
         "amount" to "1000",
-        "sender_codec" to 1,
+        "sender_codec" to 0,
         "sender" to "0x616c696365407461697261",
-        "recipient_codec" to 2,
+        "recipient_codec" to 1,
         "recipient" to "0x${hash(0x11).take(40)}",
-        "route_id_codec" to 1,
+        "route_id_codec" to 0,
         "route_id" to "0x74616972615f6273635f786f72",
     )
 
@@ -2642,6 +2730,36 @@ class SccpClientExactTest {
             canonicalArtifactBytes(SCCP_NATIVE_INBOUND_PROOF_SCHEMA_NAME),
         )
 
+    private fun canonicalReplayWitnessArtifact(): String =
+        Base64.getEncoder().encodeToString(
+            canonicalReplayWitnessBytes(),
+        )
+
+    private fun canonicalReplayWitnessBytes(
+        priorRecordDigest: ByteArray = ByteArray(32),
+        siblingBitmap: ByteArray = ByteArray(32),
+        siblings: List<ByteArray> = emptyList(),
+    ): ByteArray {
+        val siblingSequence = ByteArrayOutputStream().also { output ->
+            writeU64(output, siblings.size.toLong())
+            siblings.forEach { writeCompactField(output, it) }
+        }.toByteArray()
+        val payload = ByteArrayOutputStream().also { output ->
+            writeCompactField(output, SccpReplayV1.emptyHashes().last())
+            writeCompactField(output, priorRecordDigest)
+            writeCompactField(output, siblingBitmap)
+            writeCompactField(output, siblingSequence)
+        }.toByteArray()
+        val header = NoritoHeader(
+            SchemaHash.hash16(SCCP_REPLAY_WITNESS_SCHEMA_NAME),
+            payload.size,
+            CRC64.compute(payload),
+            NoritoCodec.DEFAULT_FLAGS,
+            NoritoHeader.COMPRESSION_NONE,
+        )
+        return header.encode() + payload
+    }
+
     private fun canonicalArtifactBytes(schemaName: String, padding: Int = 0): ByteArray {
         val schema = SchemaHash.hash16(schemaName)
         val payload = byteArrayOf(1, 2, 3)
@@ -2789,7 +2907,7 @@ class SccpClientExactTest {
     private fun finalityAnchorHash(protocolVersion: Int = 4): String {
         val canonical = ByteArrayOutputStream().also { output ->
             output.write(1)
-            output.write(1)
+            output.write(SccpNetworkV1.SORA_TAIRA.tag)
             writeU16(output, protocolVersion)
             output.write(tairaChainIdHash().hexToBytes())
             writeU64(output, 7)
@@ -2809,6 +2927,17 @@ class SccpClientExactTest {
 
     private fun writeLengthPrefixed(out: ByteArrayOutputStream, value: ByteArray) {
         writeU32(out, value.size)
+        out.write(value)
+    }
+
+    private fun writeCompactField(out: ByteArrayOutputStream, value: ByteArray) {
+        var remaining = value.size
+        do {
+            var next = remaining and 0x7f
+            remaining = remaining ushr 7
+            if (remaining != 0) next = next or 0x80
+            out.write(next)
+        } while (remaining != 0)
         out.write(value)
     }
 
@@ -2840,10 +2969,8 @@ class SccpClientExactTest {
             values.forEach { output.write(it) }
         }.toByteArray()
 
-    private fun abiWord(value: Long): ByteArray = abiWord(BigInteger.valueOf(value))
-
-    private fun abiWord(value: BigInteger): ByteArray {
-        val encoded = value.toByteArray().let {
+    private fun abiWord(value: Long): ByteArray {
+        val encoded = BigInteger.valueOf(value).toByteArray().let {
             if (it.size > 1 && it[0] == 0.toByte()) it.copyOfRange(1, it.size) else it
         }
         return ByteArray(32).also { encoded.copyInto(it, 32 - encoded.size) }
@@ -2877,12 +3004,9 @@ class SccpClientExactTest {
         )
         // These authenticate this fixture's semantic commitments and deployment code hashes.
         const val DEFAULT_ROUTE_CONFIG_HASH =
-            "E2FBA818710881B2294D45EB6494A0F2961C752EADC2D55089C3966F0CC8124D"
+            "FDCE93E148D8A9BD3BE2E7051AF681A757CA273F409073F9402F5534D32C399B"
         const val TRON_ROUTE_CONFIG_HASH =
-            "83D698E3F098A15523BD456ED7BB73957DDC46C48DC6B2701BC73AEBEDA99F3B"
-        val MAX_OUTSTANDING_LIABILITY = BigInteger("1000000000000")
-        val MAX_WRAPPED_SUPPLY = BigInteger("1000000000000000000000")
-        val MAX_U128_TEST = BigInteger.ONE.shiftLeft(128).subtract(BigInteger.ONE)
+            "60544E93C2B5E96761C90DC96E7E24EC1D6EDD5BEE2E2A946D7ED9632535177D"
         val BLS12381_SCALAR_MODULUS = BigInteger(
             "73eda753299d7d483339d80809a1d80553bda402fffe5bfeffffffff00000001",
             16,

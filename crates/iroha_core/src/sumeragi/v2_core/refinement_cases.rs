@@ -1004,6 +1004,10 @@ fn in_flight_first_release_composed_four_stage_release_is_exact_and_terminal() {
 fn in_flight_first_release_replica_queue_observation_is_exact_and_terminal() {
     for exact_ordinary_fifo_preserved in [false, true] {
         let mut state = in_flight_first_release_ready_state();
+        // The replica retirement path starts from the authenticated production
+        // custody projection: the producer and the observing replica both hold
+        // the exact payload before Kura persists the replica's retirement.
+        state.payload_binding_a |= 2;
         let before = state;
         state.decision.release_owner = 2;
         state.decision.release_scope = state.binding_a;
@@ -4761,6 +4765,23 @@ fn volatile_bounds_and_action_record_pairs_fail_closed() {
     let mut too_many_vote_pools = base_facts();
     too_many_vote_pools.volatile_after.vote_pools = 3;
     assert!(!accepts_facts(too_many_vote_pools));
+    let mut three_unowned_prepare_certificates = base_facts();
+    three_unowned_prepare_certificates
+        .volatile_before
+        .known_prepare = 3;
+    three_unowned_prepare_certificates.volatile_after =
+        three_unowned_prepare_certificates.volatile_before;
+    assert!(!accepts_facts(three_unowned_prepare_certificates));
+    let mut two_durable_and_one_pending_prepare = base_facts();
+    two_durable_and_one_pending_prepare
+        .volatile_before
+        .pending_prepare = 1;
+    two_durable_and_one_pending_prepare
+        .volatile_before
+        .known_prepare = 3;
+    two_durable_and_one_pending_prepare.volatile_after =
+        two_durable_and_one_pending_prepare.volatile_before;
+    assert!(accepts_facts(two_durable_and_one_pending_prepare));
     let mut invented_signature = base_facts();
     invented_signature.volatile_before.awaiting_signature = true;
     invented_signature.volatile_after.awaiting_signature = true;

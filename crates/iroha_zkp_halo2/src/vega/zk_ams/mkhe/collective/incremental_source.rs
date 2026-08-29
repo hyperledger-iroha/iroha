@@ -1432,26 +1432,6 @@ impl ZkAmsMkheStreamingCollectiveEvalKeyBindingV1 {
     pub(crate) const fn binding_digest(&self) -> [u8; 32] {
         self.binding_digest
     }
-    #[cfg(test)]
-    pub(crate) fn validate_native_key_v1(
-        &self,
-        key: &ZkAmsMkheCollectivePublicKeyV1,
-    ) -> Result<(), ZkAmsMkheErrorV1> {
-        let profile = release_profile_v1();
-        self.validate_release_v1()?;
-        key.validate(&profile)?;
-        if key.profile_digest != self.profile_digest
-            || key.security_certificate_digest != self.security_certificate_digest
-            || key.roster_digest != self.roster_digest
-            || key.key_material_digest != self.key_material_digest
-            || key.epoch != self.epoch
-            || key.transcript_digest != self.transcript_digest
-            || key.digest != self.key_digest
-        {
-            return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
-        }
-        Ok(())
-    }
     pub(crate) fn validate_ciphertext_binding_v1(
         &self,
         ciphertext: &ZkAmsMkheStreamingCollectiveCiphertextBindingV1<'_>,
@@ -3627,7 +3607,9 @@ mod incremental_source_rns_native_basis_extension_v2;
 // resource evidence, readiness, and release gates remain unavailable.
 #[path = "incremental_source_rns_native_tail_publication_v2.rs"]
 mod incremental_source_rns_native_tail_publication_v2;
-pub(in crate::vega::zk_ams::mkhe) use incremental_source_rns_native_tail_publication_v2::RnsNativeClaimedDirectNumericOriginV2;
+pub(in crate::vega::zk_ams::mkhe) use incremental_source_rns_native_tail_publication_v2::{
+    RnsNativeClaimedDirectNumericOriginV2, RnsNativeQpcsCompositeAuthorityV2,
+};
 // This V2 assembler is deliberately private and non-authorizing. Its live
 // owner/provider/reader adapters remain uninhabited and every integration,
 // readiness, and release flag stays false.

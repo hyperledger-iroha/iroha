@@ -16,14 +16,15 @@ use crate::privacy_engines::{
     },
 };
 use iroha_crypto::Hash;
+#[cfg(test)]
+use iroha_data_model::nexus::PrivateSettlementPoolGovernanceV1;
 use iroha_data_model::{
     nexus::{
         ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1, AtomicPrivateSettlementV1,
         PRIVATE_SETTLEMENT_INPUT_SLOTS_V1, PRIVATE_SETTLEMENT_OUTPUT_SLOTS_V1,
         PrivateSettlementAuditApprovalV1, PrivateSettlementAuditPolicyV1, PrivateSettlementDeltaV1,
         PrivateSettlementLegPayloadV1, PrivateSettlementPoolGovernanceLifecycleV1,
-        PrivateSettlementPoolGovernanceV1, PrivateSettlementRouteV1,
-        validate_private_settlement_audit_approvals_v1,
+        PrivateSettlementRouteV1, validate_private_settlement_audit_approvals_v1,
     },
     privacy::{
         PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_BYTES_V1, PrivacyCommitmentV1,
@@ -130,6 +131,7 @@ pub(crate) struct PrivateSettlementPoolGovernanceProjectionV1 {
 
 impl PrivateSettlementPoolGovernanceProjectionV1 {
     /// Derive the public projection only after validating the complete restricted record.
+    #[cfg(test)]
     pub(crate) fn from_restricted(
         governance: &PrivateSettlementPoolGovernanceV1,
     ) -> Result<Self, PrivateSettlementStateErrorV1> {
@@ -564,6 +566,7 @@ impl PrivateSettlementPoolStateV1 {
     }
 
     /// Apply one previously verified token to this exact parent head.
+    #[cfg(test)]
     pub(crate) fn apply_verified(
         &self,
         verified: &ValidatedPrivateSettlementLegV1,
@@ -822,12 +825,6 @@ impl ValidatedPrivateSettlementLegV1 {
     #[must_use]
     pub(super) fn output_commitments(&self) -> &[PrivacyCommitmentV1] {
         &self.delta.output_commitments
-    }
-
-    /// Digest of the fsync-backed sidecar evidence used during verification.
-    #[must_use]
-    pub(super) const fn durable_availability_digest(&self) -> Hash {
-        self.durable_availability_digest
     }
 
     /// Authoritative height at which the complete verification finished.

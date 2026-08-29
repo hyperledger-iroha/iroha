@@ -7,13 +7,16 @@
 //! reach a maintenance boundary fail closed because block headers do not commit
 //! the post-maintenance active-witness roster or witness permission mapping.
 use super::{
-    H256, SCCP_CODEC_TRON_ADDRESS21, SccpPayloadV1, canonical_sccp_payload_bytes, keccak256_bytes,
-    payload_hash, prefixed_blake2b, read_protobuf_varint_at, sccp_lane_id_hash_v1,
-    sccp_lane_source_event_digest_v1, sccp_message_id, sccp_source_identity_hash_v1,
-    tron_recoverable_signature_for_recovery, verify_sccp_payload_structure,
+    H256, SCCP_CODEC_TRON_ADDRESS21, SccpPayloadV1, canonical_sccp_payload_bytes,
+    decode_sccp_solidity_replay_witness_v1, encode_sccp_solidity_replay_witness_v1,
+    keccak256_bytes, payload_hash, prefixed_blake2b, read_protobuf_varint_at, sccp_lane_id_hash_v1,
+    sccp_lane_source_event_digest_v1, sccp_message_id, sccp_network_tag_v1,
+    sccp_source_identity_hash_v1, tron_recoverable_signature_for_recovery,
+    verify_sccp_payload_structure,
 };
 use alloc::{collections::BTreeSet, vec::Vec};
 use iroha_crypto::EcdsaSecp256k1Sha256;
+use iroha_data_model::bridge::SccpSparseMerkleWitnessV1;
 use iroha_data_model::bridge::sccp::{
     SccpLaneIdV1, SccpNetworkV1, SccpSourceEmitterV1, SccpSourceIdentityV1,
 };
@@ -21,7 +24,7 @@ use sha2::{Digest, Sha256};
 const TRON_NATIVE_ANCHOR_PREFIX_V1: &[u8] = b"sccp:tron:native-dpos-anchor:v1";
 const TRON_TRIGGER_SMART_CONTRACT_TYPE_URL_V1: &[u8] =
     b"type.googleapis.com/protocol.TriggerSmartContract";
-const TRON_NATIVE_TRANSFER_CALL_ABI_V1: &[u8] = b"transferToTaira(bytes,uint256,uint64)";
+const TRON_NATIVE_TRANSFER_CALL_ABI_V1: &[u8] = b"transferToTaira(bytes,uint256,uint64,bytes)";
 const TRON_TAIRA_TO_TOKEN_SCALE_V1: u64 = 1_000_000_000;
 const TRON_ADDRESS_BYTES: usize = 21;
 const TRON_SIGNATURE_BYTES: usize = 65;
@@ -56,6 +59,7 @@ pub fn canonical_tron_native_transfer_call_data(
     sora_recipient: &[u8],
     taira_amount: u128,
     nonce: u64,
+    replay_witness: &SccpSparseMerkleWitnessV1,
 ) -> Option<Vec<u8>> {
     if sora_recipient.is_empty()
         || sora_recipient.len() > 256
@@ -64,19 +68,35 @@ pub fn canonical_tron_native_transfer_call_data(
     {
         return None;
     }
-    let padded_len = sora_recipient.len().checked_add(31)? & !31;
+    let replay_witness = encode_sccp_solidity_replay_witness_v1(replay_witness)?;
+    let recipient_padded_len = sora_recipient.len().checked_add(31)? & !31;
+    let witness_padded_len = replay_witness.len().checked_add(31)? & !31;
+    let head_len = 4usize * 32;
+    let recipient_tail_len = 32usize.checked_add(recipient_padded_len)?;
+    let witness_offset = head_len.checked_add(recipient_tail_len)?;
     let selector = keccak256_bytes(TRON_NATIVE_TRANSFER_CALL_ABI_V1);
-    let mut out = Vec::with_capacity(4 + 128 + padded_len);
+    let capacity = 4usize
+        .checked_add(head_len)?
+        .checked_add(recipient_tail_len)?
+        .checked_add(32)?
+        .checked_add(witness_padded_len)?;
+    let mut out = Vec::with_capacity(capacity);
     out.extend_from_slice(&selector[..4]);
     out.extend_from_slice(&[0; 31]);
-    out.push(96);
+    out.push(u8::try_from(head_len).ok()?);
     out.extend_from_slice(&scaled_tron_token_amount_word(taira_amount));
     out.extend_from_slice(&[0; 24]);
     out.extend_from_slice(&nonce.to_be_bytes());
     out.extend_from_slice(&[0; 24]);
+    out.extend_from_slice(&u64::try_from(witness_offset).ok()?.to_be_bytes());
+    out.extend_from_slice(&[0; 24]);
     out.extend_from_slice(&u64::try_from(sora_recipient.len()).ok()?.to_be_bytes());
     out.extend_from_slice(sora_recipient);
-    out.resize(4 + 128 + padded_len, 0);
+    out.resize(4 + head_len + recipient_tail_len, 0);
+    out.extend_from_slice(&[0; 24]);
+    out.extend_from_slice(&u64::try_from(replay_witness.len()).ok()?.to_be_bytes());
+    out.extend_from_slice(&replay_witness);
+    out.resize(capacity, 0);
     Some(out)
 }
 fn scaled_tron_token_amount_word(taira_amount: u128) -> [u8; 32] {
@@ -397,9 +417,7 @@ struct ParsedTronRawHeaderV1 {
 }
 fn tron_network_tag(network: SccpNetworkV1) -> Option<u8> {
     match network {
-        SccpNetworkV1::TronMainnet => Some(0),
-        SccpNetworkV1::TronNile => Some(1),
-        SccpNetworkV1::TronShasta => Some(2),
+        SccpNetworkV1::TronMainnet => Some(sccp_network_tag_v1(network)),
         _ => None,
     }
 }
@@ -968,6 +986,30 @@ fn parse_tron_any(bytes: &[u8]) -> Result<&[u8], TronNativeTransactionError> {
     }
     value.ok_or_else(transaction_encoding_error)
 }
+fn abi_word_usize(word: &[u8]) -> Option<usize> {
+    if word.len() != 32 || word[..24].iter().any(|byte| *byte != 0) {
+        return None;
+    }
+    let mut raw = [0_u8; 8];
+    raw.copy_from_slice(&word[24..]);
+    usize::try_from(u64::from_be_bytes(raw)).ok()
+}
+fn tron_native_transfer_replay_witness(call_data: &[u8]) -> Option<SccpSparseMerkleWitnessV1> {
+    const HEAD_BYTES: usize = 4 * 32;
+    const WITNESS_OFFSET_WORD_START: usize = 4 + 3 * 32;
+    if call_data.len() < 4 + HEAD_BYTES
+        || call_data[..4] != keccak256_bytes(TRON_NATIVE_TRANSFER_CALL_ABI_V1)[..4]
+    {
+        return None;
+    }
+    let witness_offset =
+        abi_word_usize(call_data.get(WITNESS_OFFSET_WORD_START..WITNESS_OFFSET_WORD_START + 32)?)?;
+    let length_start = 4usize.checked_add(witness_offset)?;
+    let data_start = length_start.checked_add(32)?;
+    let encoded_len = abi_word_usize(call_data.get(length_start..data_start)?)?;
+    let data_end = data_start.checked_add(encoded_len)?;
+    decode_sccp_solidity_replay_witness_v1(call_data.get(data_start..data_end)?)
+}
 fn parse_tron_trigger_sccp_call(
     bytes: &[u8],
     expected_contract: [u8; 20],
@@ -1023,13 +1065,17 @@ fn parse_tron_trigger_sccp_call(
     if owner != expected_sender {
         return Err(TronNativeTransactionError::WrongCaller);
     }
+    let data = data.ok_or(TronNativeTransactionError::WrongCallData)?;
+    let replay_witness = tron_native_transfer_replay_witness(data)
+        .ok_or(TronNativeTransactionError::WrongCallData)?;
     let expected_data = canonical_tron_native_transfer_call_data(
         expected_recipient,
         expected_amount,
         expected_nonce,
+        &replay_witness,
     )
     .ok_or(TronNativeTransactionError::WrongCallData)?;
-    if data != Some(expected_data.as_slice()) {
+    if data != expected_data.as_slice() {
         return Err(TronNativeTransactionError::WrongCallData);
     }
     Ok((owner, contract))
@@ -1088,7 +1134,6 @@ fn parse_tron_raw_transaction_sccp_call(
     let mut cursor = 0usize;
     let mut previous = 0u32;
     let mut ref_block_bytes = None;
-    let mut ref_block_num = None;
     let mut ref_block_hash = None;
     let mut expiration = None;
     let mut call = None;
@@ -1102,15 +1147,6 @@ fn parse_tron_raw_transaction_sccp_call(
         previous = field;
         match (field, wire) {
             (1, 2) => ref_block_bytes = Some(read_transaction_bytes_field(bytes, &mut cursor)?),
-            (3, 0) => {
-                // The shared varint reader rejects overlong encodings.  Proto3
-                // would omit zero, and the schema declares this field as int64.
-                let number = read_transaction_varint(bytes, &mut cursor)?;
-                if number == 0 || i64::try_from(number).is_err() {
-                    return Err(transaction_encoding_error());
-                }
-                ref_block_num = Some(number);
-            }
             (4, 2) => ref_block_hash = Some(read_transaction_bytes_field(bytes, &mut cursor)?),
             (8, 0) => expiration = Some(read_transaction_varint(bytes, &mut cursor)?),
             (11, 2) => {
@@ -1136,10 +1172,6 @@ fn parse_tron_raw_transaction_sccp_call(
     if ref_block_bytes.len() != 2
         || ref_block_hash.len() != 8
         || ref_block_hash.iter().all(|byte| *byte == 0)
-        || ref_block_num.is_some_and(|number| {
-            let encoded = number.to_be_bytes();
-            encoded[6..] != ref_block_bytes[..]
-        })
         || timestamp == 0
         || i64::try_from(timestamp).is_err()
         || expiration <= timestamp
@@ -1324,10 +1356,7 @@ pub fn verify_tron_native_sccp_transaction(
         || expected_contract_address.iter().all(|byte| *byte == 0)
         || !verify_sccp_payload_structure(payload)
         || !matches!(lane.target, SccpNetworkV1::SoraTaira)
-        || !matches!(
-            lane.source,
-            SccpNetworkV1::TronMainnet | SccpNetworkV1::TronNile | SccpNetworkV1::TronShasta
-        )
+        || lane.source != SccpNetworkV1::TronMainnet
         || transfer.sender_codec != SCCP_CODEC_TRON_ADDRESS21
         || !is_tron_address(&expected_sender_address)
         || expected_contract_address == expected_sender_address[1..]
@@ -1403,10 +1432,7 @@ pub fn verify_tron_native_source(
     payload: &SccpPayloadV1,
 ) -> Result<ValidatedTronNativeSourceV1, TronNativeSourceError> {
     if !source_identity.is_well_formed()
-        || !matches!(
-            source_identity.lane.source,
-            SccpNetworkV1::TronMainnet | SccpNetworkV1::TronNile | SccpNetworkV1::TronShasta
-        )
+        || source_identity.lane.source != SccpNetworkV1::TronMainnet
     {
         return Err(TronNativeSourceError::InvalidSourceIdentity);
     }
@@ -1553,7 +1579,6 @@ mod tests {
             contract_result,
             type_url,
             &[0x12, 0x34],
-            Some(0x1234),
             &[0x44; 8],
         )
     }
@@ -1562,7 +1587,6 @@ mod tests {
         contract_result: u64,
         type_url: &[u8],
         ref_block_bytes: &[u8],
-        ref_block_num: Option<u64>,
         ref_block_hash: &[u8],
     ) -> Vec<u8> {
         let owner = test_sender();
@@ -1573,6 +1597,7 @@ mod tests {
             &test_transfer().recipient,
             test_transfer().amount,
             test_transfer().nonce,
+            &SccpSparseMerkleWitnessV1::empty_shard(),
         )
         .unwrap();
         let mut trigger = Vec::new();
@@ -1587,9 +1612,6 @@ mod tests {
         push_bytes(&mut contract, 2, &any);
         let mut raw = Vec::new();
         push_bytes(&mut raw, 1, ref_block_bytes);
-        if let Some(ref_block_num) = ref_block_num {
-            push_int(&mut raw, 3, ref_block_num);
-        }
         push_bytes(&mut raw, 4, ref_block_hash);
         push_int(&mut raw, 8, 2_000_000);
         push_bytes(&mut raw, 11, &contract);
@@ -1618,7 +1640,7 @@ mod tests {
     fn test_transfer() -> crate::TransferPayloadV1 {
         crate::TransferPayloadV1 {
             version: 1,
-            source_domain: 5,
+            source_domain: SCCP_DOMAIN_TRON,
             dest_domain: 0,
             nonce: 7,
             route_revision: 1,
@@ -2088,14 +2110,15 @@ mod tests {
     #[test]
     fn transfer_call_binds_nonce_and_scales_taira_units_to_trc20_base_units() {
         let recipient = b"alice@taira";
-        let call = canonical_tron_native_transfer_call_data(recipient, 77, 7)
-            .expect("canonical scaled transfer call");
+        let replay_witness = SccpSparseMerkleWitnessV1::empty_shard();
+        let call = canonical_tron_native_transfer_call_data(recipient, 77, 7, &replay_witness)
+            .expect("canonical scaled transfer call with replay witness");
         assert_eq!(
             &call[..4],
             &keccak256_bytes(TRON_NATIVE_TRANSFER_CALL_ABI_V1)[..4]
         );
         assert_eq!(&call[4..35], &[0; 31]);
-        assert_eq!(call[35], 96);
+        assert_eq!(call[35], 128);
         let mut expected_amount_word = [0u8; 32];
         expected_amount_word[16..].copy_from_slice(&(77_u128 * 1_000_000_000).to_be_bytes());
         assert_eq!(&call[36..68], &expected_amount_word);
@@ -2103,18 +2126,52 @@ mod tests {
         assert_eq!(&call[68..92], &[0; 24]);
         assert_eq!(&call[92..100], &7_u64.to_be_bytes());
         assert_eq!(&call[100..124], &[0; 24]);
+        let witness_offset =
+            usize::try_from(u64::from_be_bytes(call[124..132].try_into().unwrap()))
+                .expect("witness offset");
         assert_eq!(
-            &call[124..132],
+            &call[156..164],
             &u64::try_from(recipient.len()).unwrap().to_be_bytes()
         );
-        assert_eq!(&call[132..132 + recipient.len()], recipient);
-        assert!(
-            canonical_tron_native_transfer_call_data(recipient, u128::MAX, u64::MAX - 1).is_some()
+        assert_eq!(&call[164..164 + recipient.len()], recipient);
+        let witness_len_start = 4 + witness_offset;
+        let witness_len = usize::try_from(u64::from_be_bytes(
+            call[witness_len_start + 24..witness_len_start + 32]
+                .try_into()
+                .unwrap(),
+        ))
+        .expect("witness byte length");
+        let witness_start = witness_len_start + 32;
+        assert_eq!(
+            decode_sccp_solidity_replay_witness_v1(
+                &call[witness_start..witness_start + witness_len]
+            ),
+            Some(replay_witness.clone())
         );
-        assert!(canonical_tron_native_transfer_call_data(recipient, 1, u64::MAX).is_none());
-        assert!(canonical_tron_native_transfer_call_data(recipient, 0, 7).is_none());
-        assert!(canonical_tron_native_transfer_call_data(&[], 1, 7).is_none());
-        assert!(canonical_tron_native_transfer_call_data(&[b'a'; 257], 1, 7).is_none());
+        assert_eq!(
+            tron_native_transfer_replay_witness(&call),
+            Some(replay_witness.clone())
+        );
+        assert!(
+            canonical_tron_native_transfer_call_data(
+                recipient,
+                u128::MAX,
+                u64::MAX - 1,
+                &replay_witness,
+            )
+            .is_some()
+        );
+        assert!(
+            canonical_tron_native_transfer_call_data(recipient, 1, u64::MAX, &replay_witness)
+                .is_none()
+        );
+        assert!(
+            canonical_tron_native_transfer_call_data(recipient, 0, 7, &replay_witness).is_none()
+        );
+        assert!(canonical_tron_native_transfer_call_data(&[], 1, 7, &replay_witness).is_none());
+        assert!(
+            canonical_tron_native_transfer_call_data(&[b'a'; 257], 1, 7, &replay_witness).is_none()
+        );
     }
     #[test]
     fn native_transaction_authenticates_full_success_result_call_and_single_leaf_root() {
@@ -2138,16 +2195,18 @@ mod tests {
         assert_eq!(validated.source_event_digest, statement.source_event_digest);
     }
     #[test]
-    fn native_transaction_accepts_byte_exact_java_tron_raw_data_fixture() {
+    fn native_transaction_rejects_retired_three_argument_java_tron_call_and_field_aliases() {
         // Provenance: `protocol.Transaction.raw` field numbers and types come
-        // from tronprotocol/protocol `core/Tron.proto` (fields 1, 3, and 4).
+        // from tronprotocol/protocol `core/Tron.proto`. The SCCP profile accepts
+        // the current field-1 + field-4 TAPOS shape and rejects deprecated field 3.
         // The field-1 + field-4 shape comes from the Java `setReference` demo
         // in tronprotocol/documentation `TRX/Tron-overview.md`: it takes height
         // bytes [6..8] and block-hash bytes [8..16], without setting field 3.
-        // This literal is the resulting deterministic raw-data protobuf for
-        // the test SCCP trigger, with `00 00` height bytes and `44` hash bytes.
+        // This literal retains the old three-argument transfer selector as a
+        // negative-only fixture. V1 requires the fourth replay-witness argument,
+        // so an otherwise-current TAPOS envelope must reject this retired call.
         const JAVA_TRON_RAW_DATA_HEX: &str = concat!(
-            "0a020000220844444444444444444080897a5a9002081f128b020a31747970652e676f6f676c65617069732e636f6d2f",
+            "0x0a020000220844444444444444444080897a5a9002081f128b020a31747970652e676f6f676c65617069732e636f6d2f",
             "70726f746f636f6c2e54726967676572536d617274436f6e747261637412d5010a154122222222222222222222222222",
             "22222222222222121541333333333333333333333333333333333333333322a401ebfc6ca80000000000000000000000",
             "000000000000000000000000000000000000000060000000000000000000000000000000000000000000000000000000",
@@ -2165,23 +2224,24 @@ mod tests {
             ]
         );
         let transfer = test_transfer();
-        let (owner, contract) = parse_tron_raw_transaction_sccp_call(
-            &raw_data,
-            [0x33; 20],
-            test_sender(),
-            &transfer.recipient,
-            transfer.amount,
-            transfer.nonce,
-        )
-        .expect("byte-exact Java-Tron raw data");
-        assert_eq!(owner, test_sender());
-        assert_eq!(&contract[1..], &[0x33; 20]);
-
-        let mut overlong_ref_block_num = raw_data.clone();
-        overlong_ref_block_num.splice(4..4, [0x18, 0x81, 0x00]);
         assert_eq!(
             parse_tron_raw_transaction_sccp_call(
-                &overlong_ref_block_num,
+                &raw_data,
+                [0x33; 20],
+                test_sender(),
+                &transfer.recipient,
+                transfer.amount,
+                transfer.nonce,
+            ),
+            Err(TronNativeTransactionError::WrongCallData),
+            "the retired three-argument selector must not alias the mandatory-witness ABI"
+        );
+
+        let mut deprecated_ref_block_num = raw_data.clone();
+        deprecated_ref_block_num.splice(4..4, [0x18, 0xb4, 0x24]);
+        assert_eq!(
+            parse_tron_raw_transaction_sccp_call(
+                &deprecated_ref_block_num,
                 [0x33; 20],
                 test_sender(),
                 &transfer.recipient,
@@ -2206,58 +2266,38 @@ mod tests {
         );
     }
     #[test]
-    fn native_transaction_accepts_java_tron_tapos_without_deprecated_block_number() {
+    fn native_transaction_accepts_current_java_tron_tapos() {
         let contract = [0x33; 20];
         let statement = test_transaction_statement();
         // Java-Tron transaction construction populates the two-byte TAPOS
         // reference and eight-byte block hash but omits deprecated field 3.
-        // A low-16-bit block number of zero is represented by these exact two
-        // bytes and remains valid when the deprecated full number is absent.
-        let omitted = transaction_bytes_with_tapos(
+        // Field 1 carries the low 16-bit block number, including zero.
+        let canonical = transaction_bytes_with_tapos(
             contract,
             1,
             TRON_TRIGGER_SMART_CONTRACT_TYPE_URL_V1,
             &[0x00, 0x00],
-            None,
             &[0x44; 8],
         );
-        let omitted_root = sha256_bytes(&omitted);
+        let canonical_root = sha256_bytes(&canonical);
         verify_test_transaction(
-            &single_transaction_proof(omitted),
-            omitted_root,
+            &single_transaction_proof(canonical),
+            canonical_root,
             contract,
             &statement,
         )
-        .expect("canonical Java-Tron TAPOS without deprecated ref_block_num");
-
-        let matching = transaction_bytes_with_tapos(
-            contract,
-            1,
-            TRON_TRIGGER_SMART_CONTRACT_TYPE_URL_V1,
-            &[0x12, 0x34],
-            Some(0x1_1234),
-            &[0x44; 8],
-        );
-        let matching_root = sha256_bytes(&matching);
-        verify_test_transaction(
-            &single_transaction_proof(matching),
-            matching_root,
-            contract,
-            &statement,
-        )
-        .expect("canonical matching ref_block_num extension");
+        .expect("canonical current Java-Tron TAPOS");
     }
     #[test]
     fn native_transaction_rejects_inconsistent_or_malformed_tapos_fields() {
         let contract = [0x33; 20];
         let statement = test_transaction_statement();
-        let reject = |ref_block_bytes: &[u8], ref_block_num, ref_block_hash: &[u8]| {
+        let reject = |ref_block_bytes: &[u8], ref_block_hash: &[u8]| {
             let transaction = transaction_bytes_with_tapos(
                 contract,
                 1,
                 TRON_TRIGGER_SMART_CONTRACT_TYPE_URL_V1,
                 ref_block_bytes,
-                ref_block_num,
                 ref_block_hash,
             );
             let root = sha256_bytes(&transaction);
@@ -2272,13 +2312,10 @@ mod tests {
             );
         };
 
-        reject(&[0x12, 0x34], Some(0x1235), &[0x44; 8]);
-        reject(&[0x00, 0x00], Some(0), &[0x44; 8]);
-        reject(&[0x00, 0x00], Some(1_u64 << 63), &[0x44; 8]);
-        reject(&[0x12], None, &[0x44; 8]);
-        reject(&[0x12, 0x34, 0x56], None, &[0x44; 8]);
-        reject(&[0x12, 0x34], None, &[0x44; 7]);
-        reject(&[0x12, 0x34], None, &[0x44; 9]);
+        reject(&[0x12], &[0x44; 8]);
+        reject(&[0x12, 0x34, 0x56], &[0x44; 8]);
+        reject(&[0x12, 0x34], &[0x44; 7]);
+        reject(&[0x12, 0x34], &[0x44; 9]);
     }
     #[test]
     fn native_transaction_rejects_recomputed_payload_for_same_transaction_with_changed_nonce() {
@@ -2431,13 +2468,12 @@ mod tests {
             Err(TronNativeSourceError::SourceIdentityHashMismatch)
         );
         let mut wrong_profile = identity;
-        wrong_profile.lane.source = SccpNetworkV1::TronNile;
-        let wrong_profile_hash = sccp_source_identity_hash_v1(&wrong_profile).unwrap();
+        wrong_profile.lane.source = SccpNetworkV1::EthereumMainnet;
         assert_eq!(
             verify_tron_native_source(
                 &proof,
                 &wrong_profile,
-                wrong_profile_hash,
+                [0xAA; 32],
                 anchor_hash,
                 statement.message_id,
                 statement.payload_hash,
@@ -2517,7 +2553,7 @@ mod tests {
         let admitted =
             verify_sccp_native_inbound_message_proof_v1(&inbound, &identity, trust_anchor)
                 .expect("canonical TRON native admission");
-        assert_eq!(admitted.message_key.message_id, statement.message_id);
+        assert_eq!(admitted.message_id, statement.message_id);
         let mut changed_nonce = inbound;
         let SccpPayloadV1::Transfer(transfer) = &mut changed_nonce.payload;
         transfer.nonce += 1;
@@ -2580,7 +2616,7 @@ mod tests {
         );
     }
     #[test]
-    fn native_transaction_rejects_legacy_selector_and_unscaled_amount() {
+    fn native_transaction_rejects_retired_selectors_and_unscaled_amount() {
         let contract = [0x33; 20];
         let statement = test_transaction_statement();
         let valid = transaction_bytes(contract, 1, TRON_TRIGGER_SMART_CONTRACT_TYPE_URL_V1);
@@ -2588,25 +2624,31 @@ mod tests {
             &test_transfer().recipient,
             test_transfer().amount,
             test_transfer().nonce,
+            &SccpSparseMerkleWitnessV1::empty_shard(),
         )
         .expect("canonical scaled transfer call");
         let call_offset = valid
             .windows(canonical_call.len())
             .position(|window| window == canonical_call)
             .expect("embedded transfer call");
-        let mut old_selector = valid.clone();
-        old_selector[call_offset..call_offset + 4]
-            .copy_from_slice(&keccak256_bytes(b"transferToTaira(bytes,uint256)")[..4]);
-        let old_selector_root = sha256_bytes(&old_selector);
-        assert_eq!(
-            verify_test_transaction(
-                &single_transaction_proof(old_selector),
-                old_selector_root,
-                contract,
-                &statement,
-            ),
-            Err(TronNativeTransactionError::WrongCallData)
-        );
+        for retired_abi in [
+            b"transferToTaira(bytes,uint256)".as_slice(),
+            b"transferToTaira(bytes,uint256,uint64)".as_slice(),
+        ] {
+            let mut retired_selector = valid.clone();
+            retired_selector[call_offset..call_offset + 4]
+                .copy_from_slice(&keccak256_bytes(retired_abi)[..4]);
+            let retired_selector_root = sha256_bytes(&retired_selector);
+            assert_eq!(
+                verify_test_transaction(
+                    &single_transaction_proof(retired_selector),
+                    retired_selector_root,
+                    contract,
+                    &statement,
+                ),
+                Err(TronNativeTransactionError::WrongCallData)
+            );
+        }
         let mut legacy_unscaled = valid.clone();
         legacy_unscaled[call_offset + 36..call_offset + 52].fill(0);
         legacy_unscaled[call_offset + 52..call_offset + 68]
@@ -2761,7 +2803,7 @@ mod tests {
         assert!(tron_native_anchor_hash(&wrong_skip).is_none());
         let (proof, _) = proof_with_distinct_confirmations();
         assert_eq!(
-            verify_tron_native_finality(&proof, SccpNetworkV1::TronNile, hash),
+            verify_tron_native_finality(&proof, SccpNetworkV1::EthereumMainnet, hash),
             Err(TronNativeFinalityError::WrongNetwork)
         );
         assert_eq!(

@@ -120,6 +120,54 @@ fn merge_carrier_budget_reserves_receipt_frontier_without_double_counting_termin
     ));
 }
 #[test]
+fn post_wsv_successor_plan_accepts_lower_durable_frontier() {
+    let entrypoint = offline_top_up_entrypoint_for_index([0x69; 32], [0x6A; 32]);
+    let mut entry = merge_entry_with_indexed_entrypoint(entrypoint);
+    let mut blocks = DummyBlocks::new();
+    let _parent = blocks.next();
+    let carrier = next_merge_carrier(&mut blocks, &mut entry);
+    let batch = entry
+        .execution_batch
+        .as_ref()
+        .expect("fixture carries one execution batch");
+    let execution = batch.lanes.first().expect("fixture carries one lane");
+    let receipt = LaneBlockApplicationReceiptArtifact::new_merge_execution(
+        &entry,
+        batch,
+        execution,
+        Kura::merge_lane_block_execution_source(execution),
+        carrier.header().height().get(),
+        carrier.hash(),
+    );
+    let predecessor = LaneMergeApplicationFrontierV1::from_receipt(&receipt)
+        .expect("predecessor merge receipt projects a frontier");
+    let mut successor = predecessor;
+    successor.proposal_height = successor
+        .proposal_height
+        .checked_add(1)
+        .expect("successor proposal height does not overflow");
+    successor.lane_block_height = successor
+        .lane_block_height
+        .checked_add(1)
+        .expect("successor lane height does not overflow");
+    successor.lane_block_descriptor_hash = Hash::new(b"post-wsv-successor-descriptor");
+    successor.proposal_hash = Hash::new(b"post-wsv-successor-proposal");
+    successor.receipt_hash =
+        HashOf::from_untyped_unchecked(Hash::new(b"post-wsv-successor-receipt"));
+    assert!(
+        !Kura::post_wsv_frontier_conflicts_with_execution(&predecessor, &successor),
+        "the durable predecessor frontier must not conflict with a contiguous successor plan"
+    );
+
+    let mut same_height_fork = predecessor;
+    same_height_fork.application_block_hash =
+        HashOf::from_untyped_unchecked(Hash::new(b"post-wsv-same-height-fork"));
+    assert!(
+        Kura::post_wsv_frontier_conflicts_with_execution(&same_height_fork, &predecessor),
+        "different carrier evidence at the same lane height must remain fail-closed"
+    );
+}
+#[test]
 fn committed_merge_carrier_reconstructs_only_outstanding_post_wsv_components() {
     let temp_dir = TempDir::new().expect("create merge reservation temp dir");
     let cfg = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);

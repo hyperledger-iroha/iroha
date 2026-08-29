@@ -5,12 +5,13 @@
 //! slot-encoding or general multilinear parameter surfaces.
 //!
 //! The implementation completes the public algorithms in Figures 2--7 of the current ePrint
-//! 2026/044 revision as one exact, versioned, native-Rust experimental testnet profile: fixed ring
-//! parameters, proof wire, prover, verifier, integer-only sampling, and adversarial vectors.
+//! 2026/044 revision as one exact, versioned, native-Rust profile: fixed ring parameters, proof
+//! wire, prover, verifier, integer-only sampling, and adversarial vectors.
 //!
-//! The executable profile remains experimental: its complete `S_35`
-//! challenge distribution does not yet carry the distribution-wide theorem
-//! and extractor-loss evidence required by [`jindo_security_certificate_v1`].
+//! The hard-cut wire uses 32 signed-monomial repetitions and has complete
+//! machine-checked unit-difference evidence. Production qualification remains
+//! unavailable until the exact parallel Fiat--Shamir transcript has a pinned
+//! qROM extractor-loss theorem required by [`jindo_security_certificate_v1`].
 use core::{num::NonZeroU32, time::Duration};
 use iroha_crypto::{Hash, PrivateKey, PublicKey};
 use iroha_data_model::{
@@ -25,8 +26,8 @@ use iroha_data_model::{
         PrivacyStatementDigestV1, PrivacyStatementV1, PrivacyTransactionIntentDigestV1,
     },
     transaction::{
-        FeePaymentIntent, SignedTransaction, TransactionBuilder, TransactionPayload,
-        signed::TransactionSignatureError,
+        FeePaymentIntent, SignedTransaction, TransactionAdmissionIntent, TransactionBuilder,
+        TransactionPayload, signed::TransactionSignatureError,
     },
 };
 use rand_core_06::{CryptoRng, OsRng, RngCore};
@@ -62,7 +63,9 @@ mod security;
 #[path = "jindo/transcript.rs"]
 mod transcript;
 pub use codec::{JindoProofCodecErrorV1, JindoProofSectionV1};
-pub use parameters::{JINDO_PARAMETER_MANIFEST_V1, JINDO_SOURCE_PROVENANCE_V1};
+pub use parameters::{
+    JINDO_PARALLEL_REPETITIONS_V1, JINDO_PARAMETER_MANIFEST_V1, JINDO_SOURCE_PROVENANCE_V1,
+};
 pub use protocol::{
     JINDO_NATIVE_PROOF_BYTES_V1, JINDO_SOURCE_PROFILE_V1, JINDO_SUITE_V1, JindoBindingFieldV1,
     JindoErrorV1, JindoOpeningV1, commit_polynomial_v1, evaluate_polynomial_v1,
@@ -70,11 +73,16 @@ pub use protocol::{
 };
 pub use sampling::JindoSamplingErrorV1;
 pub use security::{
-    JINDO_SECURITY_CERTIFICATE_REQUIREMENTS_V1, JindoChallengePairErrorV1,
-    JindoSecurityCertificateErrorV1, JindoSecurityCertificateV1,
+    JINDO_SECURITY_CERTIFICATE_REQUIREMENTS_V1, JINDO_UNIT_DIFFERENCE_CERTIFICATE_DIGEST_V1,
+    JindoChallengePairErrorV1, JindoSecurityCertificateErrorV1, JindoSecurityCertificateV1,
+    JindoUnitDifferenceCertificateErrorV1, JindoUnitDifferenceCertificateV1,
     jindo_challenge_pair_has_unit_difference_v1, jindo_security_certificate_v1,
+    jindo_unit_difference_certificate_v1,
 };
-pub use transcript::JindoTranscriptErrorV1;
+pub use transcript::{
+    JINDO_SIGNED_MONOMIAL_CHALLENGE_CARDINALITY_V1, JindoSignedMonomialChallengeV1,
+    JindoTranscriptErrorV1,
+};
 /// Exact coefficient-field byte width in the first native Jindo profile.
 pub const JINDO_FIELD_ELEMENT_BYTES_V1: usize = IROHA_JINDO_FIELD_ELEMENT_BYTES_V1;
 /// CELPC/Jindo coefficient-encoding base `b`.
@@ -85,7 +93,7 @@ pub const JINDO_ENCODING_EXPONENT_V1: usize = 8;
 pub const JINDO_RING_DEGREE_V1: usize = IROHA_JINDO_RING_DEGREE_V1;
 /// Coefficient-encoding `gamma`, i.e. the number of field slots.
 pub const JINDO_ENCODING_SLOTS_V1: usize = JINDO_RING_DEGREE_V1 / JINDO_ENCODING_EXPONENT_V1;
-/// Maximum polynomial coefficient count in the fixed testnet profile.
+/// Maximum polynomial coefficient count in the fixed first-release profile.
 pub const JINDO_MAX_COEFFICIENTS_V1: usize = 256;
 /// Exact polynomial count in one first-release batched opening.
 pub const JINDO_MAX_BATCH_SIZE_V1: usize = IROHA_JINDO_MAX_POLYNOMIALS_V1 as usize;
@@ -360,6 +368,15 @@ impl core::fmt::Debug for JindoPreparedPrivacyActionV1 {
     }
 }
 impl JindoPreparedPrivacyActionV1 {
+    /// Borrow the exact immutable payload used to request an authenticated fee quote.
+    ///
+    /// Fee limits are transaction-intent bound, so callers must prepare the action again with
+    /// the returned quote before signing. The final prepared payload should then be re-quoted to
+    /// confirm that its fixed-width proof and fee-size fixed point preserve the same intent.
+    #[must_use]
+    pub const fn transaction_payload_for_fee_quote_v1(&self) -> &TransactionPayload {
+        &self.payload
+    }
     /// Borrow the final, already revalidated payload for the isolated native
     /// release-evidence runner.
     ///
@@ -368,7 +385,7 @@ impl JindoPreparedPrivacyActionV1 {
     /// same typed envelope and verifier that consensus admission consumes.
     #[cfg(feature = "privacy-release-evidence")]
     pub(crate) const fn release_evidence_payload_v1(&self) -> &TransactionPayload {
-        &self.payload
+        self.transaction_payload_for_fee_quote_v1()
     }
     /// Canonical transaction-intent digest bound into the statement.
     #[must_use]
@@ -598,7 +615,8 @@ fn validate_transaction_context_v1(
         context.authority.clone(),
         context.fee_payment.clone(),
     )
-    .with_metadata(context.metadata.clone());
+    .with_metadata(context.metadata.clone())
+    .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced);
     builder.set_creation_time(context.creation_time);
     if let Some(ttl) = context.time_to_live {
         builder.set_ttl(ttl);
@@ -634,7 +652,8 @@ fn transaction_payload_v1(
         context.fee_payment.clone(),
     )
     .with_instructions([SubmitPrivacyProofV1::new(envelope)])
-    .with_metadata(context.metadata.clone());
+    .with_metadata(context.metadata.clone())
+    .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced);
     builder.set_creation_time(context.creation_time);
     if let Some(ttl) = context.time_to_live {
         builder.set_ttl(ttl);
@@ -658,6 +677,8 @@ fn derive_canonical_transaction_intent_digest_v1(
     statement: PrivacyStatementV1,
 ) -> Result<PrivacyTransactionIntentDigestV1, JindoPrivacyActionBuildErrorV1> {
     let normalized_projection_envelope = PrivacyProofEnvelopeV1 {
+        wire_magic: Default::default(),
+        catalog_commitment: Default::default(),
         protocol_id: profile.protocol_id,
         proof_system_id: profile.proof_system_id,
         engine_id: profile.engine_id,
@@ -668,7 +689,7 @@ fn derive_canonical_transaction_intent_digest_v1(
         engine_manifest_digest: profile.engine_manifest_digest,
         statement_digest: PrivacyStatementDigestV1::new([0; 32]),
         statement,
-        proof: PrivacyProofV1::IrohaJindoPolynomialCommitmentV0(PrivacyProofBytesV1::new(
+        proof: PrivacyProofV1::IrohaJindoPolynomialCommitmentV1(PrivacyProofBytesV1::new(
             Vec::new(),
         )),
     };
@@ -706,7 +727,7 @@ where
     validate_transaction_context_v1(&context)?;
     witness.validate()?;
     let profile = crate::privacy_profiles::compiled_privacy_profile_v1(
-        PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0,
+        PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1,
     )
     .map_err(|_| JindoPrivacyActionBuildErrorV1::CompiledProfileUnavailable)?;
     let polynomial_count = u32::try_from(witness.polynomials.len())
@@ -749,13 +770,13 @@ where
         claimed_evaluations,
     };
     let draft_statement =
-        PrivacyStatementV1::IrohaJindoPolynomialCommitmentV0(native_statement.clone());
+        PrivacyStatementV1::IrohaJindoPolynomialCommitmentV1(native_statement.clone());
     let transaction_intent_digest =
         derive_canonical_transaction_intent_digest_v1(&context, profile, draft_statement)?;
     let mut final_statement = native_statement;
     final_statement.context.transaction_intent_digest = transaction_intent_digest;
     let typed_statement =
-        PrivacyStatementV1::IrohaJindoPolynomialCommitmentV0(final_statement.clone());
+        PrivacyStatementV1::IrohaJindoPolynomialCommitmentV1(final_statement.clone());
     let statement_digest = typed_statement
         .digest()
         .map_err(|_| JindoPrivacyActionBuildErrorV1::StatementDigest)?;
@@ -787,6 +808,8 @@ where
     let proof_bytes = u32::try_from(proof.len())
         .map_err(|_| JindoPrivacyActionBuildErrorV1::EncodedLengthOverflow)?;
     let final_envelope = PrivacyProofEnvelopeV1 {
+        wire_magic: Default::default(),
+        catalog_commitment: Default::default(),
         protocol_id: profile.protocol_id,
         proof_system_id: profile.proof_system_id,
         engine_id: profile.engine_id,
@@ -797,7 +820,7 @@ where
         engine_manifest_digest: profile.engine_manifest_digest,
         statement_digest,
         statement: typed_statement,
-        proof: PrivacyProofV1::IrohaJindoPolynomialCommitmentV0(PrivacyProofBytesV1::new(proof)),
+        proof: PrivacyProofV1::IrohaJindoPolynomialCommitmentV1(PrivacyProofBytesV1::new(proof)),
     };
     final_envelope
         .validate_with_limits(&PrivacyConsensusLimitsV1::taira_default())
@@ -1240,6 +1263,13 @@ mod tests {
         assert_eq!(prepared.polynomial_count(), 4);
         assert_eq!(prepared.coefficient_counts(), &[4, 2, 2, 2]);
         assert_eq!(prepared.proof_bytes(), JINDO_NATIVE_PROOF_BYTES_V1 as u32);
+        assert_eq!(
+            prepared
+                .transaction_payload_for_fee_quote_v1()
+                .admission_intent(),
+            TransactionAdmissionIntent::QueuePlanSynced,
+            "the direct Jindo action must bind the public QueuePlan admission path"
+        );
         assert_ne!(prepared.transaction_intent_digest(), [0; 32]);
         assert_ne!(prepared.statement_digest(), [0; 32]);
         assert_ne!(prepared.proof_envelope_hash(), [0; 32]);
@@ -1278,7 +1308,7 @@ mod tests {
             assert_eq!(observed.0.as_bytes(), &prepared.transaction_intent_digest());
             let envelope = &observed.1.envelope;
             let profile = crate::privacy_profiles::compiled_privacy_profile_v1(
-                PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0,
+                PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1,
             )
             .expect("compiled Jindo profile");
             assert_eq!(envelope.protocol_id, profile.protocol_id);
@@ -1305,7 +1335,7 @@ mod tests {
                 .expect("bounded statement bytes"),
                 "the statement metric must bind the exact canonical encoding"
             );
-            let PrivacyStatementV1::IrohaJindoPolynomialCommitmentV0(statement) =
+            let PrivacyStatementV1::IrohaJindoPolynomialCommitmentV1(statement) =
                 &envelope.statement
             else {
                 panic!("typed Jindo statement changed variant")
@@ -1315,7 +1345,7 @@ mod tests {
                 statement.context.transaction_intent_digest.as_bytes(),
                 &prepared.transaction_intent_digest()
             );
-            let PrivacyProofV1::IrohaJindoPolynomialCommitmentV0(proof) = &envelope.proof else {
+            let PrivacyProofV1::IrohaJindoPolynomialCommitmentV1(proof) = &envelope.proof else {
                 panic!("typed Jindo proof changed variant")
             };
             assert!(
@@ -1323,7 +1353,7 @@ mod tests {
                 "the proof-empty intent projection must never escape as a prepared action"
             );
             let mut proof_empty_escape = envelope.clone();
-            proof_empty_escape.proof = PrivacyProofV1::IrohaJindoPolynomialCommitmentV0(
+            proof_empty_escape.proof = PrivacyProofV1::IrohaJindoPolynomialCommitmentV1(
                 PrivacyProofBytesV1::new(Vec::new()),
             );
             assert!(
@@ -1376,6 +1406,13 @@ mod tests {
                 ring::JINDO_INNER_MODULI_V1,
             );
             mutations.push(("quadratic-partial", mutated));
+            let mut mutated = decoded.clone();
+            perturb_rns_polynomial(
+                &mut mutated.partials[JINDO_PARALLEL_REPETITIONS_V1 - 1],
+                1_i128 << 80,
+                ring::JINDO_INNER_MODULI_V1,
+            );
+            mutations.push(("terminal-parallel-quadratic-partial", mutated));
             let mut mutated = decoded.clone();
             perturb_rns_polynomial(
                 &mut mutated.encode_responses[0],
@@ -1450,12 +1487,17 @@ mod tests {
             .signed_transaction()
             .verify_signature()
             .expect("locally signed transaction verifies");
+        assert_eq!(
+            signed.signed_transaction().admission_intent(),
+            TransactionAdmissionIntent::QueuePlanSynced,
+            "signing must preserve the proof-bound QueuePlan admission intent"
+        );
         let (_, signed_submission) = signed
             .signed_transaction()
             .privacy_transaction_intent_binding_if_present_v1()
             .expect("signed direct privacy scan")
             .expect("signed Jindo submission");
-        let PrivacyProofV1::IrohaJindoPolynomialCommitmentV0(signed_proof) =
+        let PrivacyProofV1::IrohaJindoPolynomialCommitmentV1(signed_proof) =
             &signed_submission.envelope.proof
         else {
             panic!("signed Jindo proof changed variant")

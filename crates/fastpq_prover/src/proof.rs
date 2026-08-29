@@ -4,16 +4,22 @@ use crate::{
     Error, Result, TransitionBatch,
     backend::{
         self, AIR_COMPOSITION_ALPHA_COUNT, BackendArtifact, BackendConfig, ExecutionMode,
-        PoseidonExecutionMode, StarkBackend, TRANSCRIPT_TAG_AIR_ROOTS, TRANSCRIPT_TAG_ALPHA_PREFIX,
-        TRANSCRIPT_TAG_INIT, TRANSCRIPT_TAG_ROOTS,
+        MerkleTreeRoleV1, PoseidonExecutionMode, StarkBackend, TRANSCRIPT_TAG_AIR_ROOTS,
+        TRANSCRIPT_TAG_ALPHA_PREFIX, TRANSCRIPT_TAG_COLUMN_MIX_PREFIX, TRANSCRIPT_TAG_INIT,
+        TRANSCRIPT_TAG_ROOTS, TRANSCRIPT_TAG_TRACE_ROOT,
     },
+    field::GoldilocksFp4V1,
     ordering,
     semantics::{ProofSemantics, validate_batch_semantics},
     trace,
 };
 use core::convert::TryFrom;
-use fastpq_isi::{CANONICAL_PARAMETER_SETS, StarkParameterSet, find_by_name};
+use fastpq_isi::{
+    CANONICAL_PARAMETER_SETS, GoldilocksDigest384V1 as NativeGoldilocksDigest384V1,
+    StarkParameterSet, find_by_name,
+};
 use iroha_crypto::Hash;
+use iroha_data_model::privacy::GoldilocksDigest384V1;
 use norito::{NoritoDeserialize, NoritoSerialize};
 /// Protocol version advertised by the V1 prover implementation.
 const PROTOCOL_VERSION: u16 = 1;
@@ -30,9 +36,9 @@ const DEFAULT_MAX_VERIFY_BATCH_BYTES: usize = 256 * 1024;
 /// Default maximum approximate proof payload bytes accepted by the V1 verifier.
 const DEFAULT_MAX_VERIFY_PROOF_BYTES: usize = 512 * 1024;
 /// Default maximum FRI layers accepted by the V1 verifier.
-const DEFAULT_MAX_VERIFY_FRI_LAYERS: usize = 16;
+const DEFAULT_MAX_VERIFY_FRI_LAYERS: usize = 19;
 /// Default maximum query openings accepted by the V1 verifier.
-const DEFAULT_MAX_VERIFY_QUERIES: usize = 128;
+const DEFAULT_MAX_VERIFY_QUERIES: usize = 136;
 /// Default maximum LDE values carried by a single query chunk.
 const DEFAULT_MAX_VERIFY_QUERY_CHUNK_VALUES: usize = 128;
 /// Default maximum Merkle siblings carried by a single query opening.
@@ -70,7 +76,7 @@ pub struct QueryOpening {
     /// Full LDE leaf chunk containing `value`.
     pub chunk_values: Vec<u64>,
     /// Merkle authentication path from the LDE leaf chunk to `lde_root`.
-    pub merkle_path: Vec<u64>,
+    pub merkle_path: Vec<GoldilocksDigest384V1>,
 }
 /// Opened FRI fold group for one query at one round.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
@@ -82,11 +88,11 @@ pub struct FriRoundOpening {
     /// Multiplicative-coset values ordered as `f(x · ζ^k)` for increasing `k`.
     ///
     /// The final reduction may use an effective arity smaller than the configured arity.
-    pub values: Vec<u64>,
+    pub values: Vec<GoldilocksFp4V1>,
     /// Folded value carried into the next round.
-    pub folded_value: u64,
+    pub folded_value: GoldilocksFp4V1,
     /// Merkle authentication path for `values` under `fri_layers[round]`.
-    pub merkle_path: Vec<u64>,
+    pub merkle_path: Vec<GoldilocksDigest384V1>,
 }
 /// Per-query FRI opening chain across all committed rounds.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
@@ -101,9 +107,9 @@ pub struct FriQueryOpening {
     ///
     /// V1 stops before the terminal layer would collapse to one value, so this
     /// vector is interpolated and checked against the reduced degree bound.
-    pub final_values: Vec<u64>,
+    pub final_values: Vec<GoldilocksFp4V1>,
     /// Merkle authentication path for `final_values` under the terminal root.
-    pub final_merkle_path: Vec<u64>,
+    pub final_merkle_path: Vec<GoldilocksDigest384V1>,
 }
 /// Sampled AIR row and composition opening.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
@@ -116,13 +122,13 @@ pub struct AirConstraintOpening {
     /// next base-trace point in the LDE domain.
     pub next_row: Vec<u64>,
     /// Merkle authentication path for `current_row` under `air_trace_root`.
-    pub current_row_path: Vec<u64>,
+    pub current_row_path: Vec<GoldilocksDigest384V1>,
     /// Merkle authentication path for `next_row` under `air_trace_root`.
-    pub next_row_path: Vec<u64>,
+    pub next_row_path: Vec<GoldilocksDigest384V1>,
     /// Sampled AIR composition value folded by FRI.
     pub composition_value: u64,
     /// Merkle authentication path for `composition_value` under `air_composition_root`.
-    pub composition_path: Vec<u64>,
+    pub composition_path: Vec<GoldilocksDigest384V1>,
 }
 /// Proof artifact produced by the FASTPQ prover.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
@@ -133,25 +139,25 @@ pub struct Proof {
     /// Parameter set name used by the prover.
     pub parameter: String,
     /// Deterministic commitment over the canonicalised batch.
-    pub trace_commitment: Hash,
+    pub trace_commitment: GoldilocksDigest384V1,
     /// V1 public inputs.
     pub public_io: PublicIO,
     /// Poseidon commitment over the trace columns.
-    pub trace_root: [u8; 32],
+    pub trace_root: GoldilocksDigest384V1,
     /// Poseidon commitment over row-major AIR trace openings.
-    pub air_trace_root: [u8; 32],
+    pub air_trace_root: GoldilocksDigest384V1,
     /// Poseidon commitment over the AIR composition evaluation vector.
-    pub air_composition_root: [u8; 32],
+    pub air_composition_root: GoldilocksDigest384V1,
     /// Poseidon commitment over the LDE leaves.
-    pub lde_root: [u8; 32],
+    pub lde_root: GoldilocksDigest384V1,
     /// Number of evaluation rows committed by `lde_root`.
     pub lde_domain_size: u32,
     /// Composition challenges sampled after the LDE and trace roots.
     pub alphas: Vec<u64>,
     /// FRI folding challenges (`β_ℓ`).
-    pub betas: Vec<u64>,
+    pub betas: Vec<GoldilocksFp4V1>,
     /// Poseidon roots for each FRI layer (last element is the terminal root).
-    pub fri_layers: Vec<[u8; 32]>,
+    pub fri_layers: Vec<GoldilocksDigest384V1>,
     /// Openings into the evaluation domain sampled by the verifier.
     pub queries: Vec<QueryOpening>,
     /// AIR constraint openings for the same sampled query indices.
@@ -160,8 +166,8 @@ pub struct Proof {
     pub fri_queries: Vec<FriQueryOpening>,
 }
 impl Proof {
-    /// Access the commitment hash.
-    pub fn commitment(&self) -> Hash {
+    /// Access the canonical six-lane preprocessing-trace commitment.
+    pub fn commitment(&self) -> GoldilocksDigest384V1 {
         self.trace_commitment
     }
 }
@@ -456,22 +462,10 @@ fn verify_with_limits_raw(
 }
 
 fn validate_canonical_goldilocks_elements(proof: &Proof) -> Result<()> {
-    validate_canonical_goldilocks_roots(proof)?;
     validate_canonical_goldilocks_transcript_scalars(proof)?;
     validate_canonical_goldilocks_queries(proof)?;
     validate_canonical_goldilocks_air_openings(proof)?;
     validate_canonical_goldilocks_fri_openings(proof)
-}
-
-fn validate_canonical_goldilocks_roots(proof: &Proof) -> Result<()> {
-    ensure_canonical_goldilocks_encoding(&proof.trace_root, "trace_root", &[])?;
-    ensure_canonical_goldilocks_encoding(&proof.air_trace_root, "air_trace_root", &[])?;
-    ensure_canonical_goldilocks_encoding(&proof.air_composition_root, "air_composition_root", &[])?;
-    ensure_canonical_goldilocks_encoding(&proof.lde_root, "lde_root", &[])?;
-    for (index, root) in proof.fri_layers.iter().enumerate() {
-        ensure_canonical_goldilocks_encoding(root, "fri_layers", &[index])?;
-    }
-    Ok(())
 }
 
 fn validate_canonical_goldilocks_transcript_scalars(proof: &Proof) -> Result<()> {
@@ -479,7 +473,7 @@ fn validate_canonical_goldilocks_transcript_scalars(proof: &Proof) -> Result<()>
         ensure_canonical_goldilocks(alpha, "alphas", &[index])?;
     }
     for (index, &beta) in proof.betas.iter().enumerate() {
-        ensure_canonical_goldilocks(beta, "betas", &[index])?;
+        ensure_canonical_fp4(beta, "betas", &[index])?;
     }
     Ok(())
 }
@@ -492,13 +486,6 @@ fn validate_canonical_goldilocks_queries(proof: &Proof) -> Result<()> {
                 value,
                 "queries.chunk_values",
                 &[query_index, value_index],
-            )?;
-        }
-        for (path_index, &sibling) in query.merkle_path.iter().enumerate() {
-            ensure_canonical_goldilocks(
-                sibling,
-                "queries.merkle_path",
-                &[query_index, path_index],
             )?;
         }
     }
@@ -521,32 +508,11 @@ fn validate_canonical_goldilocks_air_openings(proof: &Proof) -> Result<()> {
                 &[query_index, value_index],
             )?;
         }
-        for (path_index, &sibling) in opening.current_row_path.iter().enumerate() {
-            ensure_canonical_goldilocks(
-                sibling,
-                "air_openings.current_row_path",
-                &[query_index, path_index],
-            )?;
-        }
-        for (path_index, &sibling) in opening.next_row_path.iter().enumerate() {
-            ensure_canonical_goldilocks(
-                sibling,
-                "air_openings.next_row_path",
-                &[query_index, path_index],
-            )?;
-        }
         ensure_canonical_goldilocks(
             opening.composition_value,
             "air_openings.composition_value",
             &[query_index],
         )?;
-        for (path_index, &sibling) in opening.composition_path.iter().enumerate() {
-            ensure_canonical_goldilocks(
-                sibling,
-                "air_openings.composition_path",
-                &[query_index, path_index],
-            )?;
-        }
     }
     Ok(())
 }
@@ -555,37 +521,23 @@ fn validate_canonical_goldilocks_fri_openings(proof: &Proof) -> Result<()> {
     for (query_index, query) in proof.fri_queries.iter().enumerate() {
         for (round_index, round) in query.rounds.iter().enumerate() {
             for (value_index, &value) in round.values.iter().enumerate() {
-                ensure_canonical_goldilocks(
+                ensure_canonical_fp4(
                     value,
                     "fri_queries.rounds.values",
                     &[query_index, round_index, value_index],
                 )?;
             }
-            ensure_canonical_goldilocks(
+            ensure_canonical_fp4(
                 round.folded_value,
                 "fri_queries.rounds.folded_value",
                 &[query_index, round_index],
             )?;
-            for (path_index, &sibling) in round.merkle_path.iter().enumerate() {
-                ensure_canonical_goldilocks(
-                    sibling,
-                    "fri_queries.rounds.merkle_path",
-                    &[query_index, round_index, path_index],
-                )?;
-            }
         }
         for (value_index, &value) in query.final_values.iter().enumerate() {
-            ensure_canonical_goldilocks(
+            ensure_canonical_fp4(
                 value,
                 "fri_queries.final_values",
                 &[query_index, value_index],
-            )?;
-        }
-        for (path_index, &sibling) in query.final_merkle_path.iter().enumerate() {
-            ensure_canonical_goldilocks(
-                sibling,
-                "fri_queries.final_merkle_path",
-                &[query_index, path_index],
             )?;
         }
     }
@@ -602,18 +554,32 @@ fn ensure_canonical_goldilocks(value: u64, context: &'static str, indices: &[usi
     Ok(())
 }
 
-fn ensure_canonical_goldilocks_encoding(
-    bytes: &[u8; 32],
+fn ensure_canonical_fp4(
+    value: GoldilocksFp4V1,
     context: &'static str,
     indices: &[usize],
 ) -> Result<()> {
-    if field_norito::core::from_bytes(bytes).is_none() {
-        return Err(Error::NonCanonicalGoldilocksElement {
-            context,
-            indices: indices.to_vec(),
-        });
+    for (coefficient_index, coefficient) in value.coefficients().into_iter().enumerate() {
+        let mut nested = indices.to_vec();
+        nested.push(coefficient_index);
+        ensure_canonical_goldilocks(coefficient, context, &nested)?;
     }
     Ok(())
+}
+
+fn verify_wire_merkle_path(
+    role: MerkleTreeRoleV1,
+    root: NativeGoldilocksDigest384V1,
+    leaf: NativeGoldilocksDigest384V1,
+    leaf_index: usize,
+    path: &[GoldilocksDigest384V1],
+) -> Result<bool> {
+    let path = path
+        .iter()
+        .copied()
+        .map(GoldilocksDigest384V1::as_fastpq)
+        .collect::<Vec<_>>();
+    backend::verify_merkle_path_for_role(role, root, leaf, leaf_index, &path)
 }
 
 #[allow(clippy::too_many_lines)]
@@ -650,35 +616,34 @@ fn verify_after_limits(batch: &TransitionBatch, proof: &Proof) -> Result<()> {
     if proof.trace_commitment != expected_derived.trace_commitment {
         return Err(Error::CommitmentMismatch);
     }
-    if proof.trace_root != field_norito::core::to_bytes(expected_derived.trace_root) {
+    if proof.trace_root.as_fastpq() != expected_derived.trace_root {
         return Err(Error::TraceRootMismatch);
     }
-    if proof.lde_root != field_norito::core::to_bytes(expected_derived.lde_root)
+    if proof.lde_root.as_fastpq() != expected_derived.lde_root
         || proof.lde_domain_size != expected_derived.lde_domain_size
     {
         return Err(Error::LdeRootMismatch);
     }
-    if proof.air_trace_root != field_norito::core::to_bytes(expected_derived.air_trace_root) {
+    if proof.air_trace_root.as_fastpq() != expected_derived.air_trace_root {
         return Err(Error::AirTraceRootMismatch);
     }
-    if proof.air_composition_root
-        != field_norito::core::to_bytes(expected_derived.air_composition_root)
-    {
+    if proof.air_composition_root.as_fastpq() != expected_derived.air_composition_root {
         return Err(Error::AirCompositionRootMismatch);
     }
-    let trace_root =
-        field_norito::core::from_bytes(&proof.trace_root).ok_or(Error::TraceRootMismatch)?;
-    let lde_root = field_norito::core::from_bytes(&proof.lde_root).ok_or(Error::LdeRootMismatch)?;
-    let air_trace_root =
-        field_norito::core::from_bytes(&proof.air_trace_root).ok_or(Error::AirTraceRootMismatch)?;
-    let air_composition_root = field_norito::core::from_bytes(&proof.air_composition_root)
-        .ok_or(Error::AirCompositionRootMismatch)?;
+    let trace_root = proof.trace_root.as_fastpq();
+    let lde_root = proof.lde_root.as_fastpq();
+    let air_trace_root = proof.air_trace_root.as_fastpq();
+    let air_composition_root = proof.air_composition_root.as_fastpq();
     let mut transcript = backend::Transcript::initialise(
         &proof.public_io,
         &proof.parameter,
         proof.protocol_version,
         TRANSCRIPT_TAG_INIT,
     )?;
+    transcript.append_message(TRANSCRIPT_TAG_TRACE_ROOT, &trace_root.to_le_bytes());
+    for index in 0..trace::column_names_for_batch(batch)?.len() {
+        let _ = transcript.challenge_field(&format!("{TRANSCRIPT_TAG_COLUMN_MIX_PREFIX}:{index}"));
+    }
     transcript.append_message(
         TRANSCRIPT_TAG_ROOTS,
         &[lde_root.to_le_bytes(), trace_root.to_le_bytes()].concat(),
@@ -693,7 +658,7 @@ fn verify_after_limits(batch: &TransitionBatch, proof: &Proof) -> Result<()> {
         let tag = format!("{TRANSCRIPT_TAG_ALPHA_PREFIX}:{idx}");
         let expected = transcript.challenge_field(&tag);
         if expected != alpha {
-            return Err(Error::FriChallengeMismatch { round: idx });
+            return Err(Error::AirChallengeMismatch { index: idx });
         }
     }
     transcript.append_message(
@@ -720,19 +685,16 @@ fn verify_after_limits(batch: &TransitionBatch, proof: &Proof) -> Result<()> {
     }
     let round_count = proof.fri_layers.len().saturating_sub(1);
     let mut expected_betas = Vec::with_capacity(round_count);
-    for (round, root_bytes) in proof.fri_layers.iter().take(round_count).enumerate() {
-        let root =
-            field_norito::core::from_bytes(root_bytes).ok_or(Error::FriLayerMismatch { round })?;
+    for (round, root) in proof.fri_layers.iter().take(round_count).enumerate() {
+        let root = root.as_fastpq();
         transcript.append_fri_layer(round, root);
         expected_betas.push(transcript.challenge_beta(round));
     }
-    let final_root = field_norito::core::from_bytes(
-        proof
-            .fri_layers
-            .last()
-            .expect("non-empty FRI layer commitments"),
-    )
-    .ok_or(Error::FriLayerMismatch { round: round_count })?;
+    let final_root = proof
+        .fri_layers
+        .last()
+        .expect("non-empty FRI layer commitments")
+        .as_fastpq();
     transcript.append_fri_final(final_root);
     if expected_betas.len() != proof.betas.len() {
         return Err(Error::FriChallengeLengthMismatch {
@@ -772,7 +734,7 @@ fn verify_after_limits(batch: &TransitionBatch, proof: &Proof) -> Result<()> {
         });
     }
     let column_names = trace::column_names_for_batch(batch)?;
-    let lde_chunk_size = backend::lde_chunk_size(params.fri.arity).max(1);
+    let lde_chunk_size = backend::lde_chunk_size(params.fri.arity)?;
     let lde_leaf_count = leaf_count_for_values(lde_domain_size, lde_chunk_size)?;
     let lde_path_len = merkle_path_len_for_leaf_count(lde_leaf_count)?;
     let air_path_len = merkle_path_len_for_leaf_count(lde_domain_size)?;
@@ -804,7 +766,13 @@ fn verify_after_limits(batch: &TransitionBatch, proof: &Proof) -> Result<()> {
             return Err(Error::QueryMerklePathMismatch { index: pos });
         }
         let leaf = backend::hash_lde_chunk(leaf_index, &query.chunk_values)?;
-        if !backend::verify_merkle_path(lde_root, leaf, leaf_index, &query.merkle_path)? {
+        if !verify_wire_merkle_path(
+            MerkleTreeRoleV1::Lde,
+            lde_root,
+            leaf,
+            leaf_index,
+            &query.merkle_path,
+        )? {
             return Err(Error::QueryMerklePathMismatch { index: pos });
         }
         let air_opening = &proof.air_openings[pos];
@@ -821,7 +789,8 @@ fn verify_after_limits(batch: &TransitionBatch, proof: &Proof) -> Result<()> {
             return Err(Error::AirMerklePathMismatch { index: pos });
         }
         let current_leaf = backend::hash_air_trace_row(expected_idx, &air_opening.current_row)?;
-        if !backend::verify_merkle_path(
+        if !verify_wire_merkle_path(
+            MerkleTreeRoleV1::AirTrace,
             air_trace_root,
             current_leaf,
             expected_idx,
@@ -836,7 +805,8 @@ fn verify_after_limits(batch: &TransitionBatch, proof: &Proof) -> Result<()> {
             })?
             % lde_domain_size;
         let next_leaf = backend::hash_air_trace_row(next_idx, &air_opening.next_row)?;
-        if !backend::verify_merkle_path(
+        if !verify_wire_merkle_path(
+            MerkleTreeRoleV1::AirTrace,
             air_trace_root,
             next_leaf,
             next_idx,
@@ -855,7 +825,8 @@ fn verify_after_limits(batch: &TransitionBatch, proof: &Proof) -> Result<()> {
         }
         let composition_leaf =
             backend::hash_air_composition_leaf(expected_idx, air_opening.composition_value)?;
-        if !backend::verify_merkle_path(
+        if !verify_wire_merkle_path(
+            MerkleTreeRoleV1::AirComposition,
             air_composition_root,
             composition_leaf,
             expected_idx,
@@ -1034,8 +1005,8 @@ struct FriQueryVerification<'a> {
     query_pos: usize,
     initial_index: usize,
     initial_value: u64,
-    fri_layers: &'a [[u8; 32]],
-    betas: &'a [u64],
+    fri_layers: &'a [GoldilocksDigest384V1],
+    betas: &'a [GoldilocksFp4V1],
     fri_layer_lengths: &'a [usize],
     terminal_degree_bound: usize,
     arity: u32,
@@ -1046,8 +1017,8 @@ struct FriQueryVerification<'a> {
 struct FriFinalVerification<'a> {
     query_pos: usize,
     index: usize,
-    value: u64,
-    root: &'a [u8; 32],
+    value: GoldilocksFp4V1,
+    root: &'a GoldilocksDigest384V1,
     length: usize,
     round: usize,
     arity: usize,
@@ -1088,7 +1059,11 @@ fn verify_fri_query_chain(
         });
     }
     let mut index = initial_index;
-    let mut value = initial_value;
+    let mut value =
+        GoldilocksFp4V1::from_base(initial_value).ok_or(Error::NonCanonicalGoldilocksElement {
+            context: "fri_initial_value",
+            indices: vec![query_pos],
+        })?;
     for (round, opening) in fri_query.rounds.iter().enumerate() {
         let round_len = fri_layer_lengths[round];
         if index >= round_len {
@@ -1112,10 +1087,17 @@ fn verify_fri_query_chain(
         if opening.merkle_path.len() != round_path_len {
             return Err(Error::QueryMerklePathMismatch { index: query_pos });
         }
-        let root = field_norito::core::from_bytes(&fri_layers[round])
-            .ok_or(Error::FriLayerMismatch { round })?;
+        let root = fri_layers[round].as_fastpq();
         let leaf = backend::hash_fri_chunk(round, leaf_index, &opening.values)?;
-        if !backend::verify_merkle_path(root, leaf, leaf_index, &opening.merkle_path)? {
+        if !verify_wire_merkle_path(
+            MerkleTreeRoleV1::Fri(
+                u32::try_from(round).map_err(|_| Error::QueryIndexOverflow { index: round })?,
+            ),
+            root,
+            leaf,
+            leaf_index,
+            &opening.merkle_path,
+        )? {
             return Err(Error::QueryMerklePathMismatch { index: query_pos });
         }
         let folded = fold_fri_values(
@@ -1184,10 +1166,12 @@ fn verify_fri_final_opening(
     if fri_query.final_merkle_path.len() != final_path_len {
         return Err(Error::QueryMerklePathMismatch { index: query_pos });
     }
-    let final_root =
-        field_norito::core::from_bytes(root).ok_or(Error::FriLayerMismatch { round })?;
+    let final_root = root.as_fastpq();
     let final_leaf = backend::hash_fri_chunk(round, final_leaf_index, &fri_query.final_values)?;
-    if !backend::verify_merkle_path(
+    if !verify_wire_merkle_path(
+        MerkleTreeRoleV1::Fri(
+            u32::try_from(round).map_err(|_| Error::QueryIndexOverflow { index: round })?,
+        ),
         final_root,
         final_leaf,
         final_leaf_index,
@@ -1332,7 +1316,12 @@ fn merkle_path_len_for_leaf_count(leaf_count: usize) -> Result<usize> {
     }
 }
 const GOLDILOCKS_MODULUS: u64 = 0xffff_ffff_0000_0001;
-fn fold_fri_values(values: &[u64], challenge: u64, x: u64, coset_generator: u64) -> Result<u64> {
+fn fold_fri_values(
+    values: &[GoldilocksFp4V1],
+    challenge: GoldilocksFp4V1,
+    x: u64,
+    coset_generator: u64,
+) -> Result<GoldilocksFp4V1> {
     backend::fold_fri_coset(values, challenge, x, coset_generator)
 }
 fn batch_size_hint(batch: &TransitionBatch) -> usize {
@@ -1352,42 +1341,81 @@ fn proof_size_hint(proof: &Proof) -> usize {
     let mut total = 0usize;
     total = total.saturating_add(2); // protocol_version
     total = total.saturating_add(proof.parameter.len());
-    total = total.saturating_add(32); // trace_commitment
-    total = total.saturating_add(16 + 8 + 32 * 5); // dsid, slot, roots, tx set, ordering hash
-    total = total.saturating_add(32 * 4); // trace, AIR, composition, and LDE roots
+    total = total.saturating_add(GoldilocksDigest384V1::BYTES); // trace_commitment
+    total = total.saturating_add(public_io_size_hint(&proof.public_io));
+    total = total.saturating_add(GoldilocksDigest384V1::BYTES * 4); // proof roots
     total = total.saturating_add(4); // lde_domain_size
     total = total.saturating_add(proof.alphas.len().saturating_mul(8));
-    total = total.saturating_add(proof.betas.len().saturating_mul(8));
-    total = total.saturating_add(proof.fri_layers.len().saturating_mul(32));
+    total = total.saturating_add(proof.betas.len().saturating_mul(32));
+    total = total.saturating_add(
+        proof
+            .fri_layers
+            .len()
+            .saturating_mul(GoldilocksDigest384V1::BYTES),
+    );
     for query in &proof.queries {
         total = total.saturating_add(4); // index
         total = total.saturating_add(8); // value
         total = total.saturating_add(query.chunk_values.len().saturating_mul(8));
-        total = total.saturating_add(query.merkle_path.len().saturating_mul(8));
+        total = total.saturating_add(
+            query
+                .merkle_path
+                .len()
+                .saturating_mul(GoldilocksDigest384V1::BYTES),
+        );
     }
     for opening in &proof.air_openings {
         total = total.saturating_add(4); // index
         total = total.saturating_add(opening.current_row.len().saturating_mul(8));
         total = total.saturating_add(opening.next_row.len().saturating_mul(8));
-        total = total.saturating_add(opening.current_row_path.len().saturating_mul(8));
-        total = total.saturating_add(opening.next_row_path.len().saturating_mul(8));
+        total = total.saturating_add(
+            opening
+                .current_row_path
+                .len()
+                .saturating_mul(GoldilocksDigest384V1::BYTES),
+        );
+        total = total.saturating_add(
+            opening
+                .next_row_path
+                .len()
+                .saturating_mul(GoldilocksDigest384V1::BYTES),
+        );
         total = total.saturating_add(8); // composition_value
-        total = total.saturating_add(opening.composition_path.len().saturating_mul(8));
+        total = total.saturating_add(
+            opening
+                .composition_path
+                .len()
+                .saturating_mul(GoldilocksDigest384V1::BYTES),
+        );
     }
     for query in &proof.fri_queries {
         total = total.saturating_add(4); // initial_index
         for round in &query.rounds {
             total = total.saturating_add(4); // round
             total = total.saturating_add(4); // index
-            total = total.saturating_add(round.values.len().saturating_mul(8));
-            total = total.saturating_add(8); // folded_value
-            total = total.saturating_add(round.merkle_path.len().saturating_mul(8));
+            total = total.saturating_add(round.values.len().saturating_mul(32));
+            total = total.saturating_add(32); // folded_value
+            total = total.saturating_add(
+                round
+                    .merkle_path
+                    .len()
+                    .saturating_mul(GoldilocksDigest384V1::BYTES),
+            );
         }
         total = total.saturating_add(4); // final_index
-        total = total.saturating_add(query.final_values.len().saturating_mul(8));
-        total = total.saturating_add(query.final_merkle_path.len().saturating_mul(8));
+        total = total.saturating_add(query.final_values.len().saturating_mul(32));
+        total = total.saturating_add(
+            query
+                .final_merkle_path
+                .len()
+                .saturating_mul(GoldilocksDigest384V1::BYTES),
+        );
     }
     total
+}
+fn public_io_size_hint(public_io: &PublicIO) -> usize {
+    let _ = public_io;
+    16 + 8 + 32 * 5
 }
 fn materialise_proof(public_io: PublicIO, artifact: BackendArtifact) -> Result<Proof> {
     if artifact.query_openings.len() != artifact.query_chunks.len() {
@@ -1417,7 +1445,7 @@ fn materialise_proof(public_io: PublicIO, artifact: BackendArtifact) -> Result<P
     let fri_layers = artifact
         .fri_layers
         .into_iter()
-        .map(field_norito::core::to_bytes)
+        .map(GoldilocksDigest384V1::from)
         .collect();
     let queries = artifact
         .query_openings
@@ -1429,7 +1457,10 @@ fn materialise_proof(public_io: PublicIO, artifact: BackendArtifact) -> Result<P
                 index,
                 value,
                 chunk_values,
-                merkle_path,
+                merkle_path: merkle_path
+                    .into_iter()
+                    .map(GoldilocksDigest384V1::from)
+                    .collect(),
             },
         )
         .collect();
@@ -1438,10 +1469,10 @@ fn materialise_proof(public_io: PublicIO, artifact: BackendArtifact) -> Result<P
         parameter: artifact.parameter,
         trace_commitment: artifact.trace_commitment,
         public_io,
-        trace_root: field_norito::core::to_bytes(artifact.trace_root),
-        air_trace_root: field_norito::core::to_bytes(artifact.air_trace_root),
-        air_composition_root: field_norito::core::to_bytes(artifact.air_composition_root),
-        lde_root: field_norito::core::to_bytes(artifact.lde_root),
+        trace_root: artifact.trace_root.into(),
+        air_trace_root: artifact.air_trace_root.into(),
+        air_composition_root: artifact.air_composition_root.into(),
+        lde_root: artifact.lde_root.into(),
         lde_domain_size: artifact.lde_domain_size,
         alphas: artifact.alphas,
         betas: artifact.fri_betas,
@@ -1489,26 +1520,37 @@ fn ensure_public_io_matches(expected: &PublicIO, actual: &PublicIO) -> Result<()
     }
     Ok(())
 }
-mod field_norito {
-    pub mod core {
-        pub fn to_bytes(value: u64) -> [u8; 32] {
-            let mut out = [0u8; 32];
-            out[..8].copy_from_slice(&value.to_le_bytes());
-            out
-        }
-        pub fn from_bytes(bytes: &[u8; 32]) -> Option<u64> {
-            if bytes[8..].iter().any(|byte| *byte != 0) {
-                return None;
-            }
-            let value = u64::from_le_bytes(bytes[..8].try_into().expect("slice length is 8"));
-            (value < super::super::GOLDILOCKS_MODULUS).then_some(value)
-        }
-    }
-}
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{OperationKind, PublicInputs, StateTransition};
+
+    fn fp4(value: u64) -> GoldilocksFp4V1 {
+        GoldilocksFp4V1::from_base(value).expect("canonical Goldilocks test value")
+    }
+
+    fn fp4_values(values: &[u64]) -> Vec<GoldilocksFp4V1> {
+        values.iter().copied().map(fp4).collect()
+    }
+
+    fn digest384(value: u64) -> NativeGoldilocksDigest384V1 {
+        NativeGoldilocksDigest384V1::new([value; 6]).expect("canonical Digest384 test value")
+    }
+
+    fn wire_digest384(value: u64) -> GoldilocksDigest384V1 {
+        digest384(value).into()
+    }
+
+    fn make_digest384_noncanonical(bytes: &mut [u8; GoldilocksDigest384V1::BYTES], lane: usize) {
+        let offset = lane * 8;
+        bytes[offset..offset + 8].copy_from_slice(&GOLDILOCKS_MODULUS.to_le_bytes());
+    }
+
+    fn noncanonical_digest384_bytes() -> [u8; GoldilocksDigest384V1::BYTES] {
+        let mut bytes = wire_digest384(0).to_le_bytes();
+        make_digest384_noncanonical(&mut bytes, 0);
+        bytes
+    }
 
     fn add_mod(a: u64, b: u64) -> u64 {
         let sum = u128::from(a) + u128::from(b);
@@ -1545,7 +1587,8 @@ mod tests {
         batch.public_inputs.tx_set_hash = [0xDD; 32];
     }
     fn sample_batch() -> TransitionBatch {
-        let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
+        let mut batch =
+            TransitionBatch::new("fastpq-state-transition-stark-v1", PublicInputs::default());
         batch.push(StateTransition::new(
             b"asset/xor/alice".to_vec(),
             1_u64.to_le_bytes().to_vec(),
@@ -1563,7 +1606,8 @@ mod tests {
         batch
     }
     fn sample_batch_with_size(rows: usize) -> TransitionBatch {
-        let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
+        let mut batch =
+            TransitionBatch::new("fastpq-state-transition-stark-v1", PublicInputs::default());
         for idx in 0..rows {
             let key = format!("asset/xor/account-{idx:04}").into_bytes();
             let idx_u64 = u64::try_from(idx).expect("sample row index fits u64");
@@ -1584,7 +1628,7 @@ mod tests {
         rows: usize,
         limits: VerifyLimits,
     ) -> (TransitionBatch, Proof) {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
         let batch = sample_batch_with_size(rows);
         let ordering = ordering::ordering_hash(&batch).unwrap();
         let public_io = build_public_io(&batch, ordering);
@@ -1599,20 +1643,21 @@ mod tests {
     fn single_fri_leaf_root_and_path(
         round: usize,
         leaf_index: usize,
-        values: &[u64],
-    ) -> ([u8; 32], Vec<u64>) {
+        values: &[GoldilocksFp4V1],
+    ) -> (GoldilocksDigest384V1, Vec<GoldilocksDigest384V1>) {
         let leaf = backend::hash_fri_chunk(round, leaf_index, values).unwrap();
+        let role = MerkleTreeRoleV1::Fri(u32::try_from(round).expect("round fits u32"));
         (
-            field_norito::core::to_bytes(trace::merkle_root(&[leaf])),
-            vec![leaf],
+            backend::merkle_root_for_role(&[leaf], role).unwrap().into(),
+            vec![leaf.into()],
         )
     }
     fn two_fri_leaf_root_and_path(
         round: usize,
         leaf_index: usize,
-        values: &[u64],
-        sibling_values: &[u64],
-    ) -> ([u8; 32], Vec<u64>) {
+        values: &[GoldilocksFp4V1],
+        sibling_values: &[GoldilocksFp4V1],
+    ) -> (GoldilocksDigest384V1, Vec<GoldilocksDigest384V1>) {
         let leaf = backend::hash_fri_chunk(round, leaf_index, values).unwrap();
         let sibling_index = if leaf_index == 0 { 1 } else { leaf_index - 1 };
         let sibling = backend::hash_fri_chunk(round, sibling_index, sibling_values).unwrap();
@@ -1621,17 +1666,18 @@ mod tests {
         } else {
             vec![sibling, leaf]
         };
+        let role = MerkleTreeRoleV1::Fri(u32::try_from(round).expect("round fits u32"));
         (
-            field_norito::core::to_bytes(trace::merkle_root(&leaves)),
-            vec![sibling],
+            backend::merkle_root_for_role(&leaves, role).unwrap().into(),
+            vec![sibling.into()],
         )
     }
     fn fold_fri_group_for_test(
-        values: &[u64],
-        beta: u64,
+        values: &[GoldilocksFp4V1],
+        beta: GoldilocksFp4V1,
         layer_len: usize,
         leaf_index: usize,
-    ) -> u64 {
+    ) -> GoldilocksFp4V1 {
         let params = fastpq_isi::CANONICAL_PARAMETER_SETS[0];
         let domain = backend::FriDomain::from_lde_parameters(
             params.lde_root,
@@ -1740,8 +1786,8 @@ mod tests {
         initial_index: usize,
         initial_value: u64,
         fri_query: &FriQueryOpening,
-        fri_layers: &[[u8; 32]],
-        betas: &[u64],
+        fri_layers: &[GoldilocksDigest384V1],
+        betas: &[GoldilocksFp4V1],
         fri_layer_lengths: &[usize],
         arity: u32,
     ) -> Result<()> {
@@ -1761,8 +1807,8 @@ mod tests {
         initial_index: usize,
         initial_value: u64,
         fri_query: &FriQueryOpening,
-        fri_layers: &[[u8; 32]],
-        betas: &[u64],
+        fri_layers: &[GoldilocksDigest384V1],
+        betas: &[GoldilocksFp4V1],
         fri_layer_lengths: &[usize],
         terminal_degree_bound: usize,
         arity: u32,
@@ -1792,15 +1838,15 @@ mod tests {
     }
     fn sample_backend_artifact() -> BackendArtifact {
         BackendArtifact {
-            parameter: "fastpq-lane-balanced".to_owned(),
-            trace_commitment: Hash::new(b"materialise-proof-test"),
-            trace_root: 11,
-            air_trace_root: 12,
-            air_composition_root: 13,
-            lde_root: 14,
+            parameter: "fastpq-state-transition-stark-v1".to_owned(),
+            trace_commitment: digest384(10).into(),
+            trace_root: digest384(11),
+            air_trace_root: digest384(12),
+            air_composition_root: digest384(13),
+            lde_root: digest384(14),
             lde_domain_size: 1,
-            alphas: vec![15, 16],
-            fri_layers: vec![17],
+            alphas: vec![17, 18],
+            fri_layers: vec![digest384(19)],
             fri_betas: Vec::new(),
             query_openings: vec![(0, 18)],
             query_chunks: vec![vec![18]],
@@ -1818,7 +1864,7 @@ mod tests {
                 initial_index: 0,
                 rounds: Vec::new(),
                 final_index: 0,
-                final_values: vec![19],
+                final_values: vec![fp4(21)],
                 final_merkle_path: Vec::new(),
             }],
         }
@@ -1828,7 +1874,8 @@ mod tests {
     }
     #[test]
     fn public_io_preserves_explicit_zero_permission_and_tx_set_hash() {
-        let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
+        let mut batch =
+            TransitionBatch::new("fastpq-state-transition-stark-v1", PublicInputs::default());
         batch.public_inputs.dsid = [0x11; 16];
         batch.public_inputs.slot = 7;
         batch.public_inputs.old_root = [0xAA; 32];
@@ -1847,7 +1894,8 @@ mod tests {
     }
     #[test]
     fn public_io_preserves_explicit_roots_and_hashes_claims() {
-        let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
+        let mut batch =
+            TransitionBatch::new("fastpq-state-transition-stark-v1", PublicInputs::default());
         batch.public_inputs.dsid = [0x11; 16];
         batch.public_inputs.slot = 99;
         batch.public_inputs.old_root = [0x22; 32];
@@ -1937,23 +1985,24 @@ mod tests {
     }
     #[test]
     fn raw_crypto_verifier_accepts_canonical_v1_roundtrip() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
         let batch = sample_batch();
         let proof = prover.prove_raw_statement(&batch).unwrap();
         verify(&batch, &proof).unwrap();
     }
     #[test]
     fn strict_state_profile_accepts_unchanged_empty_batch() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
-        let batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
+        let batch =
+            TransitionBatch::new("fastpq-state-transition-stark-v1", PublicInputs::default());
         let proof = prover.prove(&batch).expect("strict empty no-op proof");
         super::verify(&batch, &proof).expect("strict empty no-op verification");
     }
     #[test]
     fn full_width_slot_uses_a_canonical_trace_residue() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
         let batch = TransitionBatch::new(
-            "fastpq-lane-balanced",
+            "fastpq-state-transition-stark-v1",
             PublicInputs {
                 slot: u64::MAX,
                 ..PublicInputs::default()
@@ -1965,7 +2014,7 @@ mod tests {
     }
     #[test]
     fn strict_state_profile_rejects_cryptographically_valid_metadata_statement() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
         let batch = sample_batch();
         let raw_proof = prover
             .prove_raw_statement(&batch)
@@ -1996,7 +2045,8 @@ mod tests {
             Error::ParameterMismatch {
                 expected,
                 actual
-            } if expected == "fastpq-lane-balanced" && actual == "test-mismatched-parameter"
+            } if expected == "fastpq-state-transition-stark-v1"
+                && actual == "test-mismatched-parameter"
         ));
     }
     #[test]
@@ -2029,9 +2079,11 @@ mod tests {
     }
     #[test]
     fn canonical_with_execution_mode_overrides_backend() {
-        let prover =
-            Prover::canonical_with_execution_mode("fastpq-lane-balanced", ExecutionMode::Cpu)
-                .expect("prover");
+        let prover = Prover::canonical_with_execution_mode(
+            "fastpq-state-transition-stark-v1",
+            ExecutionMode::Cpu,
+        )
+        .expect("prover");
         assert_eq!(prover.backend.execution_mode(), ExecutionMode::Cpu);
     }
     #[test]
@@ -2045,15 +2097,15 @@ mod tests {
     fn materialise_proof_maps_backend_artifact_fields() {
         let proof = materialise_sample_artifact(sample_backend_artifact()).unwrap();
         assert_eq!(proof.protocol_version, PROTOCOL_VERSION);
-        assert_eq!(proof.parameter, "fastpq-lane-balanced");
-        assert_eq!(proof.trace_root, field_norito::core::to_bytes(11));
-        assert_eq!(proof.air_trace_root, field_norito::core::to_bytes(12));
-        assert_eq!(proof.air_composition_root, field_norito::core::to_bytes(13));
-        assert_eq!(proof.lde_root, field_norito::core::to_bytes(14));
+        assert_eq!(proof.parameter, "fastpq-state-transition-stark-v1");
+        assert_eq!(proof.trace_root, wire_digest384(11));
+        assert_eq!(proof.air_trace_root, wire_digest384(12));
+        assert_eq!(proof.air_composition_root, wire_digest384(13));
+        assert_eq!(proof.lde_root, wire_digest384(14));
         assert_eq!(proof.lde_domain_size, 1);
-        assert_eq!(proof.alphas, vec![15, 16]);
-        assert_eq!(proof.betas, Vec::<u64>::new());
-        assert_eq!(proof.fri_layers, vec![field_norito::core::to_bytes(17)]);
+        assert_eq!(proof.alphas, vec![17, 18]);
+        assert_eq!(proof.betas, Vec::<GoldilocksFp4V1>::new());
+        assert_eq!(proof.fri_layers, vec![wire_digest384(19)]);
         assert_eq!(proof.queries.len(), 1);
         assert_eq!(proof.queries[0].index, 0);
         assert_eq!(proof.queries[0].value, 18);
@@ -2063,7 +2115,7 @@ mod tests {
     }
     #[test]
     fn materialise_proof_preserves_commitment_and_public_io() {
-        let commitment = Hash::new(b"explicit-materialise-commitment");
+        let commitment: GoldilocksDigest384V1 = digest384(19).into();
         let public_io = PublicIO {
             dsid: [0x01; 16],
             slot: 17,
@@ -2085,32 +2137,43 @@ mod tests {
         let mut artifact = sample_backend_artifact();
         artifact.query_openings.push((3, 33));
         artifact.query_chunks.push(vec![30, 31, 32, 33]);
-        artifact.query_paths.push(vec![101, 102]);
+        artifact
+            .query_paths
+            .push(vec![digest384(101), digest384(102)]);
         artifact.air_openings.push(AirConstraintOpening {
             index: 3,
             current_row: vec![1, 2, 3],
             next_row: vec![4, 5, 6],
-            current_row_path: vec![201],
-            next_row_path: vec![202],
+            current_row_path: vec![wire_digest384(201)],
+            next_row_path: vec![wire_digest384(202)],
             composition_value: 34,
-            composition_path: vec![203],
+            composition_path: vec![wire_digest384(203)],
         });
         artifact.fri_query_openings.push(FriQueryOpening {
             initial_index: 3,
             rounds: Vec::new(),
             final_index: 3,
-            final_values: vec![33, 34, 35, 36],
-            final_merkle_path: vec![204],
+            final_values: fp4_values(&[33, 34, 35, 36]),
+            final_merkle_path: vec![wire_digest384(204)],
         });
         let proof = materialise_sample_artifact(artifact).unwrap();
         assert_eq!(proof.queries.len(), 2);
         assert_eq!(proof.queries[1].index, 3);
         assert_eq!(proof.queries[1].value, 33);
         assert_eq!(proof.queries[1].chunk_values, vec![30, 31, 32, 33]);
-        assert_eq!(proof.queries[1].merkle_path, vec![101, 102]);
+        assert_eq!(
+            proof.queries[1].merkle_path,
+            vec![wire_digest384(101), wire_digest384(102)]
+        );
         assert_eq!(proof.air_openings[1].index, 3);
-        assert_eq!(proof.air_openings[1].composition_path, vec![203]);
-        assert_eq!(proof.fri_queries[1].final_merkle_path, vec![204]);
+        assert_eq!(
+            proof.air_openings[1].composition_path,
+            vec![wire_digest384(203)]
+        );
+        assert_eq!(
+            proof.fri_queries[1].final_merkle_path,
+            vec![wire_digest384(204)]
+        );
     }
     #[test]
     fn materialise_proof_rejects_backend_artifact_count_mismatches() {
@@ -2172,76 +2235,23 @@ mod tests {
         );
     }
     #[test]
-    fn verify_rejects_malformed_commitment_root_encodings() {
-        let (batch, proof) = sample_proof_with_size(32);
-        assert_verify_rejects(
-            &batch,
-            &proof,
-            |tampered| tampered.trace_root[8] = 1,
-            |err| {
-                matches!(
-                    err,
-                    Error::NonCanonicalGoldilocksElement {
-                        context: "trace_root",
-                        indices,
-                    } if indices.is_empty()
-                )
-            },
-        );
-        assert_verify_rejects(
-            &batch,
-            &proof,
-            |tampered| tampered.lde_root[8] = 1,
-            |err| {
-                matches!(
-                    err,
-                    Error::NonCanonicalGoldilocksElement {
-                        context: "lde_root",
-                        indices,
-                    } if indices.is_empty()
-                )
-            },
-        );
-        assert_verify_rejects(
-            &batch,
-            &proof,
-            |tampered| tampered.air_trace_root[8] = 1,
-            |err| {
-                matches!(
-                    err,
-                    Error::NonCanonicalGoldilocksElement {
-                        context: "air_trace_root",
-                        indices,
-                    } if indices.is_empty()
-                )
-            },
-        );
-        assert_verify_rejects(
-            &batch,
-            &proof,
-            |tampered| tampered.air_composition_root[8] = 1,
-            |err| {
-                matches!(
-                    err,
-                    Error::NonCanonicalGoldilocksElement {
-                        context: "air_composition_root",
-                        indices,
-                    } if indices.is_empty()
-                )
-            },
+    fn proof_digest_carriers_reject_noncanonical_words_at_construction() {
+        assert!(
+            GoldilocksDigest384V1::from_le_bytes(noncanonical_digest384_bytes()).is_none(),
+            "proof roots, FRI layers, and Merkle paths share the canonical digest type"
         );
     }
     #[test]
     fn verify_rejects_modified_roots() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
         let batch = sample_batch();
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
-        proof.trace_root[0] ^= 0xAA;
+        proof.trace_root = wire_digest384(0xAA);
         verify(&batch, &proof).unwrap_err();
     }
     #[test]
     fn verify_rejects_valid_field_trace_root_from_other_batch() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
         let batch = sample_batch_with_size(8);
         let foreign = sample_batch_with_size(9);
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
@@ -2255,7 +2265,7 @@ mod tests {
     }
     #[test]
     fn verify_rejects_same_shape_foreign_trace_root() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
         let batch = sample_batch_with_size(8);
         let mut foreign = batch.clone();
         foreign.transitions[2].post_value[0] ^= 0x5A;
@@ -2271,7 +2281,7 @@ mod tests {
     #[test]
     fn verify_limits_reject_before_trace_root_binding() {
         let (batch, mut proof) = sample_proof_with_size(32);
-        proof.trace_root[0] ^= 0x01;
+        proof.trace_root = wire_digest384(1);
         let limits = verify_limits_with_override(|limits| limits.max_proof_bytes = 0);
         let err = verify_with_limits(&batch, &proof, limits).unwrap_err();
         assert!(
@@ -2288,7 +2298,7 @@ mod tests {
     #[test]
     fn verify_batch_size_limit_rejects_before_trace_root_binding() {
         let (batch, mut proof) = sample_proof_with_size(32);
-        proof.trace_root[0] ^= 0x01;
+        proof.trace_root = wire_digest384(1);
         let limits = verify_limits_with_override(|limits| limits.max_batch_bytes = 0);
         let err = verify_with_limits(&batch, &proof, limits).unwrap_err();
         assert!(
@@ -2305,7 +2315,7 @@ mod tests {
     #[test]
     fn verify_query_count_limit_rejects_before_trace_root_binding() {
         let (batch, mut proof) = sample_proof_with_size(32);
-        proof.trace_root[0] ^= 0x01;
+        proof.trace_root = wire_digest384(1);
         let limits = verify_limits_with_override(|limits| limits.max_queries = 0);
         let err = verify_with_limits(&batch, &proof, limits).unwrap_err();
         assert!(
@@ -2322,7 +2332,7 @@ mod tests {
     #[test]
     fn verify_transition_limit_rejects_before_trace_root_binding() {
         let (batch, mut proof) = sample_proof_with_size(32);
-        proof.trace_root[0] ^= 0x01;
+        proof.trace_root = wire_digest384(1);
         let limits = verify_limits_with_override(|limits| limits.max_transitions = 0);
         let err = verify_with_limits(&batch, &proof, limits).unwrap_err();
         assert!(
@@ -2338,7 +2348,7 @@ mod tests {
     }
     #[test]
     fn verify_transition_limit_rejects_before_semantic_profile_validation() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
         let batch = sample_batch();
         let proof = prover.prove_raw_statement(&batch).unwrap();
         assert!(matches!(
@@ -2363,7 +2373,7 @@ mod tests {
     #[test]
     fn verify_fri_layer_limit_rejects_before_trace_root_binding() {
         let (batch, mut proof) = sample_proof_with_size(32);
-        proof.trace_root[0] ^= 0x01;
+        proof.trace_root = wire_digest384(1);
         let limits = verify_limits_with_override(|limits| limits.max_fri_layers = 0);
         let err = verify_with_limits(&batch, &proof, limits).unwrap_err();
         assert!(
@@ -2380,7 +2390,7 @@ mod tests {
     #[test]
     fn verify_query_path_limit_rejects_before_trace_root_binding() {
         let (batch, mut proof) = sample_proof_with_size(32);
-        proof.trace_root[0] ^= 0x01;
+        proof.trace_root = wire_digest384(1);
         let limits = verify_limits_with_override(|limits| limits.max_query_path_len = 0);
         let err = verify_with_limits(&batch, &proof, limits).unwrap_err();
         assert!(
@@ -2397,7 +2407,7 @@ mod tests {
     #[test]
     fn verify_air_row_limit_rejects_before_trace_root_binding() {
         let (batch, mut proof) = sample_proof_with_size(32);
-        proof.trace_root[0] ^= 0x01;
+        proof.trace_root = wire_digest384(1);
         let limits = verify_limits_with_override(|limits| limits.max_air_row_values = 0);
         let err = verify_with_limits(&batch, &proof, limits).unwrap_err();
         assert!(
@@ -2414,7 +2424,7 @@ mod tests {
     #[test]
     fn verify_fri_value_limit_rejects_before_trace_root_binding() {
         let (batch, mut proof) = sample_proof_with_size(32);
-        proof.trace_root[0] ^= 0x01;
+        proof.trace_root = wire_digest384(1);
         let limits = verify_limits_with_override(|limits| limits.max_fri_round_values = 0);
         let err = verify_with_limits(&batch, &proof, limits).unwrap_err();
         assert!(
@@ -2432,7 +2442,7 @@ mod tests {
     fn verify_zero_lde_domain_rejects_before_trace_root_binding() {
         let (batch, mut proof) = sample_proof_with_size(32);
         proof.lde_domain_size = 0;
-        proof.trace_root[0] ^= 0x01;
+        proof.trace_root = wire_digest384(1);
         let err = verify(&batch, &proof).unwrap_err();
         assert!(matches!(
             err,
@@ -2443,7 +2453,7 @@ mod tests {
     fn verify_protocol_version_rejects_before_trace_root_binding() {
         let (batch, mut proof) = sample_proof_with_size(8);
         proof.protocol_version = PROTOCOL_VERSION.wrapping_add(1);
-        proof.trace_root[0] ^= 0xAA;
+        proof.trace_root = wire_digest384(0xAA);
         let err = verify(&batch, &proof).unwrap_err();
         assert!(matches!(
             err,
@@ -2454,65 +2464,45 @@ mod tests {
     }
     #[test]
     fn verify_parameter_mismatch_rejects_before_trace_root_binding() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
         let mut batch = sample_batch();
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
         batch.parameter = "test-mismatched-parameter".to_owned();
-        proof.trace_root[0] ^= 0xAA;
+        proof.trace_root = wire_digest384(0xAA);
         let err = verify(&batch, &proof).unwrap_err();
         assert!(matches!(
             err,
             Error::ParameterMismatch {
                 expected,
                 actual,
-            } if expected == "fastpq-lane-balanced" && actual == "test-mismatched-parameter"
+            } if expected == "fastpq-state-transition-stark-v1"
+                && actual == "test-mismatched-parameter"
         ));
     }
     #[test]
     fn verify_public_io_mismatch_rejects_before_trace_root_binding() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
         let batch = sample_batch();
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
         proof.public_io.slot = proof.public_io.slot.wrapping_add(1);
-        proof.trace_root[0] ^= 0xAA;
+        proof.trace_root = wire_digest384(0xAA);
         let err = verify(&batch, &proof).unwrap_err();
         assert!(matches!(err, Error::PublicIoMismatch { field: "slot" }));
     }
     #[test]
     fn verify_rejects_commitment_mismatch_before_trace_root_binding() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
         let batch = sample_batch();
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
-        proof.trace_commitment = Hash::new(b"tampered-fastpq-commitment");
-        proof.trace_root[0] ^= 0xAA;
+        proof.trace_commitment = digest384(53).into();
+        proof.trace_root = wire_digest384(0xAA);
         let err = verify(&batch, &proof).unwrap_err();
         assert!(matches!(err, Error::CommitmentMismatch));
     }
     #[test]
-    fn verify_rejects_noncanonical_deep_root_before_trace_root_binding() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
-        let batch = sample_batch();
-        let mut proof = prover.prove_raw_statement(&batch).unwrap();
-        proof.trace_root = field_norito::core::to_bytes(42);
-        proof.lde_root[8] = 1;
-        proof.air_trace_root[8] = 1;
-        proof.air_composition_root[8] = 1;
-        let err = verify(&batch, &proof).unwrap_err();
-        assert!(
-            matches!(
-                &err,
-                Error::NonCanonicalGoldilocksElement {
-                    context: "air_trace_root",
-                    indices,
-                } if indices.is_empty()
-            ),
-            "unexpected verifier error: {err:?}"
-        );
-    }
-    #[test]
     fn verify_rejects_valid_field_lde_root_tamper_after_trace_binding() {
         let (batch, mut proof) = sample_proof_with_size(32);
-        proof.lde_root = field_norito::core::to_bytes(42);
+        proof.lde_root = wire_digest384(42);
         let err = verify(&batch, &proof).unwrap_err();
         assert!(
             matches!(err, Error::LdeRootMismatch),
@@ -2522,7 +2512,7 @@ mod tests {
     #[test]
     fn verify_rejects_valid_field_air_trace_root_tamper_after_trace_binding() {
         let (batch, mut proof) = sample_proof_with_size(32);
-        proof.air_trace_root = field_norito::core::to_bytes(43);
+        proof.air_trace_root = wire_digest384(43);
         let err = verify(&batch, &proof).unwrap_err();
         assert!(
             matches!(err, Error::AirTraceRootMismatch),
@@ -2532,7 +2522,7 @@ mod tests {
     #[test]
     fn verify_rejects_valid_field_air_composition_root_tamper_after_trace_binding() {
         let (batch, mut proof) = sample_proof_with_size(32);
-        proof.air_composition_root = field_norito::core::to_bytes(44);
+        proof.air_composition_root = wire_digest384(44);
         let err = verify(&batch, &proof).unwrap_err();
         assert!(
             matches!(err, Error::AirCompositionRootMismatch),
@@ -2541,16 +2531,16 @@ mod tests {
     }
     #[test]
     fn verify_rejects_tampered_commitment() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
         let batch = sample_batch();
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
-        proof.trace_commitment = Hash::new(b"tampered-fastpq-commitment");
+        proof.trace_commitment = digest384(53).into();
         let err = verify(&batch, &proof).unwrap_err();
         assert!(matches!(err, Error::CommitmentMismatch));
     }
     #[test]
     fn verify_rejects_relabelled_proof_from_different_batch() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
         let source = sample_batch_with_size(8);
         let target = sample_batch_with_size(9);
         let mut proof = prover.prove_raw_statement(&source).unwrap();
@@ -2565,7 +2555,7 @@ mod tests {
     }
     #[test]
     fn verify_rejects_self_consistent_proof_with_foreign_public_io() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
         let source = sample_batch_with_size(8);
         let target = sample_batch_with_size(9);
         let proof = proof_over_source_trace_with_target_statement(&prover, &source, &target);
@@ -2577,7 +2567,7 @@ mod tests {
     }
     #[test]
     fn verify_rejects_same_shape_foreign_trace_with_target_statement() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
         let source = sample_batch_with_size(8);
         let mut target = source.clone();
         target.transitions[3].post_value[0] ^= 0x7F;
@@ -2590,7 +2580,7 @@ mod tests {
     }
     #[test]
     fn verify_rejects_self_consistent_foreign_lde_bound_to_target_trace_root() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
         let source = sample_batch_with_size(8);
         let mut target = source.clone();
         target.transitions[3].post_value[0] ^= 0x7F;
@@ -2607,7 +2597,7 @@ mod tests {
     }
     #[test]
     fn verify_rejects_same_transitions_with_foreign_public_inputs() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
         let source = sample_batch_with_size(8);
         let mut target = source.clone();
         target.public_inputs.slot = target.public_inputs.slot.wrapping_add(1);
@@ -2621,7 +2611,7 @@ mod tests {
     }
     #[test]
     fn verify_rejects_foreign_trace_with_grafted_target_commitments() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
         let source = sample_batch_with_size(8);
         let mut target = source.clone();
         target.transitions[3].post_value[0] ^= 0x7F;
@@ -2642,7 +2632,7 @@ mod tests {
     }
     #[test]
     fn verify_rejects_foreign_artifact_after_target_roots_are_grafted() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
         let source = sample_batch_with_size(8);
         let mut target = source.clone();
         target.transitions[3].post_value[0] ^= 0x42;
@@ -2657,8 +2647,7 @@ mod tests {
         assert!(
             matches!(
                 err,
-                Error::FriChallengeMismatch { .. }
-                    | Error::FriLayerMismatch { .. }
+                Error::AirChallengeMismatch { .. }
                     | Error::QueryMismatch { .. }
                     | Error::QueryMerklePathMismatch { .. }
                     | Error::AirMerklePathMismatch { .. }
@@ -2669,7 +2658,7 @@ mod tests {
     }
     #[test]
     fn verify_rejects_ordering_hash_mutation() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
         let batch = sample_batch();
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
         proof.public_io.ordering_hash[0] ^= 0x01;
@@ -2678,7 +2667,7 @@ mod tests {
     }
     #[test]
     fn verify_rejects_dsid_mutation() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
         let batch = sample_batch();
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
         proof.public_io.dsid[0] ^= 0x01;
@@ -2687,7 +2676,7 @@ mod tests {
     }
     #[test]
     fn verify_rejects_slot_mutation() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
         let batch = sample_batch();
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
         proof.public_io.slot = proof.public_io.slot.wrapping_add(1);
@@ -2696,7 +2685,7 @@ mod tests {
     }
     #[test]
     fn verify_rejects_old_root_mutation() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
         let batch = sample_batch();
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
         proof.public_io.old_root[0] ^= 0x01;
@@ -2705,7 +2694,7 @@ mod tests {
     }
     #[test]
     fn verify_rejects_new_root_mutation() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
         let batch = sample_batch();
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
         proof.public_io.new_root[0] ^= 0x01;
@@ -2714,7 +2703,7 @@ mod tests {
     }
     #[test]
     fn verify_rejects_perm_root_mutation() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
         let batch = sample_batch();
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
         proof.public_io.perm_root[0] ^= 0x01;
@@ -2726,7 +2715,7 @@ mod tests {
     }
     #[test]
     fn verify_rejects_tx_set_hash_mutation() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
         let batch = sample_batch();
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
         proof.public_io.tx_set_hash[0] ^= 0x01;
@@ -2740,7 +2729,7 @@ mod tests {
     }
     #[test]
     fn verify_preserves_explicit_zero_roots_and_hashes() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
         let mut batch = sample_batch();
         batch.public_inputs.perm_root = [0; 32];
         batch.public_inputs.tx_set_hash = [0; 32];
@@ -2763,27 +2752,29 @@ mod tests {
     }
     #[test]
     fn verify_rejects_wrong_betas() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
         let batch = sample_batch();
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
         if let Some(beta) = proof.betas.first_mut() {
-            *beta = beta.wrapping_add(1);
+            let mut coefficients = beta.coefficients();
+            coefficients[0] = add_mod(coefficients[0], 1);
+            *beta = GoldilocksFp4V1::new(coefficients).expect("canonical mutated beta");
         }
         let err = verify(&batch, &proof).unwrap_err();
         assert!(matches!(err, Error::FriChallengeMismatch { round: 0 }));
     }
     #[test]
     fn verify_rejects_modified_lde_root() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
         let batch = sample_batch_with_size(16);
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
-        proof.lde_root[0] ^= 0xAA;
+        proof.lde_root = wire_digest384(0xAA);
         let err = verify(&batch, &proof).unwrap_err();
         assert!(matches!(err, Error::LdeRootMismatch));
     }
     #[test]
     fn verify_rejects_fri_layer_length_mismatch() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
         let batch = sample_batch_with_size(32);
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
         assert!(
@@ -2810,9 +2801,8 @@ mod tests {
         ));
     }
     #[test]
-    fn verify_rejects_empty_and_malformed_fri_layer_roots() {
+    fn verify_rejects_empty_fri_layer_roots() {
         let (batch, proof) = sample_proof_with_size(32);
-        let terminal_round = proof.fri_layers.len() - 1;
         assert_verify_rejects(
             &batch,
             &proof,
@@ -2827,46 +2817,23 @@ mod tests {
                 )
             },
         );
-        assert_verify_rejects(
-            &batch,
-            &proof,
-            |tampered| {
-                let root = tampered
-                    .fri_layers
-                    .last_mut()
-                    .expect("expected terminal FRI root");
-                root[8] = 1;
-            },
-            |err| {
-                matches!(
-                    err,
-                    Error::NonCanonicalGoldilocksElement {
-                        context: "fri_layers",
-                        indices,
-                    } if indices.as_slice() == [terminal_round]
-                )
-            },
-        );
     }
     #[test]
     fn verify_rejects_fri_layer_mutation() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
         let batch = sample_batch_with_size(32);
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
         assert!(
             !proof.fri_layers.is_empty(),
             "expected non-empty FRI layer list"
         );
-        proof.fri_layers[0][0] ^= 0x01;
+        proof.fri_layers[0] = wire_digest384(1);
         let err = verify(&batch, &proof).unwrap_err();
-        assert!(matches!(
-            err,
-            Error::FriLayerMismatch { round: 0 } | Error::FriChallengeMismatch { round: 0 }
-        ));
+        assert!(matches!(err, Error::FriChallengeMismatch { round: 0 }));
     }
     #[test]
     fn verify_rejects_fri_challenge_length_mismatch() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
         let batch = sample_batch_with_size(32);
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
         assert!(!proof.betas.is_empty(), "expected at least one FRI beta");
@@ -2876,7 +2843,7 @@ mod tests {
     }
     #[test]
     fn verify_rejects_query_count_mismatch() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
         let batch = sample_batch_with_size(32);
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
         assert!(!proof.queries.is_empty(), "expected queries in proof");
@@ -2948,7 +2915,7 @@ mod tests {
     }
     #[test]
     fn verify_rejects_query_opening_permutation() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
         let batch = sample_batch_with_size(32);
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
         assert!(proof.queries.len() > 1, "expected multiple query openings");
@@ -2958,7 +2925,7 @@ mod tests {
     }
     #[test]
     fn verify_rejects_air_opening_permutation() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
         let batch = sample_batch_with_size(32);
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
         assert!(
@@ -2971,7 +2938,7 @@ mod tests {
     }
     #[test]
     fn verify_rejects_fri_query_permutation() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
         let batch = sample_batch_with_size(32);
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
         assert!(
@@ -2984,7 +2951,7 @@ mod tests {
     }
     #[test]
     fn verify_rejects_duplicate_query_opening_with_preserved_count() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
         let batch = sample_batch_with_size(32);
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
         assert!(proof.queries.len() > 1, "expected multiple query openings");
@@ -2994,7 +2961,7 @@ mod tests {
     }
     #[test]
     fn verify_rejects_wrong_query_value() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
         let batch = sample_batch_with_size(32);
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
         let first = proof
@@ -3007,7 +2974,7 @@ mod tests {
     }
     #[test]
     fn verify_rejects_wrong_query_chunk_value() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
         let batch = sample_batch_with_size(32);
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
         let first = proof
@@ -3027,7 +2994,7 @@ mod tests {
     }
     #[test]
     fn verify_rejects_wrong_query_merkle_path() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
         let batch = sample_batch_with_size(32);
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
         let first = proof
@@ -3038,7 +3005,7 @@ mod tests {
             .merkle_path
             .first_mut()
             .expect("expected query Merkle path");
-        *sibling = sibling.wrapping_add(1);
+        *sibling = wire_digest384(0xBAD);
         let err = verify(&batch, &proof).unwrap_err();
         assert!(matches!(err, Error::QueryMerklePathMismatch { .. }));
     }
@@ -3118,32 +3085,32 @@ mod tests {
                     .first_mut()
                     .expect("expected sampled AIR opening")
                     .current_row_path
-                    .push(0);
+                    .push(wire_digest384(0));
             },
             |err| matches!(err, Error::AirMerklePathMismatch { index: 0 }),
         );
     }
     #[test]
     fn verify_rejects_wrong_air_composition_root() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
         let batch = sample_batch_with_size(32);
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
-        proof.air_composition_root[0] ^= 0x01;
+        proof.air_composition_root = wire_digest384(1);
         let err = verify(&batch, &proof).unwrap_err();
         assert!(matches!(err, Error::AirCompositionRootMismatch));
     }
     #[test]
     fn verify_rejects_wrong_air_trace_root() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
         let batch = sample_batch_with_size(32);
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
-        proof.air_trace_root[0] ^= 0x01;
+        proof.air_trace_root = wire_digest384(1);
         let err = verify(&batch, &proof).unwrap_err();
         assert!(matches!(err, Error::AirTraceRootMismatch));
     }
     #[test]
     fn verify_rejects_missing_air_challenges() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
         let batch = sample_batch_with_size(32);
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
         proof.alphas.clear();
@@ -3158,7 +3125,7 @@ mod tests {
     }
     #[test]
     fn verify_rejects_extra_air_challenges() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
         let batch = sample_batch_with_size(32);
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
         proof.alphas.push(42);
@@ -3181,12 +3148,12 @@ mod tests {
                 let alpha = tampered.alphas.first_mut().expect("expected AIR challenge");
                 *alpha = alpha.wrapping_add(1);
             },
-            |err| matches!(err, Error::FriChallengeMismatch { round: 0 }),
+            |err| matches!(err, Error::AirChallengeMismatch { index: 0 }),
         );
     }
     #[test]
     fn verify_rejects_air_opening_index_mismatch() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
         let batch = sample_batch_with_size(32);
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
         let first = proof
@@ -3199,7 +3166,7 @@ mod tests {
     }
     #[test]
     fn verify_rejects_air_opening_count_mismatch() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
         let batch = sample_batch_with_size(32);
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
         assert!(
@@ -3216,7 +3183,7 @@ mod tests {
     }
     #[test]
     fn verify_limits_reject_transition_count_limit() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
         let proof_batch = sample_batch();
         let proof = prover.prove_raw_statement(&proof_batch).unwrap();
         let batch = sample_batch_with_size(3);
@@ -3235,7 +3202,7 @@ mod tests {
     }
     #[test]
     fn verify_limits_reject_batch_size_limit() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
         let batch = sample_batch();
         let proof = prover.prove_raw_statement(&batch).unwrap();
         let batch_bytes = batch_size_hint(&batch);
@@ -3253,7 +3220,7 @@ mod tests {
     }
     #[test]
     fn verify_limits_reject_fri_layer_count_limit() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
         let batch = sample_batch_with_size(32);
         let proof = prover.prove_raw_statement(&batch).unwrap();
         let layer_count = proof.fri_layers.len();
@@ -3271,7 +3238,7 @@ mod tests {
     }
     #[test]
     fn verify_limits_reject_oversized_air_rows() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
         let batch = sample_batch_with_size(32);
         let proof = prover.prove_raw_statement(&batch).unwrap();
         let row_len = proof
@@ -3294,7 +3261,7 @@ mod tests {
     }
     #[test]
     fn verify_limits_reject_query_count_limit() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
         let batch = sample_batch_with_size(32);
         let proof = prover.prove_raw_statement(&batch).unwrap();
         let query_count = proof.queries.len();
@@ -3312,7 +3279,7 @@ mod tests {
     }
     #[test]
     fn verify_limits_reject_extra_fri_query_count() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
         let batch = sample_batch_with_size(32);
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
         let query_count = proof.queries.len();
@@ -3336,7 +3303,7 @@ mod tests {
     }
     #[test]
     fn verify_limits_reject_extra_air_opening_count() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
         let batch = sample_batch_with_size(32);
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
         let query_count = proof.queries.len();
@@ -3360,7 +3327,7 @@ mod tests {
     }
     #[test]
     fn verify_limits_reject_oversized_query_chunks() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
         let batch = sample_batch_with_size(32);
         let proof = prover.prove_raw_statement(&batch).unwrap();
         let chunk_len = proof
@@ -3384,7 +3351,7 @@ mod tests {
     }
     #[test]
     fn verify_limits_reject_oversized_query_merkle_path() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
         let batch = sample_batch_with_size(32);
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
         let path = &mut proof
@@ -3392,7 +3359,7 @@ mod tests {
             .first_mut()
             .expect("expected sampled query")
             .merkle_path;
-        path.resize(DEFAULT_MAX_VERIFY_QUERY_PATH_LEN + 1, 0);
+        path.resize(DEFAULT_MAX_VERIFY_QUERY_PATH_LEN + 1, wire_digest384(0));
         let err = verify_with_limits(&batch, &proof, VerifyLimits::default()).unwrap_err();
         assert!(matches!(
             err,
@@ -3406,7 +3373,8 @@ mod tests {
     }
     #[test]
     fn enforce_verify_limits_allows_values_at_exact_boundaries() {
-        let batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
+        let batch =
+            TransitionBatch::new("fastpq-state-transition-stark-v1", PublicInputs::default());
         let proof = materialise_sample_artifact(sample_backend_artifact()).unwrap();
         let limits = VerifyLimits {
             max_transitions: batch.transitions.len(),
@@ -3423,14 +3391,15 @@ mod tests {
     }
     #[test]
     fn enforce_verify_limits_bounds_nested_fri_rounds_before_payload_scan() {
-        let batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
+        let batch =
+            TransitionBatch::new("fastpq-state-transition-stark-v1", PublicInputs::default());
         let mut proof = materialise_sample_artifact(sample_backend_artifact()).unwrap();
         proof.fri_queries[0].rounds = vec![
             FriRoundOpening {
                 round: 0,
                 index: 0,
                 values: Vec::new(),
-                folded_value: 0,
+                folded_value: GoldilocksFp4V1::ZERO,
                 merkle_path: Vec::new(),
             };
             2
@@ -3448,7 +3417,7 @@ mod tests {
     }
     #[test]
     fn verify_limits_reject_oversized_proof_payload() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
         let batch = sample_batch_with_size(32);
         let proof = prover.prove_raw_statement(&batch).unwrap();
         let proof_bytes = proof_size_hint(&proof);
@@ -3466,9 +3435,10 @@ mod tests {
     }
     #[test]
     fn enforce_verify_limits_rejects_air_next_and_composition_paths() {
-        let batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
+        let batch =
+            TransitionBatch::new("fastpq-state-transition-stark-v1", PublicInputs::default());
         let mut proof = materialise_sample_artifact(sample_backend_artifact()).unwrap();
-        proof.air_openings[0].next_row_path.push(7);
+        proof.air_openings[0].next_row_path.push(wire_digest384(7));
         let limits = verify_limits_with_override(|limits| limits.max_query_path_len = 0);
         let err = enforce_verify_limits(&batch, &proof, limits).unwrap_err();
         assert!(matches!(
@@ -3480,7 +3450,9 @@ mod tests {
             }
         ));
         let mut proof = materialise_sample_artifact(sample_backend_artifact()).unwrap();
-        proof.air_openings[0].composition_path.push(8);
+        proof.air_openings[0]
+            .composition_path
+            .push(wire_digest384(8));
         let err = enforce_verify_limits(&batch, &proof, limits).unwrap_err();
         assert!(matches!(
             err,
@@ -3493,7 +3465,7 @@ mod tests {
     }
     #[test]
     fn verify_limits_reject_oversized_air_merkle_paths() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
         let batch = sample_batch_with_size(32);
         let proof = prover.prove_raw_statement(&batch).unwrap();
         let path_len = proof
@@ -3516,7 +3488,8 @@ mod tests {
     }
     #[test]
     fn trace_schema_width_is_bounded_before_proving_or_verifier_replay() {
-        let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
+        let mut batch =
+            TransitionBatch::new("fastpq-state-transition-stark-v1", PublicInputs::default());
         batch.push(StateTransition::new(
             b"opaque-effect".to_vec(),
             vec![0xA5; (DEFAULT_MAX_VERIFY_AIR_ROW_VALUES + 1) * crate::LIMB_BYTES],
@@ -3526,7 +3499,8 @@ mod tests {
         let actual = trace::column_count_for_batch(&batch).expect("metadata carrier schema");
         assert!(actual > DEFAULT_MAX_VERIFY_AIR_ROW_VALUES);
 
-        let prover = Prover::canonical("fastpq-lane-balanced").expect("canonical prover");
+        let prover =
+            Prover::canonical("fastpq-state-transition-stark-v1").expect("canonical prover");
         assert!(matches!(
             prover.prove_raw_statement(&batch),
             Err(Error::VerifierLimitExceeded {
@@ -3548,7 +3522,7 @@ mod tests {
     }
     #[test]
     fn verify_limits_reject_oversized_final_fri_values() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
         let batch = sample_batch_with_size(32);
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
         let values = &mut proof
@@ -3556,7 +3530,10 @@ mod tests {
             .first_mut()
             .expect("expected FRI query opening")
             .final_values;
-        values.resize(DEFAULT_MAX_VERIFY_FRI_ROUND_VALUES + 1, 0);
+        values.resize(
+            DEFAULT_MAX_VERIFY_FRI_ROUND_VALUES + 1,
+            GoldilocksFp4V1::ZERO,
+        );
         let err = verify_with_limits(&batch, &proof, VerifyLimits::default()).unwrap_err();
         assert!(matches!(
             err,
@@ -3570,7 +3547,7 @@ mod tests {
     }
     #[test]
     fn verify_limits_reject_oversized_fri_round_values() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
         let batch = sample_batch_with_size(32);
         let proof = prover.prove_raw_statement(&batch).unwrap();
         let values_len = proof
@@ -3595,7 +3572,7 @@ mod tests {
     }
     #[test]
     fn verify_limits_reject_oversized_final_fri_merkle_path() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
         let batch = sample_batch_with_size(32);
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
         let path = &mut proof
@@ -3603,7 +3580,7 @@ mod tests {
             .first_mut()
             .expect("expected FRI query opening")
             .final_merkle_path;
-        path.resize(DEFAULT_MAX_VERIFY_QUERY_PATH_LEN + 1, 0);
+        path.resize(DEFAULT_MAX_VERIFY_QUERY_PATH_LEN + 1, wire_digest384(0));
         let err = verify_with_limits(&batch, &proof, VerifyLimits::default()).unwrap_err();
         assert!(matches!(
             err,
@@ -3617,7 +3594,7 @@ mod tests {
     }
     #[test]
     fn verify_limits_reject_oversized_fri_round_merkle_path() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
         let batch = sample_batch_with_size(32);
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
         let path = &mut proof
@@ -3626,7 +3603,7 @@ mod tests {
             .and_then(|query| query.rounds.first_mut())
             .expect("expected FRI round opening")
             .merkle_path;
-        path.resize(DEFAULT_MAX_VERIFY_QUERY_PATH_LEN + 1, 0);
+        path.resize(DEFAULT_MAX_VERIFY_QUERY_PATH_LEN + 1, wire_digest384(0));
         let err = verify_with_limits(&batch, &proof, VerifyLimits::default()).unwrap_err();
         assert!(matches!(
             err,
@@ -3640,7 +3617,7 @@ mod tests {
     }
     #[test]
     fn verify_rejects_wrong_final_fri_merkle_path() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
         let batch = sample_batch_with_size(32);
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
         let query = proof
@@ -3651,13 +3628,13 @@ mod tests {
             .final_merkle_path
             .first_mut()
             .expect("expected final FRI Merkle path");
-        *sibling = sibling.wrapping_add(1);
+        *sibling = wire_digest384(0xBAD);
         let err = verify(&batch, &proof).unwrap_err();
         assert!(matches!(err, Error::QueryMerklePathMismatch { .. }));
     }
     #[test]
     fn verify_rejects_zero_lde_domain_size() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
         let batch = sample_batch_with_size(32);
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
         proof.lde_domain_size = 0;
@@ -3669,7 +3646,7 @@ mod tests {
     }
     #[test]
     fn verify_rejects_nonzero_lde_domain_size_tamper() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
         let batch = sample_batch_with_size(32);
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
         proof.lde_domain_size = proof.lde_domain_size.saturating_add(1);
@@ -3681,7 +3658,7 @@ mod tests {
     }
     #[test]
     fn verify_rejects_wrong_fri_folded_value() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
         let batch = sample_batch_with_size(32);
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
         let round = proof
@@ -3689,13 +3666,13 @@ mod tests {
             .first_mut()
             .and_then(|query| query.rounds.first_mut())
             .expect("expected FRI round opening");
-        round.folded_value = round.folded_value.wrapping_add(1);
+        round.folded_value = round.folded_value.add(fp4(1));
         let err = verify(&batch, &proof).unwrap_err();
         assert!(matches!(err, Error::QueryMismatch { .. }));
     }
     #[test]
     fn verify_rejects_wrong_final_fri_value() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
         let batch = sample_batch_with_size(32);
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
         let value = proof
@@ -3703,7 +3680,7 @@ mod tests {
             .first_mut()
             .and_then(|query| query.final_values.first_mut())
             .expect("expected final FRI values");
-        *value = value.wrapping_add(1);
+        *value = value.add(fp4(1));
         let err = verify(&batch, &proof).unwrap_err();
         assert!(matches!(
             err,
@@ -3829,7 +3806,7 @@ mod tests {
                     .first_mut()
                     .expect("expected FRI query opening")
                     .final_values
-                    .push(0);
+                    .push(fp4(0));
             },
             |err| matches!(err, Error::QueryMismatch { index: 0 }),
         );
@@ -3840,25 +3817,23 @@ mod tests {
             initial_index: 0,
             rounds: Vec::new(),
             final_index: 0,
-            final_values: vec![1],
+            final_values: vec![fp4(1)],
             final_merkle_path: Vec::new(),
         };
         let err = verify_fri_query_chain_for_test(0, 1, &fri_query, &[], &[], &[], 0).unwrap_err();
         assert!(matches!(err, Error::FriArity(0)));
     }
     #[test]
-    fn balanced_fri_schedule_preserves_a_complete_terminal_domain() {
-        let params = fastpq_isi::params::FASTPQ_CANONICAL_BALANCED;
+    fn final_v1_binary_fri_schedule_preserves_a_complete_terminal_domain() {
+        let params = fastpq_isi::FASTPQ_FINAL_V1;
         let lengths = expected_fri_layer_lengths(
             1usize << params.lde_log_size,
             params.fri.arity,
             params.fri.max_reductions,
         )
-        .expect("balanced FRI schedule");
-        assert_eq!(
-            lengths,
-            vec![1 << 19, 1 << 16, 1 << 13, 1 << 10, 1 << 7, 1 << 4, 2]
-        );
+        .expect("final V1 FRI schedule");
+        let expected = (1..=19).rev().map(|log| 1_usize << log).collect::<Vec<_>>();
+        assert_eq!(lengths, expected);
         assert_eq!(
             fri_terminal_degree_bound(
                 1usize << params.lde_log_size,
@@ -3866,13 +3841,13 @@ mod tests {
                 params.fri.arity,
                 &lengths,
             )
-            .expect("balanced terminal degree bound"),
+            .expect("final V1 terminal degree bound"),
             1
         );
     }
     #[test]
     fn verify_fri_query_chain_accepts_terminal_leaf_without_rounds() {
-        let final_values = vec![42];
+        let final_values = vec![fp4(42)];
         let (final_root, final_path) = single_fri_leaf_root_and_path(0, 0, &final_values);
         let fri_layers = vec![final_root];
         let fri_query = FriQueryOpening {
@@ -3886,7 +3861,7 @@ mod tests {
     }
     #[test]
     fn verify_fri_query_chain_rejects_authenticated_terminal_high_degree() {
-        let final_values = vec![42, 43];
+        let final_values = fp4_values(&[42, 43]);
         let (final_root, final_path) = single_fri_leaf_root_and_path(0, 0, &final_values);
         let fri_layers = vec![final_root];
         let fri_query = FriQueryOpening {
@@ -3914,8 +3889,8 @@ mod tests {
     }
     #[test]
     fn verify_fri_query_chain_accepts_single_fold_round() {
-        let beta = 3;
-        let round_values = vec![10, 20];
+        let beta = fp4(3);
+        let round_values = fp4_values(&[10, 20]);
         let folded = fold_fri_group_for_test(&round_values, beta, 2, 0);
         let final_values = vec![folded];
         let (round_root, round_path) = single_fri_leaf_root_and_path(0, 0, &round_values);
@@ -3939,9 +3914,9 @@ mod tests {
     }
     #[test]
     fn verify_fri_query_chain_accepts_nonzero_final_offset() {
-        let beta = 5;
-        let round_values = vec![12, 34];
-        let sibling_values = vec![77, 88];
+        let beta = fp4(5);
+        let round_values = fp4_values(&[12, 34]);
+        let sibling_values = fp4_values(&[77, 88]);
         let sibling_folded = fold_fri_group_for_test(&sibling_values, beta, 4, 0);
         let folded = fold_fri_group_for_test(&round_values, beta, 4, 1);
         let final_values = vec![sibling_folded, folded];
@@ -3967,8 +3942,8 @@ mod tests {
     }
     #[test]
     fn verify_fri_query_chain_rejects_single_fold_round_mismatch() {
-        let beta = 3;
-        let round_values = vec![10, 20];
+        let beta = fp4(3);
+        let round_values = fp4_values(&[10, 20]);
         let folded = fold_fri_group_for_test(&round_values, beta, 2, 0);
         let final_values = vec![folded];
         let (round_root, round_path) = single_fri_leaf_root_and_path(0, 0, &round_values);
@@ -3987,14 +3962,14 @@ mod tests {
             final_values,
             final_merkle_path: final_path,
         };
-        fri_layers[0][0] ^= 0x01;
+        fri_layers[0] = wire_digest384(1);
         let err =
             verify_fri_query_chain_for_test(1, 20, &fri_query, &fri_layers, &[beta], &[2, 1], 2)
                 .unwrap_err();
         assert!(matches!(err, Error::QueryMerklePathMismatch { index: 0 }));
         let mut bad_query = fri_query;
-        bad_query.rounds[0].folded_value = bad_query.rounds[0].folded_value.wrapping_add(1);
-        fri_layers[0][0] ^= 0x01;
+        bad_query.rounds[0].folded_value = bad_query.rounds[0].folded_value.add(fp4(1));
+        fri_layers[0] = round_root;
         let err =
             verify_fri_query_chain_for_test(1, 20, &bad_query, &fri_layers, &[beta], &[2, 1], 2)
                 .unwrap_err();
@@ -4002,9 +3977,9 @@ mod tests {
     }
     #[test]
     fn verify_fri_query_chain_rejects_offset_value_mismatches() {
-        let beta = 5;
-        let round_values = vec![12, 34];
-        let sibling_values = vec![77, 88];
+        let beta = fp4(5);
+        let round_values = fp4_values(&[12, 34]);
+        let sibling_values = fp4_values(&[77, 88]);
         let sibling_folded = fold_fri_group_for_test(&sibling_values, beta, 4, 0);
         let folded = fold_fri_group_for_test(&round_values, beta, 4, 1);
         let final_values = vec![sibling_folded, folded];
@@ -4030,7 +4005,7 @@ mod tests {
                 .unwrap_err();
         assert!(matches!(err, Error::QueryMismatch { index: 0 }));
         let mut bad_final_query = fri_query;
-        bad_final_query.final_values[1] = bad_final_query.final_values[1].wrapping_add(1);
+        bad_final_query.final_values[1] = bad_final_query.final_values[1].add(fp4(1));
         let err = verify_fri_query_chain_for_test(
             3,
             34,
@@ -4049,12 +4024,13 @@ mod tests {
             initial_index: 0,
             rounds: Vec::new(),
             final_index: 0,
-            final_values: vec![1],
+            final_values: vec![fp4(1)],
             final_merkle_path: Vec::new(),
         };
-        let (final_root, _) = single_fri_leaf_root_and_path(0, 0, &[1]);
-        let err = verify_fri_query_chain_for_test(0, 1, &fri_query, &[final_root], &[7], &[1], 2)
-            .unwrap_err();
+        let (final_root, _) = single_fri_leaf_root_and_path(0, 0, &[fp4(1)]);
+        let err =
+            verify_fri_query_chain_for_test(0, 1, &fri_query, &[final_root], &[fp4(7)], &[1], 2)
+                .unwrap_err();
         assert!(matches!(
             err,
             Error::FriChallengeLengthMismatch {
@@ -4062,8 +4038,8 @@ mod tests {
                 actual: 0
             }
         ));
-        let round_values = vec![1, 2];
-        let folded = fold_fri_group_for_test(&round_values, 7, 2, 0);
+        let round_values = fp4_values(&[1, 2]);
+        let folded = fold_fri_group_for_test(&round_values, fp4(7), 2, 0);
         let fri_query = FriQueryOpening {
             initial_index: 0,
             rounds: vec![FriRoundOpening {
@@ -4077,8 +4053,9 @@ mod tests {
             final_values: vec![folded],
             final_merkle_path: Vec::new(),
         };
-        let err = verify_fri_query_chain_for_test(0, 1, &fri_query, &[final_root], &[7], &[2], 2)
-            .unwrap_err();
+        let err =
+            verify_fri_query_chain_for_test(0, 1, &fri_query, &[final_root], &[fp4(7)], &[2], 2)
+                .unwrap_err();
         assert!(matches!(
             err,
             Error::FriLayerLengthMismatch {
@@ -4088,61 +4065,13 @@ mod tests {
         ));
     }
     #[test]
-    fn verify_fri_query_chain_rejects_malformed_round_and_final_roots() {
-        let beta = 7;
-        let round_values = vec![1, 2];
-        let folded = fold_fri_group_for_test(&round_values, beta, 2, 0);
-        let final_values = vec![folded];
-        let (round_root, round_path) = single_fri_leaf_root_and_path(0, 0, &round_values);
-        let (final_root, final_path) = single_fri_leaf_root_and_path(1, 0, &final_values);
-        let fri_query = FriQueryOpening {
-            initial_index: 0,
-            rounds: vec![FriRoundOpening {
-                round: 0,
-                index: 0,
-                values: round_values.clone(),
-                folded_value: folded,
-                merkle_path: round_path,
-            }],
-            final_index: 0,
-            final_values: final_values.clone(),
-            final_merkle_path: final_path,
-        };
-        let mut malformed_round_root = round_root;
-        malformed_round_root[8] = 1;
-        let err = verify_fri_query_chain_for_test(
-            0,
-            1,
-            &fri_query,
-            &[malformed_round_root, final_root],
-            &[beta],
-            &[2, 1],
-            2,
-        )
-        .unwrap_err();
-        assert!(matches!(err, Error::FriLayerMismatch { round: 0 }));
-        let mut malformed_final_root = final_root;
-        malformed_final_root[8] = 1;
-        let err = verify_fri_query_chain_for_test(
-            0,
-            1,
-            &fri_query,
-            &[round_root, malformed_final_root],
-            &[beta],
-            &[2, 1],
-            2,
-        )
-        .unwrap_err();
-        assert!(matches!(err, Error::FriLayerMismatch { round: 1 }));
-    }
-    #[test]
     fn verify_fri_query_chain_rejects_terminal_layer_shape_errors() {
         let fri_query = FriQueryOpening {
             initial_index: 0,
             rounds: Vec::new(),
             final_index: 0,
-            final_values: vec![42],
-            final_merkle_path: vec![backend::hash_fri_chunk(0, 0, &[42]).unwrap()],
+            final_values: vec![fp4(42)],
+            final_merkle_path: vec![backend::hash_fri_chunk(0, 0, &[fp4(42)]).unwrap().into()],
         };
         let err =
             verify_fri_query_chain_for_test(0, 42, &fri_query, &[], &[], &[1], 2).unwrap_err();
@@ -4153,13 +4082,7 @@ mod tests {
                 actual: 0
             }
         ));
-        let mut malformed_root = field_norito::core::to_bytes(1);
-        malformed_root[8] = 1;
-        let err =
-            verify_fri_query_chain_for_test(0, 42, &fri_query, &[malformed_root], &[], &[1], 2)
-                .unwrap_err();
-        assert!(matches!(err, Error::FriLayerMismatch { round: 0 }));
-        let wrong_root = field_norito::core::to_bytes(1);
+        let wrong_root = wire_digest384(1);
         let err = verify_fri_query_chain_for_test(0, 42, &fri_query, &[wrong_root], &[], &[1], 2)
             .unwrap_err();
         assert!(matches!(err, Error::QueryMerklePathMismatch { index: 0 }));
@@ -4178,16 +4101,19 @@ mod tests {
         .expect("two-point FRI domain");
         let x = domain.point(0);
         let zeta = domain.coset_generator(1);
-        let values = [GOLDILOCKS_MODULUS - 1, 2];
-        assert_eq!(fold_fri_values(&values, x, x, zeta).unwrap(), values[0]);
+        let values = [fp4(GOLDILOCKS_MODULUS - 1), fp4(2)];
         assert_eq!(
-            fold_fri_values(&values, mul_mod(x, zeta), x, zeta).unwrap(),
+            fold_fri_values(&values, fp4(x), x, zeta).unwrap(),
+            values[0]
+        );
+        assert_eq!(
+            fold_fri_values(&values, fp4(mul_mod(x, zeta)), x, zeta).unwrap(),
             values[1]
         );
     }
     #[test]
     fn verify_rejects_wrong_air_next_row_opening() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
         let batch = sample_batch_with_size(32);
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
         let first = proof
@@ -4207,7 +4133,7 @@ mod tests {
     }
     #[test]
     fn verify_rejects_wrong_air_row_opening() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
         let batch = sample_batch_with_size(32);
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
         let first = proof
@@ -4227,7 +4153,7 @@ mod tests {
     }
     #[test]
     fn verify_rejects_wrong_air_composition_merkle_path() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
         let batch = sample_batch_with_size(32);
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
         let first = proof
@@ -4238,13 +4164,13 @@ mod tests {
             .composition_path
             .first_mut()
             .expect("expected composition Merkle path");
-        *sibling = sibling.wrapping_add(1);
+        *sibling = wire_digest384(0xBAD);
         let err = verify(&batch, &proof).unwrap_err();
         assert!(matches!(err, Error::AirMerklePathMismatch { .. }));
     }
     #[test]
     fn verify_rejects_wrong_air_composition_opening() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
         let batch = sample_batch_with_size(32);
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
         let first = proof
@@ -4260,7 +4186,7 @@ mod tests {
     }
     #[test]
     fn verify_rejects_mismatched_large_batch_by_ordering_hash_before_commitment() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
         let small_batch = sample_batch();
         let proof = prover.prove_raw_statement(&small_batch).unwrap();
         let large_batch = sample_batch_with_size(DEFAULT_MAX_VERIFY_TRANSITIONS + 1);
@@ -4281,8 +4207,8 @@ mod tests {
     fn proof_roundtrip_smoke() {
         let proof = Proof {
             protocol_version: PROTOCOL_VERSION,
-            parameter: "fastpq-lane-balanced".to_string(),
-            trace_commitment: Hash::new([0u8; 4]),
+            parameter: "fastpq-state-transition-stark-v1".to_string(),
+            trace_commitment: digest384(6).into(),
             public_io: PublicIO {
                 dsid: [0; 16],
                 slot: 42,
@@ -4292,14 +4218,14 @@ mod tests {
                 tx_set_hash: [4; 32],
                 ordering_hash: [5; 32],
             },
-            trace_root: [7; 32],
-            air_trace_root: [8; 32],
-            air_composition_root: [9; 32],
-            lde_root: [10; 32],
+            trace_root: wire_digest384(7),
+            air_trace_root: wire_digest384(8),
+            air_composition_root: wire_digest384(9),
+            lde_root: wire_digest384(10),
             lde_domain_size: 1,
-            alphas: vec![11, 12],
-            betas: vec![13, 14],
-            fri_layers: vec![[15; 32], [16; 32]],
+            alphas: vec![13, 14],
+            betas: vec![fp4(15), fp4(16)],
+            fri_layers: vec![wire_digest384(17), wire_digest384(18)],
             queries: vec![QueryOpening {
                 index: 0,
                 value: 123,
@@ -4320,12 +4246,12 @@ mod tests {
                 rounds: vec![FriRoundOpening {
                     round: 0,
                     index: 0,
-                    values: vec![456],
-                    folded_value: 456,
+                    values: vec![fp4(456)],
+                    folded_value: fp4(456),
                     merkle_path: Vec::new(),
                 }],
                 final_index: 0,
-                final_values: vec![456],
+                final_values: vec![fp4(456)],
                 final_merkle_path: Vec::new(),
             }],
         };
@@ -4368,87 +4294,64 @@ mod tests {
             "the pre-release proof schema must not decode as release V1"
         );
     }
-    #[test]
-    fn field_norito_to_bytes_encodes_le() {
-        let value = 0x0123_4567_89AB_CDEFu64;
-        let encoded = field_norito::core::to_bytes(value);
-        assert_eq!(encoded[..8], value.to_le_bytes());
-        assert!(encoded[8..].iter().all(|byte| *byte == 0));
-        assert_eq!(field_norito::core::from_bytes(&encoded), Some(value));
-    }
-    #[test]
-    fn field_norito_from_bytes_rejects_noncanonical_encodings() {
-        let mut encoded = field_norito::core::to_bytes(7);
-        encoded[8] = 1;
-        assert_eq!(field_norito::core::from_bytes(&encoded), None);
-        assert_eq!(
-            field_norito::core::from_bytes(&field_norito::core::to_bytes(GOLDILOCKS_MODULUS)),
-            None
-        );
-    }
-    #[test]
-    fn public_verifier_preflight_rejects_noncanonical_merkle_sibling() {
-        let batch = sample_batch();
-        let mut proof = materialise_sample_artifact(sample_backend_artifact()).unwrap();
-        proof.queries[0].merkle_path = vec![GOLDILOCKS_MODULUS];
-        let err = super::verify(&batch, &proof).unwrap_err();
-        assert!(matches!(
-            err,
-            Error::NonCanonicalGoldilocksElement {
-                context: "queries.merkle_path",
-                indices,
-            } if indices == [0, 0]
-        ));
-    }
     fn proof_with_every_goldilocks_container() -> Proof {
         let mut proof = materialise_sample_artifact(sample_backend_artifact()).unwrap();
-        proof.betas = vec![22];
-        proof.queries[0].merkle_path = vec![23];
-        proof.air_openings[0].current_row = vec![24];
-        proof.air_openings[0].next_row = vec![25];
-        proof.air_openings[0].current_row_path = vec![26];
-        proof.air_openings[0].next_row_path = vec![27];
-        proof.air_openings[0].composition_path = vec![28];
+        proof.betas = vec![fp4(23)];
+        proof.queries[0].merkle_path = vec![wire_digest384(24)];
+        proof.air_openings[0].current_row = vec![25];
+        proof.air_openings[0].next_row = vec![26];
+        proof.air_openings[0].current_row_path = vec![wire_digest384(27)];
+        proof.air_openings[0].next_row_path = vec![wire_digest384(28)];
+        proof.air_openings[0].composition_path = vec![wire_digest384(29)];
         proof.fri_queries[0].rounds = vec![FriRoundOpening {
             round: 0,
             index: 0,
-            values: vec![29],
-            folded_value: 30,
-            merkle_path: vec![31],
+            values: vec![fp4(30)],
+            folded_value: fp4(31),
+            merkle_path: vec![wire_digest384(32)],
         }];
-        proof.fri_queries[0].final_merkle_path = vec![32];
+        proof.fri_queries[0].final_merkle_path = vec![wire_digest384(33)];
         validate_canonical_goldilocks_elements(&proof).unwrap();
         proof
     }
 
     #[test]
-    fn canonical_preflight_covers_roots_and_transcript_scalars() {
+    fn proof_roots_and_paths_use_canonical_digest_carriers() {
         let proof = proof_with_every_goldilocks_container();
-        assert_noncanonical_goldilocks_rejected(&proof, "trace_root", &[], |proof| {
-            proof.trace_root = field_norito::core::to_bytes(GOLDILOCKS_MODULUS);
-        });
-        assert_noncanonical_goldilocks_rejected(&proof, "air_trace_root", &[], |proof| {
-            proof.air_trace_root = field_norito::core::to_bytes(GOLDILOCKS_MODULUS);
-        });
-        assert_noncanonical_goldilocks_rejected(&proof, "air_composition_root", &[], |proof| {
-            proof.air_composition_root = field_norito::core::to_bytes(GOLDILOCKS_MODULUS);
-        });
-        assert_noncanonical_goldilocks_rejected(&proof, "lde_root", &[], |proof| {
-            proof.lde_root = field_norito::core::to_bytes(GOLDILOCKS_MODULUS);
-        });
-        assert_noncanonical_goldilocks_rejected(&proof, "fri_layers", &[0], |proof| {
-            proof.fri_layers[0] = field_norito::core::to_bytes(GOLDILOCKS_MODULUS);
-        });
+        fn assert_digest(_: GoldilocksDigest384V1) {}
+        fn assert_digest_path(_: &[GoldilocksDigest384V1]) {}
+
+        assert_digest(proof.trace_root);
+        assert_digest(proof.air_trace_root);
+        assert_digest(proof.air_composition_root);
+        assert_digest(proof.lde_root);
+        assert_digest_path(&proof.fri_layers);
+        assert_digest_path(&proof.queries[0].merkle_path);
+        assert_digest_path(&proof.air_openings[0].current_row_path);
+        assert_digest_path(&proof.air_openings[0].next_row_path);
+        assert_digest_path(&proof.air_openings[0].composition_path);
+        assert_digest_path(&proof.fri_queries[0].rounds[0].merkle_path);
+        assert_digest_path(&proof.fri_queries[0].final_merkle_path);
+    }
+
+    #[test]
+    fn canonical_preflight_covers_transcript_scalars() {
+        let proof = proof_with_every_goldilocks_container();
         assert_noncanonical_goldilocks_rejected(&proof, "alphas", &[0], |proof| {
             proof.alphas[0] = GOLDILOCKS_MODULUS;
         });
-        assert_noncanonical_goldilocks_rejected(&proof, "betas", &[0], |proof| {
-            proof.betas[0] = GOLDILOCKS_MODULUS;
+        assert_noncanonical_goldilocks_rejected(&proof, "betas", &[0, 0], |proof| {
+            proof.betas[0] = GoldilocksFp4V1::from_coefficients_unchecked_for_test([
+                GOLDILOCKS_MODULUS,
+                0,
+                0,
+                0,
+            ]);
         });
     }
 
     #[test]
-    fn canonical_preflight_covers_query_values_and_paths() {
+    fn canonical_preflight_covers_query_values() {
         let proof = proof_with_every_goldilocks_container();
         assert_noncanonical_goldilocks_rejected(&proof, "queries.value", &[0], |proof| {
             proof.queries[0].value = GOLDILOCKS_MODULUS;
@@ -4456,13 +4359,10 @@ mod tests {
         assert_noncanonical_goldilocks_rejected(&proof, "queries.chunk_values", &[0, 0], |proof| {
             proof.queries[0].chunk_values[0] = GOLDILOCKS_MODULUS
         });
-        assert_noncanonical_goldilocks_rejected(&proof, "queries.merkle_path", &[0, 0], |proof| {
-            proof.queries[0].merkle_path[0] = GOLDILOCKS_MODULUS
-        });
     }
 
     #[test]
-    fn canonical_preflight_covers_air_values_and_paths() {
+    fn canonical_preflight_covers_air_values() {
         let proof = proof_with_every_goldilocks_container();
         assert_noncanonical_goldilocks_rejected(
             &proof,
@@ -4478,62 +4378,56 @@ mod tests {
         );
         assert_noncanonical_goldilocks_rejected(
             &proof,
-            "air_openings.current_row_path",
-            &[0, 0],
-            |proof| proof.air_openings[0].current_row_path[0] = GOLDILOCKS_MODULUS,
-        );
-        assert_noncanonical_goldilocks_rejected(
-            &proof,
-            "air_openings.next_row_path",
-            &[0, 0],
-            |proof| proof.air_openings[0].next_row_path[0] = GOLDILOCKS_MODULUS,
-        );
-        assert_noncanonical_goldilocks_rejected(
-            &proof,
             "air_openings.composition_value",
             &[0],
             |proof| proof.air_openings[0].composition_value = GOLDILOCKS_MODULUS,
         );
-        assert_noncanonical_goldilocks_rejected(
-            &proof,
-            "air_openings.composition_path",
-            &[0, 0],
-            |proof| proof.air_openings[0].composition_path[0] = GOLDILOCKS_MODULUS,
-        );
     }
 
     #[test]
-    fn canonical_preflight_covers_fri_values_and_paths() {
+    fn canonical_preflight_covers_fri_values() {
         let proof = proof_with_every_goldilocks_container();
         assert_noncanonical_goldilocks_rejected(
             &proof,
             "fri_queries.rounds.values",
-            &[0, 0, 0],
-            |proof| proof.fri_queries[0].rounds[0].values[0] = GOLDILOCKS_MODULUS,
+            &[0, 0, 0, 0],
+            |proof| {
+                proof.fri_queries[0].rounds[0].values[0] =
+                    GoldilocksFp4V1::from_coefficients_unchecked_for_test([
+                        GOLDILOCKS_MODULUS,
+                        0,
+                        0,
+                        0,
+                    ]);
+            },
         );
         assert_noncanonical_goldilocks_rejected(
             &proof,
             "fri_queries.rounds.folded_value",
-            &[0, 0],
-            |proof| proof.fri_queries[0].rounds[0].folded_value = GOLDILOCKS_MODULUS,
-        );
-        assert_noncanonical_goldilocks_rejected(
-            &proof,
-            "fri_queries.rounds.merkle_path",
             &[0, 0, 0],
-            |proof| proof.fri_queries[0].rounds[0].merkle_path[0] = GOLDILOCKS_MODULUS,
+            |proof| {
+                proof.fri_queries[0].rounds[0].folded_value =
+                    GoldilocksFp4V1::from_coefficients_unchecked_for_test([
+                        GOLDILOCKS_MODULUS,
+                        0,
+                        0,
+                        0,
+                    ]);
+            },
         );
         assert_noncanonical_goldilocks_rejected(
             &proof,
             "fri_queries.final_values",
-            &[0, 0],
-            |proof| proof.fri_queries[0].final_values[0] = GOLDILOCKS_MODULUS,
-        );
-        assert_noncanonical_goldilocks_rejected(
-            &proof,
-            "fri_queries.final_merkle_path",
-            &[0, 0],
-            |proof| proof.fri_queries[0].final_merkle_path[0] = GOLDILOCKS_MODULUS,
+            &[0, 0, 0],
+            |proof| {
+                proof.fri_queries[0].final_values[0] =
+                    GoldilocksFp4V1::from_coefficients_unchecked_for_test([
+                        GOLDILOCKS_MODULUS,
+                        0,
+                        0,
+                        0,
+                    ]);
+            },
         );
     }
 }

@@ -59,7 +59,7 @@ pub const AXT_FASTPQ_BATCH_SEAL_METADATA_KEY: &str = "axt_fastpq_batch_seal_v1";
 /// this relation because its descriptor binding is not recoverable.
 pub const AXT_FASTPQ_REMOTE_SPEND_CLAIMS_METADATA_KEY: &str = "axt_fastpq_remote_spend_claims_v1";
 /// Canonical FASTPQ parameter name used by maintained AXT flows.
-pub const DEFAULT_PARAMETER: &str = "fastpq-lane-balanced";
+pub const DEFAULT_PARAMETER: &str = fastpq_isi::FASTPQ_FINAL_V1_ID;
 /// Nominal first-release schema identity for the outer AXT proof payload.
 #[cfg(test)]
 const AXT_FASTPQ_PROOF_PAYLOAD_SCHEMA_NAME: &str =
@@ -2535,7 +2535,7 @@ mod tests {
                 batch
                     .transitions
                     .iter()
-                    .any(|transition| matches!(transition.operation, OperationKind::Transfer)),
+                    .any(|transition| matches!(&transition.operation, OperationKind::Transfer)),
                 "transfer claim fixture must carry transfer rows"
             );
             let proof = Prover::canonical(DEFAULT_PARAMETER)

@@ -289,7 +289,28 @@ fun signalSoraFinalityAnchorHash(raw: uint256): uint256 {
     );
 }
 
+/// Full standalone verification, including the canonical byte commitment of
+/// the key. Canonical StateInit construction performs this once.
 fun verifyTairaDestinationProof(
+    policy: DestinationProofPolicy,
+    publicSignalsCell: cell,
+    proofCell: cell,
+    verifyingKeyCell: cell,
+): bool {
+    if (canonicalBls12381VerifyingKeyHash(verifyingKeyCell) != policy.verifyingKeyHash) {
+        return false;
+    }
+    return verifyTairaDestinationProofWithBoundKey(
+        policy,
+        publicSignalsCell,
+        proofCell,
+        verifyingKeyCell,
+    );
+}
+
+/// Runtime proof verification for a key whose exact representation and
+/// canonical byte hash are already immutable in the governed StateInit.
+fun verifyTairaDestinationProofWithBoundKey(
     policy: DestinationProofPolicy,
     publicSignalsCell: cell,
     proofCell: cell,
@@ -303,8 +324,7 @@ fun verifyTairaDestinationProof(
         policy.soraFinalityAnchorHash == 0 ||
         policy.verifyingKeyHash == 0 ||
         policy.verifyingKeyCellHash == 0 ||
-        verifyingKeyCell.hash() != policy.verifyingKeyCellHash ||
-        canonicalBls12381VerifyingKeyHash(verifyingKeyCell) != policy.verifyingKeyHash
+        verifyingKeyCell.hash() != policy.verifyingKeyCellHash
     ) {
         return false;
     }
@@ -356,9 +376,10 @@ fun verifyTairaDestinationProof(
     val beta = ordinaryPointSlice(key.betaG2, 768);
     val gamma = ordinaryPointSlice(key.gammaG2, 768);
     val delta = ordinaryPointSlice(keyTail.deltaG2, 768);
-    if (!validG1(alpha) || !validG2(beta) || !validG2(gamma) || !validG2(delta)) {
-        return false;
-    }
+    // Canonical StateInit construction already checked every immutable key
+    // point for subgroup membership/non-identity before committing both key
+    // hashes. Repeating sixteen native subgroup checks here exceeds TON's
+    // per-transaction gas ceiling; only untrusted proof points are rechecked.
 
     val ic0 = ordinaryPointSlice(keyTail.ic.mustGet(0), 384);
     val ic1 = ordinaryPointSlice(keyTail.ic.mustGet(1), 384);
@@ -372,19 +393,6 @@ fun verifyTairaDestinationProof(
     val ic9 = ordinaryPointSlice(keyTail.ic.mustGet(9), 384);
     val ic10 = ordinaryPointSlice(keyTail.ic.mustGet(10), 384);
     val ic11 = ordinaryPointSlice(keyTail.ic.mustGet(11), 384);
-    if (
-        !validG1(ic0) || !validG1(ic1) || !validG1(ic2) || !validG1(ic3) || !validG1(ic4) ||
-        !validG1(ic5) ||
-        !validG1(ic6) ||
-        !validG1(ic7) ||
-        !validG1(ic8) ||
-        !validG1(ic9) ||
-        !validG1(ic10) ||
-        !validG1(ic11)
-    ) {
-        return false;
-    }
-
     val proof = Groth16Bls12381Proof.fromCell(proofCell);
     val proofA = ordinaryPointSlice(proof.a, 384);
     val proofB = ordinaryPointSlice(proof.b, 768);

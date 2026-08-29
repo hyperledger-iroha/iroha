@@ -906,48 +906,52 @@ define_singular_source_admission! {
     52 => FindSorafsPopRevocationByNonceCommitment: ProvenBounded,
     53 => FindSorafsPopAuditDigestBySequence: ProvenBounded,
     54 => FindSorafsPopRegistryStatus: ProvenBounded,
-    55 => FindSorafsPinManifest: ProvenBounded,
-    56 => FindSorafsPinManifests: ProvenBounded,
-    57 => FindSorafsRepairTask: ProvenBounded,
-    58 => FindSorafsRepairTasks: ProvenBounded,
-    59 => FindSorafsRepairStatus: ProvenBounded,
-    60 => FindSorafsRepairEvents: ProvenBounded,
-    61 => FindSorafsProofOutcome: ProvenBounded,
-    62 => FindSorafsProofOutcomeEvents: ProvenBounded,
-    63 => FindSorafsReputationJournalAuthorityPolicy: ProvenBounded,
-    64 => FindSorafsReputationJournalEventBySourceId: ProvenBounded,
-    65 => FindSorafsReputationJournalEvents: ProvenBounded,
-    66 => FindSorafsModerationPolicy: ProvenBounded,
-    67 => FindSorafsModerationAppeal: ProvenBounded,
-    68 => FindSorafsModerationJurorEligibility: ProvenBounded,
-    69 => FindSorafsModerationCase: ProvenBounded,
-    70 => FindSorafsModerationCommit: ProvenBounded,
-    71 => FindSorafsModerationReveal: ProvenBounded,
-    72 => FindSorafsModerationChallenge: ProvenBounded,
-    73 => FindSorafsModerationOutcome: ProvenBounded,
-    74 => FindSorafsModerationNoShow: ProvenBounded,
-    75 => FindSorafsModerationStatus: ProvenBounded,
-    76 => FindSorafsModerationSnapshot: ProvenBounded,
-    77 => FindSorafsModerationEvents: ProvenBounded,
-    78 => FindDataspaceNameOwnerById: ProvenBounded,
-    79 => FindMusubiExactPackageV1: ProvenBounded,
-    80 => FindMusubiExactReleaseV1: ProvenBounded,
-    81 => FindMusubiProviderBundleAttestationV1: ProvenBounded,
-    82 => FindMusubiResolverIndexV1: ProvenBounded,
-    83 => FindMusubiVersionsV1: ProvenBounded,
-    84 => FindMusubiMaintainersV1: ProvenBounded,
-    85 => FindMusubiArchiveLocationsV1: ProvenBounded,
-    86 => FindMusubiArchiveRetentionV1: ProvenBounded,
-    87 => FindMusubiAliasV1: ProvenBounded,
-    88 => FindMusubiAliasHistoryV1: ProvenBounded,
-    89 => FindMusubiOrderedPrefixV1: ProvenBounded,
-    90 => FindDomainById: ProvenBounded,
-    91 => FindFeeSponsorProgramById: ProvenBounded,
-    92 => FindFxCorridorPolicyRegistry: ProvenBounded,
-    93 => FindFxCorridorPolicyById: ProvenBounded,
-    94 => FindDomainEndorsements: ProvenBounded,
-    95 => FindDomainEndorsementPolicy: ProvenBounded,
-    96 => FindDomainCommittee: ProvenBounded,
+    55 => FindSorafsCitizenBondBySerialCommitment: ProvenBounded,
+    56 => FindSorafsCitizenBondSnapshot: ProvenBounded,
+    57 => FindSorafsAnonymousServiceEscrowById: ProvenBounded,
+    58 => FindSorafsPinManifest: ProvenBounded,
+    59 => FindSorafsPinManifests: ProvenBounded,
+    60 => FindSorafsRepairTask: ProvenBounded,
+    61 => FindSorafsRepairTasks: ProvenBounded,
+    62 => FindSorafsRepairStatus: ProvenBounded,
+    63 => FindSorafsRepairEvents: ProvenBounded,
+    64 => FindSorafsProofOutcome: ProvenBounded,
+    65 => FindSorafsProofOutcomeEvents: ProvenBounded,
+    66 => FindSorafsReputationJournalAuthorityPolicy: ProvenBounded,
+    67 => FindSorafsReputationJournalEventBySourceId: ProvenBounded,
+    68 => FindSorafsReputationJournalEvents: ProvenBounded,
+    69 => FindSorafsModerationPolicy: ProvenBounded,
+    70 => FindSorafsModerationAppeal: ProvenBounded,
+    71 => FindSorafsModerationJurorEligibility: ProvenBounded,
+    72 => FindSorafsAnonymousJurorCandidacy: ProvenBounded,
+    73 => FindSorafsModerationCase: ProvenBounded,
+    74 => FindSorafsModerationCommit: ProvenBounded,
+    75 => FindSorafsModerationReveal: ProvenBounded,
+    76 => FindSorafsModerationChallenge: ProvenBounded,
+    77 => FindSorafsModerationOutcome: ProvenBounded,
+    78 => FindSorafsModerationNoShow: ProvenBounded,
+    79 => FindSorafsModerationStatus: ProvenBounded,
+    80 => FindSorafsModerationSnapshot: ProvenBounded,
+    81 => FindSorafsModerationEvents: ProvenBounded,
+    82 => FindDataspaceNameOwnerById: ProvenBounded,
+    83 => FindMusubiExactPackageV1: ProvenBounded,
+    84 => FindMusubiExactReleaseV1: ProvenBounded,
+    85 => FindMusubiProviderBundleAttestationV1: ProvenBounded,
+    86 => FindMusubiResolverIndexV1: ProvenBounded,
+    87 => FindMusubiVersionsV1: ProvenBounded,
+    88 => FindMusubiMaintainersV1: ProvenBounded,
+    89 => FindMusubiArchiveLocationsV1: ProvenBounded,
+    90 => FindMusubiArchiveRetentionV1: ProvenBounded,
+    91 => FindMusubiAliasV1: ProvenBounded,
+    92 => FindMusubiAliasHistoryV1: ProvenBounded,
+    93 => FindMusubiOrderedPrefixV1: ProvenBounded,
+    94 => FindDomainById: ProvenBounded,
+    95 => FindFeeSponsorProgramById: ProvenBounded,
+    96 => FindFxCorridorPolicyRegistry: ProvenBounded,
+    97 => FindFxCorridorPolicyById: ProvenBounded,
+    98 => FindDomainEndorsements: ProvenBounded,
+    99 => FindDomainEndorsementPolicy: ProvenBounded,
+    100 => FindDomainCommittee: ProvenBounded,
 }
 /// Measure a singular source before a metered server lane can clone or decode it.
 ///
@@ -1329,6 +1333,12 @@ pub(super) fn preflight_server_singular_source_materialization(
         | SingularQueryBox::FindSorafsPopRegistryStatus(_) => {
             require_active_adapter(singular_output_lane_active, "SoraFS PoP registry query")?;
         }
+        SingularQueryBox::FindSorafsCitizenBondBySerialCommitment(_)
+        | SingularQueryBox::FindSorafsCitizenBondSnapshot(_)
+        | SingularQueryBox::FindSorafsAnonymousServiceEscrowById(_)
+        | SingularQueryBox::FindSorafsAnonymousJurorCandidacy(_) => {
+            require_active_adapter(singular_output_lane_active, "SoraFS anonymity query")?;
+        }
         SingularQueryBox::FindSorafsRepairTask(_)
         | SingularQueryBox::FindSorafsRepairTasks(_)
         | SingularQueryBox::FindSorafsRepairStatus(_)
@@ -1518,8 +1528,8 @@ mod tests {
         params
     }
     #[test]
-    fn singular_source_admission_audit_covers_all_96_variants() {
-        assert_eq!(SINGULAR_SOURCE_ADMISSION_AUDIT.len(), 96);
+    fn singular_source_admission_audit_covers_all_100_variants() {
+        assert_eq!(SINGULAR_SOURCE_ADMISSION_AUDIT.len(), 100);
         for (index, (number, name, class)) in SINGULAR_SOURCE_ADMISSION_AUDIT.iter().enumerate() {
             assert_eq!(usize::from(*number), index + 1);
             assert!(!name.is_empty());

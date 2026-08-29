@@ -658,7 +658,7 @@ root of an all-zero composition vector. Explicit full-material verification
 recomputes both roots from the complete caller-independent material.
 
 The reserved ZK-ACE ledger shape carries
-`PrivacyProofEnvelopeV1::ZkAcePqAuthorizationV0`. Its public input is
+`PrivacyProofEnvelopeV1::ZkAcePqAuthorizationV1`. Its public input is
 `ZkAcePrivacyPublicInputsV1`: the exact typed
 `ZkAcePqAuthorizationStatementV1` plus the trusted genesis hash. The statement
 binds the chain, action index, transaction-intent digest, compiled artifact

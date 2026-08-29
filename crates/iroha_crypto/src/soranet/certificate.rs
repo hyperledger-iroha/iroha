@@ -401,7 +401,7 @@ pub fn validate_quic_multiaddr(addr: &str) -> Result<(), CertificateError> {
     }
     Ok(())
 }
-/// Return whether an IP literal is suitable for a public SoraNet relay endpoint.
+/// Return whether an IP literal is suitable for a public `SoraNet` relay endpoint.
 ///
 /// Loopback, private, link-local, shared, documentation, benchmarking,
 /// transition, multicast, unspecified, and otherwise reserved ranges are
@@ -414,18 +414,14 @@ pub fn is_public_relay_ip(ip: IpAddr) -> bool {
             let [first, second, third, _] = ip.octets();
             !matches!(
                 (first, second, third),
-                (0, _, _)
-                    | (10, _, _)
-                    | (127, _, _)
+                (0 | 10 | 127 | 224..=255, _, _)
                     | (169, 254, _)
-                    | (192, 0, 0)
-                    | (192, 0, 2)
+                    | (192, 0, 0 | 2)
                     | (192, 88, 99)
                     | (192, 168, _)
                     | (198, 18 | 19, _)
                     | (198, 51, 100)
                     | (203, 0, 113)
-                    | (224..=255, _, _)
                     | (100, 64..=127, _)
                     | (172, 16..=31, _)
             )

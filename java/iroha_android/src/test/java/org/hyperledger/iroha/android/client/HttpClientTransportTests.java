@@ -349,7 +349,9 @@ public final class HttpClientTransportTests {
                 "ok",
                 Map.of(
                     "Content-Type", List.of("application/x-norito"),
-                    "Content-Length", List.of(Integer.toString(canonical.length)))));
+                    "Content-Length", List.of(Integer.toString(canonical.length))),
+                null,
+                false));
     final HttpClientTransport client =
         HttpClientTransport.withExecutor(
             success,
@@ -382,36 +384,48 @@ public final class HttpClientTransportTests {
     final List<TransportResponse> hostile =
         List.of(
             new TransportResponse(
-                201, canonical, "", Map.of("Content-Type", List.of("application/x-norito"))),
+                201, canonical, "", Map.of("Content-Type", List.of("application/x-norito")),
+                null,
+                false),
             new TransportResponse(
                 200,
                 canonical,
                 "",
-                Map.of("Content-Type", List.of("application/x-norito; charset=binary"))),
+                Map.of("Content-Type", List.of("application/x-norito; charset=binary")),
+                null,
+                false),
             new TransportResponse(
                 200,
                 canonical,
                 "",
-                Map.of("Content-Type", List.of("application/x-norito", "application/x-norito"))),
+                Map.of("Content-Type", List.of("application/x-norito", "application/x-norito")),
+                null,
+                false),
             new TransportResponse(
                 200,
                 canonical,
                 "",
                 Map.of(
                     "Content-Type", List.of("application/x-norito"),
-                    "Content-Length", List.of("04"))),
+                    "Content-Length", List.of("04")),
+                null,
+                false),
             new TransportResponse(
                 200,
                 canonical,
                 "",
                 Map.of(
                     "Content-Type", List.of("application/x-norito"),
-                    "Content-Length", List.of("5"))),
+                    "Content-Length", List.of("5")),
+                null,
+                false),
             new TransportResponse(
                 200,
                 new byte[0],
                 "",
-                Map.of("Content-Type", List.of("application/x-norito"))));
+                Map.of("Content-Type", List.of("application/x-norito")),
+                null,
+                false));
     for (final TransportResponse response : hostile) {
       boolean rejected = false;
       try {
@@ -437,7 +451,9 @@ public final class HttpClientTransportTests {
                       200,
                       oversized,
                       "",
-                      Map.of("Content-Type", List.of("application/x-norito")))),
+                      Map.of("Content-Type", List.of("application/x-norito")),
+                      null,
+                      false)),
               ClientConfig.builder()
                   .setBaseUri(URI.create("https://torii.example"))
                   .build())
@@ -462,7 +478,9 @@ public final class HttpClientTransportTests {
                 "ok",
                 Map.of(
                     "Content-Type", List.of("application/x-norito"),
-                    "Content-Length", List.of(Integer.toString(body.length)))));
+                    "Content-Length", List.of(Integer.toString(body.length))),
+                null,
+                false));
     final HttpClientTransport client =
         HttpClientTransport.withExecutor(
             executor,
@@ -497,7 +515,9 @@ public final class HttpClientTransportTests {
                   200,
                   body,
                   "ok",
-                  Map.of("Content-Type", List.of("application/x-norito"))));
+                  Map.of("Content-Type", List.of("application/x-norito")),
+                  null,
+                  false));
       boolean overrideRejected = false;
       try {
         HttpClientTransport.withExecutor(
@@ -526,76 +546,98 @@ public final class HttpClientTransportTests {
     final List<TransportResponse> hostileResponses =
         List.of(
             new TransportResponse(
-                201, body, "", Map.of("Content-Type", List.of("application/x-norito"))),
-            new TransportResponse(200, body, "", Map.of()),
+                201, body, "", Map.of("Content-Type", List.of("application/x-norito")),
+                null,
+                false),
+            new TransportResponse(200, body, "", Map.of(), null, false),
             new TransportResponse(
                 200,
                 body,
                 "",
-                Map.of("Content-Type", List.of("application/x-norito; charset=binary"))),
+                Map.of("Content-Type", List.of("application/x-norito; charset=binary")),
+                null,
+                false),
             new TransportResponse(
                 200,
                 body,
                 "",
-                Map.of("Content-Type", List.of("Application/X-Norito"))),
+                Map.of("Content-Type", List.of("Application/X-Norito")),
+                null,
+                false),
             new TransportResponse(
                 200,
                 body,
                 "",
                 Map.of(
                     "Content-Type",
-                    List.of("application/x-norito", "application/x-norito"))),
-            new TransportResponse(200, body, "", caseFoldedDuplicateContentType),
+                    List.of("application/x-norito", "application/x-norito")),
+                null,
+                false),
+            new TransportResponse(200, body, "", caseFoldedDuplicateContentType, null, false),
             new TransportResponse(
                 200,
                 body,
                 "",
                 Map.of(
                     "Content-Type", List.of("application/x-norito"),
-                    "Content-Length", List.of(bodyLength, bodyLength))),
-            new TransportResponse(200, body, "", caseFoldedDuplicateContentLength),
+                    "Content-Length", List.of(bodyLength, bodyLength)),
+                null,
+                false),
+            new TransportResponse(200, body, "", caseFoldedDuplicateContentLength, null, false),
             new TransportResponse(
                 200,
                 body,
                 "",
                 Map.of(
                     "Content-Type", List.of("application/x-norito"),
-                    "Content-Length", List.of("0"))),
+                    "Content-Length", List.of("0")),
+                null,
+                false),
             new TransportResponse(
                 200,
                 body,
                 "",
                 Map.of(
                     "Content-Type", List.of("application/x-norito"),
-                    "Content-Length", List.of("0" + bodyLength))),
+                    "Content-Length", List.of("0" + bodyLength)),
+                null,
+                false),
             new TransportResponse(
                 200,
                 body,
                 "",
                 Map.of(
                     "Content-Type", List.of("application/x-norito"),
-                    "Content-Length", List.of("+" + bodyLength))),
+                    "Content-Length", List.of("+" + bodyLength)),
+                null,
+                false),
             new TransportResponse(
                 200,
                 body,
                 "",
                 Map.of(
                     "Content-Type", List.of("application/x-norito"),
-                    "Content-Length", List.of(bodyLength + " "))),
+                    "Content-Length", List.of(bodyLength + " ")),
+                null,
+                false),
             new TransportResponse(
                 200,
                 body,
                 "",
                 Map.of(
                     "Content-Type", List.of("application/x-norito"),
-                    "Content-Length", List.of("9".repeat(4096)))),
+                    "Content-Length", List.of("9".repeat(4096))),
+                null,
+                false),
             new TransportResponse(
                 200,
                 new byte[0],
                 "",
                 Map.of(
                     "Content-Type", List.of("application/x-norito"),
-                    "Content-Length", List.of("0"))));
+                    "Content-Length", List.of("0")),
+                null,
+                false));
     for (final TransportResponse hostileResponse : hostileResponses) {
       assertPrivacyCapabilitiesResponseRejected(hostileResponse, keyPair);
     }
@@ -605,7 +647,9 @@ public final class HttpClientTransportTests {
             200,
             new byte[256 * 1024 + 1],
             "",
-            Map.of("Content-Type", List.of("application/x-norito"))),
+            Map.of("Content-Type", List.of("application/x-norito")),
+            null,
+            false),
         keyPair);
   }
 
@@ -711,8 +755,10 @@ public final class HttpClientTransportTests {
     final HttpClientTransport transport =
         HttpClientTransport.withExecutor(
             new ScriptedExecutor(
-                new TransportResponse(200, statusPayload(hashHex, "Queued"), "", Map.of()),
-                new TransportResponse(200, statusPayload(hashHex, "Applied"), "", Map.of())),
+                new TransportResponse(
+                    200, statusPayload(hashHex, "Queued"), "", Map.of(), null, false),
+                new TransportResponse(
+                    200, statusPayload(hashHex, "Applied"), "", Map.of(), null, false)),
             ClientConfig.builder()
                 .setBaseUri(URI.create("https://status-telemetry.test:8080"))
                 .setTelemetryOptions(telemetryOptions)
@@ -776,7 +822,8 @@ public final class HttpClientTransportTests {
     final HttpClientTransport transport =
         HttpClientTransport.withExecutor(
             new ScriptedExecutor(
-                new TransportResponse(200, statusPayload(hashHex, "Applied"), "", Map.of())),
+                new TransportResponse(
+                    200, statusPayload(hashHex, "Applied"), "", Map.of(), null, false)),
             ClientConfig.builder()
                 .setBaseUri(URI.create("http:/")) // No authority -> redaction failure path.
                 .setTelemetryOptions(telemetryOptions)
@@ -4472,22 +4519,6 @@ public final class HttpClientTransportTests {
                   intent),
           "contract-call receipt must preserve the requested alias exactly");
     }
-
-    final CapturingExecutor executor = new CapturingExecutor();
-    final HttpClientTransport transport =
-        HttpClientTransport.withExecutor(
-            executor, signedClientConfig("https://torii.example"));
-    expectIllegalState(
-        () ->
-            transport.prepareContractCall(
-                authority,
-                requestedFee,
-                contractAddress,
-                null,
-                "bound",
-                Map.of("input", 1L)),
-        "unsigned contract-call preparation without trusted intent must fail closed");
-    assert executor.lastRequest == null : "missing contract intent must fail before dispatch";
   }
 
   private static void contractCallBoundaryConsumesSharedRustArgumentRecordFixture()
@@ -4506,16 +4537,56 @@ public final class HttpClientTransportTests {
         : "Argument record must be canonical lowercase hex bytes";
 
     final Map<String, Object> boundary = object(fixture, "torii_boundary");
+    final Map<String, Object> boundaryPayload = object(boundary, "payload");
+    assert "1606938044258990275541962092341162602522202993782792835301376"
+        .equals(string(boundaryPayload, "exact_int"))
+        : "Shared exact int must remain a canonical JSON string";
+    assert "-12345678901234567890.125".equals(string(boundaryPayload, "exact_decimal"))
+        : "Shared exact decimal must remain a canonical JSON string";
+    assert "12345678901234567890.0000000000000000000000000001"
+        .equals(string(boundaryPayload, "exact_quantity"))
+        : "Shared exact quantity must remain a canonical JSON string";
     final org.hyperledger.iroha.android.model.FeePaymentIntent boundaryFeePayment =
         FeePaymentJson.parse(boundary.get("fee_payment"), "torii_boundary.fee_payment");
-    final Map<String, Object> request =
-        HttpClientTransport.buildContractCallDraftPayload(
-            string(boundary, "authority"),
-            boundaryFeePayment,
-            null,
-            string(boundary, "contract_alias"),
+    final ContractInvocation trustedInvocation =
+        new ContractInvocation(
+            "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
+            hexToBytes("11".repeat(32)),
             string(boundary, "entrypoint"),
-            boundary.get("payload"));
+            hexToBytes(string(record, "norito_hex")));
+    final StubResponseExecutor executor =
+        new StubResponseExecutor(
+            503,
+            "fixture boundary reached".getBytes(StandardCharsets.UTF_8),
+            "unavailable");
+    final HttpClientTransport transport =
+        HttpClientTransport.withExecutor(
+            executor, signedClientConfig("https://fixture.invalid"));
+    boolean failed = false;
+    try {
+      transport
+          .prepareContractCall(
+              string(boundary, "authority"),
+              boundaryFeePayment,
+              null,
+              string(boundary, "contract_alias"),
+              string(boundary, "entrypoint"),
+              boundaryPayload,
+              new ContractCallDraftIntent(trustedInvocation, Map.of()))
+          .join();
+    } catch (final CompletionException expected) {
+      failed = true;
+    }
+    assert failed : "Shared contract call must reach the deterministic failing boundary";
+
+    final TransportRequest captured = executor.lastRequest();
+    assert captured != null : "Shared contract call request must be captured";
+    assert "POST".equals(captured.method()) : "Shared contract call must use POST";
+    assert "https://fixture.invalid/v1/contracts/call".equals(captured.uri().toString())
+        : "Shared contract call route mismatch";
+    @SuppressWarnings("unchecked")
+    final Map<String, Object> request =
+        (Map<String, Object>) JsonParser.parse(readBody(captured));
 
     assert string(boundary, "authority").equals(request.get("authority"))
         : "Shared call authority mismatch";
@@ -4526,7 +4597,7 @@ public final class HttpClientTransportTests {
     assert !request.containsKey("contract_address") : "Shared call must select only the alias";
     assert string(boundary, "entrypoint").equals(request.get("entrypoint"))
         : "Shared call entrypoint mismatch";
-    assert boundary.get("payload").equals(request.get("payload"))
+    assert boundaryPayload.equals(request.get("payload"))
         : "Shared call payload mismatch";
     assert boundaryFeePayment.toJsonMap().equals(request.get("fee_payment"))
         : "Shared call fee payment mismatch";
@@ -5100,14 +5171,9 @@ public final class HttpClientTransportTests {
   }
 
   private static void callContractRejectsAmbiguousTarget() {
-    final HttpClientTransport transport =
-        HttpClientTransport.withExecutor(
-            new CapturingExecutor(),
-            ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build());
-
     boolean failed = false;
     try {
-      transport.prepareContractCall(
+      HttpClientTransport.buildContractCallDraftPayload(
           "alice",
           feePayment(5000L),
           "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
@@ -5240,7 +5306,8 @@ public final class HttpClientTransportTests {
         + txHash
         + "\",\"executed_tx_hash_hex\":\""
         + executedTxHash
-        + "\"}";
+        + "\",\"fee_payment\":{\"payer\":\"authority\",\"value\":{"
+        + "\"charge_limits\":[],\"gas_limit\":null}}}";
   }
 
   private static void governanceContractRequestParsesResponse() {
@@ -7697,7 +7764,7 @@ public final class HttpClientTransportTests {
         return CompletableFuture.completedFuture(compatibleCapabilitiesResponse());
       }
       return CompletableFuture.completedFuture(
-          new TransportResponse(202, new byte[0], "accepted", Map.of()));
+          new TransportResponse(202, new byte[0], "accepted", Map.of(), null, false));
     }
   }
 
@@ -7820,7 +7887,7 @@ public final class HttpClientTransportTests {
         final URI finalUriOverride,
         final boolean redirected,
         final boolean includeProvenance) {
-      this.response = new TransportResponse(statusCode, body, message, headers);
+      this.response = new TransportResponse(statusCode, body, message, headers, null, false);
       this.finalUriOverride = finalUriOverride;
       this.redirected = redirected;
       this.includeProvenance = includeProvenance;
@@ -7870,7 +7937,9 @@ public final class HttpClientTransportTests {
               response.statusCode(),
               response.body().getBytes(StandardCharsets.UTF_8),
               "ok",
-              Map.of()));
+              Map.of(),
+              null,
+              false));
     }
     List<TransportRequest> requests() {
       return requests;
@@ -7882,7 +7951,7 @@ public final class HttpClientTransportTests {
     @Override
     public CompletableFuture<TransportResponse> execute(final TransportRequest request) {
       return CompletableFuture.completedFuture(
-          new TransportResponse(200, new byte[0], "ok", Map.of()));
+          new TransportResponse(200, new byte[0], "ok", Map.of(), null, false));
     }
     @Override
     public void invalidateAndCancel() {

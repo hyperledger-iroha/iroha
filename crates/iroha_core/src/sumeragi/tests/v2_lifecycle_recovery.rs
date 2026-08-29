@@ -66,6 +66,7 @@ use iroha_primitives::{numeric::Quantity, time::TimeSource};
 use iroha_test_samples::{SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
 use std::{
     borrow::Cow,
+    collections::BTreeMap,
     num::{NonZeroU32, NonZeroUsize},
     sync::Arc,
 };
@@ -161,6 +162,7 @@ fn lifecycle_payload_for_validators_with_count(
         validator_set,
         LaneId::new(1),
         lane_incarnation,
+        1,
         transaction_count,
         None,
     )
@@ -171,6 +173,7 @@ fn lifecycle_payload_for_validators_with_count_and_lane(
     mut validator_set: Vec<PeerId>,
     lane_id: LaneId,
     lane_incarnation: Hash,
+    lane_block_height: u64,
     transaction_count: usize,
     creation_time: Option<core::time::Duration>,
 ) -> (
@@ -179,6 +182,7 @@ fn lifecycle_payload_for_validators_with_count_and_lane(
     crate::lane_consensus::LaneExecutablePayloadV1,
 ) {
     assert!((1..=4).contains(&transaction_count));
+    assert!(lane_block_height > 0);
     validator_set.sort();
     validator_set.dedup();
     let producer = PeerId::new(producer_signer.public_key().clone());
@@ -232,9 +236,10 @@ fn lifecycle_payload_for_validators_with_count_and_lane(
         dataspace_id: DataSpaceId::UNIVERSAL,
         lane_incarnation,
         proposal_height: 1,
-        previous_lane_block_height: 0,
-        previous_lane_block_descriptor_hash: None,
-        lane_block_height: 1,
+        previous_lane_block_height: lane_block_height - 1,
+        previous_lane_block_descriptor_hash: (lane_block_height > 1)
+            .then(|| Hash::new(b"lifecycle-recovery-predecessor")),
+        lane_block_height,
         lane_block_view: 0,
         subject_hash: Hash::new(b"lifecycle-recovery-subject"),
         payload_ownership_hash: Hash::new(b"lifecycle-recovery-ownership"),
@@ -444,6 +449,87 @@ fn open_lifecycle_recovery_state(
         .expect("install lifecycle Nexus through the authenticated startup boundary");
     (kura, state)
 }
+fn install_lifecycle_queue_plan_authority(state: &mut State, validator_keys: &[&KeyPair]) {
+    assert_eq!(
+        validator_keys.len(),
+        4,
+        "the lifecycle QueuePlan fixture requires the exact f=1 committee",
+    );
+    let validator_peers = validator_keys
+        .iter()
+        .map(|key| PeerId::new(key.public_key().clone()))
+        .collect::<Vec<_>>();
+    let validator_accounts = validator_keys
+        .iter()
+        .map(|key| AccountId::new(key.public_key().clone()))
+        .collect::<Vec<_>>();
+    let validator_bindings = validator_accounts
+        .iter()
+        .zip(&validator_peers)
+        .map(|(validator, peer_id)| ManifestValidatorBinding {
+            validator: validator.clone(),
+            peer_id: peer_id.clone(),
+            torii_url: None,
+        })
+        .collect::<Vec<_>>();
+    {
+        let mut world_block = state.world.block();
+        {
+            let mut peers = world_block.peers_mut_for_testing().transaction();
+            peers.clear();
+            peers.extend(validator_peers.iter().cloned());
+            peers.apply();
+        }
+        world_block.accounts.insert(
+            (*SAMPLE_GENESIS_ACCOUNT_ID).clone(),
+            AccountValue::new(AccountDetails::default()),
+        );
+        world_block.commit();
+    }
+    for validator_key in validator_keys {
+        let validator_pop = iroha_crypto::bls_normal_pop_prove(validator_key.private_key())
+            .expect("derive lifecycle QueuePlan validator PoP");
+        state
+            .world
+            .register_validator_pop_for_testing(validator_key.public_key().clone(), validator_pop);
+    }
+    {
+        let mut topology = state.commit_topology.block();
+        topology.clear();
+        topology.extend(validator_peers);
+        topology.commit();
+    }
+    let statuses = state
+        .nexus_snapshot()
+        .lane_catalog
+        .lanes()
+        .iter()
+        .map(|lane| {
+            (
+                lane.id,
+                LaneManifestStatus {
+                    lane: lane.id,
+                    alias: lane.alias.clone(),
+                    dataspace: lane.dataspace_id,
+                    visibility: lane.visibility.clone(),
+                    storage: lane.storage.clone(),
+                    governance: lane.governance.clone(),
+                    manifest_path: Some(std::path::PathBuf::from(format!(
+                        "/test/lifecycle-recovery-lane-{}.json",
+                        lane.id.as_u32(),
+                    ))),
+                    governance_rules: Some(GovernanceRules {
+                        validators: validator_accounts.clone(),
+                        validator_bindings: validator_bindings.clone(),
+                        ..GovernanceRules::default()
+                    }),
+                    privacy_commitments: Vec::new(),
+                },
+            )
+        })
+        .collect();
+    state.install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(statuses)));
+}
 fn install_lifecycle_queue_plan_validator_authority(
     state: &State,
     queue: &Queue,
@@ -591,6 +677,34 @@ fn open_empty_lifecycle_recovery_queue(queue_dir: &TempDir, state: &State) -> Qu
     );
     queue
 }
+fn open_lifecycle_recovery_queue(
+    queue_dir: &TempDir,
+    state: &State,
+    expect_empty_replay: bool,
+) -> Queue {
+    let time_source = TimeSource::new_system();
+    let queue = Queue::test(QueueConfig::default(), &time_source);
+    queue
+        .install_plan_journal(
+            queue_dir.path().join("queue-plan.norito"),
+            1024 * 1024,
+            true,
+        )
+        .expect("install lifecycle QueuePlan journal");
+    queue
+        .install_lane_reservation_journal(
+            queue_dir.path().join("lane-reservation.norito"),
+            1024 * 1024,
+        )
+        .expect("install lifecycle reservation journal");
+    let replay = queue
+        .replay_plan_journal(state)
+        .expect("publish lifecycle QueuePlan replay receipt");
+    if expect_empty_replay {
+        assert_eq!(replay, Default::default());
+    }
+    queue
+}
 
 fn reserve_lifecycle_replica_retirement_payload(
     queue: &Queue,
@@ -598,7 +712,9 @@ fn reserve_lifecycle_replica_retirement_payload(
     producer_signer: &KeyPair,
     context: &wire::HeightContext,
     validator_set: Vec<PeerId>,
+    lane_id: LaneId,
     lane_incarnation: Hash,
+    lane_block_height: u64,
 ) -> (
     crate::lane_consensus::LaneExecutablePayloadV1,
     Vec<crate::torii_proxy::QueuePlanAdmissionBindingV1>,
@@ -607,8 +723,9 @@ fn reserve_lifecycle_replica_retirement_payload(
         producer_signer,
         context,
         validator_set,
-        LaneId::SINGLE,
+        lane_id,
         lane_incarnation,
+        lane_block_height,
         2,
         Some(core::time::Duration::ZERO),
     );
@@ -624,7 +741,7 @@ fn reserve_lifecycle_replica_retirement_payload(
         assert_eq!(
             routing_plan.coordinator_route(),
             expected_route,
-            "replica retirement fixture must reserve the router-selected primary lane",
+            "replica retirement fixture must reserve its router-selected lane",
         );
         let admission_context = queue
             .plan_admission_context_with_state(state, &routing_plan)
@@ -705,9 +822,9 @@ fn lifecycle_payload_with_exact_ordinary_fifo(
 ) {
     let lane_incarnation = state
         .lane_incarnations_snapshot()
-        .get(&LaneId::SINGLE)
+        .get(&LaneId::new(1))
         .copied()
-        .expect("State primary-lane incarnation");
+        .expect("State lifecycle-lane incarnation");
     let validator_set = context
         .roster
         .iter()
@@ -719,15 +836,36 @@ fn lifecycle_payload_with_exact_ordinary_fifo(
         validator_set,
         LaneId::new(1),
         lane_incarnation,
+        1,
         2,
         Some(core::time::Duration::ZERO),
     );
+    let entrypoints = template
+        .entrypoints
+        .iter()
+        .map(|entrypoint| {
+            let TransactionEntrypoint::External(transaction) = entrypoint else {
+                panic!("lifecycle FIFO fixture uses only external transactions");
+            };
+            let mut payload = transaction.payload().clone();
+            payload.admission_intent =
+                iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced;
+            TransactionEntrypoint::External(
+                TransactionBuilder::from_payload(payload)
+                    .expect("rebuild signature-bound lifecycle QueuePlan transaction")
+                    .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key()),
+            )
+        })
+        .collect::<Vec<_>>();
     let mut proposal = template.origin_proposal.clone();
-    proposal.descriptor.lane_id = LaneId::SINGLE;
+    proposal.descriptor.lane_id = LaneId::new(1);
     proposal.descriptor.lane_incarnation = lane_incarnation;
+    proposal.descriptor.accepted_transaction_hashes = entrypoints
+        .iter()
+        .map(|entrypoint| Hash::from(entrypoint.hash()))
+        .collect();
     proposal.descriptor.descriptor_hash = proposal.descriptor.computed_descriptor_hash();
     proposal.proposal_hash = proposal.computed_proposal_hash();
-    let entrypoints = template.entrypoints.clone();
     let mut admission_bindings = Vec::with_capacity(entrypoints.len());
     for entrypoint in &entrypoints {
         let TransactionEntrypoint::External(transaction) = entrypoint else {
@@ -740,7 +878,7 @@ fn lifecycle_payload_with_exact_ordinary_fifo(
         assert_eq!(
             routing_plan.coordinator_route().lane_id,
             proposal.descriptor.lane_id,
-            "lifecycle FIFO fixture must use the primary Queue route",
+            "lifecycle FIFO fixture must use the autonomous lifecycle Queue route",
         );
         let admission_context = queue
             .plan_admission_context_with_state(state, &routing_plan)
@@ -1078,7 +1216,9 @@ fn retired_replica_startup_fixture(
         &producer_signer,
         &context,
         validator_set,
+        LaneId::SINGLE,
         lane_incarnation,
+        1,
     );
     let network_id = payload.network_id;
     let epoch = payload.epoch;
@@ -1762,7 +1902,7 @@ fn exercise_lifecycle_recovery_post_cas_interruption(boundary: LifecycleRecovery
         .claim_autonomous_lifecycle_process_generation(network_id, &local_peer)
         .expect("claim second interruption generation");
     assert_eq!(generation_two.generation(), 2);
-    let queue = open_empty_lifecycle_recovery_queue(&queue_dir, &restarted_state);
+    let queue = open_lifecycle_recovery_queue(&queue_dir, &restarted_state, true);
     let snapshot_before_ownership_plan = queue
         .lane_reservation_reconciliation_snapshot()
         .expect("capture pre-interruption Queue snapshot");
@@ -1851,7 +1991,7 @@ fn exercise_lifecycle_recovery_post_cas_interruption(boundary: LifecycleRecovery
         .claim_autonomous_lifecycle_process_generation(network_id, &local_peer)
         .expect("claim post-interruption generation");
     assert_eq!(generation_three.generation(), 3);
-    let reopened_queue = open_empty_lifecycle_recovery_queue(&queue_dir, &reopened_state);
+    let reopened_queue = open_lifecycle_recovery_queue(&queue_dir, &reopened_state, true);
     let reopened_snapshot = reopened_queue
         .lane_reservation_reconciliation_snapshot()
         .expect("capture reopened Queue snapshot");
@@ -2039,18 +2179,29 @@ fn exercise_nonproducer_retired_attempt_startup(
     context
         .validate()
         .expect("nonproducer retirement context must be structurally valid");
-    let nexus = Nexus {
+    let mut nexus = Nexus {
         lane_catalog: lifecycle_lane_catalog(),
         ..Nexus::default()
     };
-    let (kura, state) = open_lifecycle_recovery_state(&kura_config, &lane_config, &context, &nexus);
-    let queue = open_empty_lifecycle_recovery_queue(&queue_dir, &state);
+    nexus.routing_policy.default_lane = LaneId::new(1);
+    let (kura, mut state) =
+        open_lifecycle_recovery_state(&kura_config, &lane_config, &context, &nexus);
     let validator_keys = [
         lifecycle_key_pair(71),
         lifecycle_key_pair(91),
         lifecycle_key_pair(92),
         lifecycle_key_pair(93),
     ];
+    install_lifecycle_queue_plan_authority(
+        &mut state,
+        &[
+            &validator_keys[0],
+            &validator_keys[1],
+            &validator_keys[2],
+            &validator_keys[3],
+        ],
+    );
+    let queue = open_empty_lifecycle_recovery_queue(&queue_dir, &state);
     install_lifecycle_queue_plan_validator_authority(&state, &queue, &context, &validator_keys);
     let (payload, mut admission_bindings) = match queue_cut {
         NonproducerReplicaQueueCut::ExactOrdinaryFifo => {
@@ -2087,28 +2238,47 @@ fn exercise_nonproducer_retired_attempt_startup(
         );
         let lane_incarnation = state
             .lane_incarnations_snapshot()
-            .get(&LaneId::SINGLE)
+            .get(&LaneId::new(1))
             .copied()
-            .expect("State primary-lane incarnation for unrelated owner");
+            .expect("State lifecycle-lane incarnation for unrelated owner");
         let validator_set = context
             .roster
             .iter()
             .map(|validator| validator.validator.clone())
-            .collect();
+            .collect::<Vec<_>>();
+        let unrelated_lane_block_height = 2;
+        let unrelated_author = crate::lane_consensus::deterministic_lane_author(
+            &validator_set,
+            unrelated_lane_block_height,
+        )
+        .expect("next lifecycle lane slot has a deterministic author");
+        let unrelated_producer_signer = validator_keys
+            .iter()
+            .find(|signer| signer.public_key() == unrelated_author.public_key())
+            .expect("fixture retains the next lane-slot author key");
         let (unrelated_payload, unrelated_admission_bindings) =
             reserve_lifecycle_replica_retirement_payload(
                 &queue,
                 &state,
-                &producer_signer,
+                unrelated_producer_signer,
                 &context,
                 validator_set,
+                LaneId::new(1),
                 lane_incarnation,
+                unrelated_lane_block_height,
             );
         admission_bindings.extend(unrelated_admission_bindings);
         let reservation_group = lane_queue_reservation_group_binding_from_ordered_keys(
             unrelated_payload.reservation_keys.iter(),
         )
         .expect("bind unrelated quarantined Queue owner");
+        let retired_replica_group =
+            lane_queue_reservation_group_binding_from_ordered_keys(payload.reservation_keys.iter())
+                .expect("bind retired replica Queue identity");
+        assert_ne!(
+            reservation_group.identity, retired_replica_group.identity,
+            "the quarantined Queue owner must not alias the retired replica attempt",
+        );
         Some((reservation_group, unrelated_payload.reservation_keys))
     } else {
         None
@@ -2173,6 +2343,13 @@ fn exercise_nonproducer_retired_attempt_startup(
         )
         .expect("persist full disposition-bound ReplicaReleased retirement prefix");
     }
+    drop(queue);
+    let queue = open_lifecycle_recovery_queue(
+        &queue_dir,
+        &state,
+        matches!(queue_cut, NonproducerReplicaQueueCut::StrictQueueAbsent)
+            && unrelated_owner.is_none(),
+    );
     let descriptor = &payload.origin_proposal.descriptor;
     let terminal_path = kura
         .autonomous_lifecycle_terminal_outcome_path_for_test(
@@ -2223,7 +2400,7 @@ fn exercise_nonproducer_retired_attempt_startup(
     }
     assert!(commit_barriers_before.is_empty());
     assert!(release_barriers_before.is_empty());
-    assert!(!precrash_quarantine);
+    assert_eq!(precrash_quarantine, !queue_snapshot_before.is_empty());
     drop(generation_one);
     drop(state);
     drop(kura);

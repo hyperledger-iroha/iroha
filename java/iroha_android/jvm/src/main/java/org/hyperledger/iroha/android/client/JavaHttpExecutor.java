@@ -58,7 +58,9 @@ final class JavaHttpExecutor implements HttpTransportExecutor, StreamingTranspor
                     response.statusCode(),
                     body,
                     response.statusCode() >= 400 ? httpRequest.uri().toString() : "",
-                    response.headers().map());
+                    response.headers().map(),
+                    response.uri(),
+                    !response.uri().equals(httpRequest.uri()));
               } catch (final IOException ex) {
                 throw new CompletionException("HTTP response body rejected", ex);
               }

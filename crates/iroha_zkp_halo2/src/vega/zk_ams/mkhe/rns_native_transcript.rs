@@ -872,6 +872,17 @@ pub(super) struct ZkAmsMkheRnsNativeAllTerminalRootsEqualV1 {
     final_challenge_seeds: ZkAmsMkheRnsNativeChallengeSeedsV1,
 }
 
+impl ZkAmsMkheRnsNativeAllTerminalRootsEqualV1 {
+    /// Consume the all-roots-equal fact into the exact final transcript owner.
+    ///
+    /// This transition is intentionally crate-private and one-shot.  It exists
+    /// only so the source-bound composite carrier can move, rather than copy or
+    /// reconstruct, the terminal chronology into the atomic verifier.
+    pub(super) fn into_final_challenge_seeds_v1(self) -> ZkAmsMkheRnsNativeChallengeSeedsV1 {
+        self.final_challenge_seeds
+    }
+}
+
 /// Atomic move-only owner of the provisional terminal-root chronology.
 ///
 /// It keeps all three equality obligations, the exact pre-global capability,

@@ -4836,7 +4836,7 @@ mod tests {
     use crate::ProgramMetadata;
     use crate::pointer_abi::PointerType;
     use iroha_data_model::name::MAX_NAME_BYTES;
-    use iroha_data_model::privacy::{PRIVACY_RETIRED_PROTOCOL_LABELS_V1, PrivacyProtocolIdV1};
+    use iroha_data_model::privacy::PrivacyProtocolIdV1;
     use iroha_data_model::zk::BackendTag;
     fn test_tlv(kind: PointerType, payload: &[u8]) -> Vec<u8> {
         let mut out = Vec::with_capacity(7 + payload.len() + iroha_crypto::Hash::LENGTH);
@@ -5351,11 +5351,7 @@ mod tests {
     #[test]
     fn default_host_rejects_every_reserved_privacy_circuit_label_before_dispatch() {
         let host = DefaultHost::new();
-        for label in PrivacyProtocolIdV1::ALL
-            .into_iter()
-            .map(PrivacyProtocolIdV1::canonical_label)
-            .chain(PRIVACY_RETIRED_PROTOCOL_LABELS_V1)
-        {
+        for label in PrivacyProtocolIdV1::ALL.map(PrivacyProtocolIdV1::canonical_label) {
             for circuit_id in [
                 label.to_owned(),
                 format!("halo2/ipa::{label}"),

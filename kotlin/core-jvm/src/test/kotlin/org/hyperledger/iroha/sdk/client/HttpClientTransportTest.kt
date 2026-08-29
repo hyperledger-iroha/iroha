@@ -1098,30 +1098,6 @@ class HttpClientTransportTest {
     }
 
     @Test
-    fun prepareContractCallWithoutTrustedIntentFailsBeforeDispatch() {
-        val executor = CapturingExecutor()
-        val transport = HttpClientTransport.withExecutor(
-            executor,
-            ClientConfig.builder()
-                .setBaseUri(URI.create("https://torii.example"))
-                .build(),
-        )
-
-        val error = assertFailsWith<IllegalStateException> {
-            transport.prepareContractCall(
-                authority = testAccountId(0x1a),
-                feePayment = testFeePayment(5_000L),
-                contractAddress =
-                    "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
-                entrypoint = "ping",
-            )
-        }
-
-        assertContains(error.message.orEmpty(), "ContractCallDraftIntent")
-        assertEquals(0, executor.requestCount)
-    }
-
-    @Test
     fun prepareContractCallRejectsRehashedSignatureBoundSubstitutions() {
         val networkId = TestNetworkIds.fromSeed(0x31L)
         val authority = testAccountId(0x31)
@@ -1378,25 +1354,61 @@ class HttpClientTransportTest {
         assertTrue(Regex("(?:[0-9a-f]{2})+").matches(string(record, "norito_hex")))
 
         val boundary = obj(fixture, "torii_boundary")
+        val boundaryPayload = obj(boundary, "payload")
+        assertEquals(
+            "1606938044258990275541962092341162602522202993782792835301376",
+            string(boundaryPayload, "exact_int"),
+        )
+        assertEquals("-12345678901234567890.125", string(boundaryPayload, "exact_decimal"))
+        assertEquals(
+            "12345678901234567890.0000000000000000000000000001",
+            string(boundaryPayload, "exact_quantity"),
+        )
         val boundaryFeePayment = FeePaymentJson.parse(
             boundary["fee_payment"],
             "torii_boundary.fee_payment",
         )
-        val request = HttpClientTransport.buildContractCallDraftPayload(
-            authority = string(boundary, "authority"),
-            feePayment = boundaryFeePayment,
-            contractAddress = null,
-            contractAlias = string(boundary, "contract_alias"),
-            entrypoint = string(boundary, "entrypoint"),
-            payload = boundary["payload"],
+        val trustedInvocation = ContractInvocation(
+            "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
+            ByteArray(32) { 0x11 },
+            string(boundary, "entrypoint"),
+            hexToBytes(string(record, "norito_hex")),
+        )
+        val executor = StubResponseExecutor(
+            statusCode = 503,
+            body = "fixture boundary reached".toByteArray(StandardCharsets.UTF_8),
+        )
+        val transport = HttpClientTransport.withExecutor(
+            executor,
+            signedClientConfig("https://fixture.invalid"),
         )
 
-        assertEquals(string(boundary, "authority"), request["authority"])
+        assertFailsWith<CompletionException> {
+            transport.prepareContractCall(
+                authority = string(boundary, "authority"),
+                feePayment = boundaryFeePayment,
+                contractAlias = string(boundary, "contract_alias"),
+                entrypoint = string(boundary, "entrypoint"),
+                payload = boundaryPayload,
+                draftIntent = ContractCallDraftIntent(trustedInvocation, emptyMap()),
+            ).join()
+        }
+
+        val captured = executor.lastRequest
+        assertEquals("POST", captured.method)
+        assertEquals("https://fixture.invalid/v1/contracts/call", captured.uri.toString())
+        @Suppress("UNCHECKED_CAST")
+        val request = JsonParser.parse(readBody(captured)) as Map<String, Any?>
+
+        assertEquals(
+            expected = string(boundary, "authority"),
+            actual = request["authority"],
+        )
         assertFalse(request.containsKey("private_key"))
         assertEquals(string(boundary, "contract_alias"), request["contract_alias"])
         assertFalse(request.containsKey("contract_address"))
         assertEquals(string(boundary, "entrypoint"), request["entrypoint"])
-        assertEquals(boundary["payload"], request["payload"])
+        assertEquals(boundaryPayload, request["payload"])
         assertEquals(boundaryFeePayment.toJsonMap(), request["fee_payment"])
         assertFalse(request.containsKey("argument_record"))
         assertFalse(request.containsKey("argument_record_norito_hex"))
@@ -2021,19 +2033,15 @@ class HttpClientTransportTest {
     }
 
     @Test
-    fun callContractRejectsAmbiguousSelector() {
-        val transport = HttpClientTransport.withExecutor(
-            executor = CapturingExecutor(),
-            config = ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build(),
-        )
-
+    fun contractCallDraftPayloadRejectsAmbiguousSelector() {
         val error = assertFailsWith<IllegalArgumentException> {
-            transport.prepareContractCall(
+            HttpClientTransport.buildContractCallDraftPayload(
                 authority = "alice",
                 feePayment = testFeePayment(5_000L),
                 contractAddress = "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
                 contractAlias = "router::universal",
                 entrypoint = "contribute",
+                payload = null,
             )
         }
 

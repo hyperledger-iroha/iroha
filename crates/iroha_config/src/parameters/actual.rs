@@ -1604,7 +1604,7 @@ pub struct Network {
     /// Request QUIC transport (feature-gated).
     ///
     /// Runtime startup rejects `true` before binding while the lockfile resolves
-    /// vulnerable quinn-proto 0.11.15. TLS-over-TCP remains available.
+    /// `quinn 0.11.9` / vulnerable `quinn-proto 0.11.15`. TLS-over-TCP remains available.
     pub quic_enabled: bool,
     /// Request QUIC DATAGRAM support for best-effort topics (gossip/health).
     ///
@@ -7866,6 +7866,8 @@ pub struct Torii {
     pub soranet_privacy_ingest: SoranetPrivacyIngest,
     /// Optional authenticated native Bootle/Lantern blind-issuance service.
     pub privacy_bootle_lantern_issuer: Option<ToriiBootleLanternIssuer>,
+    /// Optional independently rebuilt SCCP replay archive service.
+    pub sccp_replay_archive: Option<ToriiSccpReplayArchive>,
     /// CIDRs whose effective transport sources bypass API rate limits only.
     pub api_rate_limit_bypass_cidrs: Vec<String>,
     /// Exact effective transport source hosts trusted for internal API reads and routing.
@@ -8067,6 +8069,7 @@ pub struct ToriiBootleLanternIssuer {
     /// Exact non-zero provider-registry public-policy digest.
     pub runtime_provider_registry_policy_digest: [u8; 32],
 }
+include!("actual/torii_sccp_replay_archive.rs");
 include!("actual/torii_tx_history.rs");
 /// Retail recipient lookup route configuration for Torii app API.
 #[derive(Debug, Clone)]

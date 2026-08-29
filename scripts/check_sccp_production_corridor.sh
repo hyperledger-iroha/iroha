@@ -12,6 +12,7 @@ CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-target/sccp-production-corridor}"
 NORITO_SKIP_BINDINGS_SYNC="${NORITO_SKIP_BINDINGS_SYNC:-1}"
 SCCP_CORRIDOR_NODE_BIN="${SCCP_CORRIDOR_NODE_BIN:-node}"
 SCCP_CORRIDOR_PYTHON_BIN="${SCCP_CORRIDOR_PYTHON_BIN:-python3}"
+SCCP_TON_DEVELOPMENT_ACTON_BIN="${SCCP_TON_DEVELOPMENT_ACTON_BIN:-/usr/local/bin/acton}"
 SCCP_GRADLE_JVMARGS="${SCCP_GRADLE_JVMARGS:--Xmx6g}"
 SCCP_KOTLIN_DAEMON_JVMARGS="${SCCP_KOTLIN_DAEMON_JVMARGS:-$SCCP_GRADLE_JVMARGS}"
 SCCP_GRADLE_OPTS_DEFAULT="-Dorg.gradle.jvmargs=$SCCP_GRADLE_JVMARGS -Dkotlin.daemon.jvmargs=$SCCP_KOTLIN_DAEMON_JVMARGS -Dkotlin.daemon.jvm.options=$SCCP_KOTLIN_DAEMON_JVMARGS"
@@ -89,6 +90,11 @@ Environment:
                                Defaults to node.
   SCCP_CORRIDOR_PYTHON_BIN     Python runtime for evidence and Python SDK phases.
                                Defaults to python3.
+  SCCP_TON_DEVELOPMENT_ACTON_BIN
+                               Absolute Acton 1.1.0 path used only by the
+                               non-release contract smoke. Production TON
+                               artifacts use ton_sccp_builder.py with external
+                               policy and signed output-lock inputs.
   SCCP_TVM_DOCKER_BIN          Docker CLI for the real TVM phase. Defaults to
                                docker and fails closed when unavailable.
   SCCP_TVM_PORT                Loopback host port for official TRE. Defaults to
@@ -1550,7 +1556,9 @@ phase_evidence_scripts() {
   run_cmd env "SCCP_RELEASE_RUST_VALIDATOR=$validator" \
     "$SCCP_CORRIDOR_PYTHON_BIN" -m pytest -q \
     pytests/scripts/check_sccp_production_corridor_test.py \
-    pytests/scripts/sccp_release_tooling_test.py
+    pytests/scripts/sccp_release_tooling_test.py \
+    scripts/tests/sccp_validator_builder_test.py \
+    scripts/tests/ton_sccp_builder_test.py
   run_cmd "$SCCP_CORRIDOR_PYTHON_BIN" scripts/sccp_release_fixture.py reject
 }
 
@@ -1857,6 +1865,8 @@ phase_dotnet_sdk() {
 phase_contract_smoke() {
   run_cmd "$SCCP_CORRIDOR_PYTHON_BIN" -m pytest -q \
     scripts/tests/contract_artifact_corridor_test.py
+  run_cmd "$SCCP_CORRIDOR_PYTHON_BIN" -m pytest -q \
+    scripts/tests/ton_sccp_builder_test.py
   run_cmd "$SCCP_CORRIDOR_PYTHON_BIN" -m py_compile \
     scripts/contract_artifact_corridor.py
   run_cmd "$SCCP_CORRIDOR_NODE_BIN" --check scripts/contract_soljson_runner.js
@@ -1865,10 +1875,12 @@ phase_contract_smoke() {
   run_cmd "$SCCP_CORRIDOR_NODE_BIN" --test scripts/tests/contract_tvm_receipts_test.mjs
   run_cmd bash -n scripts/sccp_evm_contract_smoke.sh
   run_cmd bash -n scripts/sccp_ton_contract_build.sh
+  run_cmd "$SCCP_CORRIDOR_PYTHON_BIN" scripts/ton_sccp_builder.py --help
   run_cmd bash -n scripts/contract_tvm_runner.sh
   run_cmd "$SCCP_CORRIDOR_NODE_BIN" --check contracts/evm/sccp/test/sccp_message_bridge_smoke.js
   run_cmd bash scripts/sccp_evm_contract_smoke.sh
-  run_cmd bash scripts/sccp_ton_contract_build.sh
+  run_cmd bash scripts/sccp_ton_contract_build.sh development-local \
+    --acton "$SCCP_TON_DEVELOPMENT_ACTON_BIN"
 }
 
 phase_tvm_contract_smoke() {

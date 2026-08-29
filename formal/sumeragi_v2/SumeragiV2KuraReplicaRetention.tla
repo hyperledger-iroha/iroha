@@ -101,7 +101,7 @@ RetentionConfiguration ==
   /\ RefreshWindow \in 1..RefreshHeightCount
 
 RefreshedPrefix(cursor) ==
-  IF cursor = 1 THEN {} ELSE 1..(cursor - 1)
+  {height \in 1..RefreshHeightCount : height < cursor}
 
 RefreshBatch(cursor, width) ==
   {height \in 1..RefreshHeightCount :

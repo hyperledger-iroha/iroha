@@ -18,7 +18,7 @@ KOTODAMA_MANIFEST = (
 )
 ISO_MANIFEST = ROOT / "crates/ivm/src/assets/iso20022_schema_v1/manifest.json"
 REGISTRY_PROVIDER_SHA256 = (
-    "4dea799f1400a1e977e45ed58d775fb70664e8a59ea376dfba63f5c0e70687e0"
+    "06f69d5fcaed47c0ff6d448333a9d91e1b47699b6904c6f107e7d813f69d59a8"
 )
 
 
@@ -387,35 +387,46 @@ class CompileTimeTableProjectionTests(unittest.TestCase):
             _table_rows(KOTODAMA_MANIFEST.parent / "secret_reject_cases_v1.tsv"),
         )
 
-    def test_iso_schema_equals_sealed_rust_projection(self) -> None:
+    def test_iso_schema_is_closed_and_bound_to_its_current_consumer(self) -> None:
         manifest, asset = _manifest_asset(ISO_MANIFEST, "schema_v1.tsv")
-        preimage = asset["source_preimages"][0]
-        source_path = (ISO_MANIFEST.parent / preimage["path"]).resolve()
-        source = _git_text(
-            preimage.get("source_commit", manifest["source_commit"]), source_path
-        )
-        lines = source.splitlines(keepends=True)
-        start = preimage["start_line"] - 1
-        span = "".join(lines[start : start + preimage["physical_lines"]])
-        self.assertEqual(hashlib.sha256(span.encode()).hexdigest(), preimage["sha256"])
-        schema_function_end = span.index("\n}") + 2
-        mapping = re.findall(
-            r'"([a-z]+\.\d+)"\s*=>\s*Some\(&([A-Z0-9_]+)_SCHEMA\)',
-            span[:schema_function_end],
-        )
-        self.assertEqual(len(mapping), 19)
-        expected: list[tuple[str, ...]] = []
-        for message_type, owner in mapping:
-            expected.append(("schema", owner, message_type, "-", "-", "-", "-", "-"))
-            expected.extend(_iso_fields(span, owner))
-            expected.extend(_iso_aliases(span, owner))
         self.assertEqual(
-            collections.Counter(row[0] for row in expected),
+            manifest["source_slice_hash_scope"],
+            "current Rust compile-time include consumer",
+        )
+        self.assertNotIn("source_commit", manifest)
+        self.assertEqual(asset["source_preimages"], [{"path": "../../../build.rs"}])
+        rows = _table_rows(ISO_MANIFEST.parent / "schema_v1.tsv")
+        self.assertTrue(all(len(row) == 8 for row in rows))
+        self.assertEqual(
+            collections.Counter(row[0] for row in rows),
             {"schema": 19, "field": 193, "alias": 183},
         )
-        self.assertEqual(expected, _table_rows(ISO_MANIFEST.parent / "schema_v1.tsv"))
+        owners = [row[1] for row in rows if row[0] == "schema"]
+        self.assertEqual(len(owners), len(set(owners)))
+        self.assertTrue(all(row[1] in owners for row in rows))
+        self.assertIn(
+            ("alias", "PACS009", "AppHdr/CreDt", "-", "-", "-", "-", "AppHdr/CreDt"),
+            rows,
+        )
+        self.assertIn(
+            (
+                "alias",
+                "PACS009",
+                "Document/FICdtTrf/GrpHdr/MsgId",
+                "-",
+                "-",
+                "-",
+                "-",
+                "MsgId",
+            ),
+            rows,
+        )
+        self.assertNotIn(
+            ("alias", "PACS009", "AppHdr/CreDt", "-", "-", "-", "-", "CreDtTm"),
+            rows,
+        )
 
-    def test_registry_single_provider_preserves_modes_order_and_two_passes(self) -> None:
+    def test_registry_single_provider_preserves_exact_ids_order_and_one_pass(self) -> None:
         provider_path = (
             ROOT / "crates/iroha_data_model/src/isi/registry/wire_ids.rs"
         )
@@ -434,13 +445,12 @@ class CompileTimeTableProjectionTests(unittest.TestCase):
             type_name = re.sub(r"\s+", "", match.group(2))
             mode = match.group(4) or "register_slice"
             rows.append((scope, type_name, mode, match.group(3)))
-        self.assertEqual(len(rows), 350)
+        self.assertEqual(len(rows), 344)
         self.assertEqual(
             collections.Counter(row[2] for row in rows),
             {
-                "register_slice": 330,
-                "register": 19,
-                "register_with_id": 1,
+                "register_slice": 324,
+                "register": 20,
             },
         )
         canonical = "".join("\t".join(row) + "\n" for row in rows).encode()
@@ -450,10 +460,8 @@ class CompileTimeTableProjectionTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         production = registry.split("\n#[cfg(test)]\nmod tests", 1)[0]
         self.assertNotIn("ALL_REGISTRARS", production)
-        self.assertLess(
-            production.index("let registry = wire_ids::register_all();"),
-            production.index("wire_ids::remap_all(registry)"),
-        )
+        self.assertIn("wire_ids::register_all()", production)
+        self.assertNotIn("wire_ids::remap_all", production)
 
 
 if __name__ == "__main__":

@@ -5537,6 +5537,7 @@ mod tests {
             P256ValueBusLaneChallengesV1, P256ValueBusStarkRowProviderV1, P256ValueIdV1,
             build_zk_x509_p256_value_bus_trace_v1,
         },
+        stark::zk_x509_test_digest384_v1,
     };
     use super::*;
     use sha2::{Digest as _, Sha256};
@@ -5545,14 +5546,14 @@ mod tests {
             [seed; 32],
             [seed.wrapping_add(1); 32],
             core::array::from_fn::<_, ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1, _>(|index| {
-                [seed.wrapping_add(index as u8).wrapping_add(2); 32]
+                zk_x509_test_digest384_v1(seed.wrapping_add(index as u8).wrapping_add(2))
             }),
         );
         derive_zk_x509_credential_pre_aux_binding_v1(
             main,
-            [seed.wrapping_add(0x20); 32],
-            [seed.wrapping_add(0x40); 32],
-            [seed.wrapping_add(0x60); 32],
+            zk_x509_test_digest384_v1(seed.wrapping_add(0x20)),
+            zk_x509_test_digest384_v1(seed.wrapping_add(0x40)),
+            zk_x509_test_digest384_v1(seed.wrapping_add(0x60)),
         )
         .expect("opaque X5B1 binding")
         .main_post_base()
@@ -7190,8 +7191,13 @@ mod tests {
         ])
     }
     fn terminal_claim_transcript() -> TransparentTranscriptV1 {
-        TransparentTranscriptV1::new(b"p256-claim-test", &[7_u8; 32], &[9_u8; 32])
-            .expect("claim transcript")
+        TransparentTranscriptV1::new(
+            super::super::stark::ZK_X509_DIGEST_CONTEXT_V1,
+            b"p256-claim-test",
+            &zk_x509_test_digest384_v1(7),
+            &zk_x509_test_digest384_v1(9),
+        )
+        .expect("claim transcript")
     }
     #[test]
     fn transcript_bound_terminal_claims_order_and_mutations_fail_closed() {

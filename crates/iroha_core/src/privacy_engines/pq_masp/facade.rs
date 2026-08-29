@@ -115,7 +115,7 @@ fn map_verifier_error_v1(error: ProofManagedNoteStarkErrorV1) -> PqMaspProofErro
 fn statement_digest_v1(
     statement: &PqMaspStarkStatementV1,
 ) -> Result<iroha_data_model::privacy::PrivacyStatementDigestV1, PqMaspProofErrorV1> {
-    PrivacyStatementV1::PqMaspStarkV0(statement.clone())
+    PrivacyStatementV1::PqMaspStarkV1(statement.clone())
         .digest()
         .map_err(|_| PqMaspProofErrorV1::StatementEncoding)
 }

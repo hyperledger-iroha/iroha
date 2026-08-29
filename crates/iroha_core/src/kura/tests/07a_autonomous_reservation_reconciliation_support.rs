@@ -36,6 +36,9 @@ fn two_reservation_autonomous_lane_payload_for_kura(
         Level::INFO,
         "second strict reservation payload".to_owned(),
     )])
+    .with_admission_intent(
+        iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
+    )
     .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
     let entrypoints = vec![
         source.entrypoints[0].clone(),

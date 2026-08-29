@@ -80,8 +80,11 @@ FIFO position with a retryable `Busy` disposition; it is not terminally marked
 irrelevant. Although that certificate shares the Progress lane, an ordinary
 production turn detects when it is the view-blocked class minimum. If ordinary
 timer/FIFO arbitration has selected FIFO, the turn uses the ownership-sealed
-pacemaker selector for one later authenticated current-view TimeoutVote, TC,
-or CommitQC. Its scheduler receipt binds the exact blocked occurrence,
+pacemaker selector for one later authenticated admissible TimeoutVote,
+at-or-ahead TC, or same-height CommitQC. TimeoutVotes retain the reducer's
+current-or-adjacent-view window; a TC may install a newer view, and a CommitQC
+already supersedes the blocked PrepareQC with terminal decision evidence. Its
+scheduler receipt binds the exact blocked occurrence,
 lifecycle and FIFO position, and target view to the pre- and post-selection
 queue snapshots. This allows a TC to install the missing view without
 discarding or reordering the certificate's FIFO owner. The exact PrepareQC is
@@ -148,8 +151,8 @@ frame, and validation receipt to equal that authenticated round exactly. A
 local lock is only a consistency/cache input and is never used to guess a
 missing origin. Conflicting body, manifest, frame, or execution-commitment
 identities fail closed, while a lockless validator can request the exact
-certified round directly from any signer. Revision 4 has no legacy decoder
-which fills a missing proposal origin.
+certified round directly from any signer. Revision 4 requires the signed
+proposal origin explicitly and rejects an artifact that omits it.
 
 The canonical height-one genesis header is the only header-origin exception.
 Its authenticated bytes fix `view_change_index = 0` before consensus timers
@@ -556,6 +559,16 @@ reach later archives or predecessor members, including a responsive peer beyond
 the original corridor capacity. Either authoritative cancellation path removes
 the retained request fanout and drops any actor ticket it owns.
 
+A canonical historical-body request keeps one immutable request hash while its
+bounded retry cursor samples current configured archives. Every identity whose
+request effect was actually queued remains response-authorized across later
+rotations, so a delayed exact response from an earlier live attempt cannot be
+invalidated by the next retry. That union is preflighted atomically against the
+lane session bound before any new fanout becomes visible. Exceeding the bound
+retains every live identity and fails closed for restart; completion or request
+replacement retires the request, its entire responder union, and all retained
+exact-output occurrences together.
+
 An authenticated merge-sidecar `GenerationHint` which durably advances a
 requester stream also retains the strongest pending cancellation fence for that
 semantic responder. The table is bounded by the protocol's maximum responder
@@ -686,8 +699,10 @@ separate certified-fence-escape corridor;
 requires a current-roster semantic origin. The two request-bound historical
 responses are the bounded exceptions: a certified-body response may come from
 the authenticated current archive peer named in its signed response, while a
-lane recovery response may come from an authenticated predecessor signer. The
-adapters admit either exception only for its outstanding exact request and
+canonical-block lane recovery response may come from an exact current archive
+which the outstanding request actually solicited. Autonomous-payload lane
+recovery retains its authenticated predecessor-signer authority. The adapters
+admit each exception only for its outstanding exact request and
 revalidate the corresponding frozen certificate or finality artifact. Relay
 delivery keeps semantic origin separate from authenticated transport via: the
 reducer and equivocation checks use origin, while count, bytes, and fair service
@@ -912,6 +927,14 @@ remote-only eviction. This witness is bounded Kura-local serving authority,
 not an inclusion proof exported to consensus: every requester independently
 matches the reference and certified entry to its own canonical carrier and
 rejects a substituted or non-holder response.
+An authenticated current-roster requester may obtain that exact historical
+merge sidecar even when it was absent from the old finality roster; a requester
+outside the current roster must still belong to the exact historical finality
+roster. Conversely, an archive serving a canonical historical block need not
+have signed the old CommitQC when it is a currently configured destination and
+its Kura record independently matches the exact finality, header, body, and
+wire commitments. These topology allowances change transport reachability,
+not the immutable historical authority.
 Canonical version-2 retained records remain restart-readable. They expose no
 merge witness because none was stored. If their exact body remains available,
 the same persistence operation that precedes eviction replaces the legacy
@@ -1000,6 +1023,45 @@ response hash. A historical lane-certificate response rereads the exact
 certified Kura lane artifact and requires the same lane/height, proposal,
 PrepareQC, CommitQC, target, and certificate hash. Cached claims alone are
 never sufficient.
+
+Ordinary exact-output retry may use that applied-height authority before the
+terminal rollover pass only after `State` has committed the same height. The
+worker then rereads and cryptographically validates the exact Kura finality
+artifact; Kura persistence by itself is not an application witness. An
+unranked topology target may be retired only when the existing typed
+applied-height verifier covers its complete fan-out. This includes exact
+current-height global control and manifest-bound, sender-signed payload chunks.
+A target with a live actor ticket, a manual or untyped claim, a mismatched
+creation scope, or substituted payload bytes remains owned.
+
+The same ordering applies to a durable Kura replica advert: Kura finality alone
+cannot release it. Only after `State` commits the height may ordinary retry
+reread the exact finality and retire an unranked topology target whose typed
+claim is exactly `DurableKuraReplicaAdvert`. Released source heights are
+rescheduled through the process-lifetime refresh owner after the output locks
+drop. Ticketed output, pre-application state, and any substituted claim remain
+owned.
+
+QueuePlan admission output uses the same ticketless applied-height release but
+requires the independently reread Kura certificate bytes to match its exact
+hash-addressed claim. Missing or substituted bytes and live actor tickets remain
+owned. Releasing QueuePlan output does not schedule a Kura replica-advert
+refresh.
+
+A WAL-recovered Decision fetch retains its original signed request, quorum
+certificate, height context, and response verifier, but reconstructs delivery
+destinations from the bounded current configured-peer snapshot. The frozen
+height roster is used only when that snapshot has no remote target. Thus an
+offline topology or key rotation cannot recreate the same request indefinitely
+against departed peers, while a response still has to bind its authenticated
+outer identity, request hash, signature, subject, manifest, and canonical body.
+
+Canonical executed-block recovery follows the same current-archive-first rule,
+with the frozen finality roster as the empty-snapshot fallback. A multi-chunk
+response pins the exact selected responder, request, finality, executed-wire
+hash, and chunk geometry until completion. Timeout or poisoned assembly clears
+that pin before the next bounded retry samples a fresh archive; chunks from an
+unscheduled or mixed responder cannot complete the block.
 
 The chain-scoped block-sync server retains one coarse logical slot per
 requester/context request and separately fingerprints the signed request's
@@ -1102,6 +1164,14 @@ delivery keeps that queue full. While the progress occurrence is queued, an
 ordinary source returned by downstream backpressure may re-enter beside it;
 the combined queue remains bounded at `effect_capacity + 1`, and draining the
 NewView occurrence restores the ordinary configured bound.
+
+Autonomous producer rechecks distinguish immutable planning failures from
+State/Kura races. `BlockedPredecessor` and `PlanningSnapshotChanged` leave the
+route unattempted, preserve its FIFO work, and retry on the configured bounded
+producer cadence; once the exact predecessor application receipt or stable
+snapshot exists, the next tick may reserve and publish normally. Conflicting,
+inactive, malformed, and otherwise immutable planning failures retain terminal
+height-local suppression and never reserve work.
 
 A successor adapter treats every moved earlier-height proposal, vote, QC,
 certificate, executable payload, and NewView artifact as historical work. Each
@@ -1483,7 +1553,9 @@ global-selection overlay produced an intermediate 866-row array. Removing five
 retired rows already represented by stricter replacements, exact-renaming four
 surviving tests, and replacing one retired combined daemon check with its two
 real block/lane checks produced the 862-test checkpoint. The eligible-only
-Ready-Proposal-Sign preemption regression brings the current inventory to 863
+Ready-Proposal-Sign preemption regression produced the 863-test checkpoint;
+retaining the exact failed-pre-handshake dial backoff owner
+brings the current inventory to 864
 exact tests across 44 modules and 85 pre-network legs.
 The exact Apply regression also drains the typed Kura completion and verifies
 that its immutable finality artifact and original reducer tag absorb a later
@@ -1492,11 +1564,11 @@ without allocating a new work ID; tag drift or a conflicting post-completion
 certificate still fails closed. This extends an existing named regression and
 therefore does not change the inventory cardinality.
 Its canonical module/test TSV inventory SHA-256 is
-`42509872b04f64962dc8edc09ca9f007bafffe402c4e0847255dc937a105888c`.
-Nine of those legs execute the separate 518-test G-UNIT focus inventory. Its
-canonical source-derived inventory contains 519 TSV lines and has SHA-256
-`3d2c93cab0528cb668d977642eecfe78e9c20378e887a0b7db4198ffd220eb29`.
-The 313-test core group includes grouped Native prevote-budget rejection before
+`44784c79c489d83ab142bb0db84e89138c3a54b1349926a80597e2c5b21a83df`.
+Nine of those legs execute the separate 522-test G-UNIT focus inventory. Its
+canonical source-derived inventory contains 523 TSV lines and has SHA-256
+`5e8b82b400b438eabb7733adbccae15b5aa212a98a89161a586cbce686e2f6e9`.
+The 316-test core group includes grouped Native prevote-budget rejection before
 Kura/WSV mutation, historical source-bundle authentication, crash-safe latest-
 index and prune-V2 recovery, cross-route manifest-barrier isolation, durable
 Native signing-boundary drift rejection, atomic grouped reservation commit,
@@ -1691,8 +1763,8 @@ and the root-marker directory, so a second crash cannot retire the only
 rollback-safe copy before the preceding replacements are durable. Filesystem
 aliases, including Windows reparse-point files or directories, fail closed.
 State and root replacement are native atomic replacements on Unix and Windows,
-while platforms without durable directory synchronization fail closed. V1/V2,
-corrupt, and unknown bytes are unsupported; there is no migration.
+while platforms without durable directory synchronization fail closed. The
+canonical schema is mandatory; corrupt and unknown bytes fail closed.
 
 The root marker is the local trust anchor, not an external monotonic counter.
 Replacing or rolling it back—including restoring the bootstrap sentinel—or
@@ -1752,7 +1824,7 @@ data-model module legs. Immediately before completion publication, the runner
 also revalidates the source-bound localnet binary bundle. The data-model modules are
 discovered and executed against `iroha_data_model`; they cannot fall through to
 the `iroha_core` runner.
-The current 863-test inventory is a mechanically checked
+The current 864-test inventory is a mechanically checked
 source contract, not execution evidence; the
 complete inventory must still run as one clean committed, detached,
 source-sealed release leg before it becomes release evidence.
@@ -1951,9 +2023,9 @@ and real-network execution before it reduces release debt:
 bash scripts/run_sumeragi_v2_release_gates.sh --pr
 ```
 
-Before those longer scenarios, the PR gate inventories 863 exact production
+Before those longer scenarios, the PR gate inventories 864 exact production
 liveness tests and executes all 44 owning Rust modules serially. The release
-profile additionally records nine G-UNIT legs executing a separate 518-test
+profile additionally records nine G-UNIT legs executing a separate 522-test
 focus inventory. The
 inventory includes the reducer exact-lock and adapter consumer-epoch
 regressions, plus five lane-work tests which pin the native-AMX signing guard's
@@ -2127,7 +2199,9 @@ continuation regression left the historical inventory at 865 tests across the
 same modules. The replica-disposition regression then added its `queue::tests`
 module; the subsequent retired-row/source-name reconciliation produced the
 862-test checkpoint. The eligible-only Ready-Proposal-Sign preemption row
-leaves 863 current tests across 44 modules. The retained rows require the
+produced the 863-test checkpoint; retaining the exact failed-pre-handshake dial
+backoff owner leaves 864 current tests across 44 modules. The retained rows
+require the
 post-preflight fence to serialize same-wire retransmission and unrelated append
 producers through the durable publication boundary, while a dropped unpublished
 dequeue must release the fence without consuming its target.
@@ -2165,7 +2239,7 @@ unbounded broadcast admission. The integration filter remains a four-test
 module leg, while separate P2P, daemon, status, Nexus lane-relay, and atomic
 lane-certificate contracts brought that historical aggregate pre-network
 corridor to 61 legs. The current source-bound inventory is the separately
-audited 85-leg, 863-production-test corridor plus 518 G-UNIT tests; execution
+audited 85-leg, 864-production-test corridor plus 522 G-UNIT tests; execution
 against a signed clean candidate remains required before release promotion.
 
 The current reconnect changes supersede older mutable-tree diagnostics that
@@ -2448,7 +2522,7 @@ without terminal validation it cannot publish external completion.
 
 On success, the private invocation publishes its exact aggregate receipt. That
 receipt binds the 85 pre-network corridor legs and
-their exact 863-test production inventory, the separate 518-test G-UNIT
+their exact 864-test production inventory, the separate 522-test G-UNIT
 inventory, semantic test names/counts, commands, logs, the exact source-bound
 prebuilt localnet binary bundle and attestation, and resolved tool identities.
 Formal evidence includes the completion, pinned harness lock and toolchain,

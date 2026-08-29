@@ -3,13 +3,13 @@ fn public_balance_scope_never_accepts_universal_as_a_partition() {
     let limits = PrivacyConsensusLimitsV1::taira_default();
     let universal = AssetBalanceScope::Dataspace(crate::nexus::DataSpaceId::UNIVERSAL);
     for protocol in [
-        PrivacyProtocolIdV1::ZkAcePqAuthorizationV0,
+        PrivacyProtocolIdV1::ZkAcePqAuthorizationV1,
         PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
         PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
     ] {
         let mut statement = statement_for(protocol);
         match &mut statement {
-            PrivacyStatementV1::ZkAcePqAuthorizationV0(statement) => {
+            PrivacyStatementV1::ZkAcePqAuthorizationV1(statement) => {
                 statement.public_balance_scope = universal;
             }
             PrivacyStatementV1::OrchardHalo2ActionsV1(statement) => {
@@ -148,7 +148,7 @@ fn zk_ace_policy_record_is_canonical_self_digested_and_roundtrips() {
     tampered.policy_id = PrivacyPolicyIdV1::new(raw(90));
     tamperings.push(tampered);
     let mut tampered = record.clone();
-    tampered.identity_commitment = commitment(91);
+    tampered.identity_commitment = zk_ace_identity_commitment(91);
     tamperings.push(tampered);
     let mut tampered = record.clone();
     tampered.policy_digest = PrivacyPolicyDigestV1::new(raw(92));
@@ -178,7 +178,7 @@ fn zk_ace_policy_record_is_canonical_self_digested_and_roundtrips() {
 }
 fn construct_zk_ace_policy_for_test(
     policy_id: PrivacyPolicyIdV1,
-    identity_commitment: PrivacyCommitmentV1,
+    identity_commitment: PrivacyZkAceIdentityCommitmentV1,
     policy_digest: PrivacyPolicyDigestV1,
     authorization_epoch: u64,
     source_allowlist: Vec<AccountId>,
@@ -196,7 +196,7 @@ fn construct_zk_ace_policy_for_test(
 }
 fn assert_zk_ace_policy_scalar_boundaries(
     policy_id: PrivacyPolicyIdV1,
-    identity: PrivacyCommitmentV1,
+    identity: PrivacyZkAceIdentityCommitmentV1,
     digest: PrivacyPolicyDigestV1,
     allowlist: &[AccountId],
 ) {
@@ -214,7 +214,7 @@ fn assert_zk_ace_policy_scalar_boundaries(
     assert_eq!(
         construct_zk_ace_policy_for_test(
             policy_id,
-            PrivacyCommitmentV1::new([0; 32]),
+            PrivacyZkAceIdentityCommitmentV1::default(),
             digest,
             1,
             allowlist.to_vec(),
@@ -258,7 +258,7 @@ fn assert_zk_ace_policy_scalar_boundaries(
 }
 fn assert_zk_ace_policy_allowlist_and_origin_boundaries(
     policy_id: PrivacyPolicyIdV1,
-    identity: PrivacyCommitmentV1,
+    identity: PrivacyZkAceIdentityCommitmentV1,
     digest: PrivacyPolicyDigestV1,
     allowlist: &[AccountId],
 ) {
@@ -322,7 +322,7 @@ fn assert_zk_ace_policy_allowlist_and_origin_boundaries(
 #[test]
 fn zk_ace_policy_registration_rejects_every_noncanonical_boundary() {
     let policy_id = PrivacyPolicyIdV1::new(raw(10));
-    let identity = commitment(11);
+    let identity = zk_ace_identity_commitment(11);
     let digest = PrivacyPolicyDigestV1::new(raw(12));
     let allowlist = zk_ace_allowlist();
     assert_zk_ace_policy_scalar_boundaries(policy_id, identity, digest, &allowlist);
@@ -408,7 +408,7 @@ fn zk_ace_revocation_is_one_step_terminal_and_content_preserving() {
     );
     let mut mutations = Vec::new();
     let mut changed_identity = successor.clone();
-    changed_identity.identity_commitment = commitment(21);
+    changed_identity.identity_commitment = zk_ace_identity_commitment(21);
     redigest_zk_ace_policy(&mut changed_identity);
     mutations.push(changed_identity);
     let mut changed_policy_digest = successor.clone();
@@ -1202,8 +1202,8 @@ fn assert_other_private_transfer_shape_boundaries(limits: &PrivacyConsensusLimit
             max: IVM_PRIVATE_NOTE_MAX_INPUTS_V1
         })
     ));
-    let mut pq = statement_for(PrivacyProtocolIdV1::PqMaspStarkV0);
-    let PrivacyStatementV1::PqMaspStarkV0(statement) = &mut pq else {
+    let mut pq = statement_for(PrivacyProtocolIdV1::PqMaspStarkV1);
+    let PrivacyStatementV1::PqMaspStarkV1(statement) = &mut pq else {
         unreachable!()
     };
     statement.output_commitments = vec![commitment(130), commitment(131), commitment(132)];
@@ -1214,8 +1214,8 @@ fn assert_other_private_transfer_shape_boundaries(limits: &PrivacyConsensusLimit
             max: PQ_MASP_MAX_OUTPUTS_V1
         })
     ));
-    let mut pq = statement_for(PrivacyProtocolIdV1::PqMaspStarkV0);
-    let PrivacyStatementV1::PqMaspStarkV0(statement) = &mut pq else {
+    let mut pq = statement_for(PrivacyProtocolIdV1::PqMaspStarkV1);
+    let PrivacyStatementV1::PqMaspStarkV1(statement) = &mut pq else {
         unreachable!()
     };
     statement.authorization_epoch += 1;
@@ -1227,8 +1227,8 @@ fn assert_other_private_transfer_shape_boundaries(limits: &PrivacyConsensusLimit
             bound_epoch: 18,
         })
     );
-    let mut malformed = statement_for(PrivacyProtocolIdV1::PqMaspStarkV0);
-    let PrivacyStatementV1::PqMaspStarkV0(statement) = &mut malformed else {
+    let mut malformed = statement_for(PrivacyProtocolIdV1::PqMaspStarkV1);
+    let PrivacyStatementV1::PqMaspStarkV1(statement) = &mut malformed else {
         unreachable!()
     };
     statement.encrypted_outputs[0].recipient = PrivacyRecipientIdV1::new([0; 32]);
@@ -1372,7 +1372,7 @@ fn lifecycle_edges_preserve_history_and_retirement_is_terminal() {
 fn activation_effective_height_uses_active_lifecycle_payload() {
     let limits = PrivacyConsensusLimitsV1::taira_default();
     let envelope = envelope(statement_for(
-        PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0,
+        PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1,
     ));
     let mut activation = activation(&envelope);
     activation.lifecycle = PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
@@ -1401,10 +1401,10 @@ fn envelopes_fail_closed_on_every_binding_and_resource_mutation() {
     let base = envelope(statement);
     base.validate_with_limits(&limits).expect("valid envelope");
     let mut invalid = base.clone();
-    invalid.protocol_id = PrivacyProtocolIdV1::ZkAcePqAuthorizationV0;
+    invalid.protocol_id = PrivacyProtocolIdV1::ZkAcePqAuthorizationV1;
     assert!(invalid.validate_with_limits(&limits).is_err());
     invalid = base.clone();
-    invalid.proof_system_id = PrivacyProofSystemIdV1::StarkFriSha256Goldilocks;
+    invalid.proof_system_id = PrivacyProofSystemIdV1::StarkFriPoseidonX7Goldilocks6x64;
     assert!(invalid.validate_with_limits(&limits).is_err());
     invalid = base.clone();
     invalid.engine_id = PrivacyEngineIdV1::NativeJindo;
@@ -1428,7 +1428,7 @@ fn envelopes_fail_closed_on_every_binding_and_resource_mutation() {
     invalid.statement_digest = PrivacyStatementDigestV1::new(raw(221));
     assert!(invalid.validate_with_limits(&limits).is_err());
     invalid = base.clone();
-    invalid.proof = PrivacyProofV1::ZkAcePqAuthorizationV0(PrivacyProofBytesV1::new(vec![1]));
+    invalid.proof = PrivacyProofV1::ZkAcePqAuthorizationV1(PrivacyProofBytesV1::new(vec![1]));
     assert!(invalid.validate_with_limits(&limits).is_err());
     invalid = base.clone();
     invalid.proof = PrivacyProofV1::VeRangeTransparentRangeV1(PrivacyProofBytesV1::new(Vec::new()));

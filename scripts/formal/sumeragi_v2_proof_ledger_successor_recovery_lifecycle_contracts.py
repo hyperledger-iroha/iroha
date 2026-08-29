@@ -334,8 +334,8 @@ def _successor_recovery_lifecycle_source_fidelity_errors(
                 "lineage-separated durable Validate retry seal",
                 cold_validate_seal,
                 (
-                    "Live { effect: AdapterEffect, ownership: RuntimeEffectOwnership, }",
-                    "Recovered { owner: Arc<RecoveredDurableValidateRetryOwnerV1>, frontier: RecoveredDurableValidateRetryFrontierV1, }",
+                    "Live { effect: AdapterEffect, ownership: RuntimeEffectOwnership, store_terminal: Option<DurableStoreTerminalRetrySealV1>, lifecycle_ordinal: Option<u128>, }",
+                    "Recovered { owner: Arc<RecoveredDurableValidateRetryOwnerV1>, frontier: RecoveredDurableValidateRetryFrontierV1, lifecycle_ordinal: Option<u128>, }",
                 ),
             )
             reject_tokens(
@@ -344,11 +344,60 @@ def _successor_recovery_lifecycle_source_fidelity_errors(
                 cold_validate_seal,
                 ("Recovered(Arc<RecoveredDurableValidateRetryOwnerV1>)",),
             )
-            cold_validate_retry_projection = _require_rust_item(
+            for ordinal_method, ordinal_fragments, description in (
+                (
+                    "lifecycle_ordinal",
+                    (
+                        "Self::Live { lifecycle_ordinal, .. }",
+                        "Self::Recovered { lifecycle_ordinal, .. }",
+                        "*lifecycle_ordinal",
+                    ),
+                    "exact durable Validate retry lifecycle row projection",
+                ),
+                (
+                    "bind_lifecycle_ordinal",
+                    (
+                        "if ordinal == 0",
+                        "Self::Live { lifecycle_ordinal, .. }",
+                        "Self::Recovered { lifecycle_ordinal, .. }",
+                        "Some(existing) if existing != ordinal",
+                        "None => { *lifecycle_ordinal = Some(ordinal)",
+                    ),
+                    "single-assignment durable Validate retry lifecycle row binding",
+                ),
+                (
+                    "release_lifecycle_ordinal",
+                    (
+                        "self.lifecycle_ordinal() != Some(ordinal)",
+                        "Self::Live { lifecycle_ordinal, .. }",
+                        "Self::Recovered { lifecycle_ordinal, .. }",
+                        "*lifecycle_ordinal = None",
+                    ),
+                    "exact durable Validate retry lifecycle row release",
+                ),
+            ):
+                ordinal_item = _require_qualified_rust_item(
+                    effects_path,
+                    effects_source,
+                    "DurableValidateRetrySealV1",
+                    ordinal_method,
+                    errors,
+                    description,
+                )
+                if ordinal_item is not None:
+                    require_order(
+                        effects_path,
+                        description,
+                        ordinal_item.source,
+                        ordinal_fragments,
+                    )
+            cold_validate_retry_projection = _require_qualified_rust_item(
                 effects_path,
                 effects_source,
+                "DurableValidateRetrySealV1",
                 "project_retry",
                 errors,
+                "non-substitutable live and recovered Validate retry projection",
             )
             if cold_validate_retry_projection is not None:
                 require_order(
@@ -356,14 +405,18 @@ def _successor_recovery_lifecycle_source_fidelity_errors(
                     "non-substitutable live and recovered Validate retry projection",
                     cold_validate_retry_projection.source,
                     (
-                        "Self::Live { effect: incumbent_effect, ownership: incumbent_ownership, }",
+                        "Self::Live { effect: incumbent_effect, ownership: incumbent_ownership, store_terminal, lifecycle_ordinal, }",
+                        "store_terminal.as_ref().is_some_and(|store| !store.exactly_precedes_validate(effect))",
                         "adopt_incumbent_body_stage_for_retry_or_authority(incoming, effect)",
                         "seal: Self::Live",
-                        "Self::Recovered { owner, frontier }",
+                        "store_terminal: store_terminal.clone()",
+                        "lifecycle_ordinal: *lifecycle_ordinal",
+                        "Self::Recovered { owner, frontier, lifecycle_ordinal, }",
                         "owner.exactly_matches_retry(frontier, effect, incoming)",
                         "seal: Self::Recovered {",
                         "owner: Arc::clone(owner)",
                         "frontier",
+                        "lifecycle_ordinal: *lifecycle_ordinal",
                     ),
                 )
                 reject_tokens(
@@ -385,10 +438,11 @@ def _successor_recovery_lifecycle_source_fidelity_errors(
                     cold_validate_durable_commitment_join.source,
                     (
                         "Self::Live { .. } => Ok(None)",
-                        "Self::Recovered { owner, frontier }",
+                        "Self::Recovered { owner, frontier, lifecycle_ordinal, }",
                         "frontier.project_commitment_ceiling(commitment)",
                         "owner: Arc::clone(owner)",
                         "frontier",
+                        "lifecycle_ordinal: *lifecycle_ordinal",
                     ),
                 )
             cold_validate_install = region(
@@ -550,8 +604,9 @@ def _successor_recovery_lifecycle_source_fidelity_errors(
                         "self.preflight_remote_proposal_replay_indexes()?",
                         "self.runtime.retire_proposal_work_after_decision(",
                         "let Some(seal) = projected_recovered_decision_seal",
+                        "!drain_decision_body || seal.lifecycle_ordinal().is_some()",
                         "self.durable_validate_retry_seals.insert(decision_body, seal)",
-                        "self.durable_validate_retry_seals.retain(|key, _| !drain_decision_body && *key == decision_body)",
+                        "self.durable_validate_retry_seals.retain(|key, seal| { seal.lifecycle_ordinal().is_some() || (!drain_decision_body && *key == decision_body) })",
                         "self.protected_decision = Some(durable_decision)",
                     ),
                 )
@@ -1505,15 +1560,34 @@ def _successor_recovery_lifecycle_source_fidelity_errors(
                 "activated runner readiness retirement",
                 activated_runner_authority,
                 "self.ingress_ready.store(false, Ordering::Release)",
-                1,
+                2,
             )
             require_token_count(
                 runner_dependency_path,
                 "activated runner ingress retirement",
                 activated_runner_authority,
                 "self.block_ingress.close()",
-                1,
+                2,
             )
+            activated_runner_close = _require_qualified_rust_item(
+                runner_dependency_path,
+                runner_dependency_source,
+                "ProductionLifecycleActivatedRunnerAuthorityV1",
+                "close_ingress",
+                errors,
+                "activated runner finite-drain ingress closure",
+            )
+            if activated_runner_close is not None:
+                require_order(
+                    runner_dependency_path,
+                    "activated runner finite-drain ingress closure",
+                    activated_runner_close.source,
+                    (
+                        "self.ingress_ready.store(false, Ordering::Release)",
+                        "self.block_ingress.close()",
+                        "Arc::ptr_eq(&self.block_ingress, launched_ingress)",
+                    ),
+                )
             shared_runner_ingress_retirement = region(
                 runner_dependency_path,
                 runner_dependency_source,
@@ -3140,10 +3214,13 @@ def _successor_recovery_lifecycle_source_fidelity_errors(
                 "staged recovered Broadcast registry binding",
                 single_broadcast_bind,
                 (
+                    "exact_staged_recovered_lifecycle_broadcast_address(",
+                    "pub(super) fn exact_staged_recovered_lifecycle_broadcast_address(",
                     "coordinator.records.get(&child_ordinal)",
                     "ConcreteWorkAddress::new(record.owner, child_ordinal, child_slot)",
-                    "self.registry.entries.contains_key(&broadcast_address)",
-                    ".validates_at(&self.verified, broadcast_address, child_digest)",
+                    "broadcast.matches_current_ready_record(",
+                    ".validates_at(verified, broadcast_address, child_digest)",
+                    "registry.entries.contains_key(&broadcast_address)",
                 ),
             )
             single_broadcast_transition = region(
@@ -3193,7 +3270,7 @@ def _successor_recovery_lifecycle_source_fidelity_errors(
                 "adjacent fresh Certified-Serve pair after a shared gap",
                 fresh_serve_pair,
                 (
-                    "current.high_water >= serve",
+                    "serve <= current.high_water",
                     "serve.checked_add(1) != Some(producer)",
                     "producer != staged.high_water",
                 ),
@@ -4028,7 +4105,7 @@ def _successor_recovery_lifecycle_source_fidelity_errors(
                 selector_source,
                 "queue-owned recovered Decision Fetch selector",
                 "pub(crate) fn prepare_next_recovered_decision_fetch_ingress_selector(",
-                "/// Decide whether an already selected exact cut is the recovered Fetch owner.",
+                "/// Classify the exact selected certified-response occurrence without mutation.",
             )
             require_order(
                 selector_path,
@@ -4280,10 +4357,12 @@ def _successor_recovery_lifecycle_source_fidelity_errors(
                 "staged recovered Store registry binding",
                 single_store_bind,
                 (
+                    "exact_staged_recovered_decision_store_address(",
+                    "self.registry.entries.contains_key(&store_address)",
+                    "pub(super) fn exact_staged_recovered_decision_store_address(",
                     "coordinator.records.get(&child_ordinal)",
                     "ConcreteWorkAddress::new(record.owner, child_ordinal, child_slot)",
-                    "self.registry.entries.contains_key(&store_address)",
-                    ".validates_at(coordinator.active_context, store_address, child_digest)",
+                    "store.matches_current_ready_record(",
                 ),
             )
             single_store_transition = region(

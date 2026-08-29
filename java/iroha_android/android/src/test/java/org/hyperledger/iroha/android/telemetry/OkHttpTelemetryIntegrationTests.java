@@ -79,7 +79,9 @@ public final class OkHttpTelemetryIntegrationTests {
                       "{\"status\":\"ok\"}"
                           .getBytes(java.nio.charset.StandardCharsets.UTF_8),
                       "OK",
-                      java.util.Collections.emptyMap()));
+                      java.util.Collections.emptyMap(),
+                      null,
+                      false));
       final SorafsGatewayClient client =
           SorafsGatewayClient.builder()
               .setExecutor(executor)

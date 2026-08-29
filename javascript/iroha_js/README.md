@@ -255,10 +255,9 @@ cannot authorize a network operation. Import
 manifest through the Node/N-API client. The authenticated ABI23 binding applies
 the bounded canonical decoder; transaction construction must then call
 `requirePrivacyExact12CapabilityAdmissionV1`, which requires committed Active
-state and byte-exact equality with the selected local compiled-profile row.
-There is no browser, JSON, or mock authorization fallback. The legacy
-`parsePrivacyCapabilitySnapshotV1` helper remains read-only and its result is
-not an admission object. The generic
+state, registered production qualification, and byte-exact equality with the
+selected local compiled-profile row. There is no browser, JSON snapshot, or
+mock authorization fallback. The generic
 request/build/verify dispatcher and its free-form algorithm aliases do not
 exist; proving is exposed only by protocol-specific typed APIs.
 
@@ -272,16 +271,17 @@ caller supplies that complete witness material; it is not an automatic Private
 Kaigi fee-spend adapter.
 
 `PRIVACY_PROTOCOL_IDS_V1` is the closed registry of exactly twelve identities,
-in wire order: `zk-ace-pq-authorization-v0`,
+in wire order: `zk-ace-pq-authorization-v1`,
 `anonymous-pgc-k-out-of-n-v1`, `verange-transparent-range-v1`,
-`iroha-zk-ams-v1`, `vega-existing-credential-zk-v0`,
-`iroha-zk-x509-stark-p256-v0`,
-`iroha-jindo-polynomial-commitment-v0`,
+`iroha-zk-ams-v1`, `vega-existing-credential-zk-v1`,
+`iroha-zk-x509-stark-p256-v1`,
+`iroha-jindo-polynomial-commitment-v1`,
 `iroha-bootle-lantern-anoncred-v1`, `orchard-halo2-actions-v1`,
 `monero-fcmp-plus-plus-v1`, `iroha-ivm-private-note-stark-v1`, and
-`pq-masp-stark-v0`. Capability JSON parsing requires the exact version,
-fields, row count, and ordering. Unknown fields, aliases, duplicates,
-case-folded labels, and whitespace-normalized labels fail closed.
+`pq-masp-stark-v1`. Each manifest row has exactly `protocol_id`,
+`operation_schema`, `execution_mode`, `privacy_feature_mask`,
+`compiled_profile`, `readiness`, and `activation`. Unknown fields, aliases,
+duplicates, case-folded labels, and whitespace-normalized labels fail closed.
 
 > **ESM-only:** The package ships as pure ESM. Use dynamic `import()` from
 > CommonJS (`const { ToriiClient } = await import("@iroha/iroha-js/torii");`)

@@ -14,20 +14,17 @@ async fn dispatch_connect_session_status(
     decode_canonical(arguments, "token_management", 32)?;
     let token = required_string(arguments, "token_management")?;
     let path = format!("/v1/connect/status?sid={sid}");
-    let headers = norito::json!({ "Authorization": (format!("Bearer {token}")) });
-    dispatch_route_with_extra_header_policy(
+    dispatch_route_with_borrowed_headers(
         app,
         inbound_headers,
         Method::GET,
         path.as_str(),
-        Some(&headers),
+        None,
         Vec::new(),
         None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
+        arguments.get("accept").and_then(Value::as_str),
         ExtraHeaderPolicy::ConnectManagement,
+        Some(token),
     )
     .await
 }

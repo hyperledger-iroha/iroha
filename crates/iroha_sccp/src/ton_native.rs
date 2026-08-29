@@ -23,11 +23,12 @@ use core::fmt;
 use iroha_data_model::bridge::{
     SCCP_TON_BASECHAIN_WORKCHAIN_V1, SCCP_TON_MAINNET_GLOBAL_ID_V1,
     SCCP_TON_MAINNET_ZERO_STATE_FILE_HASH_V1, SCCP_TON_MAINNET_ZERO_STATE_ROOT_HASH_V1,
-    SCCP_TON_MASTERCHAIN_SHARD_V1, SCCP_TON_MASTERCHAIN_WORKCHAIN_V1,
-    SCCP_TON_TESTNET_GLOBAL_ID_V1, SCCP_TON_TESTNET_ZERO_STATE_FILE_HASH_V1,
-    SCCP_TON_TESTNET_ZERO_STATE_ROOT_HASH_V1, SCCP_TON_ZERO_STATE_SEQNO_V1,
-    SCCP_V1_TON_STORAGE_VERSION, SccpNetworkV1, SccpSourceEmitterV1, SccpSourceIdentityV1,
-    SccpTonAddressV1,
+    SCCP_TON_MASTERCHAIN_SHARD_V1, SCCP_TON_MASTERCHAIN_WORKCHAIN_V1, SCCP_TON_ZERO_STATE_SEQNO_V1,
+    SCCP_V1_TON_STORAGE_VERSION, SccpDestinationDeploymentV1, SccpGovernedRouteV1,
+    SccpGroth16Bls12381IcV1, SccpGroth16Bls12381VerifyingKeyV1, SccpLaneIdV1, SccpNetworkV1,
+    SccpRouteKeyV1, SccpSourceEmitterV1, SccpSourceIdentityV1, SccpTonAddressV1,
+    SccpTonDestinationDeploymentV1, SccpTonMintBreakerGuardianKeysV1,
+    canonical_sccp_lane_id_bytes_v1, sccp_groth16_bls12381_verifying_key_hash_v1,
 };
 use sha2::{Digest as _, Sha256, Sha512};
 
@@ -65,6 +66,8 @@ const TON_MAX_CELL_DATA_BYTES: usize = 128;
 const TON_MAX_BOC_BYTES: usize = 64 * 1024;
 const TON_MAX_BOC_CELLS: usize = 4_096;
 const TON_MAX_REFS: usize = 4;
+/// Maximum cell depth admitted by TON's reference cell traits.
+const TON_MAX_CELL_DEPTH: u16 = 1_024;
 const TON_MAX_VALIDATORS: usize = 1_024;
 const TON_MAX_SIGNATURES: usize = 1_024;
 const TON_MAX_MASTERCHAIN_BLOCKS: usize = 64;
@@ -77,6 +80,7 @@ const TON_VALIDATOR_SET_KEY_BITS: u16 = 16;
 const TON_PAYLOAD_HEADER_BYTES: usize = 50;
 const TON_PAYLOAD_MIDDLE_CHUNK_BYTES: usize = 100;
 const TON_MAX_CANONICAL_PAYLOAD_BYTES: usize = 374;
+const TON_SCCP_PENDING_OPERATION_CAP_V1: u16 = 1_024;
 
 /// Maximum post-anchor masterchain blocks accepted by one TON proof.
 pub const TON_NATIVE_MAX_MASTERCHAIN_BLOCKS_V1: usize = TON_MAX_MASTERCHAIN_BLOCKS;
@@ -390,6 +394,223 @@ pub struct TonNativeSourceProofV1 {
     pub event: TonShardEventProofV1,
 }
 
+/// One TON account-state opening selected by a finalized masterchain head.
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
+pub struct TonAccountStateOpeningV1 {
+    /// Shard block selected from the finalized masterchain `ShardHashes` tree.
+    pub shard_block_id: TonBlockIdExtV1,
+    /// Canonical complete or Merkle-pruned shard-block BoC.
+    #[norito(with = "crate::json_utils::bytes_hex")]
+    pub shard_block_proof_boc: Vec<u8>,
+    /// Canonical account opening rooted at the shard block's post-state.
+    #[norito(with = "crate::json_utils::bytes_hex")]
+    pub shard_state_proof_boc: Vec<u8>,
+}
+
+/// Canonical dual-account proof for one TON mint-breaker observation.
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
+pub struct SccpTonBreakerObservationProofV1 {
+    /// Proof schema version. Final V1 accepts exactly `1`.
+    pub version: u8,
+    /// Exact governed route revision to which the observation applies.
+    pub route_key: SccpRouteKeyV1,
+    /// One authenticated TON-mainnet masterchain continuation.
+    pub finality: TonNativeFinalityProofV1,
+    /// Authenticated state of the governed SCCP route account.
+    pub route_account: TonAccountStateOpeningV1,
+    /// Authenticated state of the governed Jetton-master account.
+    pub jetton_master_account: TonAccountStateOpeningV1,
+}
+
+/// Authenticated identity of one active TON account at one shard block.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TonAccountStateReadbackV1 {
+    /// Exact opened account address.
+    pub address: SccpTonAddressV1,
+    /// Finalized shard block containing this post-state.
+    pub shard_block_id: TonBlockIdExtV1,
+    /// Masterchain sequence recorded by the authenticated `ShardDescr`.
+    pub registered_masterchain_seqno: u32,
+    /// Shard post-state root opened by the proof.
+    pub shard_state_root_hash: H256,
+    /// Representation hash of the complete active `Account` cell.
+    pub account_state_hash: H256,
+    /// Representation hash of the active account code cell.
+    pub code_hash: H256,
+    /// Representation hash of the active account data cell.
+    pub data_hash: H256,
+    /// Last transaction hash recorded by the enclosing `ShardAccount`.
+    pub last_transaction_hash: H256,
+    /// Last transaction logical time recorded by the enclosing `ShardAccount`.
+    pub last_transaction_lt: u64,
+    /// Account-storage logical time authenticated inside the active account.
+    pub storage_last_transaction_lt: u64,
+}
+
+/// Authenticated summary of one exact TON replay forest.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TonReplayForestReadbackV1 {
+    /// Representation hash of the nonempty-shard dictionary root, when present.
+    pub nonempty_shard_roots_hash: Option<H256>,
+    /// Number of occupied replay leaves.
+    pub leaf_count: u64,
+    /// Monotonic forest update sequence; final V1 requires equality with `leaf_count`.
+    pub update_sequence: u64,
+}
+
+/// Authenticated summary of one optional TON dictionary and its explicit count.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TonPendingMapReadbackV1 {
+    /// Representation hash of the dictionary root, when nonempty.
+    pub dictionary_root_hash: Option<H256>,
+    /// Explicit operation count stored beside the dictionary.
+    pub count: u16,
+}
+
+/// Complete immutable TON bridge configuration decoded from account storage.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TonDeploymentReadbackV1 {
+    /// Mainnet global id authenticated by the stored configuration.
+    pub expected_global_id: i32,
+    /// Exact governed route revision.
+    pub route_revision: u32,
+    /// Fixed Taira-to-TON base-unit multiplier.
+    pub taira_to_ton_multiplier: u64,
+    /// Positive immutable wrapped-supply cap.
+    pub max_wrapped_supply: u128,
+    /// Canonical TON-to-SORA lane bytes.
+    pub source_lane_bytes: Vec<u8>,
+    /// Canonical SORA-to-TON lane bytes.
+    pub destination_lane_bytes: Vec<u8>,
+    /// Hash of `source_lane_bytes` committed by the route.
+    pub source_lane_hash: H256,
+    /// Hash of `destination_lane_bytes` committed by the route.
+    pub destination_lane_hash: H256,
+    /// Exact concrete route-configuration hash.
+    pub route_configuration_hash: H256,
+    /// Exact destination-deployment binding hash.
+    pub destination_binding_hash: H256,
+    /// Hash of the governed semantic proof profile.
+    pub semantic_proof_profile_hash: H256,
+    /// Jetton-master code identity.
+    pub jetton_master_code_hash: H256,
+    /// Canonically reconstructed initial Jetton-master data identity.
+    pub jetton_master_initial_data_hash: H256,
+    /// Jetton-wallet code identity.
+    pub jetton_wallet_code_hash: H256,
+    /// SCCP route code identity.
+    pub route_code_hash: H256,
+    /// Canonically reconstructed initial SCCP-route data identity.
+    pub route_initial_data_hash: H256,
+    /// Governed SORA finality-anchor hash.
+    pub sora_finality_anchor_hash: H256,
+    /// Governed Groth16 circuit commitment.
+    pub verifier_circuit_hash: H256,
+    /// Hash of the canonical BLS12-381 verifying-key bytes.
+    pub verifying_key_hash: H256,
+    /// Exact proof-profile commitment consumed by the linked verifier.
+    pub proof_profile_commitment: H256,
+    /// Exactly five nonzero, strictly increasing breaker guardian keys.
+    pub mint_breaker_guardian_keys: SccpTonMintBreakerGuardianKeysV1,
+    /// Representation hash of the linked verifier code.
+    pub embedded_verifier_code_hash: H256,
+    /// Representation hash of the exact typed verifying-key cell.
+    pub verifying_key_cell_hash: H256,
+    /// Fully decoded typed verifying key.
+    pub verifying_key: SccpGroth16Bls12381VerifyingKeyV1,
+    /// Representation hash of the immutable master metadata cell.
+    pub master_metadata_hash: H256,
+    /// Representation hash of the complete shared bridge-configuration cell.
+    pub bridge_config_cell_hash: H256,
+}
+
+/// Mutable SCCP route state authenticated by a breaker observation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TonRouteStorageReadbackV1 {
+    /// Stored configuration hash.
+    pub route_configuration_hash: H256,
+    /// Stored hash of the referenced bridge-configuration cell.
+    pub bridge_config_cell_hash: H256,
+    /// Inbound-mint replay forest.
+    pub inbound_mint_replay: TonReplayForestReadbackV1,
+    /// Outbound-burn replay forest.
+    pub outbound_burn_replay: TonReplayForestReadbackV1,
+    /// Pending route-to-master mints.
+    pub pending_mints: TonPendingMapReadbackV1,
+    /// Pending wallet-to-route burns.
+    pub pending_burns: TonPendingMapReadbackV1,
+    /// One-way route breaker flag.
+    pub minting_disabled: bool,
+}
+
+/// Mutable Jetton-master state authenticated by a breaker observation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TonMasterStorageReadbackV1 {
+    /// Stored configuration hash.
+    pub route_configuration_hash: H256,
+    /// Stored hash of the referenced bridge-configuration cell.
+    pub bridge_config_cell_hash: H256,
+    /// Current Jetton total supply.
+    pub total_supply: u128,
+    /// Representation hash of the immutable TEP-64 metadata cell.
+    pub metadata_hash: H256,
+    /// Reciprocal governed SCCP route address.
+    pub bridge_address: SccpTonAddressV1,
+    /// Master mint replay forest.
+    pub mint_replay: TonReplayForestReadbackV1,
+    /// Master burn replay forest.
+    pub burn_replay: TonReplayForestReadbackV1,
+    /// Pending master-to-wallet mints.
+    pub pending_mints: TonPendingMapReadbackV1,
+    /// One-way master breaker flag.
+    pub minting_disabled: bool,
+}
+
+/// Fully authenticated, normalized TON breaker observation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VerifiedSccpTonBreakerObservationV1 {
+    /// Exact governed route key.
+    pub route_key: SccpRouteKeyV1,
+    /// Finalized TON-mainnet masterchain block.
+    pub masterchain_block_id: TonBlockIdExtV1,
+    /// Authenticated masterchain generation time in UNIX seconds.
+    pub masterchain_gen_utime: u32,
+    /// Governed route account identity and state hashes.
+    pub route_account: TonAccountStateReadbackV1,
+    /// Governed Jetton-master account identity and state hashes.
+    pub jetton_master_account: TonAccountStateReadbackV1,
+    /// Shared immutable deployment decoded independently from both accounts.
+    pub deployment: TonDeploymentReadbackV1,
+    /// Mutable SCCP route storage.
+    pub route_storage: TonRouteStorageReadbackV1,
+    /// Mutable Jetton-master storage.
+    pub master_storage: TonMasterStorageReadbackV1,
+    /// `route_storage.minting_disabled || master_storage.minting_disabled`.
+    pub effective_disabled: bool,
+    /// SHA-256 of canonical Norito bytes for the complete proof object.
+    pub canonical_proof_sha256: H256,
+    /// Byte length of those canonical proof bytes.
+    pub canonical_proof_byte_len: u32,
+}
+
 /// Cheap deterministic reservation for native TON source verification.
 ///
 /// The estimate reads only typed vector and byte lengths. It performs no BoC
@@ -481,6 +702,10 @@ pub enum TonNativeSourceError {
     InvalidOutboundMessage,
     /// Authenticated SCCP body did not match the exact lane/message/payload statement.
     EventStatementMismatch,
+    /// A TON breaker proof or its dual-account framing was malformed.
+    InvalidBreakerObservation,
+    /// Authenticated route/master storage did not match exact governed deployment state.
+    BreakerDeploymentMismatch,
 }
 
 impl fmt::Display for TonNativeSourceError {
@@ -506,6 +731,10 @@ impl fmt::Display for TonNativeSourceError {
             Self::UnsuccessfulTransaction => "TON source transaction did not succeed",
             Self::InvalidOutboundMessage => "invalid TON source outbound message",
             Self::EventStatementMismatch => "TON SCCP event statement mismatch",
+            Self::InvalidBreakerObservation => "invalid TON breaker observation proof",
+            Self::BreakerDeploymentMismatch => {
+                "TON breaker observation does not match governed deployment"
+            }
         })
     }
 }
@@ -519,15 +748,13 @@ fn nonzero(hash: &H256) -> bool {
 fn ton_network_global_id(network: SccpNetworkV1) -> Option<i32> {
     match network {
         SccpNetworkV1::TonMainnet => Some(SCCP_TON_MAINNET_GLOBAL_ID_V1),
-        SccpNetworkV1::TonTestnet => Some(SCCP_TON_TESTNET_GLOBAL_ID_V1),
         _ => None,
     }
 }
 
 fn ton_network_tag(network: SccpNetworkV1) -> Option<u8> {
     match network {
-        SccpNetworkV1::TonMainnet => Some(14),
-        SccpNetworkV1::TonTestnet => Some(15),
+        SccpNetworkV1::TonMainnet => Some(0x44),
         _ => None,
     }
 }
@@ -537,10 +764,6 @@ fn ton_expected_zero_state(network: SccpNetworkV1) -> Option<TonBlockIdExtV1> {
         SccpNetworkV1::TonMainnet => (
             SCCP_TON_MAINNET_ZERO_STATE_ROOT_HASH_V1,
             SCCP_TON_MAINNET_ZERO_STATE_FILE_HASH_V1,
-        ),
-        SccpNetworkV1::TonTestnet => (
-            SCCP_TON_TESTNET_ZERO_STATE_ROOT_HASH_V1,
-            SCCP_TON_TESTNET_ZERO_STATE_FILE_HASH_V1,
         ),
         _ => return None,
     };
@@ -1018,6 +1241,14 @@ struct TonBoc {
     cells: Vec<TonBocCell>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct TonCellStructuralKey {
+    descriptor: u8,
+    data_descriptor: u8,
+    data: Vec<u8>,
+    child_classes: Vec<usize>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TonCellType {
     Ordinary,
@@ -1212,7 +1443,8 @@ fn ton_level_mask_is_significant(mask: u8, level: u8) -> bool {
 
 fn ton_child_hash_depth(computed: &TonComputedCell, level: u8) -> Option<(H256, u16)> {
     let index = usize::from(level.min(3));
-    Some((*computed.hashes.get(index)?, *computed.depths.get(index)?))
+    let depth = *computed.depths.get(index)?;
+    (depth <= TON_MAX_CELL_DEPTH).then_some((*computed.hashes.get(index)?, depth))
 }
 
 fn ton_parse_pruned_branch(cell: &TonBocCell) -> Option<TonPrunedBranch> {
@@ -1225,18 +1457,26 @@ fn ton_parse_pruned_branch(cell: &TonBocCell) -> Option<TonPrunedBranch> {
         return None;
     }
     if cell.data.len() == 35 {
+        let depth = u16::from_be_bytes(cell.data.get(33..35)?.try_into().ok()?);
+        if depth > TON_MAX_CELL_DEPTH {
+            return None;
+        }
         return Some(TonPrunedBranch {
             mask: 1,
             hashes: vec![cell.data.get(1..33)?.try_into().ok()?],
-            depths: vec![u16::from_be_bytes(cell.data.get(33..35)?.try_into().ok()?)],
+            depths: vec![depth],
         });
     }
-    let mask = ton_level_mask_value(*cell.data.get(1)?);
+    let raw_mask = *cell.data.get(1)?;
+    if raw_mask & !0x07 != 0 {
+        return None;
+    }
+    let mask = raw_mask;
     let level = ton_level_mask_level(mask);
     if !(1..=3).contains(&level) {
         return None;
     }
-    let count = usize::from(level);
+    let count = ton_level_mask_hash_index(mask);
     if cell.data.len() != 2_usize.checked_add(count.checked_mul(34)?)? {
         return None;
     }
@@ -1254,12 +1494,16 @@ fn ton_parse_pruned_branch(cell: &TonBocCell) -> Option<TonPrunedBranch> {
     let mut depths = Vec::with_capacity(count);
     for index in 0..count {
         let start = depths_start.checked_add(index.checked_mul(2)?)?;
-        depths.push(u16::from_be_bytes(
+        let depth = u16::from_be_bytes(
             cell.data
                 .get(start..start.checked_add(2)?)?
                 .try_into()
                 .ok()?,
-        ));
+        );
+        if depth > TON_MAX_CELL_DEPTH {
+            return None;
+        }
+        depths.push(depth);
     }
     Some(TonPrunedBranch {
         mask,
@@ -1376,6 +1620,189 @@ fn parse_ton_boc(bytes: &[u8]) -> Option<TonBoc> {
     (cell_cursor == cell_data.len()).then_some(TonBoc { roots, cells })
 }
 
+fn ton_minimum_sized_uint_bytes(value: usize) -> usize {
+    let significant_bits =
+        usize::try_from(usize::BITS - value.leading_zeros()).expect("usize bit width fits usize");
+    significant_bits.div_ceil(8).max(1)
+}
+
+fn ton_write_sized_uint(out: &mut Vec<u8>, value: usize, size: usize) -> Option<()> {
+    if !(1..=8).contains(&size) || ton_minimum_sized_uint_bytes(value) > size {
+        return None;
+    }
+    let encoded = u64::try_from(value).ok()?.to_be_bytes();
+    out.extend_from_slice(encoded.get(8_usize.checked_sub(size)?..)?);
+    Some(())
+}
+
+fn ton_canonical_cell_order(boc: &TonBoc, root: usize) -> Option<Vec<usize>> {
+    fn visit(
+        boc: &TonBoc,
+        index: usize,
+        visiting: &mut [bool],
+        visited: &mut [bool],
+        postorder: &mut Vec<usize>,
+    ) -> Option<()> {
+        if *visited.get(index)? {
+            return Some(());
+        }
+        if *visiting.get(index)? {
+            return None;
+        }
+        *visiting.get_mut(index)? = true;
+        for reference in boc.cells.get(index)?.refs.iter().rev() {
+            visit(boc, *reference, visiting, visited, postorder)?;
+        }
+        *visiting.get_mut(index)? = false;
+        *visited.get_mut(index)? = true;
+        postorder.push(index);
+        Some(())
+    }
+
+    let mut visiting = vec![false; boc.cells.len()];
+    let mut visited = vec![false; boc.cells.len()];
+    let mut postorder = Vec::with_capacity(boc.cells.len());
+    visit(boc, root, &mut visiting, &mut visited, &mut postorder)?;
+    if visited.iter().any(|seen| !seen) {
+        return None;
+    }
+    postorder.reverse();
+    (postorder.first() == Some(&root)).then_some(postorder)
+}
+
+fn ton_reject_duplicate_subgraphs(boc: &TonBoc) -> Option<()> {
+    let mut class_by_cell = vec![0_usize; boc.cells.len()];
+    let mut classes = BTreeMap::<TonCellStructuralKey, usize>::new();
+    for index in (0..boc.cells.len()).rev() {
+        let cell = boc.cells.get(index)?;
+        let key = TonCellStructuralKey {
+            descriptor: cell.descriptor,
+            data_descriptor: cell.data_descriptor,
+            data: cell.data.clone(),
+            child_classes: cell
+                .refs
+                .iter()
+                .map(|reference| class_by_cell.get(*reference).copied())
+                .collect::<Option<Vec<_>>>()?,
+        };
+        let class = classes.len().checked_add(1)?;
+        if classes.insert(key, class).is_some() {
+            // Canonical BoCs share one cell for one structural subtree. Two
+            // byte-identical subgraphs would otherwise give the same TON root
+            // while changing the observation proof bytes and CAS digest.
+            return None;
+        }
+        *class_by_cell.get_mut(index)? = class;
+    }
+    Some(())
+}
+
+fn encode_canonical_ton_boc(boc: &TonBoc, root: usize) -> Option<Vec<u8>> {
+    let order = ton_canonical_cell_order(boc, root)?;
+    ton_reject_duplicate_subgraphs(boc)?;
+    let mut canonical_index = vec![usize::MAX; boc.cells.len()];
+    for (index, old_index) in order.iter().copied().enumerate() {
+        *canonical_index.get_mut(old_index)? = index;
+    }
+    let size_bytes = ton_minimum_sized_uint_bytes(order.len());
+    if size_bytes > 4 {
+        return None;
+    }
+    let mut cell_data = Vec::new();
+    for old_index in &order {
+        let cell = boc.cells.get(*old_index)?;
+        if usize::from(cell.descriptor & 0x07) != cell.refs.len()
+            || (cell.descriptor & 0x08 != 0) != cell.exotic
+            || cell.descriptor & 0x10 != 0
+            || cell.data_descriptor & 1 != 0 && cell.data.last() == Some(&0x80)
+        {
+            return None;
+        }
+        if ton_cell_type(cell)? == TonCellType::PrunedBranch && cell.data.len() == 35 {
+            // The historical implicit-mask form is representation-malleable
+            // with the explicit final-V1 pruned-branch encoding.
+            return None;
+        }
+        cell_data.push(cell.descriptor);
+        cell_data.push(cell.data_descriptor);
+        cell_data.extend_from_slice(&cell.data);
+        for reference in &cell.refs {
+            let mapped = *canonical_index.get(*reference)?;
+            if mapped == usize::MAX || mapped <= *canonical_index.get(*old_index)? {
+                return None;
+            }
+            let encoded = u64::try_from(mapped).ok()?.to_be_bytes();
+            cell_data.extend_from_slice(encoded.get(8_usize.checked_sub(size_bytes)?..)?);
+        }
+    }
+    let offset_bytes = ton_minimum_sized_uint_bytes(cell_data.len());
+    if offset_bytes > 8 {
+        return None;
+    }
+    let mut out = Vec::with_capacity(
+        6_usize
+            .checked_add(size_bytes.checked_mul(3)?)?
+            .checked_add(offset_bytes)?
+            .checked_add(size_bytes)?
+            .checked_add(cell_data.len())?,
+    );
+    out.extend_from_slice(&TON_BOC_MAGIC);
+    out.push(u8::try_from(size_bytes).ok()?); // no index, CRC, cache bits, or flags
+    out.push(u8::try_from(offset_bytes).ok()?);
+    ton_write_sized_uint(&mut out, order.len(), size_bytes)?;
+    ton_write_sized_uint(&mut out, 1, size_bytes)?;
+    ton_write_sized_uint(&mut out, 0, size_bytes)?;
+    ton_write_sized_uint(&mut out, cell_data.len(), offset_bytes)?;
+    ton_write_sized_uint(&mut out, 0, size_bytes)?; // canonical root is cell zero
+    out.extend_from_slice(&cell_data);
+    Some(out)
+}
+
+fn parse_canonical_single_root_boc(bytes: &[u8]) -> Option<(TonBoc, Vec<TonComputedCell>, usize)> {
+    let boc = parse_ton_boc(bytes)?;
+    let root = *boc.roots.first()?;
+    if boc.roots.len() != 1 || root != 0 {
+        return None;
+    }
+    match ton_cell_type(boc.cells.get(root)?)? {
+        TonCellType::Ordinary => {}
+        TonCellType::MerkleProof => {
+            let child = *boc.cells.get(root)?.refs.first()?;
+            if ton_cell_type(boc.cells.get(child)?)? != TonCellType::Ordinary {
+                return None;
+            }
+        }
+        TonCellType::PrunedBranch | TonCellType::MerkleUpdate => return None,
+    }
+    for (index, cell) in boc.cells.iter().enumerate() {
+        if index != root && ton_cell_type(cell)? == TonCellType::MerkleProof {
+            // A proof envelope has one root wrapper at most. Native block
+            // MerkleUpdate cells remain valid typed block content.
+            return None;
+        }
+    }
+    // Validate descriptors, exotic payloads, and the 1,024-cell depth bound
+    // iteratively before the canonical-order DFS. This prevents a deeply
+    // nested hostile BOC from reaching recursive canonicalization first.
+    let computed = ton_boc_cell_hashes(&boc)?;
+    if encode_canonical_ton_boc(&boc, root)?.as_slice() != bytes {
+        return None;
+    }
+    Some((boc, computed, root))
+}
+
+/// Derive the authenticated root hash only when a proof BoC has the one
+/// canonical final-V1 byte representation.
+///
+/// Canonical proof BoCs are single-root, unindexed, checksum-free, use minimal
+/// integer widths and root index zero, contain no unreachable or duplicate
+/// structural subgraphs, and admit at most one root Merkle-proof wrapper.
+#[must_use]
+pub fn ton_canonical_boc_single_root_hash_v1(bytes: &[u8]) -> Option<H256> {
+    let (boc, computed, root) = parse_canonical_single_root_boc(bytes)?;
+    ton_proven_root_hash(&boc, &computed, root)
+}
+
 fn ton_boc_child_for_hash_level(
     cell_type: TonCellType,
     computed: &TonComputedCell,
@@ -1490,6 +1917,9 @@ fn ton_boc_cell_hashes(boc: &TonBoc) -> Option<Vec<TonComputedCell>> {
             if !cell.refs.is_empty() {
                 current_depth = current_depth.checked_add(1)?;
             }
+            if current_depth > TON_MAX_CELL_DEPTH {
+                return None;
+            }
             let descriptor = u8::try_from(cell.refs.len()).ok()?
                 | if cell_type == TonCellType::Ordinary {
                     0
@@ -1547,6 +1977,12 @@ fn ton_boc_cell_hashes(boc: &TonBoc) -> Option<Vec<TonComputedCell>> {
                 resolved_hashes[usize::from(resolved_level)] = *hashes.get(resolved_index)?;
                 resolved_depths[usize::from(resolved_level)] = *depths.get(resolved_index)?;
             }
+        }
+        if resolved_depths
+            .iter()
+            .any(|depth| *depth > TON_MAX_CELL_DEPTH)
+        {
+            return None;
         }
         computed[index] = TonComputedCell {
             mask,
@@ -1661,15 +2097,242 @@ pub fn ton_state_init_address_hash_v1(code_boc: &[u8], data_boc: &[u8]) -> Optio
     let (_data, data_cells, data_root) = parse_complete_ordinary_single_root_boc(data_boc)?;
     let (code_hash, code_depth) = ton_child_hash_depth(code_cells.get(code_root)?, 0)?;
     let (data_hash, data_depth) = ton_child_hash_depth(data_cells.get(data_root)?, 0)?;
-    let mut repr = Vec::with_capacity(71);
-    repr.push(2); // two ordinary references, level mask zero
-    repr.push(1); // five data bits require one top-upped byte
-    repr.push(0x34); // 00110 plus the TON completion bit
-    repr.extend_from_slice(&code_depth.to_be_bytes());
-    repr.extend_from_slice(&data_depth.to_be_bytes());
-    repr.extend_from_slice(&code_hash);
-    repr.extend_from_slice(&data_hash);
-    Some(Sha256::digest(&repr).into())
+    Some(
+        ton_state_init_hash_from_children(
+            TonCellHashDepth::new(code_hash, code_depth)?,
+            TonCellHashDepth::new(data_hash, data_depth)?,
+        )?
+        .hash,
+    )
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct TonCellHashDepth {
+    hash: H256,
+    depth: u16,
+}
+
+impl TonCellHashDepth {
+    fn new(hash: H256, depth: u16) -> Option<Self> {
+        (nonzero(&hash) && depth <= TON_MAX_CELL_DEPTH).then_some(Self { hash, depth })
+    }
+}
+
+#[derive(Default)]
+struct TonCanonicalCellBits {
+    data: Vec<u8>,
+    bit_len: usize,
+}
+
+impl TonCanonicalCellBits {
+    fn push_bit(&mut self, value: bool) -> Option<()> {
+        if self.bit_len >= 1_023 {
+            return None;
+        }
+        if self.bit_len % 8 == 0 {
+            self.data.push(0);
+        }
+        if value {
+            *self.data.last_mut()? |= 1 << (7 - self.bit_len % 8);
+        }
+        self.bit_len = self.bit_len.checked_add(1)?;
+        Some(())
+    }
+
+    fn push_u64(&mut self, value: u64, width: usize) -> Option<()> {
+        if width > 64 || width < 64 && value >= (1_u64 << width) {
+            return None;
+        }
+        for shift in (0..width).rev() {
+            self.push_bit(value & (1_u64 << shift) != 0)?;
+        }
+        Some(())
+    }
+
+    fn push_bytes(&mut self, value: &[u8]) -> Option<()> {
+        for byte in value {
+            self.push_u64(u64::from(*byte), 8)?;
+        }
+        Some(())
+    }
+
+    fn push_std_address(&mut self, address: SccpTonAddressV1) -> Option<()> {
+        if address.workchain != SCCP_TON_BASECHAIN_WORKCHAIN_V1 || !nonzero(&address.account) {
+            return None;
+        }
+        self.push_bit(true)?;
+        self.push_bit(false)?;
+        self.push_bit(false)?; // `addr_std$10` without anycast: `100`.
+        let workchain = i8::try_from(address.workchain).ok()?;
+        self.push_u64(u64::from(workchain.to_be_bytes()[0]), 8)?;
+        self.push_bytes(&address.account)
+    }
+
+    fn finish(mut self, refs: &[TonCellHashDepth]) -> Option<TonCellHashDepth> {
+        if refs.len() > TON_MAX_REFS
+            || refs
+                .iter()
+                .any(|reference| reference.depth > TON_MAX_CELL_DEPTH)
+        {
+            return None;
+        }
+        let byte_len = self.bit_len.div_ceil(8);
+        let data_descriptor = if self.bit_len % 8 == 0 {
+            byte_len.checked_mul(2)?
+        } else {
+            *self.data.last_mut()? |= 1 << (7 - self.bit_len % 8);
+            byte_len.checked_mul(2)?.checked_sub(1)?
+        };
+        let mut repr = Vec::with_capacity(
+            2_usize
+                .checked_add(self.data.len())?
+                .checked_add(refs.len().checked_mul(34)?)?,
+        );
+        repr.push(u8::try_from(refs.len()).ok()?);
+        repr.push(u8::try_from(data_descriptor).ok()?);
+        repr.extend_from_slice(&self.data);
+        for reference in refs {
+            repr.extend_from_slice(&reference.depth.to_be_bytes());
+        }
+        for reference in refs {
+            repr.extend_from_slice(&reference.hash);
+        }
+        let depth = if refs.is_empty() {
+            0
+        } else {
+            refs.iter()
+                .map(|reference| reference.depth)
+                .max()?
+                .checked_add(1)?
+        };
+        TonCellHashDepth::new(Sha256::digest(&repr).into(), depth)
+    }
+}
+
+fn ton_opened_hash_depth(
+    boc: &TonBoc,
+    computed: &[TonComputedCell],
+    index: usize,
+) -> Option<TonCellHashDepth> {
+    let index = ton_merkle_opened_index(boc, index)?;
+    let (hash, depth) = ton_child_hash_depth(computed.get(index)?, 0)?;
+    TonCellHashDepth::new(hash, depth)
+}
+
+fn ton_state_init_hash_from_children(
+    code: TonCellHashDepth,
+    data: TonCellHashDepth,
+) -> Option<TonCellHashDepth> {
+    let mut bits = TonCanonicalCellBits::default();
+    bits.push_bit(false)?; // split_depth absent
+    bits.push_bit(false)?; // special absent
+    bits.push_bit(true)?; // code reference present
+    bits.push_bit(true)?; // data reference present
+    bits.push_bit(false)?; // empty library
+    bits.finish(&[code, data])
+}
+
+fn ton_empty_replay_forest_hash_depth_v1() -> Option<TonCellHashDepth> {
+    let mut bits = TonCanonicalCellBits::default();
+    bits.push_bit(false)?; // empty nonempty-shard-root dictionary
+    bits.push_u64(0, 64)?; // leaf count
+    bits.push_u64(0, 64)?; // update sequence
+    bits.finish(&[])
+}
+
+fn ton_empty_replay_pair_hash_depth_v1() -> Option<TonCellHashDepth> {
+    let empty = ton_empty_replay_forest_hash_depth_v1()?;
+    TonCanonicalCellBits::default().finish(&[empty, empty])
+}
+
+fn ton_empty_route_pending_hash_depth_v1() -> Option<TonCellHashDepth> {
+    let mut bits = TonCanonicalCellBits::default();
+    bits.push_bit(false)?; // empty mint dictionary
+    bits.push_bit(false)?; // empty burn dictionary
+    bits.push_u64(0, 16)?; // pending mint count
+    bits.push_u64(0, 16)?; // pending burn count
+    bits.finish(&[])
+}
+
+fn ton_canonical_route_initial_data_hash_depth_v1(
+    route_configuration_hash: H256,
+    bridge_config: TonCellHashDepth,
+) -> Option<TonCellHashDepth> {
+    if !nonzero(&route_configuration_hash) || route_configuration_hash == bridge_config.hash {
+        return None;
+    }
+    let replay = ton_empty_replay_pair_hash_depth_v1()?;
+    let pending = ton_empty_route_pending_hash_depth_v1()?;
+    let mut bits = TonCanonicalCellBits::default();
+    bits.push_u64(u64::from(SCCP_V1_TON_STORAGE_VERSION), 8)?;
+    bits.push_bytes(&route_configuration_hash)?;
+    bits.push_bytes(&bridge_config.hash)?;
+    bits.push_bit(false)?; // minting enabled initially
+    bits.finish(&[bridge_config, replay, pending])
+}
+
+fn ton_canonical_master_initial_data_hash_depth_v1(
+    route_configuration_hash: H256,
+    bridge_config: TonCellHashDepth,
+    master_metadata: TonCellHashDepth,
+    route_address: SccpTonAddressV1,
+) -> Option<TonCellHashDepth> {
+    if !nonzero(&route_configuration_hash)
+        || route_configuration_hash == bridge_config.hash
+        || master_metadata.hash == bridge_config.hash
+    {
+        return None;
+    }
+    let replay = ton_empty_replay_pair_hash_depth_v1()?;
+    let mut bits = TonCanonicalCellBits::default();
+    bits.push_u64(u64::from(SCCP_V1_TON_STORAGE_VERSION), 8)?;
+    bits.push_bytes(&route_configuration_hash)?;
+    bits.push_bytes(&bridge_config.hash)?;
+    bits.push_u64(0, 4)?; // canonical zero `coins`
+    bits.push_std_address(route_address)?;
+    bits.push_bit(false)?; // empty pending-mint dictionary
+    bits.push_u64(0, 16)?; // pending mint count
+    bits.push_bit(false)?; // minting enabled initially
+    bits.finish(&[master_metadata, bridge_config, replay])
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct TonCanonicalDeploymentBindingsV1 {
+    route_initial_data: TonCellHashDepth,
+    route_address: SccpTonAddressV1,
+    master_initial_data: TonCellHashDepth,
+    master_address: SccpTonAddressV1,
+}
+
+fn ton_canonical_deployment_bindings_v1(
+    route_configuration_hash: H256,
+    bridge_config: TonCellHashDepth,
+    master_metadata: TonCellHashDepth,
+    route_code: TonCellHashDepth,
+    master_code: TonCellHashDepth,
+) -> Option<TonCanonicalDeploymentBindingsV1> {
+    let route_initial_data =
+        ton_canonical_route_initial_data_hash_depth_v1(route_configuration_hash, bridge_config)?;
+    let route_address = SccpTonAddressV1 {
+        workchain: SCCP_TON_BASECHAIN_WORKCHAIN_V1,
+        account: ton_state_init_hash_from_children(route_code, route_initial_data)?.hash,
+    };
+    let master_initial_data = ton_canonical_master_initial_data_hash_depth_v1(
+        route_configuration_hash,
+        bridge_config,
+        master_metadata,
+        route_address,
+    )?;
+    let master_address = SccpTonAddressV1 {
+        workchain: SCCP_TON_BASECHAIN_WORKCHAIN_V1,
+        account: ton_state_init_hash_from_children(master_code, master_initial_data)?.hash,
+    };
+    Some(TonCanonicalDeploymentBindingsV1 {
+        route_initial_data,
+        route_address,
+        master_initial_data,
+        master_address,
+    })
 }
 
 fn ton_hashmap_uint_len_bits(max_value: usize) -> usize {
@@ -2539,9 +3202,41 @@ pub fn ton_native_source_work_estimate(
     Ok(estimate)
 }
 
+/// Return the cheap deterministic native-work reservation for one breaker proof.
+///
+/// This function examines only typed byte/vector lengths. It performs no BoC
+/// parsing, hashing, key parsing, or signature verification, so consensus can
+/// charge the complete attacker-controlled envelope before native dispatch.
+///
+/// # Errors
+///
+/// Returns [`TonNativeSourceError::ResourceLimit`] when any bounded BoC or
+/// aggregate counter exceeds its final-V1 limit.
+pub fn ton_breaker_observation_work_estimate(
+    proof: &SccpTonBreakerObservationProofV1,
+) -> Result<TonNativeFinalityWorkEstimateV1, TonNativeSourceError> {
+    let mut estimate = ton_native_finality_work_estimate(&proof.finality)?;
+    for boc in [
+        proof.route_account.shard_block_proof_boc.as_slice(),
+        proof.route_account.shard_state_proof_boc.as_slice(),
+        proof.jetton_master_account.shard_block_proof_boc.as_slice(),
+        proof.jetton_master_account.shard_state_proof_boc.as_slice(),
+    ] {
+        if boc.is_empty() || boc.len() > TON_MAX_BOC_BYTES {
+            return Err(TonNativeSourceError::ResourceLimit);
+        }
+        estimate.framed_boc_bytes = estimate
+            .framed_boc_bytes
+            .checked_add(u32::try_from(boc.len()).map_err(|_| TonNativeSourceError::ResourceLimit)?)
+            .ok_or(TonNativeSourceError::ResourceLimit)?;
+    }
+    Ok(estimate)
+}
+
 #[derive(Debug)]
 struct VerifiedMasterchain {
     block_id: TonBlockIdExtV1,
+    gen_utime: u32,
     boc: TonBoc,
     extra: TonMasterchainExtra,
     chain_ids: Vec<TonBlockIdExtV1>,
@@ -2646,6 +3341,7 @@ fn verify_masterchain_finality(
         chain_ids.push(previous);
         last = Some(VerifiedMasterchain {
             block_id: previous,
+            gen_utime: parsed.info.gen_utime,
             boc,
             extra,
             chain_ids: chain_ids.clone(),
@@ -3367,6 +4063,918 @@ impl TonLastTransactionLtRequirement {
     }
 }
 
+fn ton_read_canonical_var_uint(
+    reader: &mut TonBitReader<'_>,
+    length_bits: usize,
+    maximum_bytes: usize,
+) -> Option<u128> {
+    let byte_len = reader.read_usize(length_bits)?;
+    if byte_len >= maximum_bytes || byte_len > 16 {
+        return None;
+    }
+    if byte_len == 0 {
+        return Some(0);
+    }
+    let first = u8::try_from(reader.read_u64(8)?).ok()?;
+    if first == 0 {
+        return None;
+    }
+    let mut value = u128::from(first);
+    for _ in 1..byte_len {
+        value = value
+            .checked_shl(8)?
+            .checked_add(u128::from(u8::try_from(reader.read_u64(8)?).ok()?))?;
+    }
+    Some(value)
+}
+
+fn ton_read_canonical_coins(reader: &mut TonBitReader<'_>) -> Option<u128> {
+    ton_read_canonical_var_uint(reader, 4, 16)
+}
+
+fn ton_skip_canonical_storage_used(reader: &mut TonBitReader<'_>) -> Option<()> {
+    ton_read_canonical_var_uint(reader, 3, 7)?;
+    ton_read_canonical_var_uint(reader, 3, 7)?;
+    Some(())
+}
+
+fn ton_skip_canonical_currency_collection(reader: &mut TonBitReader<'_>) -> Option<()> {
+    ton_read_canonical_coins(reader)?;
+    if reader.read_bit()? {
+        // Extra-currency balances do not affect SCCP configuration, but their
+        // dictionary root remains authenticated by the enclosing account hash.
+        reader.read_ref()?;
+    }
+    Some(())
+}
+
+fn ton_read_canonical_std_address(reader: &mut TonBitReader<'_>) -> Option<SccpTonAddressV1> {
+    if !reader.read_bit()? || reader.read_bit()? || reader.read_bit()? {
+        // Exactly `addr_std$10`, with no anycast prefix.
+        return None;
+    }
+    let address = SccpTonAddressV1 {
+        workchain: reader.read_i32(8)?,
+        account: reader.read_h256()?,
+    };
+    (address.workchain == SCCP_TON_BASECHAIN_WORKCHAIN_V1 && nonzero(&address.account))
+        .then_some(address)
+}
+
+fn ton_complete_ordinary_cell_bytes(boc: &TonBoc, index: usize) -> Option<Vec<u8>> {
+    let index = ton_virtual_root_index(boc, index)?;
+    let cell = boc.cells.get(index)?;
+    if ton_cell_type(cell)? != TonCellType::Ordinary
+        || cell.data_descriptor & 1 != 0
+        || !cell.refs.is_empty()
+    {
+        return None;
+    }
+    Some(cell.data.clone())
+}
+
+fn ton_opaque_ref_hash(boc: &TonBoc, computed: &[TonComputedCell], index: usize) -> Option<H256> {
+    ton_opened_original_tree_hash(boc, computed, index).filter(nonzero)
+}
+
+fn ton_optional_dictionary_root_hash(
+    boc: &TonBoc,
+    computed: &[TonComputedCell],
+    reader: &mut TonBitReader<'_>,
+) -> Option<Option<H256>> {
+    if !reader.read_bit()? {
+        return Some(None);
+    }
+    Some(Some(ton_opaque_ref_hash(
+        boc,
+        computed,
+        reader.read_ref()?,
+    )?))
+}
+
+fn ton_parse_replay_forest_readback(
+    boc: &TonBoc,
+    computed: &[TonComputedCell],
+    index: usize,
+) -> Option<TonReplayForestReadbackV1> {
+    let index = ton_virtual_root_index(boc, index)?;
+    let cell = boc.cells.get(index)?;
+    (ton_cell_type(cell)? == TonCellType::Ordinary).then_some(())?;
+    let mut reader = TonBitReader::new(cell)?;
+    let nonempty_shard_roots_hash = ton_optional_dictionary_root_hash(boc, computed, &mut reader)?;
+    let leaf_count = reader.read_u64(64)?;
+    let update_sequence = reader.read_u64(64)?;
+    if !reader.exhausted()
+        || update_sequence != leaf_count
+        || (leaf_count == 0) != nonempty_shard_roots_hash.is_none()
+    {
+        return None;
+    }
+    Some(TonReplayForestReadbackV1 {
+        nonempty_shard_roots_hash,
+        leaf_count,
+        update_sequence,
+    })
+}
+
+fn ton_hashmap_ref_entries(
+    boc: &TonBoc,
+    root: usize,
+    key_bits: usize,
+) -> Option<BTreeMap<u16, usize>> {
+    fn visit(
+        boc: &TonBoc,
+        index: usize,
+        remaining: usize,
+        prefix: u16,
+        out: &mut BTreeMap<u16, usize>,
+        budget: &mut usize,
+    ) -> Option<()> {
+        *budget = budget.checked_sub(1)?;
+        let index = ton_virtual_root_index(boc, index)?;
+        let cell = boc.cells.get(index)?;
+        (ton_cell_type(cell)? == TonCellType::Ordinary).then_some(())?;
+        let mut reader = TonBitReader::new(cell)?;
+        let label = ton_read_hashmap_label_bits(&mut reader, remaining)?;
+        let mut key = prefix;
+        for bit in &label {
+            key = key.checked_shl(1)? | u16::from(*bit);
+        }
+        let remaining = remaining.checked_sub(label.len())?;
+        if remaining == 0 {
+            if reader.remaining_bits()? != 0 || reader.remaining_refs()? != 1 {
+                return None;
+            }
+            let value = ton_virtual_root_index(boc, reader.read_ref()?)?;
+            return out.insert(key, value).is_none().then_some(());
+        }
+        if reader.remaining_bits()? != 0 || reader.remaining_refs()? != 2 {
+            return None;
+        }
+        let left = reader.read_ref()?;
+        let right = reader.read_ref()?;
+        visit(boc, left, remaining - 1, key.checked_shl(1)?, out, budget)?;
+        visit(
+            boc,
+            right,
+            remaining - 1,
+            key.checked_shl(1)?.checked_add(1)?,
+            out,
+            budget,
+        )
+    }
+
+    if key_bits == 0 || key_bits > 16 {
+        return None;
+    }
+    let mut out = BTreeMap::new();
+    let mut budget = boc.cells.len().checked_add(1)?;
+    visit(boc, root, key_bits, 0, &mut out, &mut budget)?;
+    Some(out)
+}
+
+fn ton_exact_point<const N: usize>(boc: &TonBoc, index: usize) -> Option<[u8; N]> {
+    ton_complete_ordinary_cell_bytes(boc, index)?
+        .as_slice()
+        .try_into()
+        .ok()
+}
+
+fn ton_parse_verifying_key(
+    boc: &TonBoc,
+    computed: &[TonComputedCell],
+    index: usize,
+) -> Option<(SccpGroth16Bls12381VerifyingKeyV1, H256)> {
+    let verifying_key_cell_hash = ton_opaque_ref_hash(boc, computed, index)?;
+    let index = ton_virtual_root_index(boc, index)?;
+    let cell = boc.cells.get(index)?;
+    (ton_cell_type(cell)? == TonCellType::Ordinary).then_some(())?;
+    let mut reader = TonBitReader::new(cell)?;
+    let version = u8::try_from(reader.read_u64(8)?).ok()?;
+    let signal_count = u8::try_from(reader.read_u64(8)?).ok()?;
+    let alpha = reader.read_ref()?;
+    let beta = reader.read_ref()?;
+    let gamma = reader.read_ref()?;
+    let tail = reader.read_ref()?;
+    if version != 1 || signal_count != 11 || !reader.exhausted() {
+        return None;
+    }
+    let tail = ton_virtual_root_index(boc, tail)?;
+    let tail_cell = boc.cells.get(tail)?;
+    (ton_cell_type(tail_cell)? == TonCellType::Ordinary).then_some(())?;
+    let mut tail_reader = TonBitReader::new(tail_cell)?;
+    let delta = tail_reader.read_ref()?;
+    if !tail_reader.read_bit()? {
+        return None;
+    }
+    let ic_root = tail_reader.read_ref()?;
+    if !tail_reader.exhausted() {
+        return None;
+    }
+    let entries = ton_hashmap_ref_entries(boc, ic_root, 8)?;
+    if entries.len() != 12 || entries.keys().copied().ne(0_u16..12) {
+        return None;
+    }
+    let mut ic = [[0_u8; 48]; 12];
+    for (slot, point) in ic.iter_mut().enumerate() {
+        *point = ton_exact_point::<48>(boc, *entries.get(&u16::try_from(slot).ok()?)?)?;
+    }
+    let key = SccpGroth16Bls12381VerifyingKeyV1 {
+        version,
+        alpha1: ton_exact_point::<48>(boc, alpha)?,
+        beta2: ton_exact_point::<96>(boc, beta)?,
+        gamma2: ton_exact_point::<96>(boc, gamma)?,
+        delta2: ton_exact_point::<96>(boc, delta)?,
+        ic: SccpGroth16Bls12381IcV1 {
+            constant: ic[0],
+            signal_0: ic[1],
+            signal_1: ic[2],
+            signal_2: ic[3],
+            signal_3: ic[4],
+            signal_4: ic[5],
+            signal_5: ic[6],
+            signal_6: ic[7],
+            signal_7: ic[8],
+            signal_8: ic[9],
+            signal_9: ic[10],
+            signal_10: ic[11],
+        },
+    };
+    key.validate_structure().ok()?;
+    if !crate::sccp_groth16_bls12381_verifying_key_is_well_formed_v1(&key) {
+        return None;
+    }
+    Some((key, verifying_key_cell_hash))
+}
+
+fn ton_parse_mint_breaker_guardians(
+    boc: &TonBoc,
+    index: usize,
+) -> Option<SccpTonMintBreakerGuardianKeysV1> {
+    let index = ton_virtual_root_index(boc, index)?;
+    let cell = boc.cells.get(index)?;
+    (ton_cell_type(cell)? == TonCellType::Ordinary).then_some(())?;
+    let mut reader = TonBitReader::new(cell)?;
+    let guardian_0 = reader.read_h256()?;
+    let guardian_1 = reader.read_h256()?;
+    let guardian_2 = reader.read_h256()?;
+    let tail = reader.read_ref()?;
+    if !reader.exhausted() {
+        return None;
+    }
+    let tail = ton_virtual_root_index(boc, tail)?;
+    let tail_cell = boc.cells.get(tail)?;
+    (ton_cell_type(tail_cell)? == TonCellType::Ordinary).then_some(())?;
+    let mut tail = TonBitReader::new(tail_cell)?;
+    let guardian_3 = tail.read_h256()?;
+    let guardian_4 = tail.read_h256()?;
+    if !tail.exhausted() {
+        return None;
+    }
+    let keys = [guardian_0, guardian_1, guardian_2, guardian_3, guardian_4];
+    if keys.iter().any(|key| !nonzero(key)) || keys.windows(2).any(|pair| pair[0] >= pair[1]) {
+        return None;
+    }
+    Some(keys.into())
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct TonParsedDeploymentReadbackV1 {
+    readback: TonDeploymentReadbackV1,
+    bridge_config: TonCellHashDepth,
+    master_metadata: TonCellHashDepth,
+}
+
+fn ton_parse_deployment_readback(
+    boc: &TonBoc,
+    computed: &[TonComputedCell],
+    index: usize,
+) -> Option<TonParsedDeploymentReadbackV1> {
+    let bridge_config = ton_opened_hash_depth(boc, computed, index)?;
+    let bridge_config_cell_hash = bridge_config.hash;
+    let index = ton_virtual_root_index(boc, index)?;
+    let cell = boc.cells.get(index)?;
+    (ton_cell_type(cell)? == TonCellType::Ordinary).then_some(())?;
+    let mut reader = TonBitReader::new(cell)?;
+    let expected_global_id = reader.read_i32(32)?;
+    let route_revision = u32::try_from(reader.read_u64(32)?).ok()?;
+    let taira_to_ton_multiplier = reader.read_u64(64)?;
+    let max_wrapped_supply = ton_read_canonical_coins(&mut reader)?;
+    let source_lane = reader.read_ref()?;
+    let destination_lane = reader.read_ref()?;
+    let route_hashes = reader.read_ref()?;
+    let finality_hashes = reader.read_ref()?;
+    if !reader.exhausted() {
+        return None;
+    }
+
+    let source_lane_bytes = ton_complete_ordinary_cell_bytes(boc, source_lane)?;
+    let destination_lane_bytes = ton_complete_ordinary_cell_bytes(boc, destination_lane)?;
+
+    let route_hashes = ton_virtual_root_index(boc, route_hashes)?;
+    let route_hashes_cell = boc.cells.get(route_hashes)?;
+    (ton_cell_type(route_hashes_cell)? == TonCellType::Ordinary).then_some(())?;
+    let mut route_hashes_reader = TonBitReader::new(route_hashes_cell)?;
+    let source_lane_hash = route_hashes_reader.read_h256()?;
+    let destination_lane_hash = route_hashes_reader.read_h256()?;
+    let route_configuration_hash = route_hashes_reader.read_h256()?;
+    let route_hashes_tail = route_hashes_reader.read_ref()?;
+    if !route_hashes_reader.exhausted() {
+        return None;
+    }
+    let route_hashes_tail = ton_virtual_root_index(boc, route_hashes_tail)?;
+    let route_hashes_tail_cell = boc.cells.get(route_hashes_tail)?;
+    (ton_cell_type(route_hashes_tail_cell)? == TonCellType::Ordinary).then_some(())?;
+    let mut route_hashes_tail_reader = TonBitReader::new(route_hashes_tail_cell)?;
+    let destination_binding_hash = route_hashes_tail_reader.read_h256()?;
+    let semantic_proof_profile_hash = route_hashes_tail_reader.read_h256()?;
+    let deployment_codes = route_hashes_tail_reader.read_ref()?;
+    if !route_hashes_tail_reader.exhausted() {
+        return None;
+    }
+    let deployment_codes = ton_virtual_root_index(boc, deployment_codes)?;
+    let deployment_codes_cell = boc.cells.get(deployment_codes)?;
+    (ton_cell_type(deployment_codes_cell)? == TonCellType::Ordinary).then_some(())?;
+    let mut deployment_codes_reader = TonBitReader::new(deployment_codes_cell)?;
+    let jetton_master_code_hash = deployment_codes_reader.read_h256()?;
+    let jetton_wallet_code_hash = deployment_codes_reader.read_h256()?;
+    let route_code_hash = deployment_codes_reader.read_h256()?;
+    if !deployment_codes_reader.exhausted() {
+        return None;
+    }
+
+    let finality_hashes = ton_virtual_root_index(boc, finality_hashes)?;
+    let finality_hashes_cell = boc.cells.get(finality_hashes)?;
+    (ton_cell_type(finality_hashes_cell)? == TonCellType::Ordinary).then_some(())?;
+    let mut finality_hashes_reader = TonBitReader::new(finality_hashes_cell)?;
+    let sora_finality_anchor_hash = finality_hashes_reader.read_h256()?;
+    let verifier_circuit_hash = finality_hashes_reader.read_h256()?;
+    let verifying_key_hash = finality_hashes_reader.read_h256()?;
+    let finality_tail = finality_hashes_reader.read_ref()?;
+    if !finality_hashes_reader.exhausted() {
+        return None;
+    }
+    let finality_tail = ton_virtual_root_index(boc, finality_tail)?;
+    let finality_tail_cell = boc.cells.get(finality_tail)?;
+    (ton_cell_type(finality_tail_cell)? == TonCellType::Ordinary).then_some(())?;
+    let mut finality_tail_reader = TonBitReader::new(finality_tail_cell)?;
+    let proof_profile_commitment = finality_tail_reader.read_h256()?;
+    let guardians = finality_tail_reader.read_ref()?;
+    let embedded_verifier_code_hash = finality_tail_reader.read_h256()?;
+    let declared_verifying_key_cell_hash = finality_tail_reader.read_h256()?;
+    let verifying_key_cell = finality_tail_reader.read_ref()?;
+    let master_metadata = finality_tail_reader.read_ref()?;
+    if !finality_tail_reader.exhausted() {
+        return None;
+    }
+    let mint_breaker_guardian_keys = ton_parse_mint_breaker_guardians(boc, guardians)?;
+    let (verifying_key, verifying_key_cell_hash) =
+        ton_parse_verifying_key(boc, computed, verifying_key_cell)?;
+    if declared_verifying_key_cell_hash != verifying_key_cell_hash
+        || sccp_groth16_bls12381_verifying_key_hash_v1(verifying_key).ok()? != verifying_key_hash
+    {
+        return None;
+    }
+    let master_metadata = ton_opened_hash_depth(boc, computed, master_metadata)?;
+    let master_metadata_hash = master_metadata.hash;
+    Some(TonParsedDeploymentReadbackV1 {
+        readback: TonDeploymentReadbackV1 {
+            expected_global_id,
+            route_revision,
+            taira_to_ton_multiplier,
+            max_wrapped_supply,
+            source_lane_bytes,
+            destination_lane_bytes,
+            source_lane_hash,
+            destination_lane_hash,
+            route_configuration_hash,
+            destination_binding_hash,
+            semantic_proof_profile_hash,
+            jetton_master_code_hash,
+            jetton_master_initial_data_hash: [0; 32],
+            jetton_wallet_code_hash,
+            route_code_hash,
+            route_initial_data_hash: [0; 32],
+            sora_finality_anchor_hash,
+            verifier_circuit_hash,
+            verifying_key_hash,
+            proof_profile_commitment,
+            mint_breaker_guardian_keys,
+            embedded_verifier_code_hash,
+            verifying_key_cell_hash,
+            verifying_key,
+            master_metadata_hash,
+            bridge_config_cell_hash,
+        },
+        bridge_config,
+        master_metadata,
+    })
+}
+
+fn ton_parse_route_storage_readback(
+    boc: &TonBoc,
+    computed: &[TonComputedCell],
+    data_index: usize,
+) -> Option<(TonParsedDeploymentReadbackV1, TonRouteStorageReadbackV1)> {
+    let data_index = ton_virtual_root_index(boc, data_index)?;
+    let cell = boc.cells.get(data_index)?;
+    (ton_cell_type(cell)? == TonCellType::Ordinary).then_some(())?;
+    let mut reader = TonBitReader::new(cell)?;
+    if u8::try_from(reader.read_u64(8)?).ok()? != SCCP_V1_TON_STORAGE_VERSION {
+        return None;
+    }
+    let route_configuration_hash = reader.read_h256()?;
+    let bridge_config_cell_hash = reader.read_h256()?;
+    let config = reader.read_ref()?;
+    let replay = reader.read_ref()?;
+    let pending = reader.read_ref()?;
+    let minting_disabled = reader.read_bit()?;
+    if !reader.exhausted() || ton_opaque_ref_hash(boc, computed, config)? != bridge_config_cell_hash
+    {
+        return None;
+    }
+    let deployment = ton_parse_deployment_readback(boc, computed, config)?;
+
+    let replay = ton_virtual_root_index(boc, replay)?;
+    let replay_cell = boc.cells.get(replay)?;
+    (ton_cell_type(replay_cell)? == TonCellType::Ordinary).then_some(())?;
+    let mut replay_reader = TonBitReader::new(replay_cell)?;
+    let inbound_mint_replay =
+        ton_parse_replay_forest_readback(boc, computed, replay_reader.read_ref()?)?;
+    let outbound_burn_replay =
+        ton_parse_replay_forest_readback(boc, computed, replay_reader.read_ref()?)?;
+    if !replay_reader.exhausted() {
+        return None;
+    }
+
+    let pending = ton_virtual_root_index(boc, pending)?;
+    let pending_cell = boc.cells.get(pending)?;
+    (ton_cell_type(pending_cell)? == TonCellType::Ordinary).then_some(())?;
+    let mut pending_reader = TonBitReader::new(pending_cell)?;
+    let pending_mint_root = ton_optional_dictionary_root_hash(boc, computed, &mut pending_reader)?;
+    let pending_burn_root = ton_optional_dictionary_root_hash(boc, computed, &mut pending_reader)?;
+    let pending_mint_count = u16::try_from(pending_reader.read_u64(16)?).ok()?;
+    let pending_burn_count = u16::try_from(pending_reader.read_u64(16)?).ok()?;
+    if !pending_reader.exhausted()
+        || pending_mint_count > TON_SCCP_PENDING_OPERATION_CAP_V1
+        || pending_burn_count > TON_SCCP_PENDING_OPERATION_CAP_V1
+        || (pending_mint_count == 0) != pending_mint_root.is_none()
+        || (pending_burn_count == 0) != pending_burn_root.is_none()
+    {
+        return None;
+    }
+    Some((
+        deployment,
+        TonRouteStorageReadbackV1 {
+            route_configuration_hash,
+            bridge_config_cell_hash,
+            inbound_mint_replay,
+            outbound_burn_replay,
+            pending_mints: TonPendingMapReadbackV1 {
+                dictionary_root_hash: pending_mint_root,
+                count: pending_mint_count,
+            },
+            pending_burns: TonPendingMapReadbackV1 {
+                dictionary_root_hash: pending_burn_root,
+                count: pending_burn_count,
+            },
+            minting_disabled,
+        },
+    ))
+}
+
+fn ton_parse_master_storage_readback(
+    boc: &TonBoc,
+    computed: &[TonComputedCell],
+    data_index: usize,
+) -> Option<(
+    TonParsedDeploymentReadbackV1,
+    TonMasterStorageReadbackV1,
+    TonCellHashDepth,
+)> {
+    let data_index = ton_virtual_root_index(boc, data_index)?;
+    let cell = boc.cells.get(data_index)?;
+    (ton_cell_type(cell)? == TonCellType::Ordinary).then_some(())?;
+    let mut reader = TonBitReader::new(cell)?;
+    if u8::try_from(reader.read_u64(8)?).ok()? != SCCP_V1_TON_STORAGE_VERSION {
+        return None;
+    }
+    let route_configuration_hash = reader.read_h256()?;
+    let bridge_config_cell_hash = reader.read_h256()?;
+    let total_supply = ton_read_canonical_coins(&mut reader)?;
+    let metadata = reader.read_ref()?;
+    let config = reader.read_ref()?;
+    let bridge_address = ton_read_canonical_std_address(&mut reader)?;
+    let replay = reader.read_ref()?;
+    let pending_mint_root = ton_optional_dictionary_root_hash(boc, computed, &mut reader)?;
+    let pending_mint_count = u16::try_from(reader.read_u64(16)?).ok()?;
+    let minting_disabled = reader.read_bit()?;
+    if !reader.exhausted()
+        || pending_mint_count > TON_SCCP_PENDING_OPERATION_CAP_V1
+        || (pending_mint_count == 0) != pending_mint_root.is_none()
+        || ton_opaque_ref_hash(boc, computed, config)? != bridge_config_cell_hash
+    {
+        return None;
+    }
+    let metadata = ton_opened_hash_depth(boc, computed, metadata)?;
+    let metadata_hash = metadata.hash;
+    let deployment = ton_parse_deployment_readback(boc, computed, config)?;
+    let replay = ton_virtual_root_index(boc, replay)?;
+    let replay_cell = boc.cells.get(replay)?;
+    (ton_cell_type(replay_cell)? == TonCellType::Ordinary).then_some(())?;
+    let mut replay_reader = TonBitReader::new(replay_cell)?;
+    let mint_replay = ton_parse_replay_forest_readback(boc, computed, replay_reader.read_ref()?)?;
+    let burn_replay = ton_parse_replay_forest_readback(boc, computed, replay_reader.read_ref()?)?;
+    if !replay_reader.exhausted() {
+        return None;
+    }
+    Some((
+        deployment,
+        TonMasterStorageReadbackV1 {
+            route_configuration_hash,
+            bridge_config_cell_hash,
+            total_supply,
+            metadata_hash,
+            bridge_address,
+            mint_replay,
+            burn_replay,
+            pending_mints: TonPendingMapReadbackV1 {
+                dictionary_root_hash: pending_mint_root,
+                count: pending_mint_count,
+            },
+            minting_disabled,
+        },
+        metadata,
+    ))
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct TonOpenedAccountState {
+    readback: TonAccountStateReadbackV1,
+    code: TonCellHashDepth,
+    data_index: usize,
+}
+
+fn ton_parse_active_account_state(
+    boc: &TonBoc,
+    computed: &[TonComputedCell],
+    account_index: usize,
+    expected_address: SccpTonAddressV1,
+    shard_block_id: TonBlockIdExtV1,
+    registered_masterchain_seqno: u32,
+    shard_state_root_hash: H256,
+    last_transaction_hash: H256,
+    last_transaction_lt: u64,
+) -> Option<TonOpenedAccountState> {
+    let account_state_hash = ton_opaque_ref_hash(boc, computed, account_index)?;
+    let index = ton_virtual_root_index(boc, account_index)?;
+    let cell = boc.cells.get(index)?;
+    (ton_cell_type(cell)? == TonCellType::Ordinary).then_some(())?;
+    let mut reader = TonBitReader::new(cell)?;
+    if !reader.read_bit()? || ton_read_canonical_std_address(&mut reader)? != expected_address {
+        return None;
+    }
+    ton_skip_canonical_storage_used(&mut reader)?;
+    ton_skip_storage_extra_info(&mut reader)?;
+    reader.read_u64(32)?; // last_paid
+    if reader.read_bit()? {
+        ton_read_canonical_coins(&mut reader)?;
+    }
+    let storage_last_transaction_lt = reader.read_u64(64)?;
+    let logical_time_is_valid = if last_transaction_lt == 0 {
+        storage_last_transaction_lt == 0
+    } else {
+        storage_last_transaction_lt > last_transaction_lt
+    };
+    if !logical_time_is_valid {
+        return None;
+    }
+    ton_skip_canonical_currency_collection(&mut reader)?;
+    if !reader.read_bit()? || reader.read_bit()? || reader.read_bit()? {
+        // Exactly active, with no split depth or tick/tock specialization.
+        return None;
+    }
+    let code = if reader.read_bit()? {
+        reader.read_ref()?
+    } else {
+        return None;
+    };
+    let data = if reader.read_bit()? {
+        reader.read_ref()?
+    } else {
+        return None;
+    };
+    if reader.read_bit()? || !reader.exhausted() {
+        // Canonical SCCP deployments carry no mutable library dictionary.
+        return None;
+    }
+    let code = ton_opened_hash_depth(boc, computed, code)?;
+    let code_hash = code.hash;
+    let data_hash = ton_opaque_ref_hash(boc, computed, data)?;
+    let data_index = ton_virtual_root_index(boc, data)?;
+    Some(TonOpenedAccountState {
+        readback: TonAccountStateReadbackV1 {
+            address: expected_address,
+            shard_block_id,
+            registered_masterchain_seqno,
+            shard_state_root_hash,
+            account_state_hash,
+            code_hash,
+            data_hash,
+            last_transaction_hash,
+            last_transaction_lt,
+            storage_last_transaction_lt,
+        },
+        code,
+        data_index,
+    })
+}
+
+fn ton_verify_breaker_account_opening(
+    opening: &TonAccountStateOpeningV1,
+    masterchain: &VerifiedMasterchain,
+    expected_address: SccpTonAddressV1,
+) -> Result<(TonBoc, Vec<TonComputedCell>, TonOpenedAccountState), TonNativeSourceError> {
+    let shard_hashes = masterchain
+        .extra
+        .shard_hashes_root
+        .ok_or(TonNativeSourceError::ShardNotFinalized)?;
+    let (finalized_shard, registered_masterchain_seqno) =
+        ton_select_shard_descriptor(&masterchain.boc, shard_hashes, expected_address)
+            .ok_or(TonNativeSourceError::ShardNotFinalized)?;
+    if finalized_shard != opening.shard_block_id
+        || registered_masterchain_seqno > masterchain.block_id.seqno
+    {
+        return Err(TonNativeSourceError::ShardNotFinalized);
+    }
+    let (shard_boc, shard_computed, shard_root) =
+        parse_canonical_single_root_boc(&opening.shard_block_proof_boc)
+            .ok_or(TonNativeSourceError::InvalidBoc)?;
+    if ton_proven_root_hash(&shard_boc, &shard_computed, shard_root)
+        != Some(opening.shard_block_id.root_hash)
+    {
+        return Err(TonNativeSourceError::InvalidBoc);
+    }
+    let shard_block = ton_parse_block(&shard_boc, &shard_computed, shard_root)
+        .ok_or(TonNativeSourceError::InvalidBoc)?;
+    if shard_block.global_id != SCCP_TON_MAINNET_GLOBAL_ID_V1
+        || !shard_block.info.not_master
+        || shard_block.info.workchain != opening.shard_block_id.workchain
+        || shard_block.info.shard != opening.shard_block_id.shard
+        || shard_block.info.seqno != opening.shard_block_id.seqno
+        || shard_block.info.before_split
+        || shard_block.info.min_ref_mc_seqno > masterchain.block_id.seqno
+        || !shard_block
+            .info
+            .master_ref
+            .is_some_and(|reference| masterchain.chain_ids.contains(&reference))
+    {
+        return Err(TonNativeSourceError::ShardNotFinalized);
+    }
+    let (state_boc, state_computed, state_root) =
+        parse_canonical_single_root_boc(&opening.shard_state_proof_boc)
+            .ok_or(TonNativeSourceError::InvalidShardState)?;
+    if ton_proven_root_hash(&state_boc, &state_computed, state_root)
+        != Some(shard_block.new_state_hash)
+    {
+        return Err(TonNativeSourceError::InvalidShardState);
+    }
+    let state = ton_virtual_root_index(&state_boc, state_root)
+        .ok_or(TonNativeSourceError::InvalidShardState)?;
+    let accounts = ton_parse_shard_state_accounts(
+        &state_boc,
+        state,
+        SCCP_TON_MAINNET_GLOBAL_ID_V1,
+        opening.shard_block_id,
+    )
+    .ok_or(TonNativeSourceError::InvalidShardState)?;
+    let accounts_root = ton_hashmap_aug_e_root(&state_boc, accounts, ton_skip_depth_balance)
+        .ok_or(TonNativeSourceError::InvalidShardState)?;
+    if accounts_root == usize::MAX {
+        return Err(TonNativeSourceError::InvalidShardState);
+    }
+    let mut account = ton_hashmap_aug_leaf_reader(
+        &state_boc,
+        accounts_root,
+        &expected_address.account,
+        TON_SHARD_ACCOUNT_KEY_BITS,
+        ton_skip_depth_balance,
+    )
+    .ok_or(TonNativeSourceError::InvalidShardState)?;
+    ton_skip_depth_balance(&mut account).ok_or(TonNativeSourceError::InvalidShardState)?;
+    let account_ref = account
+        .read_ref()
+        .ok_or(TonNativeSourceError::InvalidShardState)?;
+    let last_transaction_hash = account
+        .read_h256()
+        .ok_or(TonNativeSourceError::InvalidShardState)?;
+    let last_transaction_lt = account
+        .read_u64(64)
+        .ok_or(TonNativeSourceError::InvalidShardState)?;
+    if !account.exhausted() {
+        return Err(TonNativeSourceError::InvalidShardState);
+    }
+    let opened = ton_parse_active_account_state(
+        &state_boc,
+        &state_computed,
+        account_ref,
+        expected_address,
+        opening.shard_block_id,
+        registered_masterchain_seqno,
+        shard_block.new_state_hash,
+        last_transaction_hash,
+        last_transaction_lt,
+    )
+    .ok_or(TonNativeSourceError::InvalidShardState)?;
+    Ok((state_boc, state_computed, opened))
+}
+
+fn ton_deployment_readback_matches_governance(
+    readback: &TonDeploymentReadbackV1,
+    route: &SccpGovernedRouteV1,
+    deployment: &SccpTonDestinationDeploymentV1,
+) -> bool {
+    let destination_lane = SccpLaneIdV1 {
+        source: SccpNetworkV1::SoraTaira,
+        target: SccpNetworkV1::TonMainnet,
+    };
+    let expected_source_lane_bytes = canonical_sccp_lane_id_bytes_v1(route.lane_id);
+    let expected_destination_lane_bytes = canonical_sccp_lane_id_bytes_v1(destination_lane);
+    let expected_source_lane_hash = sccp_lane_id_hash_v1(route.lane_id);
+    let expected_destination_lane_hash = sccp_lane_id_hash_v1(destination_lane);
+    let expected_route_configuration_hash = route.route_configuration_hash().ok();
+    let expected_destination_binding_hash = route.destination_binding_hash().ok();
+    let expected_semantic_profile_hash = deployment
+        .outbound_proof_policy
+        .semantic_profile_hash()
+        .ok();
+    let expected_finality_anchor_hash = deployment
+        .outbound_proof_policy
+        .sora_finality_anchor_hash()
+        .ok();
+    readback.expected_global_id == SCCP_TON_MAINNET_GLOBAL_ID_V1
+        && readback.route_revision == route.revision
+        && readback.taira_to_ton_multiplier == deployment.taira_to_token_multiplier
+        && readback.max_wrapped_supply == deployment.max_wrapped_supply
+        && Some(readback.source_lane_bytes.as_slice()) == expected_source_lane_bytes.as_deref()
+        && Some(readback.destination_lane_bytes.as_slice())
+            == expected_destination_lane_bytes.as_deref()
+        && Some(readback.source_lane_hash) == expected_source_lane_hash
+        && Some(readback.destination_lane_hash) == expected_destination_lane_hash
+        && Some(readback.route_configuration_hash) == expected_route_configuration_hash
+        && Some(readback.destination_binding_hash) == expected_destination_binding_hash
+        && Some(readback.semantic_proof_profile_hash) == expected_semantic_profile_hash
+        && readback.jetton_master_code_hash == deployment.jetton_master_code_hash
+        && readback.jetton_master_initial_data_hash == deployment.jetton_master_initial_data_hash
+        && readback.jetton_wallet_code_hash == deployment.jetton_wallet_code_hash
+        && readback.route_code_hash == deployment.route_code_hash
+        && readback.route_initial_data_hash == deployment.route_initial_data_hash
+        && Some(readback.sora_finality_anchor_hash) == expected_finality_anchor_hash
+        && readback.verifier_circuit_hash == deployment.verifier_circuit_hash
+        && readback.verifying_key_hash == deployment.verifier_key_hash
+        && readback.proof_profile_commitment == deployment.proof_profile_commitment
+        && readback.mint_breaker_guardian_keys == deployment.mint_breaker_guardian_keys
+        && readback.embedded_verifier_code_hash == deployment.embedded_verifier_code_hash
+        && readback.verifying_key == deployment.verifying_key
+}
+
+fn ton_block_signatures_are_canonically_ordered(signatures: &TonBlockSignaturesV1) -> bool {
+    let entries = match signatures {
+        TonBlockSignaturesV1::Ordinary(proof) => proof.signatures.as_slice(),
+        TonBlockSignaturesV1::Simplex(proof) => proof.signatures.as_slice(),
+    };
+    entries
+        .windows(2)
+        .all(|pair| pair[0].node_id_short < pair[1].node_id_short)
+}
+
+/// Verify one canonical dual-account TON mint-breaker observation.
+///
+/// Both account openings are selected from the same finalized TON-mainnet
+/// masterchain block. The verifier then consumes the complete route/master
+/// storage layouts and requires byte-for-byte agreement with the governed
+/// destination deployment, including lanes, hash roles, verifier material,
+/// guardian order, cap, reciprocal address, replay state, pending state, and
+/// both irreversible breaker flags.
+///
+/// # Errors
+///
+/// Returns a fail-closed [`TonNativeSourceError`] for a noncanonical proof,
+/// invalid finality, mismatched route revision, malformed typed storage, or any
+/// authenticated field that differs from exact governance state.
+pub fn verify_sccp_ton_breaker_observation_v1(
+    proof: &SccpTonBreakerObservationProofV1,
+    governed_route: &SccpGovernedRouteV1,
+    expected_anchor_hash: H256,
+) -> Result<VerifiedSccpTonBreakerObservationV1, TonNativeSourceError> {
+    if proof.version != 1 || proof.finality.version != 1 {
+        return Err(TonNativeSourceError::UnsupportedVersion);
+    }
+    let _ = ton_breaker_observation_work_estimate(proof)?;
+    if !nonzero(&expected_anchor_hash)
+        || governed_route.validate().is_err()
+        || proof.route_key != governed_route.key()
+        || governed_route.lane_id.source != SccpNetworkV1::TonMainnet
+        || governed_route.lane_id.target != SccpNetworkV1::SoraTaira
+        || proof.finality.anchor.network != SccpNetworkV1::TonMainnet
+    {
+        return Err(TonNativeSourceError::InvalidBreakerObservation);
+    }
+    let SccpDestinationDeploymentV1::Ton(deployment) = &governed_route.destination else {
+        return Err(TonNativeSourceError::BreakerDeploymentMismatch);
+    };
+    for block in &proof.finality.blocks {
+        if !ton_block_signatures_are_canonically_ordered(&block.signatures) {
+            return Err(TonNativeSourceError::InvalidBreakerObservation);
+        }
+        parse_canonical_single_root_boc(&block.block_proof_boc)
+            .ok_or(TonNativeSourceError::InvalidBoc)?;
+    }
+    let masterchain = verify_masterchain_finality(
+        &proof.finality,
+        SccpNetworkV1::TonMainnet,
+        expected_anchor_hash,
+    )?;
+    let (route_boc, route_computed, route_account) = ton_verify_breaker_account_opening(
+        &proof.route_account,
+        &masterchain,
+        deployment.route_address,
+    )?;
+    let (master_boc, master_computed, jetton_master_account) = ton_verify_breaker_account_opening(
+        &proof.jetton_master_account,
+        &masterchain,
+        deployment.jetton_master_address,
+    )?;
+    if route_account.readback.code_hash != deployment.route_code_hash
+        || jetton_master_account.readback.code_hash != deployment.jetton_master_code_hash
+    {
+        return Err(TonNativeSourceError::BreakerDeploymentMismatch);
+    }
+    let (mut route_deployment, route_storage) =
+        ton_parse_route_storage_readback(&route_boc, &route_computed, route_account.data_index)
+            .ok_or(TonNativeSourceError::BreakerDeploymentMismatch)?;
+    let (master_deployment, master_storage, master_storage_metadata) =
+        ton_parse_master_storage_readback(
+            &master_boc,
+            &master_computed,
+            jetton_master_account.data_index,
+        )
+        .ok_or(TonNativeSourceError::BreakerDeploymentMismatch)?;
+    if route_deployment != master_deployment
+        || route_deployment.bridge_config != master_deployment.bridge_config
+        || route_deployment.master_metadata != master_deployment.master_metadata
+        || route_deployment.master_metadata != master_storage_metadata
+    {
+        return Err(TonNativeSourceError::BreakerDeploymentMismatch);
+    }
+    let bindings = ton_canonical_deployment_bindings_v1(
+        route_deployment.readback.route_configuration_hash,
+        route_deployment.bridge_config,
+        route_deployment.master_metadata,
+        route_account.code,
+        jetton_master_account.code,
+    )
+    .ok_or(TonNativeSourceError::BreakerDeploymentMismatch)?;
+    route_deployment.readback.route_initial_data_hash = bindings.route_initial_data.hash;
+    route_deployment.readback.jetton_master_initial_data_hash = bindings.master_initial_data.hash;
+    let route_deployment = route_deployment.readback;
+    if bindings.route_address != deployment.route_address
+        || bindings.master_address != deployment.jetton_master_address
+        || !ton_deployment_readback_matches_governance(
+            &route_deployment,
+            governed_route,
+            deployment,
+        )
+        || route_storage.route_configuration_hash != route_deployment.route_configuration_hash
+        || master_storage.route_configuration_hash != route_deployment.route_configuration_hash
+        || route_storage.bridge_config_cell_hash != route_deployment.bridge_config_cell_hash
+        || master_storage.bridge_config_cell_hash != route_deployment.bridge_config_cell_hash
+        || master_storage.metadata_hash != route_deployment.master_metadata_hash
+        || master_storage.bridge_address != deployment.route_address
+        || master_storage.total_supply > route_deployment.max_wrapped_supply
+    {
+        return Err(TonNativeSourceError::BreakerDeploymentMismatch);
+    }
+    let canonical_proof = norito::encode_canonical(proof)
+        .map_err(|_| TonNativeSourceError::InvalidBreakerObservation)?;
+    let canonical_proof_byte_len =
+        u32::try_from(canonical_proof.len()).map_err(|_| TonNativeSourceError::ResourceLimit)?;
+    let effective_disabled = route_storage.minting_disabled || master_storage.minting_disabled;
+    Ok(VerifiedSccpTonBreakerObservationV1 {
+        route_key: proof.route_key.clone(),
+        masterchain_block_id: masterchain.block_id,
+        masterchain_gen_utime: masterchain.gen_utime,
+        route_account: route_account.readback,
+        jetton_master_account: jetton_master_account.readback,
+        deployment: route_deployment,
+        route_storage,
+        master_storage,
+        effective_disabled,
+        canonical_proof_sha256: Sha256::digest(&canonical_proof).into(),
+        canonical_proof_byte_len,
+    })
+}
+
 fn ton_parse_account_deployment(
     boc: &TonBoc,
     computed: &[TonComputedCell],
@@ -3792,7 +5400,7 @@ mod tests {
     }
 
     fn pruned_branch_cell(mask: u8, hashes: &[H256], depths: &[u16]) -> TonBocCell {
-        let count = usize::from(ton_level_mask_level(mask));
+        let count = ton_level_mask_hash_index(mask);
         assert_eq!(hashes.len(), count);
         assert_eq!(depths.len(), count);
         let mut data = vec![1, mask];
@@ -4177,6 +5785,34 @@ mod tests {
         }
     }
 
+    fn breaker_work_estimate_fixture() -> SccpTonBreakerObservationProofV1 {
+        let source = work_estimate_fixture();
+        let shard_block_id = source.event.shard_block_id;
+        SccpTonBreakerObservationProofV1 {
+            version: 1,
+            route_key: SccpRouteKeyV1 {
+                lane_id: SccpLaneIdV1 {
+                    source: SccpNetworkV1::TonMainnet,
+                    target: SccpNetworkV1::SoraTaira,
+                },
+                route_id: "taira_ton_xor".to_owned(),
+                asset_key: "xor".to_owned(),
+                revision: 1,
+            },
+            finality: source.finality,
+            route_account: TonAccountStateOpeningV1 {
+                shard_block_id,
+                shard_block_proof_boc: vec![0x11; 3],
+                shard_state_proof_boc: vec![0x12; 5],
+            },
+            jetton_master_account: TonAccountStateOpeningV1 {
+                shard_block_id,
+                shard_block_proof_boc: vec![0x21; 7],
+                shard_state_proof_boc: vec![0x22; 11],
+            },
+        }
+    }
+
     #[test]
     fn validator_node_id_and_roster_hash_match_native_vectors() {
         let keys = [
@@ -4544,6 +6180,87 @@ mod tests {
     }
 
     #[test]
+    fn breaker_work_estimate_charges_both_account_openings_before_parsing() {
+        let mut proof = breaker_work_estimate_fixture();
+        let base = ton_native_finality_work_estimate(&proof.finality).expect("fixture finality");
+        let estimate =
+            ton_breaker_observation_work_estimate(&proof).expect("bounded breaker proof");
+        assert_eq!(
+            estimate.ed25519_signature_checks,
+            base.ed25519_signature_checks
+        );
+        assert_eq!(
+            estimate.validator_key_checks_upper_bound,
+            base.validator_key_checks_upper_bound
+        );
+        assert_eq!(
+            estimate.framed_boc_bytes,
+            base.framed_boc_bytes + 3 + 5 + 7 + 11
+        );
+
+        proof.route_account.shard_state_proof_boc = vec![0; TON_MAX_BOC_BYTES + 1];
+        assert_eq!(
+            ton_breaker_observation_work_estimate(&proof),
+            Err(TonNativeSourceError::ResourceLimit)
+        );
+    }
+
+    #[test]
+    fn breaker_proof_binary_and_json_roundtrip_preserve_both_openings() {
+        let proof = breaker_work_estimate_fixture();
+        let encoded = norito::encode_canonical(&proof).expect("TON breaker proof encodes");
+        assert_eq!(
+            norito::decode_canonical::<SccpTonBreakerObservationProofV1>(&encoded)
+                .expect("TON breaker proof decodes"),
+            proof
+        );
+        let json = norito::json::to_json(&proof).expect("TON breaker proof JSON encodes");
+        assert!(json.contains("route_account"));
+        assert!(json.contains("jetton_master_account"));
+        assert_eq!(
+            norito::json::from_json::<SccpTonBreakerObservationProofV1>(&json)
+                .expect("TON breaker proof JSON decodes"),
+            proof
+        );
+    }
+
+    #[test]
+    fn breaker_account_readback_preserves_authenticated_shard_registration() {
+        let address = SccpTonAddressV1 {
+            workchain: SCCP_TON_BASECHAIN_WORKCHAIN_V1,
+            account: [0x31; 32],
+        };
+        let boc = account_deployment_boc(address, 43, 0x51, [0x61; 32]);
+        let computed = ton_boc_cell_hashes(&boc).expect("account proof hashes");
+        let shard_block_id = TonBlockIdExtV1 {
+            workchain: SCCP_TON_BASECHAIN_WORKCHAIN_V1,
+            shard: SCCP_TON_MASTERCHAIN_SHARD_V1,
+            seqno: 17,
+            root_hash: [0x71; 32],
+            file_hash: [0x72; 32],
+        };
+        let opened = ton_parse_active_account_state(
+            &boc,
+            &computed,
+            0,
+            address,
+            shard_block_id,
+            16,
+            [0x73; 32],
+            [0x74; 32],
+            42,
+        )
+        .expect("active account readback");
+        assert_eq!(opened.readback.address, address);
+        assert_eq!(opened.readback.shard_block_id, shard_block_id);
+        assert_eq!(opened.readback.registered_masterchain_seqno, 16);
+        assert_eq!(opened.readback.storage_last_transaction_lt, 43);
+        assert_eq!(opened.readback.account_state_hash, computed[0].hashes[0]);
+        assert_eq!(opened.readback.code_hash, computed[1].hashes[0]);
+        assert_eq!(opened.readback.data_hash, computed[2].hashes[0]);
+    }
+
+    #[test]
     fn ordinary_signatures_require_unique_strictly_more_than_two_thirds_weight() {
         let block = fixture_block();
         let transcript = ton_block_id_tl_bytes(block);
@@ -4670,6 +6387,7 @@ mod tests {
         )
         .expect("ordinary finality");
         assert_eq!(ordinary_verified.block_id, block);
+        assert_eq!(ordinary_verified.gen_utime, 1);
         assert_eq!(
             ton_proven_root_hash(
                 &ordinary_verified.boc,
@@ -4846,6 +6564,802 @@ mod tests {
     }
 
     #[test]
+    fn canonical_initial_storage_hashes_match_exact_tolk_layout() {
+        fn hash_depth(boc: &TonBoc, index: usize) -> TonCellHashDepth {
+            let computed = ton_boc_cell_hashes(boc).expect("valid fixture cell graph");
+            ton_opened_hash_depth(boc, &computed, index).expect("fixture hash and depth")
+        }
+
+        fn empty_forest_bits() -> TestBits {
+            let mut bits = TestBits::default();
+            bits.bit(false);
+            bits.uint(0, 64);
+            bits.uint(0, 64);
+            bits
+        }
+
+        let route_configuration_hash = [0x31; 32];
+        let config_cell = ordinary_cell(vec![0xa1], Vec::new());
+        let metadata_cell = ordinary_cell(vec![0xa2], Vec::new());
+        let route_code_cell = ordinary_cell(vec![0xa3], Vec::new());
+        let master_code_cell = ordinary_cell(vec![0xa4], Vec::new());
+        let bridge_config = hash_depth(
+            &TonBoc {
+                roots: vec![0],
+                cells: vec![config_cell.clone()],
+            },
+            0,
+        );
+        let master_metadata = hash_depth(
+            &TonBoc {
+                roots: vec![0],
+                cells: vec![metadata_cell.clone()],
+            },
+            0,
+        );
+        let route_code = hash_depth(
+            &TonBoc {
+                roots: vec![0],
+                cells: vec![route_code_cell.clone()],
+            },
+            0,
+        );
+        let master_code = hash_depth(
+            &TonBoc {
+                roots: vec![0],
+                cells: vec![master_code_cell.clone()],
+            },
+            0,
+        );
+
+        let mut route_bits = TestBits::default();
+        route_bits.uint(u64::from(SCCP_V1_TON_STORAGE_VERSION), 8);
+        route_bits.bytes(&route_configuration_hash);
+        route_bits.bytes(&bridge_config.hash);
+        route_bits.bit(false);
+        let mut pending_bits = TestBits::default();
+        pending_bits.bit(false);
+        pending_bits.bit(false);
+        pending_bits.uint(0, 16);
+        pending_bits.uint(0, 16);
+        let route_data_boc = TonBoc {
+            roots: vec![0],
+            cells: vec![
+                route_bits.cell(vec![1, 2, 3]),
+                config_cell.clone(),
+                TestBits::default().cell(vec![4, 5]),
+                pending_bits.cell(Vec::new()),
+                empty_forest_bits().cell(Vec::new()),
+                empty_forest_bits().cell(Vec::new()),
+            ],
+        };
+        let route_initial_data = hash_depth(&route_data_boc, 0);
+        assert_eq!(
+            ton_canonical_route_initial_data_hash_depth_v1(route_configuration_hash, bridge_config,),
+            Some(route_initial_data)
+        );
+
+        let route_address = SccpTonAddressV1 {
+            workchain: SCCP_TON_BASECHAIN_WORKCHAIN_V1,
+            account: ton_state_init_hash_from_children(route_code, route_initial_data)
+                .expect("route StateInit")
+                .hash,
+        };
+        let mut master_bits = TestBits::default();
+        master_bits.uint(u64::from(SCCP_V1_TON_STORAGE_VERSION), 8);
+        master_bits.bytes(&route_configuration_hash);
+        master_bits.bytes(&bridge_config.hash);
+        master_bits.uint(0, 4);
+        master_bits.bit(true);
+        master_bits.bit(false);
+        master_bits.bit(false);
+        master_bits.uint(
+            u64::from(
+                i8::try_from(route_address.workchain)
+                    .expect("basechain workchain")
+                    .to_be_bytes()[0],
+            ),
+            8,
+        );
+        master_bits.bytes(&route_address.account);
+        master_bits.bit(false);
+        master_bits.uint(0, 16);
+        master_bits.bit(false);
+        let master_data_boc = TonBoc {
+            roots: vec![0],
+            cells: vec![
+                master_bits.cell(vec![1, 2, 3]),
+                metadata_cell.clone(),
+                config_cell.clone(),
+                TestBits::default().cell(vec![4, 5]),
+                empty_forest_bits().cell(Vec::new()),
+                empty_forest_bits().cell(Vec::new()),
+            ],
+        };
+        let master_initial_data = hash_depth(&master_data_boc, 0);
+        assert_eq!(
+            ton_canonical_master_initial_data_hash_depth_v1(
+                route_configuration_hash,
+                bridge_config,
+                master_metadata,
+                route_address,
+            ),
+            Some(master_initial_data)
+        );
+
+        let bindings = ton_canonical_deployment_bindings_v1(
+            route_configuration_hash,
+            bridge_config,
+            master_metadata,
+            route_code,
+            master_code,
+        )
+        .expect("canonical route/master bindings");
+        assert_eq!(bindings.route_initial_data, route_initial_data);
+        assert_eq!(bindings.route_address, route_address);
+        assert_eq!(bindings.master_initial_data, master_initial_data);
+        assert_eq!(
+            bindings.route_address.account,
+            ton_state_init_address_hash_v1(
+                &serialize_test_boc(&TonBoc {
+                    roots: vec![0],
+                    cells: vec![route_code_cell],
+                }),
+                &serialize_test_boc(&route_data_boc),
+            )
+            .expect("route StateInit BOC parity")
+        );
+        assert_eq!(
+            bindings.master_address.account,
+            ton_state_init_address_hash_v1(
+                &serialize_test_boc(&TonBoc {
+                    roots: vec![0],
+                    cells: vec![master_code_cell],
+                }),
+                &serialize_test_boc(&master_data_boc),
+            )
+            .expect("master StateInit BOC parity")
+        );
+
+        let changed_route_code = TonCellHashDepth {
+            hash: [0xb1; 32],
+            ..route_code
+        };
+        let changed = ton_canonical_deployment_bindings_v1(
+            route_configuration_hash,
+            bridge_config,
+            master_metadata,
+            changed_route_code,
+            master_code,
+        )
+        .expect("changed route code remains structurally valid");
+        assert_eq!(changed.route_initial_data, bindings.route_initial_data);
+        assert_ne!(changed.route_address, bindings.route_address);
+        assert_ne!(changed.master_initial_data, bindings.master_initial_data);
+        assert_ne!(changed.master_address, bindings.master_address);
+
+        let changed_metadata = TonCellHashDepth {
+            hash: [0xb2; 32],
+            ..master_metadata
+        };
+        let changed = ton_canonical_deployment_bindings_v1(
+            route_configuration_hash,
+            bridge_config,
+            changed_metadata,
+            route_code,
+            master_code,
+        )
+        .expect("changed metadata remains structurally valid");
+        assert_eq!(changed.route_address, bindings.route_address);
+        assert_ne!(changed.master_initial_data, bindings.master_initial_data);
+        assert_ne!(changed.master_address, bindings.master_address);
+
+        let changed_master_code = TonCellHashDepth {
+            hash: [0xb3; 32],
+            ..master_code
+        };
+        let changed = ton_canonical_deployment_bindings_v1(
+            route_configuration_hash,
+            bridge_config,
+            master_metadata,
+            route_code,
+            changed_master_code,
+        )
+        .expect("changed master code remains structurally valid");
+        assert_eq!(changed.route_address, bindings.route_address);
+        assert_eq!(changed.master_initial_data, bindings.master_initial_data);
+        assert_ne!(changed.master_address, bindings.master_address);
+    }
+
+    #[test]
+    fn final_tolk_stateinit_golden_matches_rust_hash_depth_binding() {
+        fn field<'a>(value: &'a norito::json::Value, key: &str) -> &'a norito::json::Value {
+            value
+                .as_object()
+                .and_then(|object| object.get(key))
+                .unwrap_or_else(|| panic!("missing TON StateInit fixture field {key}"))
+        }
+
+        fn text<'a>(value: &'a norito::json::Value, key: &str) -> &'a str {
+            field(value, key)
+                .as_str()
+                .unwrap_or_else(|| panic!("TON StateInit fixture field {key} must be text"))
+        }
+
+        fn depth(value: &norito::json::Value, key: &str) -> u16 {
+            u16::try_from(
+                field(value, key)
+                    .as_u64()
+                    .unwrap_or_else(|| panic!("TON StateInit fixture field {key} must be u16")),
+            )
+            .expect("TON StateInit fixture depth fits u16")
+        }
+
+        fn child(value: &norito::json::Value, hash_key: &str, depth_key: &str) -> TonCellHashDepth {
+            TonCellHashDepth::new(hex32(text(value, hash_key)), depth(value, depth_key))
+                .expect("Tolk emitted a nonzero bounded child hash and depth")
+        }
+
+        const FIXTURE_BYTES: &[u8] =
+            include_bytes!("../../../fixtures/sccp/ton_stateinit_golden_v1.json");
+        let artifact_sha256: H256 = Sha256::digest(FIXTURE_BYTES).into();
+        assert_eq!(
+            artifact_sha256,
+            hex32("b6a1d220b4a3618d59f42b4c79d6094dd10cab56c71209a575a13cd6d4a1b27d")
+        );
+
+        let fixture = norito::json::from_str::<norito::json::Value>(
+            core::str::from_utf8(FIXTURE_BYTES).expect("fixture is UTF-8"),
+        )
+        .expect("parse final Tolk StateInit fixture");
+        assert_eq!(
+            text(&fixture, "schema"),
+            "iroha.sccp.ton-stateinit-golden.final-v1"
+        );
+        let provenance = field(&fixture, "provenance");
+        assert_eq!(
+            text(provenance, "source_closure_sha256"),
+            "61e06f489875a0a15edd9ea04b7c0024dade5d6992b1567102967b517d9662f9"
+        );
+        assert_eq!(
+            text(provenance, "tolk_output_sha256"),
+            "a3eddf2376fb2fbf9b588e582be214782cb15a20f7c59ed52b3ecbc7898791e2"
+        );
+
+        let route = field(&fixture, "route");
+        let master = field(&fixture, "master");
+        let route_code = child(route, "code_hash", "code_depth");
+        let route_data = child(route, "initial_data_cell_hash", "initial_data_cell_depth");
+        let master_code = child(master, "code_hash", "code_depth");
+        let master_data = child(master, "initial_data_cell_hash", "initial_data_cell_depth");
+        assert_eq!((route_code.depth, route_data.depth), (52, 11));
+        assert_eq!((master_code.depth, master_data.depth), (37, 11));
+
+        let expected_route = hex32(text(route, "state_init_hash"));
+        let expected_master = hex32(text(master, "state_init_hash"));
+        let route_state = ton_state_init_hash_from_children(route_code, route_data)
+            .expect("compose canonical route StateInit");
+        let master_state = ton_state_init_hash_from_children(master_code, master_data)
+            .expect("compose canonical master StateInit");
+        assert_eq!(
+            route_state,
+            TonCellHashDepth::new(expected_route, 53).expect("expected route hash is nonzero")
+        );
+        assert_eq!(
+            master_state,
+            TonCellHashDepth::new(expected_master, 38).expect("expected master hash is nonzero")
+        );
+
+        let route_address = field(route, "address");
+        let master_address = field(master, "address");
+        assert_eq!(hex32(text(route_address, "account_hash")), expected_route);
+        assert_eq!(hex32(text(master_address, "account_hash")), expected_master);
+        assert_eq!(
+            text(route_address, "raw").strip_prefix("0:").map(hex32),
+            Some(expected_route)
+        );
+        assert_eq!(
+            text(master_address, "raw").strip_prefix("0:").map(hex32),
+            Some(expected_master)
+        );
+        assert_eq!(field(route_address, "workchain").as_u64(), Some(0));
+        assert_eq!(field(master_address, "workchain").as_u64(), Some(0));
+
+        for (label, code, data, expected) in [
+            (
+                "route code depth",
+                TonCellHashDepth {
+                    depth: route_code
+                        .depth
+                        .checked_add(1)
+                        .expect("fixture route code depth leaves mutation room"),
+                    ..route_code
+                },
+                route_data,
+                expected_route,
+            ),
+            (
+                "route data depth",
+                route_code,
+                TonCellHashDepth {
+                    depth: route_data
+                        .depth
+                        .checked_add(1)
+                        .expect("fixture route data depth leaves mutation room"),
+                    ..route_data
+                },
+                expected_route,
+            ),
+            (
+                "master code depth",
+                TonCellHashDepth {
+                    depth: master_code
+                        .depth
+                        .checked_add(1)
+                        .expect("fixture master code depth leaves mutation room"),
+                    ..master_code
+                },
+                master_data,
+                expected_master,
+            ),
+            (
+                "master data depth",
+                master_code,
+                TonCellHashDepth {
+                    depth: master_data
+                        .depth
+                        .checked_add(1)
+                        .expect("fixture master data depth leaves mutation room"),
+                    ..master_data
+                },
+                expected_master,
+            ),
+        ] {
+            assert_ne!(
+                ton_state_init_hash_from_children(code, data)
+                    .unwrap_or_else(|| panic!("{label} mutation remains structurally bounded"))
+                    .hash,
+                expected,
+                "{label} must be authenticated by the StateInit hash"
+            );
+        }
+        for (label, code, data, expected) in [
+            ("route child swap", route_data, route_code, expected_route),
+            (
+                "master child swap",
+                master_data,
+                master_code,
+                expected_master,
+            ),
+            (
+                "route code substitution",
+                master_code,
+                route_data,
+                expected_route,
+            ),
+            (
+                "master code substitution",
+                route_code,
+                master_data,
+                expected_master,
+            ),
+        ] {
+            assert_ne!(
+                ton_state_init_hash_from_children(code, data)
+                    .unwrap_or_else(|| panic!("{label} remains structurally bounded"))
+                    .hash,
+                expected,
+                "{label} must not preserve the governed address"
+            );
+        }
+    }
+
+    #[test]
+    fn breaker_boc_gate_accepts_only_one_canonical_representation() {
+        const EMPTY: &[u8] = &[
+            0xb5, 0xee, 0x9c, 0x72, 0x01, 0x01, 0x01, 0x01, 0x00, 0x02, 0x00, 0x00, 0x00,
+        ];
+        const EMPTY_WITH_CRC: &[u8] = &[
+            0xb5, 0xee, 0x9c, 0x72, 0x41, 0x01, 0x01, 0x01, 0x00, 0x02, 0x00, 0x00, 0x00, 0x4c,
+            0xac, 0xb9, 0xcd,
+        ];
+        const NONMINIMAL_SIZE_WIDTH: &[u8] = &[
+            0xb5, 0xee, 0x9c, 0x72, 0x02, 0x01, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x02, 0x00,
+            0x00, 0x00, 0x00,
+        ];
+        const NONMINIMAL_OFFSET_WIDTH: &[u8] = &[
+            0xb5, 0xee, 0x9c, 0x72, 0x01, 0x02, 0x01, 0x01, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00,
+            0x00,
+        ];
+        let expected = hex32("96a296d224f285c67bee93c30f8a309157f0daa35dc5b87e410b78630a09cfc7");
+        assert_eq!(ton_canonical_boc_single_root_hash_v1(EMPTY), Some(expected));
+        assert!(parse_ton_boc(EMPTY_WITH_CRC).is_some());
+        assert!(parse_ton_boc(NONMINIMAL_SIZE_WIDTH).is_some());
+        assert!(parse_ton_boc(NONMINIMAL_OFFSET_WIDTH).is_some());
+        assert_eq!(ton_canonical_boc_single_root_hash_v1(EMPTY_WITH_CRC), None);
+        assert_eq!(
+            ton_canonical_boc_single_root_hash_v1(NONMINIMAL_SIZE_WIDTH),
+            None
+        );
+        assert_eq!(
+            ton_canonical_boc_single_root_hash_v1(NONMINIMAL_OFFSET_WIDTH),
+            None
+        );
+
+        let mut unreachable = serialize_test_boc(&TonBoc {
+            roots: vec![0],
+            cells: vec![
+                ordinary_cell(Vec::new(), Vec::new()),
+                ordinary_cell(vec![0x42], Vec::new()),
+            ],
+        });
+        assert!(parse_ton_boc(&unreachable).is_some());
+        assert_eq!(ton_canonical_boc_single_root_hash_v1(&unreachable), None);
+        // Selecting the second cell as root leaves the first one unreachable as
+        // well as violating canonical root index zero.
+        unreachable[10] = 1;
+        assert!(parse_ton_boc(&unreachable).is_some());
+        assert_eq!(ton_canonical_boc_single_root_hash_v1(&unreachable), None);
+    }
+
+    #[test]
+    fn breaker_boc_gate_rejects_duplicate_and_alternate_dags() {
+        let duplicate = serialize_test_boc(&TonBoc {
+            roots: vec![0],
+            cells: vec![
+                ordinary_cell(vec![0x10], vec![1, 2]),
+                ordinary_cell(vec![0x20], Vec::new()),
+                ordinary_cell(vec![0x20], Vec::new()),
+            ],
+        });
+        assert!(parse_ton_boc(&duplicate).is_some());
+        assert_eq!(ton_canonical_boc_single_root_hash_v1(&duplicate), None);
+
+        let alternate = serialize_test_boc(&TonBoc {
+            roots: vec![0],
+            cells: vec![
+                // Logical reference order is A then B, but the cell table puts
+                // B before A. Both parents share the same canonical child.
+                ordinary_cell(vec![0x10], vec![2, 1]),
+                ordinary_cell(vec![0xb0], vec![3]),
+                ordinary_cell(vec![0xa0], vec![3]),
+                ordinary_cell(vec![0xc0], Vec::new()),
+            ],
+        });
+        assert!(parse_ton_boc(&alternate).is_some());
+        assert_eq!(ton_canonical_boc_single_root_hash_v1(&alternate), None);
+
+        let canonical_graph = TonBoc {
+            roots: vec![0],
+            cells: vec![
+                ordinary_cell(vec![0x10], vec![1, 2]),
+                ordinary_cell(vec![0xa0], vec![3]),
+                ordinary_cell(vec![0xb0], vec![3]),
+                ordinary_cell(vec![0xc0], Vec::new()),
+            ],
+        };
+        let canonical = serialize_test_boc(&canonical_graph);
+        assert_eq!(
+            encode_canonical_ton_boc(&canonical_graph, 0),
+            Some(canonical.clone())
+        );
+        assert!(ton_canonical_boc_single_root_hash_v1(&canonical).is_some());
+    }
+
+    #[test]
+    fn breaker_boc_gate_enforces_raw_level_masks_tuple_counts_and_max_depth() {
+        let sparse = TonBoc {
+            roots: vec![0],
+            cells: vec![pruned_branch_cell(0x02, &[[0x41; 32]], &[7])],
+        };
+        assert!(
+            ton_boc_cell_hashes(&sparse).is_some(),
+            "one set level carries exactly one stored hash/depth tuple"
+        );
+
+        let extra_tuple = TonBoc {
+            roots: vec![0],
+            cells: vec![pruned_branch_cell(0x02, &[[0x41; 32], [0x42; 32]], &[7, 8])],
+        };
+        assert!(ton_boc_cell_hashes(&extra_tuple).is_none());
+
+        let mut high_bit_alias = pruned_branch_cell(0x01, &[[0x51; 32]], &[9]);
+        high_bit_alias.data[1] |= 0x08;
+        let high_bit_alias = TonBoc {
+            roots: vec![0],
+            cells: vec![high_bit_alias],
+        };
+        assert!(ton_boc_cell_hashes(&high_bit_alias).is_none());
+
+        let excessive_pruned_depth = TonBoc {
+            roots: vec![0],
+            cells: vec![pruned_branch_cell(
+                0x01,
+                &[[0x61; 32]],
+                &[TON_MAX_CELL_DEPTH + 1],
+            )],
+        };
+        assert!(ton_boc_cell_hashes(&excessive_pruned_depth).is_none());
+
+        let cells = (0..=usize::from(TON_MAX_CELL_DEPTH))
+            .map(|index| {
+                ordinary_cell(
+                    Vec::new(),
+                    (index < usize::from(TON_MAX_CELL_DEPTH))
+                        .then_some(index + 1)
+                        .into_iter()
+                        .collect(),
+                )
+            })
+            .collect();
+        let boundary = TonBoc {
+            roots: vec![0],
+            cells,
+        };
+        assert!(ton_boc_cell_hashes(&boundary).is_some());
+
+        let excessive = TonBoc {
+            roots: vec![0],
+            cells: (0..=usize::from(TON_MAX_CELL_DEPTH) + 1)
+                .map(|index| {
+                    ordinary_cell(
+                        Vec::new(),
+                        (index <= usize::from(TON_MAX_CELL_DEPTH))
+                            .then_some(index + 1)
+                            .into_iter()
+                            .collect(),
+                    )
+                })
+                .collect(),
+        };
+        assert!(ton_boc_cell_hashes(&excessive).is_none());
+    }
+
+    #[test]
+    fn breaker_boc_gate_rejects_tail_alias_legacy_pruning_and_nested_wrappers() {
+        let zero_bit_alias = [
+            0xb5, 0xee, 0x9c, 0x72, 0x01, 0x01, 0x01, 0x01, 0x00, 0x03, 0x00, 0x00, 0x01, 0x80,
+        ];
+        assert!(parse_ton_boc(&zero_bit_alias).is_some());
+        assert_eq!(ton_canonical_boc_single_root_hash_v1(&zero_bit_alias), None);
+
+        let byte_aligned_tail_alias = serialize_test_boc(&TonBoc {
+            roots: vec![0],
+            cells: vec![TonBocCell {
+                descriptor: 0,
+                data_descriptor: 3,
+                data: vec![0x42, 0x80],
+                refs: Vec::new(),
+                exotic: false,
+            }],
+        });
+        assert!(parse_ton_boc(&byte_aligned_tail_alias).is_some());
+        assert_eq!(
+            ton_canonical_boc_single_root_hash_v1(&byte_aligned_tail_alias),
+            None
+        );
+
+        let mut root = ordinary_cell(vec![0x41], vec![1]);
+        root.descriptor |= 1 << 5;
+        let mut legacy_data = vec![1];
+        legacy_data.extend_from_slice(&[0x51; 32]);
+        legacy_data.extend_from_slice(&1_u16.to_be_bytes());
+        let legacy = serialize_test_boc(&TonBoc {
+            roots: vec![0],
+            cells: vec![
+                root,
+                TonBocCell {
+                    descriptor: 0x08 | (1 << 5),
+                    data_descriptor: 70,
+                    data: legacy_data,
+                    refs: Vec::new(),
+                    exotic: true,
+                },
+            ],
+        });
+        assert!(parse_single_root_boc(&legacy).is_some());
+        assert_eq!(ton_canonical_boc_single_root_hash_v1(&legacy), None);
+
+        let leaf = TonBoc {
+            roots: vec![0],
+            cells: vec![ordinary_cell(vec![0x42], Vec::new())],
+        };
+        let leaf_hashes = ton_boc_cell_hashes(&leaf).expect("leaf hashes");
+        let inner = TonBoc {
+            roots: vec![0],
+            cells: vec![
+                merkle_proof_cell(
+                    1,
+                    leaf_hashes[0].mask,
+                    leaf_hashes[0].hashes[0],
+                    leaf_hashes[0].depths[0],
+                ),
+                ordinary_cell(vec![0x42], Vec::new()),
+            ],
+        };
+        let inner_hashes = ton_boc_cell_hashes(&inner).expect("inner hashes");
+        let nested = serialize_test_boc(&TonBoc {
+            roots: vec![0],
+            cells: vec![
+                merkle_proof_cell(
+                    1,
+                    inner_hashes[0].mask,
+                    inner_hashes[0].hashes[0],
+                    inner_hashes[0].depths[0],
+                ),
+                merkle_proof_cell(
+                    2,
+                    leaf_hashes[0].mask,
+                    leaf_hashes[0].hashes[0],
+                    leaf_hashes[0].depths[0],
+                ),
+                ordinary_cell(vec![0x42], Vec::new()),
+            ],
+        });
+        assert!(parse_single_root_boc(&nested).is_some());
+        assert_eq!(ton_canonical_boc_single_root_hash_v1(&nested), None);
+    }
+
+    #[test]
+    fn breaker_storage_amounts_are_minimal_and_below_two_to_the_120() {
+        let mut maximum = TestBits::default();
+        maximum.uint(15, 4);
+        maximum.bytes(&[0xff; 15]);
+        let maximum = maximum.cell(Vec::new());
+        let mut reader = TonBitReader::new(&maximum).expect("maximum coins reader");
+        assert_eq!(
+            ton_read_canonical_coins(&mut reader),
+            Some((1_u128 << 120) - 1)
+        );
+        assert!(reader.exhausted());
+
+        let mut zero = TestBits::default();
+        zero.uint(0, 4);
+        let zero = zero.cell(Vec::new());
+        let mut reader = TonBitReader::new(&zero).expect("zero coins reader");
+        assert_eq!(ton_read_canonical_coins(&mut reader), Some(0));
+        assert!(reader.exhausted());
+
+        let mut nonminimal = TestBits::default();
+        nonminimal.uint(2, 4);
+        nonminimal.bytes(&[0, 1]);
+        let nonminimal = nonminimal.cell(Vec::new());
+        let mut reader = TonBitReader::new(&nonminimal).expect("nonminimal coins reader");
+        assert_eq!(ton_read_canonical_coins(&mut reader), None);
+    }
+
+    #[test]
+    fn breaker_replay_forest_readback_binds_root_count_and_sequence() {
+        let replay = |root_present: bool, leaf_count: u64, update_sequence: u64, trailing: bool| {
+            let mut bits = TestBits::default();
+            bits.bit(root_present);
+            bits.uint(leaf_count, 64);
+            bits.uint(update_sequence, 64);
+            if trailing {
+                bits.bit(false);
+            }
+            TonBoc {
+                roots: vec![0],
+                cells: if root_present {
+                    vec![bits.cell(vec![1]), ordinary_cell(vec![0x55], Vec::new())]
+                } else {
+                    vec![bits.cell(Vec::new())]
+                },
+            }
+        };
+
+        let empty = replay(false, 0, 0, false);
+        let empty_hashes = ton_boc_cell_hashes(&empty).expect("empty replay hashes");
+        assert_eq!(
+            ton_parse_replay_forest_readback(&empty, &empty_hashes, 0),
+            Some(TonReplayForestReadbackV1 {
+                nonempty_shard_roots_hash: None,
+                leaf_count: 0,
+                update_sequence: 0,
+            })
+        );
+
+        let occupied = replay(true, 1, 1, false);
+        let occupied_hashes = ton_boc_cell_hashes(&occupied).expect("occupied replay hashes");
+        let occupied_readback = ton_parse_replay_forest_readback(&occupied, &occupied_hashes, 0)
+            .expect("occupied replay readback");
+        assert_eq!(occupied_readback.leaf_count, 1);
+        assert_eq!(occupied_readback.update_sequence, 1);
+        assert_eq!(
+            occupied_readback.nonempty_shard_roots_hash,
+            Some(occupied_hashes[1].hashes[0])
+        );
+
+        for invalid in [
+            replay(false, 1, 1, false),
+            replay(true, 0, 0, false),
+            replay(true, 2, 1, false),
+            replay(true, 1, 1, true),
+        ] {
+            let hashes = ton_boc_cell_hashes(&invalid).expect("invalid replay hashes");
+            assert_eq!(ton_parse_replay_forest_readback(&invalid, &hashes, 0), None);
+        }
+    }
+
+    #[test]
+    fn breaker_guardians_are_exactly_five_nonzero_sorted_keys() {
+        let guardians = |keys: [H256; 5], trailing: bool| {
+            let mut head = TestBits::default();
+            for key in &keys[..3] {
+                head.bytes(key);
+            }
+            let mut tail = TestBits::default();
+            for key in &keys[3..] {
+                tail.bytes(key);
+            }
+            if trailing {
+                tail.bit(false);
+            }
+            TonBoc {
+                roots: vec![0],
+                cells: vec![head.cell(vec![1]), tail.cell(Vec::new())],
+            }
+        };
+        let canonical = [[1; 32], [2; 32], [3; 32], [4; 32], [5; 32]];
+        let canonical_boc = guardians(canonical, false);
+        assert_eq!(
+            ton_parse_mint_breaker_guardians(&canonical_boc, 0),
+            Some(canonical.into())
+        );
+
+        let mut zero = canonical;
+        zero[0] = [0; 32];
+        assert_eq!(
+            ton_parse_mint_breaker_guardians(&guardians(zero, false), 0),
+            None
+        );
+        let mut reordered = canonical;
+        reordered.swap(2, 3);
+        assert_eq!(
+            ton_parse_mint_breaker_guardians(&guardians(reordered, false), 0),
+            None
+        );
+        assert_eq!(
+            ton_parse_mint_breaker_guardians(&guardians(canonical, true), 0),
+            None
+        );
+    }
+
+    #[test]
+    fn breaker_signature_envelope_requires_strict_node_id_order() {
+        let signature = |id| TonValidatorSignatureV1 {
+            node_id_short: [id; 32],
+            signature: vec![id; 64],
+        };
+        let ordinary = |signatures| {
+            TonBlockSignaturesV1::Ordinary(TonOrdinaryBlockSignaturesV1 {
+                catchain_seqno: 1,
+                validator_list_hash_short: 1,
+                signatures,
+            })
+        };
+        assert!(ton_block_signatures_are_canonically_ordered(&ordinary(
+            vec![signature(1), signature(2), signature(3),]
+        )));
+        assert!(!ton_block_signatures_are_canonically_ordered(&ordinary(
+            vec![signature(1), signature(1),]
+        )));
+        assert!(!ton_block_signatures_are_canonically_ordered(&ordinary(
+            vec![signature(2), signature(1),]
+        )));
+
+        let simplex = TonBlockSignaturesV1::Simplex(TonSimplexBlockSignaturesV1 {
+            catchain_seqno: 1,
+            validator_list_hash_short: 1,
+            session_id: [0x44; 32],
+            slot: 1,
+            candidate_data: vec![1],
+            signatures: vec![signature(1), signature(2)],
+        });
+        assert!(ton_block_signatures_are_canonically_ordered(&simplex));
+    }
+
+    #[test]
     fn boc_hash_zero_preserves_original_tree_identity_across_pruned_levels() {
         let complete = TonBoc {
             roots: vec![0],
@@ -5011,10 +7525,12 @@ mod tests {
         let update_hashes = ton_boc_cell_hashes(&hash_update).expect("HashUpdate hashes");
         let mut description = ordinary_cell(Vec::new(), vec![5]);
         description.descriptor |= 7 << 5;
+        let mut transaction = transaction.cell(vec![1, 2, 4]);
+        transaction.descriptor |= 7 << 5;
         let boc = TonBoc {
             roots: vec![0],
             cells: vec![
-                transaction.cell(vec![1, 2, 4]),
+                transaction,
                 ordinary_cell(Vec::new(), Vec::new()),
                 merkle_proof_cell(
                     3,

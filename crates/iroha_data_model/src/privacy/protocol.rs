@@ -196,8 +196,8 @@ impl PrivacyNamespaceV1 {
     #[must_use]
     pub const fn from_statement(statement: &PrivacyStatementV1) -> Self {
         match statement {
-            PrivacyStatementV1::ZkAcePqAuthorizationV0(statement) => Self::new(
-                PrivacyProtocolIdV1::ZkAcePqAuthorizationV0,
+            PrivacyStatementV1::ZkAcePqAuthorizationV1(statement) => Self::new(
+                PrivacyProtocolIdV1::ZkAcePqAuthorizationV1,
                 PrivacyNamespaceScopeV1::Policy(PrivacyPolicyNamespaceV1 {
                     policy_id: statement.policy_id,
                 }),
@@ -224,21 +224,21 @@ impl PrivacyNamespaceV1 {
                     },
                 ),
             ),
-            PrivacyStatementV1::VegaExistingCredentialZkV0(statement) => Self::new(
-                PrivacyProtocolIdV1::VegaExistingCredentialZkV0,
+            PrivacyStatementV1::VegaExistingCredentialZkV1(statement) => Self::new(
+                PrivacyProtocolIdV1::VegaExistingCredentialZkV1,
                 PrivacyNamespaceScopeV1::Parameter(PrivacyParameterNamespaceV1 {
                     parameter_id: statement.context.parameter_id,
                 }),
             ),
-            PrivacyStatementV1::IrohaZkX509StarkP256V0(statement) => Self::new(
-                PrivacyProtocolIdV1::IrohaZkX509StarkP256V0,
+            PrivacyStatementV1::IrohaZkX509StarkP256V1(statement) => Self::new(
+                PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
                 PrivacyNamespaceScopeV1::TrustAnchorPolicy(PrivacyTrustAnchorPolicyNamespaceV1 {
                     trust_anchor_id: statement.trust_anchor_id,
                     policy_id: statement.certificate_policy_id,
                 }),
             ),
-            PrivacyStatementV1::IrohaJindoPolynomialCommitmentV0(statement) => Self::new(
-                PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0,
+            PrivacyStatementV1::IrohaJindoPolynomialCommitmentV1(statement) => Self::new(
+                PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1,
                 PrivacyNamespaceScopeV1::Parameter(PrivacyParameterNamespaceV1 {
                     parameter_id: statement.context.parameter_id,
                 }),
@@ -269,8 +269,8 @@ impl PrivacyNamespaceV1 {
                     program_id: statement.program_id,
                 }),
             ),
-            PrivacyStatementV1::PqMaspStarkV0(statement) => Self::new(
-                PrivacyProtocolIdV1::PqMaspStarkV0,
+            PrivacyStatementV1::PqMaspStarkV1(statement) => Self::new(
+                PrivacyProtocolIdV1::PqMaspStarkV1,
                 PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 {
                     pool_id: statement.pool_id,
                 }),
@@ -297,25 +297,25 @@ impl PrivacyNamespaceV1 {
         let compatible = matches!(
             (self.protocol_id, self.scope),
             (
-                PrivacyProtocolIdV1::ZkAcePqAuthorizationV0
+                PrivacyProtocolIdV1::ZkAcePqAuthorizationV1
                     | PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
                 PrivacyNamespaceScopeV1::Policy(_)
             ) | (
                 PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1
                     | PrivacyProtocolIdV1::OrchardHalo2ActionsV1
                     | PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1
-                    | PrivacyProtocolIdV1::PqMaspStarkV0,
+                    | PrivacyProtocolIdV1::PqMaspStarkV1,
                 PrivacyNamespaceScopeV1::Pool(_)
             ) | (
                 PrivacyProtocolIdV1::IrohaZkAmsV1,
                 PrivacyNamespaceScopeV1::IssuerRegistryPolicy(_)
             ) | (
-                PrivacyProtocolIdV1::IrohaZkX509StarkP256V0,
+                PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
                 PrivacyNamespaceScopeV1::TrustAnchor(_)
                     | PrivacyNamespaceScopeV1::TrustAnchorPolicy(_)
             ) | (
-                PrivacyProtocolIdV1::VegaExistingCredentialZkV0
-                    | PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0,
+                PrivacyProtocolIdV1::VegaExistingCredentialZkV1
+                    | PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1,
                 PrivacyNamespaceScopeV1::Parameter(_)
             ) | (
                 PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1,
@@ -484,11 +484,11 @@ impl PrivacyRootRoleV1 {
                     Self::Revocation
                 )
                 | (
-                    PrivacyProtocolIdV1::IrohaZkX509StarkP256V0,
+                    PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
                     Self::CertificateAuthorityMembership
                 )
                 | (
-                    PrivacyProtocolIdV1::OrchardHalo2ActionsV1 | PrivacyProtocolIdV1::PqMaspStarkV0,
+                    PrivacyProtocolIdV1::OrchardHalo2ActionsV1 | PrivacyProtocolIdV1::PqMaspStarkV1,
                     Self::NoteCommitmentAnchor
                 )
                 | (PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1, Self::OutputSet)
@@ -1067,8 +1067,8 @@ pub enum PrivacyProofManagedPoolBootstrapV1 {
     #[cfg_attr(feature = "json", norito(rename = "iroha-ivm-private-note-stark-v1"))]
     IrohaIvmPrivateNoteStarkV1(PrivacyIvmPrivateNotePoolBootstrapV1),
     /// PQ-MASP note-commitment origin.
-    #[cfg_attr(feature = "json", norito(rename = "pq-masp-stark-v0"))]
-    PqMaspStarkV0(PrivacyPqMaspPoolBootstrapV1),
+    #[cfg_attr(feature = "json", norito(rename = "pq-masp-stark-v1"))]
+    PqMaspStarkV1(PrivacyPqMaspPoolBootstrapV1),
 }
 impl PrivacyProofManagedPoolBootstrapV1 {
     /// Return the exact protocol initialized by this payload.
@@ -1077,7 +1077,7 @@ impl PrivacyProofManagedPoolBootstrapV1 {
         match self {
             Self::MoneroFcmpPlusPlusV1(_) => PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1,
             Self::IrohaIvmPrivateNoteStarkV1(_) => PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
-            Self::PqMaspStarkV0(_) => PrivacyProtocolIdV1::PqMaspStarkV0,
+            Self::PqMaspStarkV1(_) => PrivacyProtocolIdV1::PqMaspStarkV1,
         }
     }
     /// Return the exact proof-managed root role initialized by this payload.
@@ -1086,7 +1086,7 @@ impl PrivacyProofManagedPoolBootstrapV1 {
         match self {
             Self::MoneroFcmpPlusPlusV1(_) => PrivacyRootRoleV1::OutputSet,
             Self::IrohaIvmPrivateNoteStarkV1(_) => PrivacyRootRoleV1::ProgramState,
-            Self::PqMaspStarkV0(_) => PrivacyRootRoleV1::NoteCommitmentAnchor,
+            Self::PqMaspStarkV1(_) => PrivacyRootRoleV1::NoteCommitmentAnchor,
         }
     }
     /// Return the sole protocol-scoped namespace initialized by this payload.
@@ -1106,8 +1106,8 @@ impl PrivacyProofManagedPoolBootstrapV1 {
                     program_id: bootstrap.program_id,
                 }),
             ),
-            Self::PqMaspStarkV0(bootstrap) => PrivacyNamespaceV1::new(
-                PrivacyProtocolIdV1::PqMaspStarkV0,
+            Self::PqMaspStarkV1(bootstrap) => PrivacyNamespaceV1::new(
+                PrivacyProtocolIdV1::PqMaspStarkV1,
                 PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 {
                     pool_id: bootstrap.pool_id,
                 }),
@@ -1120,7 +1120,7 @@ impl PrivacyProofManagedPoolBootstrapV1 {
         match self {
             Self::MoneroFcmpPlusPlusV1(bootstrap) => &bootstrap.asset_definition_id,
             Self::IrohaIvmPrivateNoteStarkV1(bootstrap) => &bootstrap.asset_definition_id,
-            Self::PqMaspStarkV0(bootstrap) => &bootstrap.asset_definition_id,
+            Self::PqMaspStarkV1(bootstrap) => &bootstrap.asset_definition_id,
         }
     }
     /// Return the public reserve account when the protocol supports an
@@ -1129,7 +1129,7 @@ impl PrivacyProofManagedPoolBootstrapV1 {
     pub const fn reserve_account(&self) -> Option<&AccountId> {
         match self {
             Self::IrohaIvmPrivateNoteStarkV1(bootstrap) => Some(&bootstrap.reserve_account),
-            Self::MoneroFcmpPlusPlusV1(_) | Self::PqMaspStarkV0(_) => None,
+            Self::MoneroFcmpPlusPlusV1(_) | Self::PqMaspStarkV1(_) => None,
         }
     }
     /// Return the exact transparent balance partition for protocols with a
@@ -1138,7 +1138,7 @@ impl PrivacyProofManagedPoolBootstrapV1 {
     pub const fn public_balance_scope(&self) -> Option<AssetBalanceScope> {
         match self {
             Self::IrohaIvmPrivateNoteStarkV1(bootstrap) => Some(bootstrap.public_balance_scope),
-            Self::MoneroFcmpPlusPlusV1(_) | Self::PqMaspStarkV0(_) => None,
+            Self::MoneroFcmpPlusPlusV1(_) | Self::PqMaspStarkV1(_) => None,
         }
     }
     /// Return the pinned private-program digest for private-IVM pools.
@@ -1146,7 +1146,7 @@ impl PrivacyProofManagedPoolBootstrapV1 {
     pub const fn program_id(&self) -> Option<PrivacyProgramIdV1> {
         match self {
             Self::IrohaIvmPrivateNoteStarkV1(bootstrap) => Some(bootstrap.program_id),
-            Self::MoneroFcmpPlusPlusV1(_) | Self::PqMaspStarkV0(_) => None,
+            Self::MoneroFcmpPlusPlusV1(_) | Self::PqMaspStarkV1(_) => None,
         }
     }
     /// Return the complete canonical genesis note-commitment set.
@@ -1159,7 +1159,7 @@ impl PrivacyProofManagedPoolBootstrapV1 {
             Self::IrohaIvmPrivateNoteStarkV1(bootstrap) => {
                 Some(&bootstrap.initial_note_commitments)
             }
-            Self::PqMaspStarkV0(bootstrap) => Some(&bootstrap.initial_note_commitments),
+            Self::PqMaspStarkV1(bootstrap) => Some(&bootstrap.initial_note_commitments),
         }
     }
     /// Return the complete canonical FCMP++ genesis output set.
@@ -1167,7 +1167,7 @@ impl PrivacyProofManagedPoolBootstrapV1 {
     pub fn initial_fcmp_outputs(&self) -> Option<&[PrivacyFcmpOutputTupleV1]> {
         match self {
             Self::MoneroFcmpPlusPlusV1(bootstrap) => Some(&bootstrap.initial_outputs),
-            Self::IrohaIvmPrivateNoteStarkV1(_) | Self::PqMaspStarkV0(_) => None,
+            Self::IrohaIvmPrivateNoteStarkV1(_) | Self::PqMaspStarkV1(_) => None,
         }
     }
     /// Validate the exact closed namespace and required non-zero identifiers.
@@ -1192,7 +1192,7 @@ impl PrivacyProofManagedPoolBootstrapV1 {
                 }
                 bootstrap.pool_id
             }
-            Self::PqMaspStarkV0(bootstrap) => bootstrap.pool_id,
+            Self::PqMaspStarkV1(bootstrap) => bootstrap.pool_id,
         };
         if pool_id.is_zero() {
             return Err(PrivacyProofManagedPoolBootstrapValidationErrorV1::ZeroPoolId);
@@ -1234,7 +1234,7 @@ impl PrivacyProofManagedPoolBootstrapV1 {
             Self::IrohaIvmPrivateNoteStarkV1(bootstrap) => {
                 validate_initial_note_commitments(&bootstrap.initial_note_commitments)?;
             }
-            Self::PqMaspStarkV0(bootstrap) => {
+            Self::PqMaspStarkV1(bootstrap) => {
                 validate_initial_note_commitments(&bootstrap.initial_note_commitments)?;
             }
         }
@@ -2457,18 +2457,169 @@ pub enum PrivacyLifecycleTransitionError {
     #[error("retired privacy protocol lifecycle is terminal")]
     RetiredIsTerminal,
 }
-/// Assurance classification for a first-release privacy activation.
+/// Exact security target required from every final privacy protocol claim.
+pub const PRIVACY_MINIMUM_SECURITY_BITS_V1: u16 = 128;
+/// Domain separator for canonical security-claim content addressing.
+pub const PRIVACY_SECURITY_CLAIM_DIGEST_DOMAIN_V1: &[u8] = b"iroha:privacy:security-claim:v1";
+
+/// Final, independently reviewable security claim for one privacy protocol.
+///
+/// The model is always the weakest model in the full composition. Parameter
+/// and verifier digests bind the claim to the exact native activation rather
+/// than to a family name or caller-selected profile.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "assurance", content = "value", deny_unknown_fields)
-)]
-pub enum PrivacyAssuranceV1 {
-    /// Testnet-only experimental; not security-audited and not a production-readiness claim.
-    #[cfg_attr(feature = "json", norito(rename = "experimental"))]
-    Experimental,
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct PrivacySecurityClaimV1 {
+    /// Commitment to the final ordered Exact12 catalog.
+    pub catalog_commitment: PrivacyExact12CatalogCommitmentV1,
+    /// Exact protocol covered by the reduction and review.
+    pub protocol_id: PrivacyProtocolIdV1,
+    /// Weakest security model in the complete protocol composition.
+    pub security_model: PrivacySecurityModelV1,
+    /// Required security target; exactly 128 for the first release.
+    pub target_security_bits: u16,
+    /// Conservative security bound established by the reviewed reduction.
+    pub achieved_security_bits: u16,
+    /// Exact governed parameter artifact covered by the claim.
+    pub parameter_digest: PrivacyParameterDigestV1,
+    /// Exact verifier artifact covered by the claim.
+    pub verifier_digest: PrivacyVerifierDigestV1,
+    /// Content digest of the complete machine-checkable reduction artifact.
+    pub reduction_digest: PrivacySecurityReductionDigestV1,
+    /// Content digest of the independent audit and signed finding dispositions.
+    pub audit_bundle_digest: PrivacyAuditBundleDigestV1,
 }
+
+impl PrivacySecurityClaimV1 {
+    /// Compute the canonical content digest of this complete claim.
+    ///
+    /// # Errors
+    ///
+    /// Returns a Norito error if canonical encoding unexpectedly fails.
+    pub fn computed_digest(&self) -> Result<PrivacySecurityClaimDigestV1, norito::Error> {
+        let encoded = norito::encode_canonical(self)?;
+        let mut hasher = Sha256::new();
+        hasher.update(PRIVACY_SECURITY_CLAIM_DIGEST_DOMAIN_V1);
+        hasher.update(
+            u64::try_from(encoded.len())
+                .expect("Norito output length fits u64 on supported targets")
+                .to_le_bytes(),
+        );
+        hasher.update(encoded);
+        Ok(PrivacySecurityClaimDigestV1::new(hasher.finalize().into()))
+    }
+
+    /// Validate the claim against exact activated protocol artifacts.
+    ///
+    /// # Errors
+    ///
+    /// Rejects catalog, protocol, model, security bound, artifact, reduction,
+    /// or independent-audit drift.
+    pub fn validate_against(
+        &self,
+        protocol_id: PrivacyProtocolIdV1,
+        parameter_digest: PrivacyParameterDigestV1,
+        verifier_digest: PrivacyVerifierDigestV1,
+    ) -> Result<(), PrivacySecurityClaimValidationErrorV1> {
+        if self.catalog_commitment != PrivacyExact12CatalogCommitmentV1::canonical() {
+            return Err(PrivacySecurityClaimValidationErrorV1::CatalogCommitment);
+        }
+        if self.protocol_id != protocol_id {
+            return Err(PrivacySecurityClaimValidationErrorV1::Protocol {
+                expected: protocol_id,
+                actual: self.protocol_id,
+            });
+        }
+        let expected_model = protocol_id.security_model();
+        if self.security_model != expected_model {
+            return Err(PrivacySecurityClaimValidationErrorV1::SecurityModel {
+                expected: expected_model,
+                actual: self.security_model,
+            });
+        }
+        if self.target_security_bits != PRIVACY_MINIMUM_SECURITY_BITS_V1 {
+            return Err(PrivacySecurityClaimValidationErrorV1::TargetSecurityBits {
+                expected: PRIVACY_MINIMUM_SECURITY_BITS_V1,
+                actual: self.target_security_bits,
+            });
+        }
+        if self.achieved_security_bits < self.target_security_bits {
+            return Err(
+                PrivacySecurityClaimValidationErrorV1::InsufficientSecurity {
+                    target: self.target_security_bits,
+                    achieved: self.achieved_security_bits,
+                },
+            );
+        }
+        if self.parameter_digest != parameter_digest {
+            return Err(PrivacySecurityClaimValidationErrorV1::ParameterDigest);
+        }
+        if self.verifier_digest != verifier_digest {
+            return Err(PrivacySecurityClaimValidationErrorV1::VerifierDigest);
+        }
+        if self.reduction_digest.is_zero() {
+            return Err(PrivacySecurityClaimValidationErrorV1::ZeroReductionDigest);
+        }
+        if self.audit_bundle_digest.is_zero() {
+            return Err(PrivacySecurityClaimValidationErrorV1::ZeroAuditBundleDigest);
+        }
+        Ok(())
+    }
+}
+
+/// Validation failure for one final protocol security claim.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+pub enum PrivacySecurityClaimValidationErrorV1 {
+    /// Claim does not carry the sole final catalog commitment.
+    #[error("privacy security claim has an unknown Exact12 catalog commitment")]
+    CatalogCommitment,
+    /// Claim names a different protocol.
+    #[error("privacy security claim protocol {actual:?} differs from {expected:?}")]
+    Protocol {
+        /// Required protocol.
+        expected: PrivacyProtocolIdV1,
+        /// Rejected protocol.
+        actual: PrivacyProtocolIdV1,
+    },
+    /// Claim uses a stronger or otherwise different model than the composition permits.
+    #[error("privacy security model {actual:?} differs from weakest model {expected:?}")]
+    SecurityModel {
+        /// Weakest model of the composition.
+        expected: PrivacySecurityModelV1,
+        /// Rejected claimed model.
+        actual: PrivacySecurityModelV1,
+    },
+    /// First-release target is not exactly 128 bits.
+    #[error("privacy security target {actual} differs from {expected} bits")]
+    TargetSecurityBits {
+        /// Exact required target.
+        expected: u16,
+        /// Rejected target.
+        actual: u16,
+    },
+    /// Reviewed bound falls below the declared target.
+    #[error("privacy security bound {achieved} is below target {target} bits")]
+    InsufficientSecurity {
+        /// Required target.
+        target: u16,
+        /// Reviewed conservative bound.
+        achieved: u16,
+    },
+    /// Parameter digest differs from the activation.
+    #[error("privacy security claim parameter digest differs from activation")]
+    ParameterDigest,
+    /// Verifier digest differs from the activation.
+    #[error("privacy security claim verifier digest differs from activation")]
+    VerifierDigest,
+    /// Reduction artifact digest is zero.
+    #[error("privacy security claim reduction digest must be non-zero")]
+    ZeroReductionDigest,
+    /// Independent audit/disposition bundle digest is zero.
+    #[error("privacy security claim audit bundle digest must be non-zero")]
+    ZeroAuditBundleDigest,
+}
+
 /// Activation-specific Anonymous PGC policy limits.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -2552,8 +2703,8 @@ pub struct PqMaspActivationLimitsV1 {
 )]
 pub enum PrivacyProtocolActivationLimitsV1 {
     /// ZK-ACE has no additional first-release count limits.
-    #[cfg_attr(feature = "json", norito(rename = "zk-ace-pq-authorization-v0"))]
-    ZkAcePqAuthorizationV0,
+    #[cfg_attr(feature = "json", norito(rename = "zk-ace-pq-authorization-v1"))]
+    ZkAcePqAuthorizationV1,
     /// Anonymous PGC receiver policy.
     #[cfg_attr(feature = "json", norito(rename = "anonymous-pgc-k-out-of-n-v1"))]
     AnonymousPgcKOutOfNV1(AnonymousPgcActivationLimitsV1),
@@ -2564,17 +2715,17 @@ pub enum PrivacyProtocolActivationLimitsV1 {
     #[cfg_attr(feature = "json", norito(rename = "iroha-zk-ams-v1"))]
     IrohaZkAmsV1(ZkAmsActivationLimitsV1),
     /// Vega has no additional first-release count limits.
-    #[cfg_attr(feature = "json", norito(rename = "vega-existing-credential-zk-v0"))]
-    VegaExistingCredentialZkV0,
+    #[cfg_attr(feature = "json", norito(rename = "vega-existing-credential-zk-v1"))]
+    VegaExistingCredentialZkV1,
     /// X.509 has fixed first-release limits encoded by its statement validator.
-    #[cfg_attr(feature = "json", norito(rename = "iroha-zk-x509-stark-p256-v0"))]
-    IrohaZkX509StarkP256V0,
+    #[cfg_attr(feature = "json", norito(rename = "iroha-zk-x509-stark-p256-v1"))]
+    IrohaZkX509StarkP256V1,
     /// Jindo batched opening policy.
     #[cfg_attr(
         feature = "json",
-        norito(rename = "iroha-jindo-polynomial-commitment-v0")
+        norito(rename = "iroha-jindo-polynomial-commitment-v1")
     )]
-    IrohaJindoPolynomialCommitmentV0(JindoActivationLimitsV1),
+    IrohaJindoPolynomialCommitmentV1(JindoActivationLimitsV1),
     /// Lantern anonymous credentials have a fixed first-release parameter profile.
     #[cfg_attr(feature = "json", norito(rename = "iroha-bootle-lantern-anoncred-v1"))]
     IrohaBootleLanternAnoncredV1,
@@ -2588,28 +2739,28 @@ pub enum PrivacyProtocolActivationLimitsV1 {
     #[cfg_attr(feature = "json", norito(rename = "iroha-ivm-private-note-stark-v1"))]
     IrohaIvmPrivateNoteStarkV1(IvmPrivateNoteActivationLimitsV1),
     /// PQ-MASP input/output policy.
-    #[cfg_attr(feature = "json", norito(rename = "pq-masp-stark-v0"))]
-    PqMaspStarkV0(PqMaspActivationLimitsV1),
+    #[cfg_attr(feature = "json", norito(rename = "pq-masp-stark-v1"))]
+    PqMaspStarkV1(PqMaspActivationLimitsV1),
 }
 impl PrivacyProtocolActivationLimitsV1 {
     /// Exact protocol to which these activation-specific limits apply.
     #[must_use]
     pub const fn protocol_id(&self) -> PrivacyProtocolIdV1 {
         match self {
-            Self::ZkAcePqAuthorizationV0 => PrivacyProtocolIdV1::ZkAcePqAuthorizationV0,
+            Self::ZkAcePqAuthorizationV1 => PrivacyProtocolIdV1::ZkAcePqAuthorizationV1,
             Self::AnonymousPgcKOutOfNV1(_) => PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
             Self::VeRangeTransparentRangeV1(_) => PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
             Self::IrohaZkAmsV1(_) => PrivacyProtocolIdV1::IrohaZkAmsV1,
-            Self::VegaExistingCredentialZkV0 => PrivacyProtocolIdV1::VegaExistingCredentialZkV0,
-            Self::IrohaZkX509StarkP256V0 => PrivacyProtocolIdV1::IrohaZkX509StarkP256V0,
-            Self::IrohaJindoPolynomialCommitmentV0(_) => {
-                PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0
+            Self::VegaExistingCredentialZkV1 => PrivacyProtocolIdV1::VegaExistingCredentialZkV1,
+            Self::IrohaZkX509StarkP256V1 => PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
+            Self::IrohaJindoPolynomialCommitmentV1(_) => {
+                PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1
             }
             Self::IrohaBootleLanternAnoncredV1 => PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1,
             Self::OrchardHalo2ActionsV1(_) => PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
             Self::MoneroFcmpPlusPlusV1(_) => PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1,
             Self::IrohaIvmPrivateNoteStarkV1(_) => PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
-            Self::PqMaspStarkV0(_) => PrivacyProtocolIdV1::PqMaspStarkV0,
+            Self::PqMaspStarkV1(_) => PrivacyProtocolIdV1::PqMaspStarkV1,
         }
     }
     /// Validate activation-specific values against first-release hard ceilings.
@@ -2664,7 +2815,7 @@ impl PrivacyProtocolActivationLimitsV1 {
                 }
                 Ok(())
             }
-            Self::IrohaJindoPolynomialCommitmentV0(limits) => validate_profile_limit(
+            Self::IrohaJindoPolynomialCommitmentV1(limits) => validate_profile_limit(
                 PrivacyActivationLimitFieldV1::JindoPolynomialCount,
                 limits.max_polynomial_count,
                 IROHA_JINDO_MAX_POLYNOMIALS_V1,
@@ -2698,7 +2849,7 @@ impl PrivacyProtocolActivationLimitsV1 {
                     IVM_PRIVATE_NOTE_MAX_OUTPUTS_V1,
                 )
             }
-            Self::PqMaspStarkV0(limits) => {
+            Self::PqMaspStarkV1(limits) => {
                 validate_profile_limit(
                     PrivacyActivationLimitFieldV1::PqMaspInputCount,
                     limits.max_input_count,
@@ -2731,9 +2882,9 @@ impl PrivacyProtocolActivationLimitsV1 {
         self.validate()?;
         ceiling.validate()?;
         match (*self, *ceiling) {
-            (Self::ZkAcePqAuthorizationV0, Self::ZkAcePqAuthorizationV0)
-            | (Self::VegaExistingCredentialZkV0, Self::VegaExistingCredentialZkV0)
-            | (Self::IrohaZkX509StarkP256V0, Self::IrohaZkX509StarkP256V0)
+            (Self::ZkAcePqAuthorizationV1, Self::ZkAcePqAuthorizationV1)
+            | (Self::VegaExistingCredentialZkV1, Self::VegaExistingCredentialZkV1)
+            | (Self::IrohaZkX509StarkP256V1, Self::IrohaZkX509StarkP256V1)
             | (Self::IrohaBootleLanternAnoncredV1, Self::IrohaBootleLanternAnoncredV1) => Ok(()),
             (Self::AnonymousPgcKOutOfNV1(value), Self::AnonymousPgcKOutOfNV1(max)) => {
                 validate_profile_limit_ceiling(
@@ -2767,8 +2918,8 @@ impl PrivacyProtocolActivationLimitsV1 {
                 )
             }
             (
-                Self::IrohaJindoPolynomialCommitmentV0(value),
-                Self::IrohaJindoPolynomialCommitmentV0(max),
+                Self::IrohaJindoPolynomialCommitmentV1(value),
+                Self::IrohaJindoPolynomialCommitmentV1(max),
             ) => validate_profile_limit_ceiling(
                 PrivacyActivationLimitFieldV1::JindoPolynomialCount,
                 value.max_polynomial_count,
@@ -2805,7 +2956,7 @@ impl PrivacyProtocolActivationLimitsV1 {
                     max.max_output_count,
                 )
             }
-            (Self::PqMaspStarkV0(value), Self::PqMaspStarkV0(max)) => {
+            (Self::PqMaspStarkV1(value), Self::PqMaspStarkV1(max)) => {
                 validate_profile_limit_ceiling(
                     PrivacyActivationLimitFieldV1::PqMaspInputCount,
                     value.max_input_count,
@@ -3021,8 +3172,6 @@ pub struct PrivacyProtocolActivationRecordV1 {
     pub protocol_limits: PrivacyProtocolActivationLimitsV1,
     /// At most one delayed, component-wise protocol-limit tightening.
     pub pending_protocol_limits_tightening: Option<PrivacyProtocolLimitsTighteningV1>,
-    /// Testnet assurance classification.
-    pub assurance: PrivacyAssuranceV1,
 }
 impl PrivacyProtocolActivationRecordV1 {
     /// Validate exact protocol mappings, non-zero digests, lifecycle, and limits.
@@ -3833,6 +3982,10 @@ pub struct PrivacyCapabilitySnapshotV1 {
     pub committed_height: u64,
     /// Authoritative singleton chain-wide privacy policy.
     pub consensus_policy: PrivacyConsensusPolicyV1,
+    /// Full registered Exact12 release and network deployment evidence.
+    ///
+    /// Absence is valid snapshot state but keeps every protocol unavailable.
+    pub qualification: Option<PrivacyExact12QualificationRecordV1>,
     /// Exactly twelve protocol rows in canonical discriminant order.
     pub protocols: Vec<PrivacyCapabilityRowV1>,
 }
@@ -3879,6 +4032,11 @@ impl PrivacyCapabilitySnapshotV1 {
                         source,
                     },
                 )?;
+        }
+        if let Some(qualification) = &self.qualification {
+            qualification
+                .validate()
+                .map_err(PrivacyCapabilitySnapshotValidationErrorV1::Qualification)?;
         }
         Ok(())
     }
@@ -4037,8 +4195,7 @@ impl PrivacyCapabilityArchiveValidationStatusV1 {
 /// [`PrivacyExact12CapabilityManifestV1`] schema and byte-for-byte canonical re-encoding. Finally
 /// [`PrivacyExact12CapabilityManifestV1::validate`] enforces the exact twelve rows in
 /// [`PrivacyProtocolIdV1::ALL`] order and all operation, profile, readiness, activation, policy,
-/// limitation, and self-digest bindings. The legacy snapshot schema is rejected rather than treated
-/// as a compatibility representation.
+/// production-qualification, and self-digest bindings. Every other schema is rejected.
 #[must_use]
 pub fn validate_privacy_capability_archive_v1(
     archive: &[u8],
@@ -4089,6 +4246,9 @@ pub enum PrivacyCapabilitySnapshotValidationErrorV1 {
     /// Singleton policy is invalid at the committed height.
     #[error("privacy capability consensus policy is invalid: {0}")]
     ConsensusPolicy(PrivacyPolicyValidationErrorV1),
+    /// Registered release/deployment evidence does not match this snapshot.
+    #[error("privacy capability qualification is invalid: {0}")]
+    Qualification(PrivacyExact12QualificationRecordValidationErrorV1),
     /// Protocol row count differs from the closed registry.
     #[error("privacy capability snapshot has {actual} rows; expected {expected}")]
     ProtocolCount {

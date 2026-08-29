@@ -8,18 +8,11 @@ namespace Hyperledger.Iroha.Sccp;
 /// <summary>Closed first-release SCCP network inventory.</summary>
 public enum SccpNetworkV1 : byte
 {
-    // Tag 0 is permanently reserved for the removed pre-release SORA profile.
-    SoraTaira = 1,
-    EthereumMainnet = 2,
-    EthereumSepolia = 3,
-    BscMainnet = 4,
-    BscTestnet = 5,
-    // Tags 6 through 9 are retired and permanently reserved.
-    TronMainnet = 10,
-    TronNile = 11,
-    TronShasta = 12,
-    TonMainnet = 14,
-    TonTestnet = 15,
+    SoraTaira = 0x40,
+    EthereumMainnet = 0x41,
+    BscMainnet = 0x42,
+    TronMainnet = 0x43,
+    TonMainnet = 0x44,
 }
 
 /// <summary>Exact profile metadata for <see cref="SccpNetworkV1"/>.</summary>
@@ -29,24 +22,19 @@ public static class SccpNetworkV1Extensions
     {
         SccpNetworkV1.SoraTaira => "sora-taira",
         SccpNetworkV1.EthereumMainnet => "ethereum-mainnet",
-        SccpNetworkV1.EthereumSepolia => "ethereum-sepolia",
         SccpNetworkV1.BscMainnet => "bsc-mainnet",
-        SccpNetworkV1.BscTestnet => "bsc-testnet",
         SccpNetworkV1.TronMainnet => "tron-mainnet",
-        SccpNetworkV1.TronNile => "tron-nile",
-        SccpNetworkV1.TronShasta => "tron-shasta",
         SccpNetworkV1.TonMainnet => "ton-mainnet",
-        SccpNetworkV1.TonTestnet => "ton-testnet",
         _ => throw new ArgumentOutOfRangeException(nameof(network)),
     };
 
     public static uint DomainId(this SccpNetworkV1 network) => network switch
     {
         SccpNetworkV1.SoraTaira => 0,
-        SccpNetworkV1.EthereumMainnet or SccpNetworkV1.EthereumSepolia => 1,
-        SccpNetworkV1.BscMainnet or SccpNetworkV1.BscTestnet => 2,
-        SccpNetworkV1.TonMainnet or SccpNetworkV1.TonTestnet => 4,
-        SccpNetworkV1.TronMainnet or SccpNetworkV1.TronNile or SccpNetworkV1.TronShasta => 5,
+        SccpNetworkV1.EthereumMainnet => 1,
+        SccpNetworkV1.BscMainnet => 2,
+        SccpNetworkV1.TronMainnet => 3,
+        SccpNetworkV1.TonMainnet => 4,
         _ => throw new ArgumentOutOfRangeException(nameof(network)),
     };
 
@@ -96,10 +84,10 @@ public sealed record SccpLaneIdV1
 /// <summary>Closed first-release SCCP binary codec inventory.</summary>
 public enum SccpCodecV1 : byte
 {
-    CanonicalText = 1,
-    EvmAddress20 = 2,
-    TronAddress21 = 5,
-    TonAccount36 = 7,
+    CanonicalText = 0,
+    EvmAddress20 = 1,
+    TronAddress21 = 2,
+    TonAccount36 = 3,
 }
 
 /// <summary>Canonical binary codec validation.</summary>
@@ -206,10 +194,10 @@ public static class SccpNativeBackendV1Extensions
 
     public static bool Supports(this SccpNativeBackendV1 backend, SccpNetworkV1 network) => backend switch
     {
-        SccpNativeBackendV1.EthereumBeacon => network is SccpNetworkV1.EthereumMainnet or SccpNetworkV1.EthereumSepolia,
-        SccpNativeBackendV1.BscParlia => network is SccpNetworkV1.BscMainnet or SccpNetworkV1.BscTestnet,
-        SccpNativeBackendV1.TronDpos => network is SccpNetworkV1.TronMainnet or SccpNetworkV1.TronNile or SccpNetworkV1.TronShasta,
-        SccpNativeBackendV1.TonMasterchain => network is SccpNetworkV1.TonMainnet or SccpNetworkV1.TonTestnet,
+        SccpNativeBackendV1.EthereumBeacon => network == SccpNetworkV1.EthereumMainnet,
+        SccpNativeBackendV1.BscParlia => network == SccpNetworkV1.BscMainnet,
+        SccpNativeBackendV1.TronDpos => network == SccpNetworkV1.TronMainnet,
+        SccpNativeBackendV1.TonMasterchain => network == SccpNetworkV1.TonMainnet,
         _ => false,
     };
 
@@ -231,7 +219,7 @@ public static class SccpNativeBackendV1Extensions
 /// <summary>Stable fixed-width kind tags used by canonical SCCP commitments.</summary>
 public enum SccpHubMessageKindV1 : byte
 {
-    Transfer = 5,
+    Transfer = 0,
 }
 
 /// <summary>Closed canonical SCCP payload. V1 admits only transfer.</summary>
@@ -253,7 +241,7 @@ public abstract class SccpPayloadV1
     public byte[] CanonicalBytes()
     {
         using var output = new MemoryStream();
-        output.WriteByte(2);
+        output.WriteByte(0);
         WriteCanonicalBody(output);
         return output.ToArray();
     }
@@ -398,7 +386,7 @@ public sealed class SccpTransferPayloadV1 : SccpPayloadV1
 
     private static void RequireDomain(uint value, string field)
     {
-        if (value is not (0 or 1 or 2 or 4 or 5))
+        if (value > 4)
         {
             throw new ArgumentOutOfRangeException(field, "SCCP domain is unsupported or retired.");
         }
@@ -408,8 +396,8 @@ public sealed class SccpTransferPayloadV1 : SccpPayloadV1
     {
         0 => SccpCodecV1.CanonicalText,
         1 or 2 => SccpCodecV1.EvmAddress20,
+        3 => SccpCodecV1.TronAddress21,
         4 => SccpCodecV1.TonAccount36,
-        5 => SccpCodecV1.TronAddress21,
         _ => throw new ArgumentOutOfRangeException(nameof(domain)),
     };
 }
@@ -663,23 +651,11 @@ public static class SccpV1
             case SccpNetworkV1.EthereumMainnet:
                 WriteUInt64(output, 1);
                 break;
-            case SccpNetworkV1.EthereumSepolia:
-                WriteUInt64(output, 11_155_111);
-                break;
             case SccpNetworkV1.BscMainnet:
                 WriteUInt64(output, 56);
                 break;
-            case SccpNetworkV1.BscTestnet:
-                WriteUInt64(output, 97);
-                break;
             case SccpNetworkV1.TronMainnet:
                 WriteUInt32(output, 0x2b6653dc);
-                break;
-            case SccpNetworkV1.TronNile:
-                WriteUInt32(output, 0xcd8690dc);
-                break;
-            case SccpNetworkV1.TronShasta:
-                WriteUInt32(output, 0x94a9059e);
                 break;
             case SccpNetworkV1.TonMainnet:
                 WriteTonNetwork(
@@ -687,13 +663,6 @@ public static class SccpV1
                     -239,
                     "17a3a92992aabea785a7a090985a265cd31f323d849da51239737e321fb05569",
                     "5e994fcf4d425c0a6ce6a792594b7173205f740a39cd56f537defd28b48a0f6e");
-                break;
-            case SccpNetworkV1.TonTestnet:
-                WriteTonNetwork(
-                    output,
-                    -3,
-                    "823f81f306ff02694f935cf5021548e3ce2b86b529812af6a12148879e95a128",
-                    "67e20ac184b9e039a62667acc3f9c00f90f359a76738233379efa47604980ce8");
                 break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(network));
@@ -778,7 +747,7 @@ public static class SccpV1
     public static SccpTransferPayloadV1 DecodeCanonicalPayload(ReadOnlySpan<byte> bytes)
     {
         var cursor = new PayloadCursor(bytes);
-        if (cursor.TakeByte() != 2)
+        if (cursor.TakeByte() != 0)
         {
             throw new ArgumentException("Unsupported or retired SCCP payload discriminant.", nameof(bytes));
         }

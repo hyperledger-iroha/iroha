@@ -258,6 +258,22 @@ impl Kura {
             block.hash(),
         )
     }
+    /// Reject route changes and equal-height forks while allowing the durable
+    /// frontier to precede or supersede the execution being reconciled.
+    fn post_wsv_frontier_conflicts_with_execution(
+        frontier: &LaneMergeApplicationFrontierV1,
+        expected: &LaneMergeApplicationFrontierV1,
+    ) -> bool {
+        frontier != expected
+            && (frontier.lane_id != expected.lane_id
+                || frontier.dataspace_id != expected.dataspace_id
+                || frontier.lane_incarnation != expected.lane_incarnation
+                // A lower frontier is the normal prepublication state for
+                // the next contiguous lane execution.  Only a different
+                // frontier at this exact height is a fork; a higher frontier
+                // is an already-published historical successor.
+                || frontier.lane_block_height == expected.lane_block_height)
+    }
     /// Read exact active evidence for one immutable carrier plan while the
     /// caller holds lane geometry and sidecar locks. A complete terminal record
     /// is an authenticated tombstone for receipt/frontier bytes that later
@@ -354,11 +370,10 @@ impl Kura {
             {
                 if frontier == execution.frontier {
                     consumed.insert(PostWsvLaneArtifactStableComponentId::Frontier(identity));
-                } else if frontier.lane_id != identity.lane_id
-                    || frontier.dataspace_id != identity.dataspace_id
-                    || frontier.lane_incarnation != identity.lane_incarnation
-                    || frontier.lane_block_height <= identity.lane_block_height
-                {
+                } else if Self::post_wsv_frontier_conflicts_with_execution(
+                    &frontier,
+                    &execution.frontier,
+                ) {
                     return Err(Self::invalid_lane_artifact_error(
                         frontier_path,
                         "post-WSV frontier evidence conflicts with its carrier plan",

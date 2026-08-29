@@ -1399,6 +1399,32 @@ fn parliament_attempt_openapi_is_closed_authenticated_and_bounded() {
     assert!(casting_response_headers.contains_key("Cache-Control"));
     assert!(casting_response_headers.contains_key("Vary"));
 
+    fn assert_no_secret_properties(schema_name: &str, value: &Value) {
+        match value {
+            Value::Object(object) => {
+                if let Some(Value::Object(properties)) = object.get("properties") {
+                    for property in properties.keys() {
+                        for secret in ["private_key", "privateKey", "seed", "mnemonic"] {
+                            assert!(
+                                !property.contains(secret),
+                                "{schema_name} leaked signing material field {property}"
+                            );
+                        }
+                    }
+                }
+                for child in object.values() {
+                    assert_no_secret_properties(schema_name, child);
+                }
+            }
+            Value::Array(array) => {
+                for child in array {
+                    assert_no_secret_properties(schema_name, child);
+                }
+            }
+            _ => {}
+        }
+    }
+
     for schema_name in [
         "DeployContractProposalDraftRequestV1",
         "DeployContractProposalDraftResponseV1",
@@ -1429,18 +1455,12 @@ fn parliament_attempt_openapi_is_closed_authenticated_and_bounded() {
             Some(&Value::Bool(false)),
             "{schema_name} must reject unknown fields"
         );
-        let encoded = norito::json::to_json(
+        assert_no_secret_properties(
+            schema_name,
             schemas
                 .get(schema_name)
                 .unwrap_or_else(|| panic!("missing {schema_name}")),
-        )
-        .expect("encode Parliament schema");
-        for secret in ["private_key", "privateKey", "seed", "mnemonic"] {
-            assert!(
-                !encoded.contains(secret),
-                "{schema_name} leaked signing material field {secret}"
-            );
-        }
+        );
     }
 
     let casting_context = schemas

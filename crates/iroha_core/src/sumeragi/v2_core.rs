@@ -186,10 +186,10 @@ pub(crate) const PRODUCTION_IN_FLIGHT_FIRST_RELEASE_TRANSITION_WITNESS_VERSION: 
 /// advancing this identity fails the source-bound formal preflight.
 pub(crate) const PRODUCTION_IN_FLIGHT_FIRST_RELEASE_TLA_SOURCE_SHA256:
     ProductionDigest256Projection = ProductionDigest256Projection {
-    word0: 0x2518_68a6_cc66_0bd6,
-    word1: 0x1e6f_b4e0_0592_3b04,
-    word2: 0xb529_3995_6821_3ffd,
-    word3: 0x03e2_1fda_4686_67d2,
+    word0: 0x2a74_3bb2_11d4_b36f,
+    word1: 0x587c_dd65_bffc_84c9,
+    word2: 0xe822_a45b_2c7c_7115,
+    word3: 0x0a0a_e281_fb6f_8598,
 };
 /// Explicit classification accepted by the production trace replay reducer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

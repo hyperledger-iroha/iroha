@@ -1239,7 +1239,7 @@ mod tests {
 
         let archived = norito::core::archived_from_slice::<Signature>(&bytes)
             .expect("sized canonical unpacked signature marker");
-        let _context = norito::core::PayloadCtxGuard::enter(archived.bytes());
+        let context = norito::core::PayloadCtxGuard::enter(archived.bytes());
         let error = norito::core::with_decode_limits(sequence_limited, || {
             <Signature as norito::core::NoritoDeserialize<'_>>::try_deserialize(archived.as_ref())
         })
@@ -1252,7 +1252,7 @@ mod tests {
             }
         ));
 
-        drop(_context);
+        drop(context);
         let mut raw = Vec::with_capacity(8 + payload.len());
         raw.extend_from_slice(&u64::try_from(payload.len()).unwrap().to_le_bytes());
         raw.extend_from_slice(&payload);

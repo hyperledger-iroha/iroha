@@ -2147,12 +2147,8 @@ mod tests {
         let jindo = &manifest.protocols[6];
         assert_eq!(
             jindo.readiness,
-            iroha_data_model::privacy::PrivacyCapabilityReadinessV1::AvailableExperimental
-        );
-        assert_eq!(
-            jindo.limitation,
-            Some(
-                iroha_data_model::privacy::PrivacyCapabilityLimitationV1::MissingDistributionWideKnowledgeSoundnessEvidence
+            iroha_data_model::privacy::PrivacyCapabilityReadinessV1::Unavailable(
+                iroha_data_model::privacy::PrivacyCapabilityUnavailableReasonV1::NotRegistered
             )
         );
         for row in [&manifest.protocols[3], &manifest.protocols[5]] {
@@ -2167,7 +2163,9 @@ mod tests {
         let json = norito::json::to_json(&manifest).expect("manifest JSON");
         assert!(json.contains("iroha-bootle-lantern-anoncred-v1"));
         assert!(json.contains("zk_x509_identity_presentation_v1"));
-        assert!(json.contains("missing-distribution-wide-knowledge-soundness-evidence"));
+        assert!(json.contains("not-registered"));
+        assert!(!json.contains("available-experimental"));
+        assert!(!json.contains("limitation"));
         assert!(!json.contains("iroha-bootle-genisis-ac-stark-v0"));
         assert!(!json.contains("production_ready"));
         assert!(!json.contains("production_gate"));

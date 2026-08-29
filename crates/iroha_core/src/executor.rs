@@ -324,6 +324,10 @@ fn native_singular_query_access(query: &SingularQueryBox) -> NativeQueryAccess {
         | SingularQueryBox::FindLaneRelayEnvelopeByRef(_)
         | SingularQueryBox::FindFxCorridorPolicyRegistry(_)
         | SingularQueryBox::FindFxCorridorPolicyById(_)
+        | SingularQueryBox::FindSorafsCitizenBondBySerialCommitment(_)
+        | SingularQueryBox::FindSorafsCitizenBondSnapshot(_)
+        | SingularQueryBox::FindSorafsAnonymousServiceEscrowById(_)
+        | SingularQueryBox::FindSorafsAnonymousJurorCandidacy(_)
         | SingularQueryBox::FindNftById(_) => NativeQueryAccess::AllLedger,
     }
 }
@@ -9332,6 +9336,16 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
     ) {
         return true;
     }
+    // Privacy activation remains governance-bound in Core, while proof
+    // submission consumes the rollback-safe signed transaction-intent binding
+    // and runs the exhaustive native verifier before any persistent world,
+    // ledger, or budget mutation.
+    if is_any!(
+        iroha_data_model::isi::privacy::RegisterPrivacyProtocolActivationV1,
+        iroha_data_model::isi::privacy::SubmitPrivacyProofV1,
+    ) {
+        return true;
+    }
     // Offline/Kagemusha execution is guarded by exact native checks in Core.
     if is_any!(
         iroha_data_model::isi::offline::TopUpKagemushaRecursiveV4,
@@ -9387,6 +9401,7 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
         iroha_data_model::isi::bridge::RecordBridgeReceipt,
         iroha_data_model::isi::bridge::ApplySccpRouteGovernance,
         iroha_data_model::isi::bridge::RecordSccpMessage,
+        iroha_data_model::isi::bridge::SubmitSccpTonBreakerObservationV1,
         iroha_data_model::isi::governance::ProposeDeployContract,
         iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal,
         iroha_data_model::isi::governance::ProposeSccpRouteGovernance,
@@ -11131,6 +11146,26 @@ mod tests {
         AccountId::new(checked_keypair().public_key().clone())
     }
     #[test]
+    fn native_sorafs_anonymity_queries_require_all_ledger_access() {
+        use iroha_data_model::query::sorafs::prelude::{
+            FindSorafsAnonymousJurorCandidacy, FindSorafsAnonymousServiceEscrowById,
+            FindSorafsCitizenBondBySerialCommitment, FindSorafsCitizenBondSnapshot,
+        };
+
+        let queries: [SingularQueryBox; 4] = [
+            FindSorafsCitizenBondBySerialCommitment::new([0x11; 32]).into(),
+            FindSorafsCitizenBondSnapshot.into(),
+            FindSorafsAnonymousServiceEscrowById::new([0x22; 32]).into(),
+            FindSorafsAnonymousJurorCandidacy::new([0x33; 32]).into(),
+        ];
+        for query in &queries {
+            assert_eq!(
+                native_singular_query_access(query),
+                NativeQueryAccess::AllLedger
+            );
+        }
+    }
+    #[test]
     fn native_escrow_query_authorization_uses_query_specific_tags() {
         use iroha_data_model::{
             escrow::AssetEscrowStatus,
@@ -11705,6 +11740,76 @@ mod tests {
                 !initial_native_instruction_is_explicitly_admitted(instruction),
                 "{} must remain unavailable through the post-genesis Initial executor",
                 instruction.id()
+            );
+        }
+    }
+    #[test]
+    fn initial_executor_routes_native_privacy_corridor_to_core() {
+        use crate::privacy_profiles::compiled_privacy_profile_v1;
+        use iroha_data_model::{
+            isi::privacy::{RegisterPrivacyProtocolActivationV1, SubmitPrivacyProofV1},
+            privacy::{
+                IrohaJindoPolynomialCommitmentStatementV1, PrivacyJindoFieldElementV1,
+                PrivacyJindoLatticeCommitmentV1, PrivacyProofBytesV1, PrivacyProofEnvelopeV1,
+                PrivacyProofV1, PrivacyProposedLifecycleV1, PrivacyProtocolIdV1,
+                PrivacyProtocolLifecycleV1, PrivacyStatementContextV1, PrivacyStatementV1,
+                PrivacyTransactionIntentDigestV1,
+            },
+        };
+
+        let profile =
+            compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1)
+                .expect("load compiled Jindo profile");
+        let activation = profile.activation_record(PrivacyProtocolLifecycleV1::Proposed(
+            PrivacyProposedLifecycleV1 {
+                proposed_at_height: 2,
+                activate_at_height: 2 + crate::privacy::PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1,
+            },
+        ));
+        let statement = PrivacyStatementV1::IrohaJindoPolynomialCommitmentV1(
+            IrohaJindoPolynomialCommitmentStatementV1 {
+                context: PrivacyStatementContextV1 {
+                    network_id: executor_test_network_id(b"initial-privacy-corridor"),
+                    action_index: 0,
+                    transaction_intent_digest: PrivacyTransactionIntentDigestV1::new([0x11; 32]),
+                    parameter_id: profile.parameter_id,
+                    parameter_digest: profile.parameter_digest,
+                    verifier_digest: profile.verifier_digest,
+                    statement_schema_digest: profile.statement_schema_digest,
+                    engine_manifest_digest: profile.engine_manifest_digest,
+                },
+                polynomial_commitments: vec![PrivacyJindoLatticeCommitmentV1::new(vec![0x22])],
+                evaluation_point: PrivacyJindoFieldElementV1::new([0x33; 32]),
+                claimed_evaluations: vec![PrivacyJindoFieldElementV1::new([0x44; 32])],
+            },
+        );
+        let statement_digest = statement.digest().expect("hash Jindo statement fixture");
+        let envelope = PrivacyProofEnvelopeV1 {
+            wire_magic: Default::default(),
+            catalog_commitment: Default::default(),
+            protocol_id: profile.protocol_id,
+            proof_system_id: profile.proof_system_id,
+            engine_id: profile.engine_id,
+            parameter_id: profile.parameter_id,
+            parameter_digest: profile.parameter_digest,
+            verifier_digest: profile.verifier_digest,
+            statement_schema_digest: profile.statement_schema_digest,
+            engine_manifest_digest: profile.engine_manifest_digest,
+            statement_digest,
+            statement,
+            proof: PrivacyProofV1::IrohaJindoPolynomialCommitmentV1(PrivacyProofBytesV1::new(
+                vec![0x55],
+            )),
+        };
+        let instructions: [InstructionBox; 2] = [
+            RegisterPrivacyProtocolActivationV1::new(activation).into(),
+            SubmitPrivacyProofV1::new(envelope).into(),
+        ];
+        for instruction in &instructions {
+            assert!(
+                initial_native_instruction_is_explicitly_admitted(instruction),
+                "{} must reach its exact native Core authorization and verification gates",
+                instruction.id(),
             );
         }
     }
@@ -15843,7 +15948,7 @@ mod tests {
             3,
             *Hash::new(b"relay-allocation-manifest").as_ref(),
             iroha_data_model::nexus::AxtFastpqBinding {
-                parameter: "fastpq-lane-balanced".to_owned(),
+                parameter: "fastpq-state-transition-stark-v1".to_owned(),
                 source_dsid: source_dataspace_id.as_u64(),
                 source_dataspace: format!("dataspace-{}", source_dataspace_id.as_u64()),
                 source_receipt_id: "relay-allocation-receipt".to_owned(),

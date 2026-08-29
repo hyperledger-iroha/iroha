@@ -156,7 +156,7 @@ mod tests {
 
     fn batch(old_root: [u8; 32], new_root: [u8; 32]) -> TransitionBatch {
         TransitionBatch::new(
-            "fastpq-lane-balanced",
+            "fastpq-state-transition-stark-v1",
             PublicInputs {
                 old_root,
                 new_root,

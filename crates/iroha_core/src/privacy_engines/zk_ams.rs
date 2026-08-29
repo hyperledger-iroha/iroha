@@ -1,11 +1,11 @@
-//! Native Iroha testnet instantiation of ZK-AMS anonymous provisioning.
+//! Native Iroha V1 instantiation of ZK-AMS anonymous provisioning.
 //!
 //! The protocol workflow follows ZK-AMS v2, arXiv:2602.16130, Algorithms 1--4 and Appendices A/C.
 //! The paper intentionally leaves the concrete linkable ring-signature group, hash, transcript, and
 //! wire unspecified. This module closes Phase V to an LSAG instance over prime-order Ristretto255
 //! with SHA3-512 and supplies the holder-possession Schnorr component composed with the admission
-//! relation. This module defines the sole Iroha first-release testnet profile; no paper-prototype
-//! or legacy wire is admitted.
+//! relation. This module defines the sole Iroha first-release profile; no paper prototype or
+//! retired wire is admitted.
 //!
 //! Batch admission composes an exact low-s ES256 credential relation, a setup-free masked
 //! relaxed-R1CS proof, and one transcript-bound Ristretto possession proof per ordered anchor.
@@ -611,6 +611,8 @@ fn zk_ams_intent_projection_envelope_v1(
         }
     };
     PrivacyProofEnvelopeV1 {
+        wire_magic: Default::default(),
+        catalog_commitment: Default::default(),
         protocol_id: profile.protocol_id,
         proof_system_id: profile.proof_system_id,
         engine_id: profile.engine_id,
@@ -957,6 +959,8 @@ fn finalize_zk_ams_prepared_action_v1(
     )
     .map_err(|_| ZkAmsPrivacyActionBuildErrorV1::EncodedLengthOverflow)?;
     let final_envelope = PrivacyProofEnvelopeV1 {
+        wire_magic: Default::default(),
+        catalog_commitment: Default::default(),
         protocol_id: profile.protocol_id,
         proof_system_id: profile.proof_system_id,
         engine_id: profile.engine_id,
@@ -2809,17 +2813,16 @@ mod tests {
         },
         transaction::FeePaymentIntent,
     };
-    use iroha_primitives::json::Json;
     use p256::ecdsa::{SigningKey as P256SigningKey, signature::hazmat::PrehashSigner as _};
     use rand_core_06::Error as RngError;
     #[derive(norito::derive::NoritoSerialize)]
-    struct LegacyZkAmsBatchAdmissionProofWireV1 {
+    struct RetiredWireZkAmsBatchAdmissionProofV1 {
         version: u8,
         relation_proof: Vec<u8>,
         possession_proofs: Vec<Vec<u8>>,
     }
     #[derive(norito::derive::NoritoSerialize)]
-    struct LegacyZkAmsOptionSlotsBatchAdmissionProofWireV1 {
+    struct RetiredWireZkAmsOptionSlotsBatchAdmissionProofV1 {
         version: u8,
         relation_proof: Vec<u8>,
         possession_proofs:
@@ -3162,32 +3165,32 @@ mod tests {
                 .expect("canonical fixed-slot wire"),
             canonical_wire
         );
-        let legacy = LegacyZkAmsBatchAdmissionProofWireV1 {
+        let retired_wire = RetiredWireZkAmsBatchAdmissionProofV1 {
             version: ZK_AMS_BATCH_ADMISSION_PROOF_VERSION_V1,
             relation_proof: Vec::new(),
             possession_proofs: Vec::new(),
         };
-        let legacy_bytes = norito::codec::encode_adaptive(&legacy);
-        assert_ne!(legacy_bytes, canonical);
+        let retired_wire_bytes = norito::codec::encode_adaptive(&retired_wire);
+        assert_ne!(retired_wire_bytes, canonical);
         assert!(
-            decode_zk_ams_batch_admission_wire_v1(&legacy_bytes, 1).is_err(),
+            decode_zk_ams_batch_admission_wire_v1(&retired_wire_bytes, 1).is_err(),
             "the unreleased nested-Vec wire must not survive the first-release schema"
         );
-        let mut legacy_option_slots = [None; ZK_AMS_MAX_ADMISSION_BATCH_SIZE_V1];
-        legacy_option_slots[0] = Some(ZkAmsAdmissionPossessionProofWireV1 {
+        let mut retired_option_slots = [None; ZK_AMS_MAX_ADMISSION_BATCH_SIZE_V1];
+        retired_option_slots[0] = Some(ZkAmsAdmissionPossessionProofWireV1 {
             version: ZK_AMS_ADMISSION_POSSESSION_PROOF_VERSION_V1,
             commitment: [1; 32],
             response: [2; 32],
         });
-        let legacy_option_array =
-            norito::codec::encode_adaptive(&LegacyZkAmsOptionSlotsBatchAdmissionProofWireV1 {
+        let retired_option_array =
+            norito::codec::encode_adaptive(&RetiredWireZkAmsOptionSlotsBatchAdmissionProofV1 {
                 version: ZK_AMS_BATCH_ADMISSION_PROOF_VERSION_V1,
                 relation_proof: Vec::new(),
-                possession_proofs: legacy_option_slots,
+                possession_proofs: retired_option_slots,
             });
-        assert_ne!(legacy_option_array, canonical);
+        assert_ne!(retired_option_array, canonical);
         assert!(
-            decode_zk_ams_batch_admission_wire_v1(&legacy_option_array, 1).is_err(),
+            decode_zk_ams_batch_admission_wire_v1(&retired_option_array, 1).is_err(),
             "the unreleased Option-array wire must not reach the first-release decoder"
         );
         let max_wire = ZkAmsBatchAdmissionProofWireV1 {
@@ -3693,57 +3696,6 @@ mod tests {
             metadata: Metadata::default(),
         }
     }
-    fn prepared_intent_statements() -> Vec<(
-        ZkAmsPrivacyActionTransactionContextV1,
-        IrohaZkAmsStatementV1,
-    )> {
-        let profile = crate::privacy_profiles::zk_ams_release_candidate_profile_material_v1()
-            .expect("release-candidate profile material");
-        let admission_template = typed_batch_statement();
-        let PrivacyZkAmsActionV1::BatchAdmission(admission_action) =
-            admission_template.action.clone()
-        else {
-            unreachable!()
-        };
-        let admission_context = intent_transaction_context(1_800_000_000_010, 11);
-        let admission = prepare_zk_ams_privacy_action_transaction_intent_with_profile_v1(
-            &admission_context,
-            intent_governance(&admission_template),
-            PrivacyZkAmsActionV1::BatchAdmission(admission_action),
-            profile,
-        )
-        .expect("derive canonical batch-admission transaction intent");
-        let ring = sorted_ring(ZK_AMS_MIN_RING_SIZE_V1);
-        let key_image = zk_ams_key_image_v1(&ring[5].1).expect("canonical key image");
-        let provision_template = typed_provision_statement(&ring, key_image);
-        let PrivacyZkAmsActionV1::ProvisionAccount(provision_action) =
-            provision_template.action.clone()
-        else {
-            unreachable!()
-        };
-        let provision_context = intent_transaction_context(1_800_000_000_011, 12);
-        let provision = prepare_zk_ams_privacy_action_transaction_intent_with_profile_v1(
-            &provision_context,
-            intent_governance(&provision_template),
-            PrivacyZkAmsActionV1::ProvisionAccount(provision_action),
-            profile,
-        )
-        .expect("derive canonical provisioning transaction intent");
-        vec![
-            (admission_context, admission),
-            (provision_context, provision),
-        ]
-    }
-    fn validate_release_candidate_transaction_intent(
-        context: &ZkAmsPrivacyActionTransactionContextV1,
-        statement: &IrohaZkAmsStatementV1,
-    ) -> Result<PrivacyTransactionIntentDigestV1, ZkAmsPrivacyActionIntentErrorV1> {
-        let profile = crate::privacy_profiles::zk_ams_release_candidate_profile_material_v1()
-            .expect("release-candidate profile material");
-        validate_zk_ams_privacy_action_transaction_intent_with_profile_v1(
-            context, statement, profile,
-        )
-    }
     fn sealed_provision_fixture() -> (
         ZkAmsPrivacyActionTransactionContextV1,
         ZkAmsPrivacyActionGovernanceV1,
@@ -3763,70 +3715,6 @@ mod tests {
             ring,
         )
     }
-    fn prepare_release_candidate_provision_with_rng<R>(
-        context: ZkAmsPrivacyActionTransactionContextV1,
-        governance: ZkAmsPrivacyActionGovernanceV1,
-        action: PrivacyZkAmsProvisionAccountV1,
-        signer_index: usize,
-        secret: &ZkAmsSeedSecretV1,
-        canonical_genesis_hash: [u8; 32],
-        rng: &mut R,
-    ) -> Result<ZkAmsPreparedPrivacyActionV1, ZkAmsPrivacyActionBuildErrorV1>
-    where
-        R: CryptoRng + RngCore,
-    {
-        if canonical_genesis_hash == [0; 32] {
-            return Err(ZkAmsPrivacyActionBuildErrorV1::ZeroGenesisHash);
-        }
-        let profile = crate::privacy_profiles::zk_ams_release_candidate_profile_material_v1()
-            .map_err(|_| ZkAmsPrivacyActionIntentErrorV1::CompiledProfileUnavailable)?;
-        prepare_zk_ams_provision_privacy_action_with_rng_and_profile_v1(
-            context,
-            governance,
-            action,
-            signer_index,
-            secret,
-            canonical_genesis_hash,
-            profile,
-            rng,
-        )
-    }
-    #[test]
-    fn canonical_single_action_transaction_intents_bind_admission_then_provision() {
-        let prepared = prepared_intent_statements();
-        assert_eq!(prepared.len(), 2);
-        assert!(prepared[0].0.creation_time < prepared[1].0.creation_time);
-        assert!(
-            prepared[0].0.nonce.expect("admission nonce")
-                < prepared[1].0.nonce.expect("provision nonce")
-        );
-        assert!(matches!(
-            &prepared[0].1.action,
-            PrivacyZkAmsActionV1::BatchAdmission(_)
-        ));
-        assert!(matches!(
-            &prepared[1].1.action,
-            PrivacyZkAmsActionV1::ProvisionAccount(_)
-        ));
-        let digests = prepared
-            .iter()
-            .map(|(context, statement)| {
-                assert_eq!(
-                    statement.context.action_index,
-                    ZK_AMS_PRIVACY_ACTION_INDEX_V1
-                );
-                let digest = validate_release_candidate_transaction_intent(context, statement)
-                    .expect("canonical candidate intent binding validates");
-                assert_eq!(digest, statement.context.transaction_intent_digest);
-                assert!(!digest.is_zero());
-                digest
-            })
-            .collect::<Vec<_>>();
-        assert_ne!(
-            digests[0], digests[1],
-            "sequential state-dependent actions require distinct transaction intents"
-        );
-    }
     #[test]
     fn public_transaction_intent_surface_stays_closed_before_release_readiness() {
         let template = typed_batch_statement();
@@ -3842,80 +3730,10 @@ mod tests {
             ),
             Err(ZkAmsPrivacyActionIntentErrorV1::CompiledProfileUnavailable),
         );
-        let (candidate_context, candidate_statement) = prepared_intent_statements()
-            .into_iter()
-            .next()
-            .expect("candidate admission statement");
         assert_eq!(
-            validate_zk_ams_privacy_action_transaction_intent_v1(
-                &candidate_context,
-                &candidate_statement,
-            ),
+            validate_zk_ams_privacy_action_transaction_intent_v1(&context, &template),
             Err(ZkAmsPrivacyActionIntentErrorV1::CompiledProfileUnavailable),
         );
-    }
-    #[test]
-    fn transaction_intents_reject_fee_ttl_nonce_metadata_and_action_index_mutations() {
-        for (context, statement) in prepared_intent_statements() {
-            let mut changed_fee = context.clone();
-            changed_fee.fee_payment =
-                FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(6_000_000));
-            assert_eq!(
-                validate_release_candidate_transaction_intent(&changed_fee, &statement),
-                Err(ZkAmsPrivacyActionIntentErrorV1::FinalIntentBinding),
-                "fee mutation must invalidate the stored intent"
-            );
-            let mut changed_ttl = context.clone();
-            changed_ttl.time_to_live = Some(Duration::from_secs(61));
-            assert_eq!(
-                validate_release_candidate_transaction_intent(&changed_ttl, &statement),
-                Err(ZkAmsPrivacyActionIntentErrorV1::FinalIntentBinding),
-                "TTL mutation must invalidate the stored intent"
-            );
-            let mut changed_nonce = context.clone();
-            changed_nonce.nonce = NonZeroU32::new(
-                context
-                    .nonce
-                    .expect("fixture nonce")
-                    .get()
-                    .checked_add(1)
-                    .expect("fixture nonce increment"),
-            );
-            assert_eq!(
-                validate_release_candidate_transaction_intent(&changed_nonce, &statement),
-                Err(ZkAmsPrivacyActionIntentErrorV1::FinalIntentBinding),
-                "nonce mutation must invalidate the stored intent"
-            );
-            let mut changed_metadata = context.clone();
-            changed_metadata.metadata.insert(
-                "zk_ams_intent_mutation"
-                    .parse()
-                    .expect("canonical metadata key"),
-                Json::new(1_u32),
-            );
-            assert_eq!(
-                validate_release_candidate_transaction_intent(&changed_metadata, &statement),
-                Err(ZkAmsPrivacyActionIntentErrorV1::FinalIntentBinding),
-                "metadata mutation must invalidate the stored intent"
-            );
-            let mut changed_creation_time = context.clone();
-            changed_creation_time.creation_time = changed_creation_time
-                .creation_time
-                .checked_add(Duration::from_millis(1))
-                .expect("fixture creation time increment");
-            assert_eq!(
-                validate_release_candidate_transaction_intent(&changed_creation_time, &statement,),
-                Err(ZkAmsPrivacyActionIntentErrorV1::FinalIntentBinding),
-                "creation-time mutation must invalidate the stored intent"
-            );
-            let mut impossible_second_action = statement.clone();
-            impossible_second_action.context.action_index = 1;
-            assert_eq!(
-                validate_release_candidate_transaction_intent(&context, &impossible_second_action,),
-                Err(ZkAmsPrivacyActionIntentErrorV1::StatementValidation),
-                "Taira's single-action transaction limit must reject action index one"
-            );
-        }
     }
     #[test]
     fn sealed_provision_builder_preflights_public_failures_before_randomness() {
@@ -3947,120 +3765,6 @@ mod tests {
                 &mut PanicRng,
             ),
             Err(ZkAmsPrivacyActionBuildErrorV1::AuthorityKeyMismatch)
-        ));
-    }
-    #[test]
-    fn sealed_provision_builder_consumes_one_revalidated_payload_and_signature() {
-        let (context, governance, action, ring) = sealed_provision_fixture();
-        let prepared = prepare_release_candidate_provision_with_rng(
-            context,
-            governance,
-            action,
-            5,
-            &ring[5].1,
-            [0x11; 32],
-            &mut TestRng::new(0x1234_5566_7788_9900),
-        )
-        .expect("prepare sealed ZK-AMS provisioning action");
-        assert_eq!(
-            prepared.effect(),
-            ZkAmsPrivacyActionEffectV1::ProvisionAccount
-        );
-        assert_ne!(prepared.transaction_intent_digest(), [0; 32]);
-        assert_ne!(prepared.statement_digest(), [0; 32]);
-        assert_ne!(prepared.proof_envelope_hash(), [0; 32]);
-        assert!(prepared.statement_bytes() > 0);
-        assert!(prepared.proof_bytes() > 0);
-        assert!(prepared.encoded_proof_envelope_bytes() > prepared.proof_bytes());
-        validate_zk_ams_payload_integrity_v1(&prepared.payload, prepared.integrity())
-            .expect("prepared payload independently revalidates");
-        let prepared_debug = format!("{prepared:?}");
-        assert!(!prepared_debug.contains("TransactionPayload"));
-        assert!(!prepared_debug.contains("PrivacyProofBytes"));
-        assert!(!prepared_debug.contains("canonical_genesis_hash"));
-        let expected_intent = prepared.transaction_intent_digest();
-        let expected_statement = prepared.statement_digest();
-        let expected_envelope_hash = prepared.proof_envelope_hash();
-        let signer = KeyPair::try_from_seed(vec![60; 32], Algorithm::Ed25519)
-            .expect("matching transaction signer");
-        let signed = sign_prepared_zk_ams_privacy_action_v1(prepared, signer.private_key())
-            .expect("consume and sign sealed ZK-AMS action");
-        signed
-            .signed_transaction()
-            .verify_signature()
-            .expect("locally signed transaction verifies");
-        assert_eq!(
-            signed.effect(),
-            ZkAmsPrivacyActionEffectV1::ProvisionAccount
-        );
-        assert_eq!(signed.transaction_intent_digest(), expected_intent);
-        assert_eq!(signed.statement_digest(), expected_statement);
-        assert_eq!(signed.proof_envelope_hash(), expected_envelope_hash);
-        assert_eq!(
-            signed.transaction_hash(),
-            *signed.signed_transaction().hash().as_ref()
-        );
-        assert_eq!(
-            signed.adaptive_signed_transaction_bytes(),
-            u32::try_from(norito::codec::encode_adaptive(signed.signed_transaction()).len())
-                .expect("bounded signed transaction")
-        );
-        assert!(signed.signed_transaction().attachments().is_none());
-        let signed_debug = format!("{signed:?}");
-        assert!(!signed_debug.contains("SignedTransaction {"));
-        assert!(!signed_debug.contains("PrivacyProofBytes"));
-    }
-    #[test]
-    fn sealed_provision_signer_rejects_nonce_genesis_and_integrity_substitution() {
-        let signer = KeyPair::try_from_seed(vec![60; 32], Algorithm::Ed25519)
-            .expect("matching transaction signer");
-        let (context, governance, action, ring) = sealed_provision_fixture();
-        let mut nonce_substitution = prepare_release_candidate_provision_with_rng(
-            context,
-            governance,
-            action,
-            5,
-            &ring[5].1,
-            [0x11; 32],
-            &mut TestRng::new(0x2200_0000_0000_0001),
-        )
-        .expect("prepare nonce-substitution fixture");
-        nonce_substitution.payload.nonce = NonZeroU32::new(22);
-        assert!(matches!(
-            sign_prepared_zk_ams_privacy_action_v1(nonce_substitution, signer.private_key()),
-            Err(ZkAmsPrivacyActionBuildErrorV1::PreparedPayloadDrift)
-        ));
-        let (context, governance, action, ring) = sealed_provision_fixture();
-        let mut genesis_substitution = prepare_release_candidate_provision_with_rng(
-            context,
-            governance,
-            action,
-            5,
-            &ring[5].1,
-            [0x11; 32],
-            &mut TestRng::new(0x2200_0000_0000_0002),
-        )
-        .expect("prepare genesis-substitution fixture");
-        genesis_substitution.canonical_genesis_hash[0] ^= 1;
-        assert!(matches!(
-            sign_prepared_zk_ams_privacy_action_v1(genesis_substitution, signer.private_key()),
-            Err(ZkAmsPrivacyActionBuildErrorV1::PreparedPayloadDrift)
-        ));
-        let (context, governance, action, ring) = sealed_provision_fixture();
-        let mut metric_substitution = prepare_release_candidate_provision_with_rng(
-            context,
-            governance,
-            action,
-            5,
-            &ring[5].1,
-            [0x11; 32],
-            &mut TestRng::new(0x2200_0000_0000_0003),
-        )
-        .expect("prepare integrity-substitution fixture");
-        metric_substitution.proof_envelope_hash[0] ^= 1;
-        assert!(matches!(
-            sign_prepared_zk_ams_privacy_action_v1(metric_substitution, signer.private_key()),
-            Err(ZkAmsPrivacyActionBuildErrorV1::PreparedPayloadDrift)
         ));
     }
     fn binding_for_statement(statement: &IrohaZkAmsStatementV1) -> TranscriptBindingV1<'_> {

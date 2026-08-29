@@ -279,6 +279,13 @@ final class AtomicPrivateSettlementToriiClientV1Tests: XCTestCase {
             }
             current.deleteLastPathComponent()
         }
-        throw XCTSkip("shared atomic-private-settlement fixture was not found")
+        throw NSError(
+            domain: "AtomicPrivateSettlementToriiClientV1Tests",
+            code: 1,
+            userInfo: [
+                NSLocalizedDescriptionKey:
+                    "shared atomic-private-settlement fixture was not found"
+            ]
+        )
     }
 }

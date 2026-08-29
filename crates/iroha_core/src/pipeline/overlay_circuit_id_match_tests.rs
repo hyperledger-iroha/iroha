@@ -38,8 +38,8 @@ mod circuit_id_match_tests {
                 alias,
             ));
         }
-        let stark_backend = "stark/fri/sha256-goldilocks";
-        let stark_canonical = "stark/fri/sha256-goldilocks:ivm-execution-v1";
+        let stark_backend = "stark/fri/poseidon-x7-goldilocks-6x64-v1";
+        let stark_canonical = "stark/fri/poseidon-x7-goldilocks-6x64-v1:ivm-execution-v1";
         assert!(circuit_id_matches(
             stark_backend,
             stark_canonical,
@@ -47,8 +47,8 @@ mod circuit_id_match_tests {
         ));
         for alias in [
             crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID,
-            "stark/fri/sha256-goldilocks/ivm-execution-v1",
-            " stark/fri/sha256-goldilocks:ivm-execution-v1 ",
+            "stark/fri/poseidon-x7-goldilocks-6x64-v1/ivm-execution-v1",
+            " stark/fri/poseidon-x7-goldilocks-6x64-v1:ivm-execution-v1 ",
         ] {
             assert!(!circuit_id_matches(stark_backend, alias, alias));
         }

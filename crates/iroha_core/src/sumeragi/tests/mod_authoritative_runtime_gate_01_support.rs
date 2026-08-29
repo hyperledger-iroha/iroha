@@ -4,7 +4,7 @@ use super::{
     fair_v2_ingress_same_control_slot, test_sumeragi_handle,
     test_sumeragi_handle_with_source_geometry,
 };
-use iroha_crypto::{Hash, HashOf, KeyPair};
+use iroha_crypto::{Hash, HashOf, KeyPair, MerkleTree, MerkleTreeCommitment};
 use iroha_data_model::{
     NetworkId,
     block::{
@@ -18,12 +18,13 @@ use iroha_data_model::{
     merge::{
         LaneDrainCertificateBodyV1, LaneDrainIntentV1, MergeCommitteeSignature, MergeLedgerEntry,
     },
-    nexus::{DataSpaceId, LaneId},
+    nexus::{DataSpaceId, LaneFinalityStatement, LaneId},
     peer::PeerId,
 };
 use iroha_p2p::network::{NetworkReplyRoute, NetworkReplyRouteError, NetworkReplyRouteTestFixture};
 use norito::codec::Encode as _;
 use std::{
+    num::NonZeroU64,
     sync::{Arc, atomic::Ordering},
     time::{Duration, Instant},
 };
@@ -536,16 +537,31 @@ fn v2_maximum_structural_proposal_wire(
         ordinary_writes_root,
         topup_anchor_root,
     );
-    let execution_commitment = wire::ExecutionCommitment::new_without_merge_carrier(
+    let execution_commitment = wire::ExecutionCommitment::new_with_manifests(
         Hash::new(b"fair-v2-ingress-max-proposal-parent-state"),
         post_state_root,
         ordinary_writes_root,
         Some(topup_anchor_root),
         topup_anchor_count,
-        1,
+        wire::NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
+        Hash::new(b"fair-v2-ingress-max-proposal-native-amx"),
+        wire::MAX_NATIVE_AMX_APPLICATION_MANIFEST_LEAVES,
+        Some(MerkleTreeCommitment::new(
+            HashOf::<MerkleTree<LaneFinalityStatement>>::from_untyped_unchecked(Hash::new(
+                b"fair-v2-ingress-max-proposal-lane-finality",
+            )),
+            NonZeroU64::new(u64::from(wire::MAX_LANE_FINALITY_STATEMENTS_PER_BLOCK))
+                .expect("lane-finality bound is non-zero"),
+        )),
+        Some(wire::MergeCarrierCommitmentV1::new(
+            HashOf::<MergeLedgerEntry>::from_untyped_unchecked(Hash::new(
+                b"fair-v2-ingress-max-proposal-merge-carrier",
+            )),
+        )),
+        wire::MAX_EXECUTED_BLOCK_WIRE_BYTES,
         Hash::new(b"fair-v2-ingress-max-proposal-executed-wire"),
     )
-    .expect("maximum top-up projection is canonical");
+    .expect("maximum bounded execution projection is canonical");
     let signers = (0..roster_len)
         .map(|index| u32::try_from(index).expect("validator bound fits u32"))
         .collect::<Vec<_>>();

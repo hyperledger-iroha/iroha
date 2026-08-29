@@ -1,7 +1,7 @@
 //! Period for re-entrant polling
 use std::time::Duration;
 /// Period for re-entrant polling
-pub(crate) struct RetryPeriod {
+pub struct RetryPeriod {
     /// The minimum period
     min_period: Duration,
     /// The maximum exponent
@@ -11,7 +11,7 @@ pub(crate) struct RetryPeriod {
 }
 impl RetryPeriod {
     /// Constructs a new object
-    pub(crate) const fn new(min_period: Duration, max_exponent: u8) -> Self {
+    pub(super) const fn new(min_period: Duration, max_exponent: u8) -> Self {
         Self {
             min_period,
             max_exponent,
@@ -19,19 +19,19 @@ impl RetryPeriod {
         }
     }
     /// Return the current delay, then increase the delay for the next failure.
-    pub(crate) fn next_period(&mut self) -> Duration {
+    pub(super) fn next_period(&mut self) -> Duration {
         let period = self.period();
         self.exponent = self.exponent.saturating_add(1).min(self.max_exponent);
         period
     }
 
     /// Reset backoff after a successful operation.
-    pub(crate) fn reset(&mut self) {
+    pub(super) fn reset(&mut self) {
         self.exponent = 0;
     }
 
     /// Retry period that is calculated as `min_period * 2 ^ min(exponent, max_exponent)`
-    pub(crate) fn period(&self) -> Duration {
+    pub(super) fn period(&self) -> Duration {
         let mult = 2_u32.saturating_pow(self.exponent.into());
         self.min_period.saturating_mul(mult)
     }

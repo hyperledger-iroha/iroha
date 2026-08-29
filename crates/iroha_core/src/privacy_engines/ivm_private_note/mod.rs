@@ -64,10 +64,10 @@ pub(crate) use relation::{
 };
 pub use stark::IVM_PRIVATE_NOTE_MAX_PROOF_BYTES_V1;
 pub(crate) use stark::{
-    IVM_PRIVATE_NOTE_STARK_KAT_PROOF_SHA256_V1, IVM_PRIVATE_NOTE_STARK_PROFILE_DESCRIPTOR_V1,
-    IVM_PRIVATE_NOTE_STARK_PROFILE_DIGEST_V1, PRIVATE_NOTE_PROFILE_AUX_WIDTH_V1,
-    PRIVATE_NOTE_PROFILE_CONSTRAINT_DEGREE_V1, PrivateNoteStarkRelationV1,
-    validate_ivm_private_note_stark_profile_v1, verify_private_note_stark_v1,
+    IVM_PRIVATE_NOTE_STARK_PROFILE_DESCRIPTOR_V1, PRIVATE_NOTE_DOMAINS_V1,
+    PRIVATE_NOTE_PROFILE_AUX_WIDTH_V1, PRIVATE_NOTE_PROFILE_CONSTRAINT_DEGREE_V1,
+    PrivateNoteStarkRelationV1, validate_ivm_private_note_stark_profile_v1,
+    verify_private_note_stark_v1,
 };
 pub(crate) use wallet::encrypt_ivm_private_wallet_note_for_commitment_with_opening_v1;
 pub(crate) use wallet::validate_ivm_private_wallet_encryption_opening_v1;

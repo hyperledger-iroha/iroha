@@ -417,7 +417,7 @@ mod tests {
     fn sccp_route_action() -> SccpRouteGovernanceActionV1 {
         SccpRouteGovernanceActionV1::Remove(crate::bridge::SccpRouteKeyV1 {
             lane_id: crate::bridge::SccpLaneIdV1 {
-                source: crate::bridge::SccpNetworkV1::EthereumSepolia,
+                source: crate::bridge::SccpNetworkV1::EthereumMainnet,
                 target: crate::bridge::SccpNetworkV1::SoraTaira,
             },
             route_id: "taira_eth_xor".to_owned(),

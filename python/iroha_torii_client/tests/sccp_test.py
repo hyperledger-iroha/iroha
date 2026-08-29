@@ -58,8 +58,6 @@ def PREFIX_HASH(byte: int) -> str:
 def UPPER(byte: int, length: int) -> str:
     return f"{byte:02x}".upper() * length
 AUTHORITY = "sorauﾛ1Nヱﾐﾚﾗﾗﾁ9SHyｾｼF2ﾚbヱAｦiﾇｺﾂpﾆWyｿﾛWﾍ7ｾA7ﾋヰｿUJEKNX"
-TEST_MAX_OUTSTANDING_LIABILITY = 1_000_000_000_000
-TEST_EVM_MAX_WRAPPED_SUPPLY = TEST_MAX_OUTSTANDING_LIABILITY * 1_000_000_000
 MESSAGE_ID = HASH(0x11)
 MESSAGE_BUNDLE_NORITO_TYPE = "iroha_sccp::TairaSccpMessageProofV1"
 PROOF_REQUEST_NORITO_TYPE = "iroha_sccp::SccpGroth16Bn254ProofRequestV1"
@@ -71,6 +69,9 @@ DESTINATION_ARTIFACT_NORITO_TYPE = (
 )
 NATIVE_INBOUND_PROOF_NORITO_TYPE = (
     "iroha_sccp::native_admission::SccpNativeInboundMessageProofV1"
+)
+REPLAY_WITNESS_NORITO_TYPE = (
+    "iroha_data_model::bridge::sccp_replay::SccpSparseMerkleWitnessV1"
 )
 
 
@@ -127,6 +128,10 @@ def _destination_artifact_b64(*, padding: int = 0) -> str:
 
 def _native_inbound_proof_b64(*, padding: int = 0) -> str:
     return _b64(_sccp_norito_frame(NATIVE_INBOUND_PROOF_NORITO_TYPE, padding=padding))
+
+
+def _replay_witness_b64(*, padding: int = 0) -> str:
+    return _b64(_sccp_norito_frame(REPLAY_WITNESS_NORITO_TYPE, padding=padding))
 
 
 def _network(profile: str) -> Dict[str, Any]:
@@ -279,7 +284,7 @@ def test_finality_anchor_accepts_only_protocol_v4() -> None:
     )
     assert len(current_roles) == 4
     assert current_hash.hex().upper() == (
-        "4410EE4CCFD06F2D0E3A658615D516AC8CF65255D8A8716CE511EA95E135C8C3"
+        "CDBEC097FED4AD21E44A354FE09A3C43AD489F4AC78CFF8944BA8BB5CC2FD577"
     )
 
     retired = copy.deepcopy(current)
@@ -317,6 +322,7 @@ def _capabilities() -> Dict[str, Any]:
         "message_bundle_path": "/v1/sccp/proofs/message/{message_id}",
         "proof_request_path": "/v1/sccp/proof-requests/{message_id}",
         "recent_messages_path": "/v1/sccp/messages/recent",
+        "sora_outbound_material_path": "/v1/sccp/routes/{source_profile}/{route_id}/{asset_key}/{revision}/sora-outbound-material",
         "registry_limits": {
             "max_governed_lanes": 16,
             "max_live_governed_routes": 64,
@@ -384,6 +390,21 @@ def _refresh_route_config_hash(route: Dict[str, Any]) -> None:
     )
 
 
+def _sora_outbound_execution_policy() -> Dict[str, Any]:
+    return {
+        "version": 1,
+        "semantics": "ivm_proved_record_sccp_message_v1",
+        "contract_artifact_sha256": UPPER(0x51, 32),
+        "vk_ref": {
+            "backend": "halo2/ipa",
+            "name": "sccp_route_v1",
+            "version": 1,
+            "commitment": UPPER(0x52, 32),
+        },
+        "gas_limit": 1_000_000,
+    }
+
+
 def _route(
     *,
     source: str = "bsc-mainnet",
@@ -431,15 +452,19 @@ def _route(
                 "outbound_proof_policy": _outbound_policy(),
                 "route_address": route_address,
                 "route_code_hash": route_code_hash,
+                "replay_verifier_address": UPPER(0x13, 20),
+                "replay_verifier_code_hash": UPPER(0x23, 32),
+                "mint_breaker_address": UPPER(0x14, 20),
+                "mint_breaker_code_hash": UPPER(0x24, 32),
                 "taira_to_token_multiplier": 1_000_000_000,
-                "max_wrapped_supply": TEST_EVM_MAX_WRAPPED_SUPPLY,
+                "max_wrapped_supply": "1000000000000000000000",
             },
         },
+        "sora_outbound_execution_policy": _sora_outbound_execution_policy(),
         "settlement": {
             "asset_definition_id": "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
-            "custody_owner": AUTHORITY,
             "payload_amount_scale": 9,
-            "max_outstanding_liability": TEST_MAX_OUTSTANDING_LIABILITY,
+            "max_outstanding_liability": "1000000000000",
         },
     }
     _refresh_route_config_hash(route)
@@ -463,9 +488,16 @@ def _ton_route(
         "verifying_key": key,
         "verifier_key_hash": _bls12381_key_hash(key).upper(),
         "proof_profile_commitment": sccp._ton_proof_profile_commitment().hex().upper(),  # noqa: SLF001
+        "mint_breaker_guardian_keys": {
+            "guardian_0": UPPER(0xA1, 32),
+            "guardian_1": UPPER(0xA2, 32),
+            "guardian_2": UPPER(0xA3, 32),
+            "guardian_3": UPPER(0xA4, 32),
+            "guardian_4": UPPER(0xA5, 32),
+        },
         "outbound_proof_policy": _ton_outbound_policy(),
         "taira_to_token_multiplier": 1,
-        "max_wrapped_supply": TEST_MAX_OUTSTANDING_LIABILITY,
+        "max_wrapped_supply": "1000000000000",
     }
     route = {
         "lane_id": _lane(source),
@@ -486,11 +518,11 @@ def _ton_route(
             },
         },
         "destination": {"family": "ton", "deployment": deployment},
+        "sora_outbound_execution_policy": _sora_outbound_execution_policy(),
         "settlement": {
             "asset_definition_id": "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
-            "custody_owner": AUTHORITY,
             "payload_amount_scale": 9,
-            "max_outstanding_liability": TEST_MAX_OUTSTANDING_LIABILITY,
+            "max_outstanding_liability": "1000000000000",
         },
     }
     _refresh_route_config_hash(route)
@@ -550,14 +582,14 @@ def _bundle() -> Dict[str, Any]:
                 "nonce": "7",
                 "route_revision": 1,
                 "asset_home_domain": 0,
-                "asset_id_codec": 1,
+                "asset_id_codec": 0,
                 "asset_id": "0x786f72",
                 "amount": "1",
-                "sender_codec": 1,
+                "sender_codec": 0,
                 "sender": "0x616c696365",
-                "recipient_codec": 2,
+                "recipient_codec": 1,
                 "recipient": "0x" + HASH(0x21)[:40],
-                "route_id_codec": 1,
+                "route_id_codec": 0,
                 "route_id": "0x74616972615f6273635f786f72",
             }
         },
@@ -769,24 +801,26 @@ class RecordingSession(requests.Session):
         return self.responses.pop(0)
 
 
-def test_closed_inventory_exposes_ton_and_removes_solana_and_nontransfer_payloads() -> None:
+def test_closed_inventory_exposes_only_four_external_mainnets_and_taira() -> None:
     assert tuple(SCCP_NETWORK_PROFILES) == (
         "sora-taira",
         "ethereum-mainnet",
-        "ethereum-sepolia",
         "bsc-mainnet",
-        "bsc-testnet",
         "tron-mainnet",
-        "tron-nile",
-        "tron-shasta",
         "ton-mainnet",
-        "ton-testnet",
     )
     assert all(profile["tag"] != 0 for profile in SCCP_NETWORK_PROFILES.values())
-    assert tuple(SCCP_CODEC_KEYS) == (1, 2, 5, 7)
+    assert tuple(profile["tag"] for profile in SCCP_NETWORK_PROFILES.values()) == (
+        0x40,
+        0x41,
+        0x42,
+        0x43,
+        0x44,
+    )
+    assert tuple(SCCP_CODEC_KEYS) == (0, 1, 2, 3)
     assert SCCP_NETWORK_PROFILES["ton-mainnet"] == {
         "profile": "ton-mainnet",
-        "tag": 14,
+        "tag": 0x44,
         "domain": SCCP_DOMAIN_TON,
         "sora": False,
     }
@@ -811,22 +845,23 @@ def test_closed_codecs_accept_exact_bytes_and_reject_retired_or_textual_aliases(
     assert normalize_sccp_codec_value(SCCP_CODEC_TRON_ADDRESS21, b"\x41" + b"\x02" * 20)
     assert normalize_sccp_codec_value(SCCP_CODEC_TON_ACCOUNT36, bytes(4) + b"\x03" * 32)
     for codec, value in (
-        (3, b"\x01" * 32),
-        (4, b"\x01" * 36),
+        (4, b"\x01" * 32),
+        (5, b"\x01" * 36),
         (6, b"\x01"),
-        (7, bytes(36)),
-        (7, b"\x00\x00\x00\x01" + b"\x01" * 32),
-        (7, b"\x01" * 35),
-        (2, "0x" + "11" * 20),
-        (2, b"\x00" * 20),
-        (5, b"\x42" + b"\x01" * 20),
-        (1, " padded"),
-        (1, "contains space"),
-        (1, "line\nbreak"),
-        (1, "merchant🙂"),
-        (1, AUTHORITY[:-1] + ("2" if AUTHORITY.endswith("1") else "1")),
-        (1, "n753" + AUTHORITY.removeprefix("sora")),
-        (1, AUTHORITY + "ｲ" * 100),
+        (7, b"\x01"),
+        (3, bytes(36)),
+        (3, b"\x00\x00\x00\x01" + b"\x01" * 32),
+        (3, b"\x01" * 35),
+        (1, "0x" + "11" * 20),
+        (1, b"\x00" * 20),
+        (2, b"\x42" + b"\x01" * 20),
+        (0, " padded"),
+        (0, "contains space"),
+        (0, "line\nbreak"),
+        (0, "merchant🙂"),
+        (0, AUTHORITY[:-1] + ("2" if AUTHORITY.endswith("1") else "1")),
+        (0, "n753" + AUTHORITY.removeprefix("sora")),
+        (0, AUTHORITY + "ｲ" * 100),
     ):
         with pytest.raises((TypeError, ValueError)):
             normalize_sccp_codec_value(codec, value)
@@ -836,6 +871,12 @@ def test_source_event_digest_matches_all_shared_vectors_and_rejects_aliases() ->
     fixture = json.loads(
         (Path(__file__).resolve().parents[3] / "fixtures/sccp/native_transfer_event_v1.json").read_text()
     )
+    assert [vector["source_profile"] for vector in fixture["vectors"]] == [
+        "ethereum-mainnet",
+        "bsc-mainnet",
+        "tron-mainnet",
+        "ton-mainnet",
+    ]
     for vector in fixture["vectors"]:
         assert sccp_source_event_digest(
             vector["lane_hash_hex"], vector["message_id_hex"], vector["payload_hash_hex"]
@@ -1047,7 +1088,17 @@ def test_registry_checks_retained_history_caps_before_traversal() -> None:
 
 
 def test_registry_validates_full_key_and_rejects_retired_or_aliased_routes() -> None:
-    assert len(normalize_sccp_registry(_registry()).lanes) == 1
+    parsed = normalize_sccp_registry(_registry())
+    assert len(parsed.lanes) == 1
+    policy_payload = parsed.lanes[0]["routes"][0]["sora_outbound_execution_policy"]
+    assert policy_payload["semantics"] == package.SCCP_SORA_OUTBOUND_EXECUTION_SEMANTICS_V1
+    policy = sccp._sora_outbound_execution_policy(  # noqa: SLF001
+        policy_payload,
+        "test execution policy",
+    )
+    assert isinstance(policy, package.SccpSoraOutboundExecutionPolicy)
+    assert isinstance(policy.vk_ref, package.SccpPortableVerifyingKeyRef)
+    assert policy.gas_limit == 1_000_000
     for removed in ("sora-nexus", "sora_nexus"):
         retired_sora = _registry()
         retired_sora["lanes"][0]["lane_id"]["target"] = {
@@ -1085,62 +1136,56 @@ def test_registry_validates_full_key_and_rejects_retired_or_aliased_routes() -> 
     ]
     with pytest.raises(ValueError, match="outbound_proof_policy"):
         normalize_sccp_registry(policyless)
+    missing_execution_policy = _registry()
+    del missing_execution_policy["lanes"][0]["routes"][0][
+        "sora_outbound_execution_policy"
+    ]
+    with pytest.raises(ValueError, match="sora_outbound_execution_policy"):
+        normalize_sccp_registry(missing_execution_policy)
+    for mutate, expected in (
+        (lambda policy: policy.update(semantics="legacy_burn_v0"), "semantics"),
+        (lambda policy: policy.update(gas_limit=0), "gas_limit"),
+        (
+            lambda policy: policy.update(
+                gas_limit=package.SCCP_MAX_SORA_OUTBOUND_GAS_LIMIT_V1 + 1
+            ),
+            "gas_limit",
+        ),
+        (lambda policy: policy["vk_ref"].update(backend="Halo2/ipa"), "portable"),
+        (lambda policy: policy["vk_ref"].pop("version"), "version"),
+        (lambda policy: policy.update(legacy_gas_budget=1), "retired field"),
+        (
+            lambda policy: policy["vk_ref"].update(
+                commitment=policy["contract_artifact_sha256"]
+            ),
+            "reuses",
+        ),
+    ):
+        invalid_policy = _registry()
+        execution_policy = invalid_policy["lanes"][0]["routes"][0][
+            "sora_outbound_execution_policy"
+        ]
+        mutate(execution_policy)
+        with pytest.raises(ValueError, match=expected):
+            normalize_sccp_registry(invalid_policy)
+    cross_role_alias = _registry()
+    aliased_route = cross_role_alias["lanes"][0]["routes"][0]
+    destination, _ = _parsed_destination_and_route_hash(aliased_route)
+    aliased_route["sora_outbound_execution_policy"][
+        "contract_artifact_sha256"
+    ] = destination.destination_binding_hash.hex().upper()
+    with pytest.raises(ValueError, match="reuses"):
+        normalize_sccp_registry(cross_role_alias)
     wrong_asset = _registry()
     wrong_asset["lanes"][0]["routes"][0]["settlement"]["asset_definition_id"] = "xor"
     with pytest.raises(ValueError, match="canonical Taira XOR"):
         normalize_sccp_registry(wrong_asset)
-    noncanonical_custody = _registry()
-    noncanonical_custody["lanes"][0]["routes"][0]["settlement"][
+    retired_custody = _registry()
+    retired_custody["lanes"][0]["routes"][0]["settlement"][
         "custody_owner"
-    ] = "n753" + AUTHORITY.removeprefix("sora")
-    with pytest.raises(ValueError, match="exact canonical rendering"):
-        normalize_sccp_registry(noncanonical_custody)
-
-
-def test_registry_requires_exact_positive_supply_and_liability_caps() -> None:
-    for route, source in (
-        (_route(), "bsc-mainnet"),
-        (_route(source="tron-mainnet"), "tron-mainnet"),
-        (_ton_route(), "ton-mainnet"),
-    ):
-        missing_supply = copy.deepcopy(route)
-        del missing_supply["destination"]["deployment"]["max_wrapped_supply"]
-        with pytest.raises(ValueError, match="max_wrapped_supply"):
-            normalize_sccp_registry(_registry([missing_supply], source=source))
-
-    missing_liability = _registry()
-    del missing_liability["lanes"][0]["routes"][0]["settlement"][
-        "max_outstanding_liability"
-    ]
-    with pytest.raises(ValueError, match="max_outstanding_liability"):
-        normalize_sccp_registry(missing_liability)
-
-    mismatched = _registry()
-    mismatched["lanes"][0]["routes"][0]["destination"]["deployment"][
-        "max_wrapped_supply"
-    ] += 1
-    with pytest.raises(ValueError, match="must equal settlement.max_outstanding_liability"):
-        normalize_sccp_registry(mismatched)
-
-    unsafe_liability = (1 << 64) + 1
-    lossless_route = _route()
-    lossless_route["settlement"]["max_outstanding_liability"] = unsafe_liability
-    lossless_route["destination"]["deployment"]["max_wrapped_supply"] = (
-        unsafe_liability
-        * lossless_route["destination"]["deployment"]["taira_to_token_multiplier"]
-    )
-    _refresh_route_config_hash(lossless_route)
-    parsed = parse_sccp_json_object(
-        json.dumps(_registry([lossless_route]), separators=(",", ":")),
-        "SCCP registry",
-    )
-    assert (
-        parsed["lanes"][0]["routes"][0]["settlement"][
-            "max_outstanding_liability"
-        ]
-        == unsafe_liability
-    )
-    assert len(normalize_sccp_registry(parsed).lanes) == 1
+    ] = AUTHORITY
+    with pytest.raises(ValueError, match="retired field"):
+        normalize_sccp_registry(retired_custody)
 
 
 @pytest.mark.parametrize(
@@ -1176,15 +1221,15 @@ def test_registry_rejects_legacy_or_ambiguous_v2_finality_anchor(
     (
         (
             "bsc-mainnet",
-            "0d3f2789f19af900584d24bab4148ac32ac1532e85748845646ca032e43c0757",
-            "c96a33a74f1e4134a7d6d63cb2ee4eaffe7d2007d4189bddce6d39f5aa97bc5c",
-            "3dbb23c4f6659308b48114e68049674e5cfc0f1aa2a517ff6b64bf448834dc28",
+            "68a718f971bbdeea456b325b7821e20b6cbde82a1c5fb520d31e0d27f0b2d452",
+            "bc7ecd599c20cecace8b28139eb6949c9bf490e2bf04f06c12d59a3befb38c8c",
+            "4776f5fbe731e2eebd827baf080db67abe1a1e8f78f79a1b741cb004a2a992ad",
         ),
         (
-            "tron-nile",
-            "929040304688aed6529341a8060ca669d6ace688eec98036e4c1d4a8f28eb564",
-            "376a54dfc0288fd43fe696a5be9a898196fb2195bd33c21eca6cbedd022e17c4",
-            "c60b8fefb1e6a64da218b2cf30c0017ce97a57c6cdb09303030d38be1af6c29c",
+            "tron-mainnet",
+            "83b2bb7f5497e89d613df3c6cfb745d84c4976dd4b447ddae65d8b485ee9a408",
+            "f95ad7752cf34aa4bf813e23cf517591372dbb7fef6e344c37ed16be63ff3414",
+            "060705f1fb6c32bde115dd29b6885cade7f734df4768772f1da857c914018fd9",
         ),
     ),
 )
@@ -1203,7 +1248,7 @@ def test_registry_destination_and_route_hashes_match_canonical_vectors(
     assert len(normalize_sccp_registry(_registry([route], source=source)).lanes) == 1
 
 
-@pytest.mark.parametrize("source", ("bsc-mainnet", "tron-nile"))
+@pytest.mark.parametrize("source", ("bsc-mainnet", "tron-mainnet"))
 def test_registry_policy_mutations_recompute_every_hash_and_reject_stale_emitter(
     source: str,
 ) -> None:
@@ -1242,7 +1287,7 @@ def test_registry_policy_mutations_recompute_every_hash_and_reject_stale_emitter
         assert len(normalize_sccp_registry(_registry([candidate], source=source)).lanes) == 1
 
 
-@pytest.mark.parametrize("source", ("bsc-mainnet", "tron-nile"))
+@pytest.mark.parametrize("source", ("bsc-mainnet", "tron-mainnet"))
 def test_registry_recomputes_binding_and_deployment_intermediaries(source: str) -> None:
     baseline = _route(source=source)
     baseline_destination, baseline_route_hash = _parsed_destination_and_route_hash(baseline)
@@ -1260,7 +1305,7 @@ def test_registry_recomputes_binding_and_deployment_intermediaries(source: str) 
         normalize_sccp_registry(_registry([changed_code], source=source))
 
     changed_verifier = copy.deepcopy(baseline)
-    changed_verifier["destination"]["deployment"]["verifier_address"] = UPPER(0x13, 20)
+    changed_verifier["destination"]["deployment"]["verifier_address"] = UPPER(0x15, 20)
     verifier_destination, verifier_route_hash = _parsed_destination_and_route_hash(
         changed_verifier
     )
@@ -1275,6 +1320,73 @@ def test_registry_recomputes_binding_and_deployment_intermediaries(source: str) 
     assert verifier_route_hash != baseline_route_hash
     with pytest.raises(ValueError, match="source route_config_hash"):
         normalize_sccp_registry(_registry([changed_verifier], source=source))
+
+    for field, replacement in (
+        ("replay_verifier_address", UPPER(0x17, 20)),
+        ("replay_verifier_code_hash", UPPER(0x27, 32)),
+        ("mint_breaker_address", UPPER(0x18, 20)),
+        ("mint_breaker_code_hash", UPPER(0x28, 32)),
+    ):
+        changed_role = copy.deepcopy(baseline)
+        changed_role["destination"]["deployment"][field] = replacement
+        role_destination, role_route_hash = _parsed_destination_and_route_hash(
+            changed_role
+        )
+        assert (
+            role_destination.destination_binding_hash
+            != baseline_destination.destination_binding_hash
+        )
+        assert role_route_hash != baseline_route_hash
+
+    for fields in (
+        ("replay_verifier_address", "mint_breaker_address"),
+        ("replay_verifier_code_hash", "mint_breaker_code_hash"),
+        (
+            "replay_verifier_address",
+            "mint_breaker_address",
+            "replay_verifier_code_hash",
+            "mint_breaker_code_hash",
+        ),
+    ):
+        substituted = copy.deepcopy(baseline)
+        deployment = substituted["destination"]["deployment"]
+        for left, right in zip(fields[::2], fields[1::2]):
+            deployment[left], deployment[right] = deployment[right], deployment[left]
+        changed_destination, changed_route_hash = _parsed_destination_and_route_hash(
+            substituted
+        )
+        assert (
+            changed_destination.destination_binding_hash
+            != baseline_destination.destination_binding_hash
+        )
+        assert changed_route_hash != baseline_route_hash
+        with pytest.raises(ValueError, match="source route_config_hash"):
+            normalize_sccp_registry(_registry([substituted], source=source))
+
+
+def test_registry_requires_distinct_nonempty_replay_and_breaker_roles() -> None:
+    for field, alias in (
+        ("replay_verifier_address", "token_address"),
+        ("mint_breaker_address", "verifier_address"),
+    ):
+        value = _registry()
+        deployment = value["lanes"][0]["routes"][0]["destination"]["deployment"]
+        deployment[field] = deployment[alias]
+        with pytest.raises(ValueError, match="reuses"):
+            normalize_sccp_registry(value)
+    for field in (
+        "token_code_hash",
+        "verifier_code_hash",
+        "route_code_hash",
+        "replay_verifier_code_hash",
+        "mint_breaker_code_hash",
+    ):
+        value = _registry()
+        value["lanes"][0]["routes"][0]["destination"]["deployment"][field] = (
+            sccp._KECCAK256_EMPTY_BYTES.hex().upper()  # noqa: SLF001
+        )
+        with pytest.raises(ValueError, match="empty bytecode"):
+            normalize_sccp_registry(value)
 
 
 def test_ton_registry_binds_storage_roles_without_stateinit_fixed_points() -> None:
@@ -1311,6 +1423,34 @@ def test_ton_registry_binds_storage_roles_without_stateinit_fixed_points() -> No
     )
     with pytest.raises(ValueError, match="source emitter"):
         normalize_sccp_registry(_registry([source_alias], source="ton-mainnet"))
+
+    zero_guardian = copy.deepcopy(route)
+    zero_guardian["destination"]["deployment"]["mint_breaker_guardian_keys"][
+        "guardian_2"
+    ] = UPPER(0, 32)
+    with pytest.raises(ValueError, match="nonzero"):
+        normalize_sccp_registry(_registry([zero_guardian], source="ton-mainnet"))
+
+    unsorted = copy.deepcopy(route)
+    guardians = unsorted["destination"]["deployment"][
+        "mint_breaker_guardian_keys"
+    ]
+    guardians["guardian_3"] = guardians["guardian_2"]
+    with pytest.raises(ValueError, match="strictly increasing"):
+        normalize_sccp_registry(_registry([unsorted], source="ton-mainnet"))
+
+    for cap in ("0", str(1 << 120)):
+        outside_range = copy.deepcopy(route)
+        outside_range["destination"]["deployment"]["max_wrapped_supply"] = cap
+        with pytest.raises(ValueError, match="decimal string"):
+            normalize_sccp_registry(_registry([outside_range], source="ton-mainnet"))
+
+    mismatched_circuit = copy.deepcopy(route)
+    mismatched_circuit["destination"]["deployment"]["verifier_circuit_hash"] = UPPER(
+        0x96, 32
+    )
+    with pytest.raises(ValueError, match="semantic circuit"):
+        normalize_sccp_registry(_registry([mismatched_circuit], source="ton-mainnet"))
 
 
 def test_registry_rejects_duplicate_lanes_revision_gaps_and_two_live_revisions() -> None:
@@ -1607,7 +1747,7 @@ def test_bundle_and_proof_request_are_closed_and_query_free() -> None:
     with pytest.raises(ValueError, match="role-separated"):
         normalize_sccp_message_bundle(aliased_commitment)
     reserved_domain = _bundle()
-    reserved_domain["payload"]["Transfer"]["dest_domain"] = 3
+    reserved_domain["payload"]["Transfer"]["dest_domain"] = 5
     with pytest.raises(ValueError, match="reserved"):
         normalize_sccp_message_bundle(reserved_domain)
     oversized_nonce = _bundle()
@@ -1615,7 +1755,7 @@ def test_bundle_and_proof_request_are_closed_and_query_free() -> None:
     with pytest.raises(ValueError, match="u64"):
         normalize_sccp_message_bundle(oversized_nonce)
     wrong_recipient_codec = _bundle()
-    wrong_recipient_codec["payload"]["Transfer"]["recipient_codec"] = 5
+    wrong_recipient_codec["payload"]["Transfer"]["recipient_codec"] = 2
     with pytest.raises(ValueError, match="protocol domain"):
         normalize_sccp_message_bundle(wrong_recipient_codec)
     long_merkle_path = _bundle()
@@ -1691,9 +1831,10 @@ def test_submit_dtos_have_no_redundant_public_key_or_caller_selected_route() -> 
                 "authority": AUTHORITY,
                 "fee_payment": _fee_payment(),
                 "native_proof_b64": _native_inbound_proof_b64(),
+                "replay_witness_b64": _replay_witness_b64(),
             }
         )
-    ) == ["authority", "fee_payment", "native_proof_b64"]
+    ) == ["authority", "fee_payment", "native_proof_b64", "replay_witness_b64"]
     native = normalize_bridge_message_submit_payload(
         {
             "authority": AUTHORITY,
@@ -1701,6 +1842,7 @@ def test_submit_dtos_have_no_redundant_public_key_or_caller_selected_route() -> 
             "signature_b64": "AQ==",
             "transaction_payload_b64": transaction_payload_b64,
             "native_proof_b64": _native_inbound_proof_b64(),
+            "replay_witness_b64": _replay_witness_b64(),
             "creation_time_ms": 10,
         }
     )
@@ -1729,6 +1871,7 @@ def test_submit_authorities_require_exact_canonical_i105() -> None:
                 "authority": noncanonical,
                 "fee_payment": _fee_payment(),
                 "native_proof_b64": _native_inbound_proof_b64(),
+                "replay_witness_b64": _replay_witness_b64(),
             }
         )
 
@@ -1784,6 +1927,7 @@ def test_submit_artifacts_require_exact_schema_and_zero_alignment_padding() -> N
             "authority": AUTHORITY,
             "fee_payment": _fee_payment(),
             "native_proof_b64": _native_inbound_proof_b64(),
+            "replay_witness_b64": _replay_witness_b64(),
         }
     )
     with pytest.raises(ValueError, match="schema hash"):
@@ -1812,6 +1956,7 @@ def test_submit_artifacts_require_exact_schema_and_zero_alignment_padding() -> N
                 "authority": AUTHORITY,
                 "fee_payment": _fee_payment(),
                 "native_proof_b64": _destination_artifact_b64(),
+                "replay_witness_b64": _replay_witness_b64(),
             }
         )
     for padding in (1, 8, 64):
@@ -1829,6 +1974,7 @@ def test_submit_artifacts_require_exact_schema_and_zero_alignment_padding() -> N
                     "authority": AUTHORITY,
                     "fee_payment": _fee_payment(),
                     "native_proof_b64": _native_inbound_proof_b64(padding=padding),
+                    "replay_witness_b64": _replay_witness_b64(),
                 }
             )
 
@@ -1919,6 +2065,22 @@ def test_proof_submit_requires_structural_typed_fee_payment(fee_payment: Any) ->
 
 def test_bridge_response_and_strict_json_reject_contradictions_and_duplicates() -> None:
     assert normalize_sccp_bridge_submit_response(_prepared_response()).submitted is False
+    assert (
+        normalize_sccp_bridge_submit_response(
+            _prepared_response(backend="evm-groth16-bn254-v1")
+        ).backend
+        == "evm-groth16-bn254-v1"
+    )
+    assert (
+        normalize_sccp_bridge_submit_response(
+            _prepared_response(
+                backend="ton-groth16-bls12381-v1",
+                counterparty_domain=4,
+                counterparty_chain="ton-mainnet",
+            )
+        ).backend
+        == "ton-groth16-bls12381-v1"
+    )
     submitted = _prepared_response(
         submitted=True,
         tx_hash_hex=HASH(0x55),

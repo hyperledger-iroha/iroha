@@ -17,7 +17,7 @@ import "../../evm/sccp/SccpGroth16Bn254MessageVerifier.sol";
  */
 contract SccpTronGroth16Bn254MessageVerifier is SccpGroth16Bn254MessageVerifier {
     uint32 private constant SCCP_DOMAIN_SORA = 0;
-    uint32 private constant SCCP_DOMAIN_TRON = 5;
+    uint32 private constant SCCP_DOMAIN_TRON = 3;
 
     bytes32 private constant TRON_GROTH16_BACKEND_HASH =
         keccak256("tron-groth16-bn254-v1");

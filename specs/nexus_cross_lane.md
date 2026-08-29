@@ -74,6 +74,16 @@ canonical bytes in local Kura. That durable certificate is the public
 acceptance boundary; it does not assert that the binding is already in WSV.
 There is no deferred, metadata-marker, or legacy proxy admission branch.
 
+The proposal-native certificate is control work, not ordinary transaction
+execution. The `QueuePlanSynced` transaction's physical FIFO position and then
+its immutable live-reservation ordinal remain a strict global cut until the
+autonomous outcome is terminal; only the resulting authenticated lane payload
+and certified merge may execute it. Candidate assembly and its work provider
+exclude that role even in a single-route topology. Common block validation
+rejects every external `QueuePlanSynced` entrypoint, and locked/recovered-body
+ingress performs the same check before Kura retention, session publication, or
+losing-reservation retirement can mutate ownership.
+
 For `QueuePlanSynced`, a failure before network dispatch is definitely
 unavailable. A lost or unverifiable response after P2P or HTTP dispatch is
 returned as `queue_plan_journal_outcome_unknown` with the canonical
@@ -342,6 +352,9 @@ in both the ordinary global-body path and reservation-bound autonomous
 payloads. A routing plan names its coordinator and every participant leg. The
 producer must collect the required participant prepare/commit QCs;
 coordinator-only evidence is not synthesized.
+This ordinary Native-AMX path does not relax QueuePlan admission: a transaction
+whose signature-bound intent is `QueuePlanSynced` is autonomous-only regardless
+of whether its routing plan also contains Native-AMX participant legs.
 On the ordinary path the authenticated global leader owns these requests. In
 reservation-bound lookahead, only the independently frozen deterministic lane
 author may issue them, including when that author is outside the current global

@@ -147,12 +147,13 @@ mod tests {
     }
     #[test]
     fn ledger_lock_rejects_reserved_sidecar_suffix() {
+        let unicode_kelvin_suffix = format!("unicode.loc{}", '\u{212a}');
         for path in [
             "replays.norito.lock",
             "other.LoCk",
             "windows.lock.",
             "windows.LOCK ... ",
-            "unicode.locK",
+            &unicode_kelvin_suffix,
         ] {
             assert!(has_reserved_lock_suffix(Path::new(path)));
             let error = ExclusiveLedgerLock::acquire(Path::new(path))

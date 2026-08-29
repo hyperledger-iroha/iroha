@@ -665,6 +665,75 @@ mod tests {
         let circuit = VMExecutionCircuit::new(&program, &trace, &constraints);
         assert_eq!(circuit.verify(), Err("constraint failure"));
     }
+    #[test]
+    fn vm_execution_circuit_rejects_skipped_prefix_and_incomplete_suffix() {
+        let program = build_program(&[
+            wide_enc::encode_rr(wide::arithmetic::ADD, 3, 1, 2),
+            wide_enc::encode_halt(),
+        ]);
+        let mut s0 = base_state(0);
+        s0.gpr[1] = 5;
+        s0.gpr[2] = 7;
+        let mut s1 = s0.clone();
+        s1.pc = 4;
+        s1.gpr[3] = 12;
+        let partial_trace = vec![s0, s1.clone()];
+        let circuit = VMExecutionCircuit::new(&program, &partial_trace, &[]);
+        assert_eq!(circuit.verify(), Err("incomplete trace"));
+
+        let mut s2 = s1.clone();
+        s2.pc = 8;
+        let skipped_prefix_trace = vec![s1, s2];
+        let circuit = VMExecutionCircuit::new(&program, &skipped_prefix_trace, &[]);
+        assert_eq!(circuit.verify(), Err("trace does not start at code entry"));
+    }
+    #[test]
+    fn vm_execution_circuit_requires_halt_instead_of_physical_code_end() {
+        let fallthrough_program =
+            build_program(&[wide_enc::encode_ri(wide::arithmetic::ADDI, 1, 0, 7)]);
+        let s0 = base_state(0);
+        let mut s1 = s0.clone();
+        s1.pc = 4;
+        s1.gpr[1] = 7;
+        let fallthrough_trace = vec![s0, s1];
+        let circuit = VMExecutionCircuit::new(&fallthrough_program, &fallthrough_trace, &[]);
+        assert_eq!(circuit.verify(), Err("incomplete trace"));
+
+        let early_halt_program = build_program(&[
+            wide_enc::encode_halt(),
+            wide_enc::encode_ri(wide::arithmetic::ADDI, 1, 0, 7),
+        ]);
+        let s0 = base_state(0);
+        let mut s1 = s0.clone();
+        s1.pc = 4;
+        let early_halt_trace = vec![s0, s1];
+        let circuit = VMExecutionCircuit::new(&early_halt_program, &early_halt_trace, &[]);
+        assert!(circuit.verify().is_ok());
+
+        let multiple_halt_program = build_program(&[
+            wide_enc::encode_halt(),
+            wide_enc::encode_ri(wide::arithmetic::ADDI, 1, 0, 7),
+            wide_enc::encode_halt(),
+        ]);
+        let s0 = base_state(0);
+        let mut s1 = s0.clone();
+        s1.pc = 4;
+        let mut s2 = s1.clone();
+        s2.pc = 8;
+        s2.gpr[1] = 7;
+        let mut s3 = s2.clone();
+        s3.pc = 12;
+        let post_halt_trace = vec![s0, s1, s2, s3];
+        let circuit = VMExecutionCircuit::new(&multiple_halt_program, &post_halt_trace, &[]);
+        assert_eq!(circuit.verify(), Err("trace continues after halt"));
+    }
+    #[test]
+    fn memory_path_rejects_right_only_nodes_instead_of_hashing_a_sentinel() {
+        let leaf = [0x42; 32];
+        let missing_sibling_path = [[0; 32]];
+        assert!(verify_memory_path(leaf, 0, &missing_sibling_path).is_some());
+        assert_eq!(verify_memory_path(leaf, 1, &missing_sibling_path), None);
+    }
 }
 // -----------------------------------------------------------------------------
 // Arithmetic and Bitwise Operation Circuit
@@ -1286,7 +1355,7 @@ impl PairingCircuit {
 const CHUNK_SIZE: usize = 32;
 // Paths are ordered from leaf → root. Keep this in sync with
 // ByteMerkleTree::path and tests under crates/ivm/tests.
-fn verify_memory_path(leaf: [u8; 32], index: usize, path: &[[u8; 32]]) -> [u8; 32] {
+fn verify_memory_path(leaf: [u8; 32], index: usize, path: &[[u8; 32]]) -> Option<[u8; 32]> {
     use sha2::{Digest, Sha256};
     let mut current: [u8; 32] = Sha256::digest(leaf).into();
     let mut idx = index;
@@ -1310,19 +1379,17 @@ fn verify_memory_path(leaf: [u8; 32], index: usize, path: &[[u8; 32]]) -> [u8; 3
                 h.finalize().into()
             }
             (Some(l), None) => l,
-            (None, Some(_)) => {
-                // Invalid: right‑only child cannot exist in a complete tree.
-                // Return a sentinel zero root to ensure mismatch.
-                [0u8; 32]
-            }
-            (None, None) => [0u8; 32],
+            // A right-only child cannot exist in a complete tree. Returning a
+            // failure here prevents higher levels from hashing an error
+            // sentinel into an apparently ordinary root.
+            (None, Some(_)) | (None, None) => return None,
         };
         idx /= 2;
     }
     // ByteMerkleTree roots are returned as Hash::prehashed bytes (marker bit set).
     let mut out = current;
     out[31] |= 1;
-    out
+    Some(out)
 }
 fn region_perm(addr: u64, size: u32, code_len: u64, heap_limit: u64) -> Option<crate::error::Perm> {
     use crate::memory::Memory;
@@ -1390,7 +1457,7 @@ impl LoadCircuit {
         )?;
         // Verify Merkle path
         let idx = (self.addr as usize) / CHUNK_SIZE;
-        let root = verify_memory_path(self.leaf, idx, &self.path);
+        let root = verify_memory_path(self.leaf, idx, &self.path).ok_or("invalid memory path")?;
         ensure_bytes_equal(&root, &self.root)
     }
 }
@@ -1426,7 +1493,8 @@ impl StoreCircuit {
             return Err("access violation");
         }
         let idx = (self.addr as usize) / CHUNK_SIZE;
-        let computed_before = verify_memory_path(self.old_leaf, idx, &self.path);
+        let computed_before =
+            verify_memory_path(self.old_leaf, idx, &self.path).ok_or("invalid memory path")?;
         ensure_bytes_equal(&computed_before, &self.root_before)?;
         let offset = (self.addr as usize) % CHUNK_SIZE;
         let mut new_leaf = self.old_leaf;
@@ -1434,7 +1502,8 @@ impl StoreCircuit {
         val_bytes.copy_from_slice(&self.value.to_le_bytes());
         new_leaf[offset..offset + self.size as usize]
             .copy_from_slice(&val_bytes[..self.size as usize]);
-        let computed_after = verify_memory_path(new_leaf, idx, &self.path);
+        let computed_after =
+            verify_memory_path(new_leaf, idx, &self.path).ok_or("invalid memory path")?;
         ensure_bytes_equal(&computed_after, &self.root_after)
     }
 }
@@ -1695,7 +1764,9 @@ impl<'a> VMExecutionCircuit<'a> {
             .map_err(|_| "program")?
             .code_offset;
         let code = self.program.get(offset..).ok_or("program")?;
-        for window in self.trace.windows(2) {
+        let transition_count = self.trace.len().checked_sub(1).ok_or("incomplete trace")?;
+        let mut terminated_with_halt = false;
+        for (transition_index, window) in self.trace.windows(2).enumerate() {
             let curr = &window[0];
             let next = &window[1];
             let pc = usize::try_from(curr.pc).map_err(|_| "pc out of bounds")?;
@@ -1787,15 +1858,25 @@ impl<'a> VMExecutionCircuit<'a> {
                     Self::check_regs(curr, next, None)?;
                 }
                 x if x == crate::instruction::wide::control::HALT => {
+                    if transition_index + 1 != transition_count {
+                        return Err("trace continues after halt");
+                    }
                     let hc = HaltCircuit {
                         pc: curr.pc,
                         next_pc: next.pc,
                     };
                     hc.verify()?;
                     Self::check_regs(curr, next, None)?;
+                    terminated_with_halt = true;
                 }
                 _ => return Err("unsupported opcode"),
             }
+        }
+        if self.trace[0].pc != 0 {
+            return Err("trace does not start at code entry");
+        }
+        if !terminated_with_halt {
+            return Err("incomplete trace");
         }
         crate::zk::verify_trace(self.trace, self.constraints, &[], &[])
             .map_err(|_| "constraint failure")?;

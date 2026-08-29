@@ -37,15 +37,12 @@ where
     F: Fn() -> Fut + Send + Sync + 'static,
     Fut: Future<Output = Option<MetricsSnapshot>> + Send + 'static,
 {
-    let (bot_key, chat_id) = match (
-        config.telegram_bot_key.as_deref(),
-        config.telegram_chat_id.as_deref(),
-    ) {
-        (Some(k), Some(c)) if !k.is_empty() && !c.is_empty() => (k.to_owned(), c.to_owned()),
+    let settings = AlertSettings::from_config(&config)?;
+    let (bot_key, chat_id) = match (config.telegram_bot_key, config.telegram_chat_id) {
+        (Some(k), Some(c)) if !k.is_empty() && !c.is_empty() => (k, c),
         _ => return Err(eyre!("Telegram configuration missing bot_key or chat_id")),
     };
     let client = build_http_client()?;
-    let settings = AlertSettings::from_config(&config)?;
     let worker = TelegramWorker {
         client,
         bot_key,
@@ -274,7 +271,6 @@ fn format_alert(
     let mut extra: Vec<(String, String)> = Vec::new();
     for (k, v) in &event.fields.0 {
         match *k {
-            "msg" => {}
             "error" | "text" | "warning" => {
                 text = Some(match v {
                     norito::json::Value::String(s) => s.clone(),

@@ -627,7 +627,8 @@ public final class ConfidentialAssetToriiClientTests {
       requestCount++;
       this.lastRequest = request;
       this.lastBody = new String(request.body(), StandardCharsets.UTF_8);
-      return CompletableFuture.completedFuture(new TransportResponse(status, body, message, headers));
+      return CompletableFuture.completedFuture(
+          new TransportResponse(status, body, message, headers, null, false));
     }
   }
 }

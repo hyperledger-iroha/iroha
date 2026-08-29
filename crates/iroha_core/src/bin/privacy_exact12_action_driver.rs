@@ -78,8 +78,7 @@ const ORCHARD_RELEASE_EXPIRY_HEIGHT: u64 = 1_000_000_000;
 const ZK_ACE_RELEASE_AMOUNT: u128 = 19;
 const VERANGE_RELEASE_VALUES: [u64; 4] = [0, 1, 17, 4_294_967_295];
 const QUALIFICATION_SCOPE: &str = "native-action-construction-only";
-const CONSTRUCTION_ONLY_STATUS: &str = "constructible";
-const JINDO_EXPERIMENTAL_STATUS: &str = "available-experimental";
+const CONSTRUCTION_STATE: &str = "constructed";
 const MISSING_CONTROLLER_CASE_EVIDENCE: &str = "MissingSealedControllerProtocolCaseEvidence";
 const MISSING_ADMISSION_ARTIFACT_BUNDLE: &str = "MissingCanonicalAdmissionArtifactBundle";
 const MISSING_GOVERNED_FIGURE9_PROVER_ARTIFACTS: &str = "MissingGovernedFigure9ProverArtifacts";
@@ -113,7 +112,7 @@ struct ConstructibleOperationSpecV1 {
 const CONSTRUCTIBLE_OPERATION_SPECS_V1: [ConstructibleOperationSpecV1; 9] = [
     ConstructibleOperationSpecV1 {
         operation: ZK_ACE_OPERATION,
-        protocol: "zk-ace-pq-authorization-v0",
+        protocol: "zk-ace-pq-authorization-v1",
     },
     ConstructibleOperationSpecV1 {
         operation: ANONYMOUS_PGC_OPERATION,
@@ -125,7 +124,7 @@ const CONSTRUCTIBLE_OPERATION_SPECS_V1: [ConstructibleOperationSpecV1; 9] = [
     },
     ConstructibleOperationSpecV1 {
         operation: JINDO_OPERATION,
-        protocol: "iroha-jindo-polynomial-commitment-v0",
+        protocol: "iroha-jindo-polynomial-commitment-v1",
     },
     ConstructibleOperationSpecV1 {
         operation: BOOTLE_LANTERN_OPERATION,
@@ -145,7 +144,7 @@ const CONSTRUCTIBLE_OPERATION_SPECS_V1: [ConstructibleOperationSpecV1; 9] = [
     },
     ConstructibleOperationSpecV1 {
         operation: PQ_MASP_OPERATION,
-        protocol: "pq-masp-stark-v0",
+        protocol: "pq-masp-stark-v1",
     },
 ];
 fn constructible_operation_spec_v1(operation: &str) -> Option<ConstructibleOperationSpecV1> {
@@ -185,9 +184,9 @@ struct RequestIdBodyV1 {
 }
 #[derive(Debug, norito::JsonSerialize)]
 struct BuildActionResponseV1 {
-    availability: String,
     candidate_binding_sha256: String,
-    limitations: Vec<String>,
+    construction_state: String,
+    missing_evidence: Vec<String>,
     network_outcome_authoritative: bool,
     operation: String,
     protocol: String,
@@ -205,7 +204,7 @@ struct BuildActionResponseV1 {
 ///
 /// This deliberately contains neither a setup transaction nor any secret,
 /// witness, endpoint, credential, or network outcome.  The explicit response
-/// limitations keep qualification closed until the controller owns an
+/// missing-evidence list keeps qualification closed until the controller owns an
 /// already-admitted setup authority and a native policy/activation bundle.
 #[derive(Debug, norito::JsonSerialize)]
 struct VeRangePublicAdmissionArtifactsV1 {
@@ -295,27 +294,20 @@ fn request_id_body(request: &BuildActionRequestV1) -> RequestIdBodyV1 {
         ttl_millis: request.ttl_millis,
     }
 }
-fn operation_availability_v1(protocol: &str) -> &'static str {
-    if protocol == "iroha-jindo-polynomial-commitment-v0" {
-        JINDO_EXPERIMENTAL_STATUS
-    } else {
-        CONSTRUCTION_ONLY_STATUS
-    }
-}
-fn operation_limitations_v1(protocol: &str) -> Vec<String> {
-    let mut limitations = vec![MISSING_CONTROLLER_CASE_EVIDENCE.to_owned()];
+fn operation_missing_evidence_v1(protocol: &str) -> Vec<String> {
+    let mut missing_evidence = vec![MISSING_CONTROLLER_CASE_EVIDENCE.to_owned()];
     if protocol == "verange-transparent-range-v1" {
-        limitations.extend([
+        missing_evidence.extend([
             MISSING_VERANGE_SETUP_AUTHORITY.to_owned(),
             MISSING_VERANGE_SETUP_TRANSACTION_BUNDLE.to_owned(),
             MISSING_VERANGE_STATE_QUERY_EVIDENCE.to_owned(),
         ]);
-    } else if protocol != "iroha-jindo-polynomial-commitment-v0" {
-        limitations.push(MISSING_ADMISSION_ARTIFACT_BUNDLE.to_owned());
+    } else if protocol != "iroha-jindo-polynomial-commitment-v1" {
+        missing_evidence.push(MISSING_ADMISSION_ARTIFACT_BUNDLE.to_owned());
     } else {
-        limitations.push(MISSING_JINDO_KNOWLEDGE_SOUNDNESS.to_owned());
+        missing_evidence.push(MISSING_JINDO_KNOWLEDGE_SOUNDNESS.to_owned());
     }
-    limitations
+    missing_evidence
 }
 fn compute_request_id(request: &BuildActionRequestV1) -> Result<String, String> {
     let body = norito::json::to_string(&request_id_body(request))
@@ -753,9 +745,9 @@ fn build_response(request: BuildActionRequestV1) -> Result<BuildActionResponseV1
     }
     let transaction_hash_hex = hex::encode(transaction.hash().as_ref());
     Ok(BuildActionResponseV1 {
-        availability: operation_availability_v1(operation.protocol).to_owned(),
         candidate_binding_sha256: request.candidate_binding_sha256,
-        limitations: operation_limitations_v1(operation.protocol),
+        construction_state: CONSTRUCTION_STATE.to_owned(),
+        missing_evidence: operation_missing_evidence_v1(operation.protocol),
         network_outcome_authoritative: false,
         operation: operation.operation.to_owned(),
         protocol: operation.protocol.to_owned(),
@@ -859,15 +851,15 @@ mod tests {
         assert_eq!(
             CONSTRUCTIBLE_OPERATION_SPECS_V1.map(|spec| spec.protocol),
             [
-                "zk-ace-pq-authorization-v0",
+                "zk-ace-pq-authorization-v1",
                 "anonymous-pgc-k-out-of-n-v1",
                 "verange-transparent-range-v1",
-                "iroha-jindo-polynomial-commitment-v0",
+                "iroha-jindo-polynomial-commitment-v1",
                 "iroha-bootle-lantern-anoncred-v1",
                 "orchard-halo2-actions-v1",
                 "monero-fcmp-plus-plus-v1",
                 "iroha-ivm-private-note-stark-v1",
-                "pq-masp-stark-v0",
+                "pq-masp-stark-v1",
             ]
         );
         assert!(
@@ -875,11 +867,26 @@ mod tests {
                 .iter()
                 .all(|spec| !matches!(
                     spec.protocol,
-                    "vega-existing-credential-zk-v0"
+                    "vega-existing-credential-zk-v1"
                         | "iroha-zk-ams-v1"
-                        | "iroha-zk-x509-stark-p256-v0"
+                        | "iroha-zk-x509-stark-p256-v1"
                 ))
         );
+    }
+
+    #[test]
+    fn construction_response_reports_missing_evidence_without_assurance() {
+        assert_eq!(
+            operation_missing_evidence_v1("iroha-jindo-polynomial-commitment-v1"),
+            [
+                MISSING_CONTROLLER_CASE_EVIDENCE.to_owned(),
+                MISSING_JINDO_KNOWLEDGE_SOUNDNESS.to_owned(),
+            ]
+        );
+        assert!(!DRIVER_SOURCE.contains("available-experimental"));
+        assert!(!DRIVER_SOURCE.contains("limitations:"));
+        assert!(DRIVER_SOURCE.contains("construction_state: String"));
+        assert!(DRIVER_SOURCE.contains("missing_evidence: Vec<String>"));
     }
 
     #[test]

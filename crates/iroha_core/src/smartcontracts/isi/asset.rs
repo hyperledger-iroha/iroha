@@ -1472,20 +1472,6 @@ pub mod isi {
                 ) == *account_id
             })
     }
-    /// Return whether an account is the immutable funding/refund owner of a retained SCCP route.
-    pub(crate) fn is_sccp_custody_owner(
-        state_transaction: &StateTransaction<'_, '_>,
-        account_id: &AccountId,
-    ) -> bool {
-        state_transaction
-            .world
-            .sccp_registry
-            .get()
-            .lanes
-            .iter()
-            .flat_map(|lane| &lane.routes)
-            .any(|route| route.settlement.custody_owner == *account_id)
-    }
     /// Return whether a definition is referenced by any retained SCCP revision.
     pub(crate) fn is_sccp_settlement_asset_definition(
         state_transaction: &StateTransaction<'_, '_>,
@@ -5331,7 +5317,7 @@ pub mod isi {
         state_transaction: &StateTransaction<'_, '_>,
         route_key: &iroha_data_model::bridge::SccpRouteKeyV1,
         asset_definition_id: &AssetDefinitionId,
-    ) -> Result<(AccountId, AccountId), Error> {
+    ) -> Result<AccountId, Error> {
         let route = state_transaction
             .sccp_registry
             .route(route_key)
@@ -5352,7 +5338,7 @@ pub mod isi {
             asset_definition_id,
         );
         state_transaction.world.account(&escrow)?;
-        Ok((route.settlement.custody_owner.clone(), escrow))
+        Ok(escrow)
     }
     fn sccp_liability_quantity(
         outstanding_liability: u128,
@@ -5394,7 +5380,7 @@ pub mod isi {
         payload_amount: u128,
         amount: Quantity,
     ) -> Result<(), Error> {
-        let (_owner, escrow) =
+        let escrow =
             resolve_sccp_route_escrow_binding(state_transaction, route_key, asset_definition_id)?;
         let route = state_transaction
             .sccp_registry
@@ -5413,6 +5399,12 @@ pub mod isi {
             .sccp_route_liabilities
             .get(route_key)
             .copied();
+        if current.is_some_and(|record| !record.is_well_formed()) {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "SCCP outbound lock observed a noncanonical zero liability row".into(),
+            )
+            .into());
+        }
         let current_units = current.map_or(0, |record| record.outstanding_liability);
         let next = match current {
             Some(record) => record.checked_credit(payload_amount, maximum),
@@ -5655,6 +5647,12 @@ pub mod isi {
                     "SCCP inbound release has no outstanding route liability".into(),
                 )
             })?;
+        if !liability_before.is_well_formed() {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "SCCP inbound release observed a noncanonical zero liability row".into(),
+            )
+            .into());
+        }
         let liability_after = liability_before
             .checked_debit(payload_amount)
             .ok_or_else(|| {
@@ -5666,7 +5664,7 @@ pub mod isi {
                     .into(),
                 )
             })?;
-        let (_owner, escrow) =
+        let escrow =
             resolve_sccp_route_escrow_binding(state_transaction, route_key, &asset_definition_id)?;
         let source_id = AssetId::new(asset_definition_id, escrow);
         let expected_escrow_balance_before =

@@ -4,7 +4,7 @@ import java.io.ByteArrayOutputStream;
 
 /** Closed canonical SCCP payload. V1 contains only transfer. */
 public abstract class SccpPayloadV1 {
-  private static final int TRANSFER_DISCRIMINANT = 2;
+  private static final int TRANSFER_DISCRIMINANT = 0;
 
   private final SccpHubMessageKindV1 kind;
 

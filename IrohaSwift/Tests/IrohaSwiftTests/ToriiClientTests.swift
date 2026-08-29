@@ -8508,7 +8508,7 @@ final class ToriiClientTests: XCTestCase {
                             },
                             "variant":"Asset"
                         },
-"wire_id":"iroha.instruction.v1::mint_burn::MintBox"
+                        "wire_id":"iroha.instruction.v1::mint_burn::MintBox"
                     }
                 },
                 "transaction_hash":"9bca4ad18474058cbbad5bbc49e5e11cf58d90fc28b094ac8f8963a5116fdff5",
@@ -9507,8 +9507,28 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertEqual(page.items.first?.id, "lot-001$commodities.sora")
     }
 
+    func testQueryEnvelopeEncodesMixedSelectEntries() throws {
+        let envelope = ToriiQueryEnvelope(
+            select: [
+                .fieldPath(" account.id "),
+                .object(["metadata": .bool(true)]),
+            ]
+        )
+
+        let encoded = try JSONEncoder().encode(envelope)
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+        )
+        let select = try XCTUnwrap(object["select"] as? [Any])
+        XCTAssertEqual(select[0] as? String, "account.id")
+        XCTAssertEqual(
+            (select[1] as? [String: Any])?["metadata"] as? Bool,
+            true
+        )
+    }
+
     func testQueryEnvelopeRejectsBlankSelectFieldPaths() throws {
-        let envelope = ToriiQueryEnvelope(selectEntries: [.fieldPath(" ")])
+        let envelope = ToriiQueryEnvelope(select: [.fieldPath(" ")])
         XCTAssertThrowsError(try JSONEncoder().encode(envelope)) { error in
             let description = String(describing: error)
             XCTAssertTrue(description.contains("select field path must not be empty"))
@@ -9516,7 +9536,7 @@ final class ToriiClientTests: XCTestCase {
     }
 
     func testQueryEnvelopeRejectsBlankQueryName() throws {
-        let envelope = ToriiQueryEnvelope(query: " ", select: Optional<[String]>.none)
+        let envelope = ToriiQueryEnvelope(query: " ")
         XCTAssertThrowsError(try JSONEncoder().encode(envelope)) { error in
             let description = String(describing: error)
             XCTAssertTrue(description.contains("query must be a non-empty string"))
@@ -9524,7 +9544,7 @@ final class ToriiClientTests: XCTestCase {
     }
 
     func testQueryEnvelopeRejectsInvalidCountMode() throws {
-        let envelope = ToriiQueryEnvelope(select: Optional<[String]>.none, countMode: "full")
+        let envelope = ToriiQueryEnvelope(countMode: "full")
         XCTAssertThrowsError(try JSONEncoder().encode(envelope)) { error in
             let description = String(describing: error)
             XCTAssertTrue(description.contains("countMode must be bounded or exact"))
@@ -14318,8 +14338,8 @@ final class ToriiClientHeaderTests: XCTestCase {
             "halo2/\u{200B}ipa",
             "h\u{0430}lo2/ipa",
             "stark/fri/miden",
-            " stark/fri/sha256-goldilocks",
-            "stark/fri/sha256-goldilocks ",
+            " stark/fri/poseidon-x7-goldilocks-6x64-v1",
+            "stark/fri/poseidon-x7-goldilocks-6x64-v1 ",
             "halo2/ipa/orchard",
             "halo2/kzg",
             "halo2/ipa\0",
@@ -15571,8 +15591,8 @@ final class ToriiClientHeaderTests: XCTestCase {
             "halo2/\u{200B}ipa",
             "h\u{0430}lo2/ipa",
             "stark/fri/miden",
-            " stark/fri/sha256-goldilocks",
-            "stark/fri/sha256-goldilocks ",
+            " stark/fri/poseidon-x7-goldilocks-6x64-v1",
+            "stark/fri/poseidon-x7-goldilocks-6x64-v1 ",
             "halo2/ipa/orchard",
             "halo2/kzg",
             "halo2/ipa\0",
@@ -20320,6 +20340,18 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         XCTAssertEqual(fixture["generator"] as? String, "ivm::encode_argument_record_from_json")
         XCTAssertNotNil(schemaHash.range(of: "^[0-9a-f]{64}$", options: .regularExpression))
         XCTAssertNotNil(recordHex.range(of: "^(?:[0-9a-f]{2})+$", options: .regularExpression))
+        XCTAssertEqual(
+            fixturePayload["exact_int"] as? String,
+            "1606938044258990275541962092341162602522202993782792835301376"
+        )
+        XCTAssertEqual(
+            fixturePayload["exact_decimal"] as? String,
+            "-12345678901234567890.125"
+        )
+        XCTAssertEqual(
+            fixturePayload["exact_quantity"] as? String,
+            "12345678901234567890.0000000000000000000000000001"
+        )
 
         let payloadData = try JSONSerialization.data(withJSONObject: fixturePayload)
         let payload = try JSONDecoder().decode(ToriiJSONValue.self, from: payloadData)

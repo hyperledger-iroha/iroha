@@ -658,6 +658,8 @@ fn connect_management_authorization_value(token: &str) -> Result<HeaderValue, St
         .map_err(|_| "failed to reserve management authorization header".to_owned())?;
     authorization.push_str(PREFIX);
     authorization.push_str(token);
-    HeaderValue::from_str(&authorization)
-        .map_err(|error| format!("invalid management authorization header: {error}"))
+    let mut value = HeaderValue::from_str(&authorization)
+        .map_err(|error| format!("invalid management authorization header: {error}"))?;
+    value.set_sensitive(true);
+    Ok(value)
 }

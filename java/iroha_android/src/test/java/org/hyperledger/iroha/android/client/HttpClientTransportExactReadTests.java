@@ -89,7 +89,9 @@ public final class HttpClientTransportExactReadTests {
                 "ok",
                 Map.of(
                     "Content-Type", List.of("application/x-norito"),
-                    "Content-Length", List.of(Integer.toString(canonical.length)))));
+                    "Content-Length", List.of(Integer.toString(canonical.length))),
+                null,
+                false));
     final HttpClientTransport client =
         HttpClientTransport.withExecutor(
             success,
@@ -122,36 +124,48 @@ public final class HttpClientTransportExactReadTests {
     final List<TransportResponse> hostile =
         List.of(
             new TransportResponse(
-                201, canonical, "", Map.of("Content-Type", List.of("application/x-norito"))),
+                201, canonical, "", Map.of("Content-Type", List.of("application/x-norito")),
+                null,
+                false),
             new TransportResponse(
                 200,
                 canonical,
                 "",
-                Map.of("Content-Type", List.of("application/x-norito; charset=binary"))),
+                Map.of("Content-Type", List.of("application/x-norito; charset=binary")),
+                null,
+                false),
             new TransportResponse(
                 200,
                 canonical,
                 "",
-                Map.of("Content-Type", List.of("application/x-norito", "application/x-norito"))),
+                Map.of("Content-Type", List.of("application/x-norito", "application/x-norito")),
+                null,
+                false),
             new TransportResponse(
                 200,
                 canonical,
                 "",
                 Map.of(
                     "Content-Type", List.of("application/x-norito"),
-                    "Content-Length", List.of("04"))),
+                    "Content-Length", List.of("04")),
+                null,
+                false),
             new TransportResponse(
                 200,
                 canonical,
                 "",
                 Map.of(
                     "Content-Type", List.of("application/x-norito"),
-                    "Content-Length", List.of("5"))),
+                    "Content-Length", List.of("5")),
+                null,
+                false),
             new TransportResponse(
                 200,
                 new byte[0],
                 "",
-                Map.of("Content-Type", List.of("application/x-norito"))));
+                Map.of("Content-Type", List.of("application/x-norito")),
+                null,
+                false));
     for (final TransportResponse response : hostile) {
       boolean rejected = false;
       try {
@@ -177,7 +191,9 @@ public final class HttpClientTransportExactReadTests {
                       200,
                       oversized,
                       "",
-                      Map.of("Content-Type", List.of("application/x-norito")))),
+                      Map.of("Content-Type", List.of("application/x-norito")),
+                      null,
+                      false)),
               ClientConfig.builder()
                   .setBaseUri(URI.create("https://torii.example"))
                   .build())
@@ -199,7 +215,9 @@ public final class HttpClientTransportExactReadTests {
                 "ok",
                 Map.of(
                     "Content-Type", List.of("application/x-norito"),
-                    "Content-Length", List.of(Integer.toString(body.length)))));
+                    "Content-Length", List.of(Integer.toString(body.length))),
+                null,
+                false));
     final HttpClientTransport client =
         HttpClientTransport.withExecutor(
             executor,
@@ -258,7 +276,9 @@ public final class HttpClientTransportExactReadTests {
             200,
             body,
             "ok",
-            Map.of("Content-Type", List.of("application/x-norito"))));
+            Map.of("Content-Type", List.of("application/x-norito")),
+            null,
+            false));
 
     for (final String defaultAcceptName : List.of("Accept", "aCcEpT")) {
       final OneResponseExecutor blockedExecutor =
@@ -267,7 +287,9 @@ public final class HttpClientTransportExactReadTests {
                   200,
                   body,
                   "ok",
-                  Map.of("Content-Type", List.of("application/x-norito"))));
+                  Map.of("Content-Type", List.of("application/x-norito")),
+                  null,
+                  false));
       boolean overrideRejected = false;
       try {
         HttpClientTransport.withExecutor(
@@ -286,7 +308,7 @@ public final class HttpClientTransportExactReadTests {
 
     final String retired =
         privacyCapabilitySnapshotJson()
-            .replace("zk-ace-pq-authorization-v0", "sis-with-hints");
+            .replace("zk-ace-pq-authorization-v1", "sis-with-hints");
     boolean retiredRejected = false;
     try {
       HttpClientTransport.withExecutor(
@@ -295,7 +317,9 @@ public final class HttpClientTransportExactReadTests {
                       200,
                       retired.getBytes(StandardCharsets.UTF_8),
                       "",
-                      Map.of("Content-Type", List.of("application/x-norito")))),
+                      Map.of("Content-Type", List.of("application/x-norito")),
+                      null,
+                      false)),
               signedClientConfig("https://torii.example"))
           .getPrivacyCapabilities(privacyAuth("privacy-retired"))
           .join();
@@ -315,75 +339,97 @@ public final class HttpClientTransportExactReadTests {
     final List<TransportResponse> hostileResponses =
         List.of(
             new TransportResponse(
-                201, body, "", Map.of("Content-Type", List.of("application/json"))),
-            new TransportResponse(200, body, "", Map.of()),
+                201, body, "", Map.of("Content-Type", List.of("application/json")),
+                null,
+                false),
+            new TransportResponse(200, body, "", Map.of(), null, false),
             new TransportResponse(
                 200,
                 body,
                 "",
-                Map.of("Content-Type", List.of("application/json; charset=utf-8"))),
+                Map.of("Content-Type", List.of("application/json; charset=utf-8")),
+                null,
+                false),
             new TransportResponse(
                 200,
                 body,
                 "",
-                Map.of("Content-Type", List.of("Application/Json"))),
-            new TransportResponse(
-                200,
-                body,
-                "",
-                Map.of(
-                    "Content-Type", List.of("application/json", "application/json"))),
-            new TransportResponse(200, body, "", caseFoldedDuplicateContentType),
-            new TransportResponse(
-                200,
-                body,
-                "",
-                Map.of(
-                    "Content-Type", List.of("application/json"),
-                    "Content-Length", List.of(bodyLength, bodyLength))),
-            new TransportResponse(200, body, "", caseFoldedDuplicateContentLength),
+                Map.of("Content-Type", List.of("Application/Json")),
+                null,
+                false),
             new TransportResponse(
                 200,
                 body,
                 "",
                 Map.of(
-                    "Content-Type", List.of("application/json"),
-                    "Content-Length", List.of("0"))),
+                    "Content-Type", List.of("application/json", "application/json")),
+                null,
+                false),
+            new TransportResponse(200, body, "", caseFoldedDuplicateContentType, null, false),
             new TransportResponse(
                 200,
                 body,
                 "",
                 Map.of(
                     "Content-Type", List.of("application/json"),
-                    "Content-Length", List.of("0" + bodyLength))),
+                    "Content-Length", List.of(bodyLength, bodyLength)),
+                null,
+                false),
+            new TransportResponse(200, body, "", caseFoldedDuplicateContentLength, null, false),
             new TransportResponse(
                 200,
                 body,
                 "",
                 Map.of(
                     "Content-Type", List.of("application/json"),
-                    "Content-Length", List.of("+" + bodyLength))),
+                    "Content-Length", List.of("0")),
+                null,
+                false),
             new TransportResponse(
                 200,
                 body,
                 "",
                 Map.of(
                     "Content-Type", List.of("application/json"),
-                    "Content-Length", List.of(bodyLength + " "))),
+                    "Content-Length", List.of("0" + bodyLength)),
+                null,
+                false),
             new TransportResponse(
                 200,
                 body,
                 "",
                 Map.of(
                     "Content-Type", List.of("application/json"),
-                    "Content-Length", List.of("9".repeat(4096)))),
+                    "Content-Length", List.of("+" + bodyLength)),
+                null,
+                false),
+            new TransportResponse(
+                200,
+                body,
+                "",
+                Map.of(
+                    "Content-Type", List.of("application/json"),
+                    "Content-Length", List.of(bodyLength + " ")),
+                null,
+                false),
+            new TransportResponse(
+                200,
+                body,
+                "",
+                Map.of(
+                    "Content-Type", List.of("application/json"),
+                    "Content-Length", List.of("9".repeat(4096))),
+                null,
+                false),
             new TransportResponse(
                 200,
                 new byte[0],
                 "",
                 Map.of(
                     "Content-Type", List.of("application/json"),
-                    "Content-Length", List.of("0"))));
+                    "Content-Length", List.of("0")),
+                null,
+                false));
     for (final TransportResponse hostileResponse : hostileResponses) {
       assertPrivacyCapabilitiesResponseRejected(hostileResponse);
     }
@@ -393,12 +439,16 @@ public final class HttpClientTransportExactReadTests {
             200,
             new byte[256 * 1024 + 1],
             "",
-            Map.of("Content-Type", List.of("application/json"))));
+            Map.of("Content-Type", List.of("application/json")),
+            null,
+            false));
 
     final OneResponseExecutor missingContextExecutor =
         new OneResponseExecutor(
             new TransportResponse(
-                200, body, "", Map.of("Content-Type", List.of("application/x-norito"))));
+                200, body, "", Map.of("Content-Type", List.of("application/x-norito")),
+                null,
+                false));
     boolean missingContextRejected = false;
     try {
       HttpClientTransport.withExecutor(
@@ -416,7 +466,9 @@ public final class HttpClientTransportExactReadTests {
     final OneResponseExecutor forgedHeaderExecutor =
         new OneResponseExecutor(
             new TransportResponse(
-                200, body, "", Map.of("Content-Type", List.of("application/x-norito"))));
+                200, body, "", Map.of("Content-Type", List.of("application/x-norito")),
+                null,
+                false));
     boolean forgedHeaderRejected = false;
     try {
       HttpClientTransport.withExecutor(
@@ -435,7 +487,9 @@ public final class HttpClientTransportExactReadTests {
     final OneResponseExecutor admissionExecutor =
         new OneResponseExecutor(
             new TransportResponse(
-                200, body, "", Map.of("Content-Type", List.of("application/x-norito"))));
+                200, body, "", Map.of("Content-Type", List.of("application/x-norito")),
+                null,
+                false));
     boolean admissionRejected = false;
     try {
       HttpClientTransport.withExecutor(

@@ -1,5 +1,60 @@
+fn assert_locked_external_queue_plan_body_rejects_before_retiring_autonomous_owner() {
+    let (mut adapter, keys) = autonomous_test_fixture(wire::ConsensusMode::Permissioned, true);
+    let lane_id = LaneId::new(1);
+    let dataspace_id = DataSpaceId::new(7);
+    prepare_autonomous_test_lane(&mut adapter, &keys, lane_id, dataspace_id);
+    let journal_dir = tempfile::tempdir().expect("autonomous reservation journal directory");
+    let queue = install_autonomous_test_queue(
+        &mut adapter,
+        lane_id,
+        dataspace_id,
+        &journal_dir.path().join("lane-reservations.norito"),
+    );
+    enqueue_autonomous_test_transactions(&adapter, &queue, lane_id, dataspace_id, 1);
+    adapter
+        .schedule_autonomous_lane_production(0, autonomous_test_candidate_limits(2, 2))
+        .expect("produce one Queue-owned autonomous payload");
+
+    let pending_before = adapter.pending_autonomous_anchor_payloads.clone();
+    let reservations_before = queue.live_lane_reservations();
+    let fifo_before = queue.fifo_snapshot_for_test();
+    let (forbidden, _) = planned_lane_candidate_block_for_route_at_view_with_intent(
+        &adapter,
+        &keys,
+        0,
+        lane_id,
+        dataspace_id,
+        iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
+    );
+    mark_global_body_locked_for_block(&mut adapter, &forbidden);
+
+    assert_eq!(
+        adapter.bind_locked_global_body(&forbidden),
+        V2LaneIngressOutcome::Rejected
+    );
+    assert_eq!(adapter.pending_autonomous_anchor_payloads, pending_before);
+    assert_eq!(queue.live_lane_reservations(), reservations_before);
+    assert_eq!(queue.fifo_snapshot_for_test(), fifo_before);
+    for payload in pending_before.values() {
+        assert!(
+            adapter
+                .kura
+                .read_autonomous_lane_slot_retirement(
+                    payload.origin_proposal.descriptor.lane_id,
+                    payload.origin_proposal.descriptor.lane_block_height,
+                    adapter.native_network_id(),
+                    adapter.context.epoch,
+                )
+                .expect("read autonomous retirement state")
+                .is_none(),
+            "role-invalid global ownership must not retire the autonomous attempt"
+        );
+    }
+}
+
 #[test]
 fn losing_autonomous_carrier_is_durably_retired_before_cache_drop() {
+    assert_locked_external_queue_plan_body_rejects_before_retiring_autonomous_owner();
     let (mut adapter, keys) = autonomous_test_fixture(wire::ConsensusMode::Permissioned, true);
     let lane_id = LaneId::new(1);
     let dataspace_id = DataSpaceId::new(7);
@@ -589,25 +644,126 @@ fn canonical_kura_anchor_cannot_bypass_route_reset_or_incarnation_guards() {
     }
 }
 #[test]
-fn merge_certificates_require_exact_equal_vote_quorum() {
+fn merge_certificates_require_exact_equal_vote_quorum_and_leader_custody() {
     let (adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
+    let all_signatures = (0_u32..4)
+        .map(|signer| (signer, Vec::new()))
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(
+        exact_merge_certificate_signers(&all_signatures, 3, 3),
+        Some(vec![0, 1, 3]),
+        "exact QC construction must retain a high-index round leader"
+    );
+    let signatures_without_leader = (0_u32..3)
+        .map(|signer| (signer, Vec::new()))
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(
+        exact_merge_certificate_signers(&signatures_without_leader, 3, 3),
+        None,
+        "new QC construction waits for its durable round-leader custodian"
+    );
     assert!(!adapter.frozen_certificate_quorum_met(&[0, 1]));
     assert!(adapter.frozen_certificate_quorum_met(&[1, 2, 3]));
     assert!(adapter.frozen_certificate_quorum_met(&[0, 1, 3]));
     assert!(!adapter.frozen_certificate_quorum_met(&[0, 1, 2, 3]));
-    let subquorum = missing_sidecar_reference_with_signers(&adapter, &keys, 0, &[1, 2]);
+    let carrier_view = 0;
+    let leader = usize::try_from(adapter.context.leader(carrier_view))
+        .expect("fixture leader index fits usize");
+    let subquorum = missing_sidecar_reference_with_signers(&adapter, &keys, carrier_view, &[1, 2]);
     assert!(matches!(
         authenticate_bounded_merge_sidecar_holders(&adapter.context, &subquorum),
         Err(reason) if reason.contains("signer count mismatch")
     ));
-    let quorum = missing_sidecar_reference_with_signers(&adapter, &keys, 0, &[0, 1, 3]);
-    authenticate_bounded_merge_sidecar_holders(&adapter.context, &quorum)
-        .expect("the same verifier accepts any three distinct committee votes");
-    let superset = missing_sidecar_reference_with_signers(&adapter, &keys, 0, &[0, 1, 2, 3]);
+    let without_leader = (0..adapter.context.roster.len())
+        .filter(|index| *index != leader)
+        .collect::<Vec<_>>();
+    let legacy_without_leader =
+        missing_sidecar_reference_with_signers(&adapter, &keys, carrier_view, &without_leader);
+    let legacy_holders =
+        authenticate_bounded_merge_sidecar_holders(&adapter.context, &legacy_without_leader)
+            .expect("a pre-fix V1 quorum retains implicit carrier-leader custody");
+    assert_eq!(
+        legacy_holders.first(),
+        Some(&adapter.context.roster[leader].validator),
+        "the authenticated carrier leader precedes legacy bitmap signers"
+    );
+    let quorum = missing_sidecar_reference(&adapter, &keys, carrier_view);
+    let holders = authenticate_bounded_merge_sidecar_holders(&adapter.context, &quorum)
+        .expect("an exact quorum with leader custody is authenticated");
+    assert_eq!(
+        holders.first(),
+        Some(&adapter.context.roster[leader].validator),
+        "the durable round-leader custodian must be first"
+    );
+    let superset =
+        missing_sidecar_reference_with_signers(&adapter, &keys, carrier_view, &[0, 1, 2, 3]);
     assert!(matches!(
         authenticate_bounded_merge_sidecar_holders(&adapter.context, &superset),
         Err(reason) if reason.contains("expected exactly 3, got 4")
     ));
+}
+#[test]
+fn missing_merge_sidecar_contacts_durable_round_leader_before_other_signers() {
+    let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
+    let local_index = adapter
+        .context
+        .roster
+        .iter()
+        .position(|entry| entry.validator == adapter.local_peer)
+        .expect("fixture local peer belongs to the frozen roster");
+    let carrier_view = (0..u64::try_from(adapter.context.roster.len()).expect("roster fits u64"))
+        .find(|view| {
+            usize::try_from(adapter.context.leader(*view)).expect("leader index fits usize")
+                != local_index
+        })
+        .expect("four-validator fixture has a remote round leader");
+    let leader_index =
+        usize::try_from(adapter.context.leader(carrier_view)).expect("leader index fits usize");
+    let leader = adapter.context.roster[leader_index].validator.clone();
+    let reference = missing_sidecar_reference(&adapter, &keys, carrier_view);
+    let round = wire::ConsensusRound {
+        context_id: adapter.context.id(),
+        height: adapter.context.height,
+        view: carrier_view,
+    };
+    let subject = wire::BlockSubject {
+        parent_block_hash: adapter
+            .context
+            .parent_commit_qc
+            .as_ref()
+            .map(|qc| qc.subject.block_hash),
+        block_hash: HashOf::from_untyped_unchecked(Hash::new(
+            b"leader-first merge sidecar carrier",
+        )),
+        payload_hash: Hash::new(b"leader-first merge sidecar payload"),
+    };
+    assert_eq!(
+        adapter
+            .defer_missing_merge_sidecar(round, subject, reference)
+            .expect("authenticate and register the missing exact sidecar"),
+        MergeSidecarDeferralDisposition::Fetching
+    );
+    let effect = adapter
+        .drain_effects(usize::MAX)
+        .into_iter()
+        .find(|effect| {
+            matches!(
+                effect,
+                V2LaneWorkEffect::PostCertifiedMergeSidecar {
+                    message,
+                    ..
+                } if matches!(message.as_ref(), CertifiedMergeSidecarMessage::Request(_))
+            )
+        })
+        .expect("registration emits one exact sidecar request");
+    let V2LaneWorkEffect::PostCertifiedMergeSidecar { peer, message, .. } = effect else {
+        unreachable!("selected effect is a sidecar post")
+    };
+    let CertifiedMergeSidecarMessage::Request(request) = message.as_ref() else {
+        unreachable!("selected sidecar post is a request")
+    };
+    assert_eq!(peer, leader);
+    assert_eq!(request.responder, leader);
 }
 fn merge_candidate_for_persistence_retry(
     adapter: &V2LaneWorkAdapter,
@@ -847,7 +1003,8 @@ fn synthetic_merge_execution_batch_for_test(
 fn authenticated_leader_candidate_recovers_exact_follower_share_after_restart() {
     let (mut adapter, keys) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
     let view = remote_merge_leader_view(&adapter);
-    let candidate = record_production_merge_candidate_for_persistence_retry(&adapter, &keys, view);
+    let candidate =
+        record_production_merge_candidate_for_persistence_retry(&mut adapter, &keys, view);
     let candidate_bytes = candidate.canonical_bytes();
     let leader = adapter.context.leader(view);
     let local = adapter
@@ -876,11 +1033,32 @@ fn authenticated_leader_candidate_recovers_exact_follower_share_after_restart() 
             .expect("admit authenticated leader candidate"),
         V2LaneIngressOutcome::Inserted
     );
+    let validation_checks_after_admission = adapter.merge_candidate_validation_checks.get();
     assert_eq!(
         adapter
-            .accept_merge_signature(leader_share, view)
+            .accept_merge_signature(leader_share.clone(), view)
             .expect("re-admit exact leader candidate"),
         V2LaneIngressOutcome::Duplicate
+    );
+    assert_eq!(
+        adapter.merge_candidate_validation_checks.get(),
+        validation_checks_after_admission,
+        "an exact authenticated replay must not reexecute its admitted candidate"
+    );
+    let mut substituted = leader_share;
+    let mut substituted_candidate = candidate.clone();
+    substituted_candidate.global_state_root = Hash::new(b"substituted replay body");
+    substituted.leader_candidate_body = Some(substituted_candidate.canonical_bytes());
+    assert_eq!(
+        adapter
+            .accept_merge_signature(substituted, view)
+            .expect("reject a replay carrying substituted leader bytes"),
+        V2LaneIngressOutcome::Rejected
+    );
+    assert_eq!(
+        adapter.merge_candidate_validation_checks.get(),
+        validation_checks_after_admission,
+        "a substituted replay body must be rejected before semantic execution"
     );
     let follower_share = adapter
         .drain_effects(usize::MAX)
@@ -954,7 +1132,8 @@ fn authenticated_leader_candidate_recovers_exact_follower_share_after_restart() 
 fn merge_share_transport_rejects_omission_nonleader_body_and_legacy_version() {
     let (mut adapter, keys) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
     let view = remote_merge_leader_view(&adapter);
-    let candidate = record_production_merge_candidate_for_persistence_retry(&adapter, &keys, view);
+    let candidate =
+        record_production_merge_candidate_for_persistence_retry(&mut adapter, &keys, view);
     let leader = adapter.context.leader(view);
     let follower = adapter
         .local_validator_index()
@@ -1002,7 +1181,8 @@ fn merge_share_transport_rejects_omission_nonleader_body_and_legacy_version() {
 fn merge_leader_candidate_body_is_canonical_under_ambient_layout() {
     let (mut adapter, keys) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
     let view = remote_merge_leader_view(&adapter);
-    let candidate = record_production_merge_candidate_for_persistence_retry(&adapter, &keys, view);
+    let candidate =
+        record_production_merge_candidate_for_persistence_retry(&mut adapter, &keys, view);
     adapter
         .retain_merge_sidecars_for_global_view(view, None, None)
         .expect("install exact unlocked follower directive");
@@ -1049,7 +1229,8 @@ fn merge_leader_candidate_body_is_canonical_under_ambient_layout() {
 fn merge_leader_candidate_rejects_substitution_outer_epoch_and_oversize_before_journal() {
     let (mut adapter, keys) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
     let view = remote_merge_leader_view(&adapter);
-    let candidate = record_production_merge_candidate_for_persistence_retry(&adapter, &keys, view);
+    let candidate =
+        record_production_merge_candidate_for_persistence_retry(&mut adapter, &keys, view);
     let leader = adapter.context.leader(view);
     adapter
         .retain_merge_sidecars_for_global_view(view, None, None)
@@ -1159,7 +1340,7 @@ fn authenticated_relay_candidate_cannot_be_relabelled_as_execution() {
     let (mut adapter, keys) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
     let view = remote_merge_leader_view(&adapter);
     let mut candidate =
-        record_production_merge_candidate_for_persistence_retry(&adapter, &keys, view);
+        record_production_merge_candidate_for_persistence_retry(&mut adapter, &keys, view);
     let exact_header = adapter
         .merge_carrier_context_header(view)
         .expect("derive exact deterministic carrier context");
@@ -1203,7 +1384,7 @@ fn authenticated_relay_candidate_cannot_be_relabelled_as_execution() {
 #[test]
 fn durable_local_merge_claim_rejects_same_context_candidate_drift() {
     let (mut adapter, keys) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
-    let candidate = record_production_merge_candidate_for_persistence_retry(&adapter, &keys, 0);
+    let candidate = record_production_merge_candidate_for_persistence_retry(&mut adapter, &keys, 0);
     let signer = adapter
         .local_validator_index()
         .expect("fixture local validator is in the frozen roster");
@@ -1256,7 +1437,7 @@ fn durable_local_merge_claim_rejects_same_context_candidate_drift() {
 #[test]
 fn durable_local_merge_claim_rejects_conflict_after_adapter_reopen() {
     let (mut adapter, keys) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
-    let candidate = record_production_merge_candidate_for_persistence_retry(&adapter, &keys, 0);
+    let candidate = record_production_merge_candidate_for_persistence_retry(&mut adapter, &keys, 0);
     let signer = adapter
         .local_validator_index()
         .expect("fixture local validator is in the frozen roster");
@@ -1327,7 +1508,7 @@ fn durable_local_merge_claim_rejects_conflict_after_adapter_reopen() {
 #[test]
 fn locked_later_view_directive_purges_queued_merge_shares_and_disables_retry() {
     let (mut adapter, keys) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
-    let candidate = record_production_merge_candidate_for_persistence_retry(&adapter, &keys, 0);
+    let candidate = record_production_merge_candidate_for_persistence_retry(&mut adapter, &keys, 0);
     adapter
         .retain_merge_sidecars_for_global_view(0, None, None)
         .expect("install initial unlocked directive");
@@ -1361,7 +1542,7 @@ fn locked_later_view_directive_purges_queued_merge_shares_and_disables_retry() {
     );
 }
 fn record_production_merge_candidate_for_persistence_retry(
-    adapter: &V2LaneWorkAdapter,
+    adapter: &mut V2LaneWorkAdapter,
     keys: &[KeyPair],
     view: wire::View,
 ) -> crate::merge::MergeLedgerCandidate {
@@ -1369,21 +1550,58 @@ fn record_production_merge_candidate_for_persistence_retry(
     let dataspace_id = DataSpaceId::UNIVERSAL;
     let lane_height = 1;
     let global_height = adapter.context.height;
-    let parent_hash = adapter
-        .context
+    let finalized_height = global_height
+        .checked_sub(1)
+        .expect("persistence-retry fixture has a finalized parent height");
+    let finalized_height_index = usize::try_from(finalized_height)
+        .ok()
+        .and_then(NonZeroUsize::new)
+        .expect("finalized parent height fits Kura indexing");
+    let block = adapter
+        .kura
+        .get_block(finalized_height_index)
+        .expect("persistence-retry fixture retains its finalized parent block");
+    let mut finalized_context = adapter.context.clone();
+    finalized_context.height = finalized_height;
+    let predecessor_height = finalized_height
+        .checked_sub(1)
+        .expect("fixture finalized parent has a predecessor");
+    let predecessor = adapter
+        .kura
+        .get_block(
+            usize::try_from(predecessor_height)
+                .ok()
+                .and_then(NonZeroUsize::new)
+                .expect("finalized predecessor height fits Kura indexing"),
+        )
+        .expect("persistence-retry fixture retains the finalized predecessor");
+    let predecessor_wire = predecessor
+        .encode_wire()
+        .expect("encode persistence-retry finalized predecessor");
+    let predecessor_qc = finalized_context
         .parent_commit_qc
-        .as_ref()
-        .expect("persistence-retry fixture has durable parent finality")
-        .subject
-        .block_hash;
-    let header = BlockHeader::new(
-        NonZeroU64::new(global_height).expect("non-zero global height"),
-        Some(parent_hash),
-        None,
-        None,
-        1_700_000_000_000,
-        0,
-    );
+        .as_mut()
+        .expect("non-genesis finalized context has a parent certificate");
+    predecessor_qc.round.height = predecessor_height;
+    predecessor_qc.proposal_round = predecessor_qc.round;
+    predecessor_qc.subject = wire::BlockSubject {
+        parent_block_hash: predecessor.header().prev_block_hash(),
+        block_hash: predecessor.hash(),
+        payload_hash: predecessor
+            .canonical_proposal_wire_hash()
+            .expect("hash persistence-retry finalized predecessor"),
+    };
+    predecessor_qc.execution_commitment =
+        wire::ExecutionCommitment::without_topups_or_merge_carrier(
+            Hash::new(b"persistence-retry predecessor parent state"),
+            Hash::new(b"persistence-retry predecessor post state"),
+            Hash::new(b"persistence-retry predecessor writes"),
+            u64::try_from(predecessor_wire.len()).expect("predecessor wire length fits u64"),
+            Hash::new(&predecessor_wire),
+        );
+    finalized_context
+        .validate()
+        .expect("production-shaped finalized relay context is valid");
     // Relay admission requires committee members to be present in both
     // the exact frozen commit topology and World. The v2 adapter fixture
     // seeds the key registry directly and commits synthetic parent blocks,
@@ -1409,41 +1627,6 @@ fn record_production_merge_candidate_for_persistence_retry(
         peers.apply();
     }
     world_block.commit();
-    let validators = keys
-        .iter()
-        .map(|key| AccountId::new(key.public_key().clone()))
-        .collect::<Vec<_>>();
-    let validator_bindings = validators
-        .iter()
-        .zip(keys)
-        .map(|(validator, key)| ManifestValidatorBinding {
-            validator: validator.clone(),
-            peer_id: PeerId::new(key.public_key().clone()),
-            torii_url: None,
-        })
-        .collect::<Vec<_>>();
-    let status = LaneManifestStatus {
-        lane: lane_id,
-        alias: "default".to_owned(),
-        dataspace: dataspace_id,
-        visibility: LaneVisibility::Public,
-        storage: LaneStorageProfile::FullReplica,
-        governance: Some("parliament".to_owned()),
-        manifest_path: Some(std::path::PathBuf::from(
-            "/tmp/v2-merge-persistence-retry-manifest.json",
-        )),
-        governance_rules: Some(GovernanceRules {
-            validators,
-            validator_bindings,
-            ..GovernanceRules::default()
-        }),
-        privacy_commitments: Vec::new(),
-    };
-    adapter
-        .state
-        .install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(
-            BTreeMap::from([(lane_id, status)]),
-        )));
     let (beacon_key, beacon_pulse) = crate::beacon::signed_persisted_pulse_fixture_for_world(
         adapter.context.network_id,
         global_height - 1,
@@ -1512,7 +1695,6 @@ fn record_production_merge_candidate_for_persistence_retry(
         nexus_fee_receipts: Vec::new(),
         native_amx_receipts: Vec::new(),
     };
-    let block = Arc::new(BlockBuilder::new(header).build_with_signature(0, keys[0].private_key()));
     let mut envelope = LaneRelayEnvelope::new(block.header(), None, settlement, 0)
         .expect("construct production-valid relay envelope")
         .with_lane_block_descriptor_hash(Some(Hash::new(
@@ -1521,7 +1703,7 @@ fn record_production_merge_candidate_for_persistence_retry(
         .with_manifest_root(Some([0x44; 32]))
         .with_fastpq_proof_material(Some(LaneFastpqProofMaterial {
             proof_digest: Hash::new(b"v2 merge persistence retry FastPQ proof"),
-            verified_at_height: global_height,
+            verified_at_height: finalized_height,
         }));
     let statement = envelope
         .lane_finality_statement()
@@ -1548,16 +1730,24 @@ fn record_production_merge_candidate_for_persistence_retry(
     execution_commitment
         .validate()
         .expect("valid persistence-retry execution commitment");
-    let finality = verified_finality_artifact_for_block_with_execution_commitment(
-        adapter,
+    let finality = signed_finality_artifact(
+        &finalized_context,
         keys,
         &block,
         execution_commitment,
+        (0..crate::sumeragi::network_topology::commit_quorum_from_len(keys.len()).max(1))
+            .map(|index| u32::try_from(index).expect("fixture signer index fits u32"))
+            .collect(),
+        [
+            "encode persistence-retry finalized block",
+            "derive persistence-retry finality signer preimage",
+            "persistence-retry signer index",
+            "sign persistence-retry finality vote",
+            "aggregate persistence-retry finality votes",
+            "derive persistence-retry finality signer PoP",
+            "cryptographically valid persistence-retry finality artifact",
+        ],
     );
-    adapter
-        .kura
-        .store_block(Arc::clone(&block))
-        .expect("persist persistence-retry carrier");
     let _commit_receipt = adapter
         .kura
         .store_v2_finality_artifact(&finality)
@@ -1568,6 +1758,40 @@ fn record_production_merge_candidate_for_persistence_retry(
         finality_artifact_hash: HashOf::new(&finality),
         statement_proof,
     });
+    let (envelope, proof_blob) = crate::state::prove_finalized_lane_relay_for_registration(
+        envelope,
+        parent_state_root.into(),
+        post_state_root.into(),
+    );
+    let registration =
+        InstructionBox::from(iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay {
+            envelope: envelope.clone(),
+            proof_blob,
+            effect_proof_blob: None,
+        });
+    let registration_authority = AccountId::new(keys[0].public_key().clone());
+    let mut registration_block = adapter.state.block(block.header());
+    {
+        let mut registration_transaction = registration_block.transaction();
+        crate::smartcontracts::isi::execute_borrowed_instruction(
+            &registration,
+            &registration_authority,
+            &mut registration_transaction,
+        )
+        .expect("production instruction verifies and stages the persistence-retry relay");
+        // Commit only the production-generated World writes. Applying the whole
+        // transaction would stage a second copy as current-block metadata, whose
+        // normal block commit would advance the already-finalized State frontier.
+        registration_transaction.world.apply();
+    }
+    registration_block
+        .commit_world_overlay_for_testing()
+        .expect("commit production-verified relay state without advancing the frontier");
+    adapter.context.nexus_amx_context_hash =
+        super::super::v2_recovery::committed_nexus_amx_context_hash(adapter.state.as_ref());
+    adapter.context.execution_policy_hash =
+        super::super::v2_recovery::committed_execution_policy_hash(adapter.state.as_ref())
+            .expect("derive persistence-retry execution policy");
     adapter
         .state
         .record_lane_relay(&envelope)
@@ -1588,7 +1812,7 @@ fn record_production_merge_candidate_for_persistence_retry(
 #[test]
 fn merge_signing_rejects_wrong_round_context_and_post_apply_state() {
     let (mut adapter, keys) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
-    let candidate = record_production_merge_candidate_for_persistence_retry(&adapter, &keys, 0);
+    let candidate = record_production_merge_candidate_for_persistence_retry(&mut adapter, &keys, 0);
     let signer = adapter
         .local_validator_index()
         .expect("fixture local validator is in the frozen roster");
@@ -1665,7 +1889,7 @@ fn merge_signing_rejects_wrong_round_context_and_post_apply_state() {
 #[test]
 fn merge_signing_rejects_block_first_kura_ahead_crash_image() {
     let (mut adapter, keys) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
-    let candidate = record_production_merge_candidate_for_persistence_retry(&adapter, &keys, 0);
+    let candidate = record_production_merge_candidate_for_persistence_retry(&mut adapter, &keys, 0);
     let signer = adapter
         .local_validator_index()
         .expect("fixture local validator is in the frozen roster");
@@ -1720,8 +1944,11 @@ fn same_round_merge_claims_survive_successful_kura_staging() {
         .expect("fixture roster length fits u64"))
         .find(|view| adapter.context.leader(*view) == local_index)
         .expect("rotating leader schedule reaches the local validator");
-    let candidate =
-        record_production_merge_candidate_for_persistence_retry(&adapter, &keys, local_leader_view);
+    let candidate = record_production_merge_candidate_for_persistence_retry(
+        &mut adapter,
+        &keys,
+        local_leader_view,
+    );
     let digest = crate::merge::merge_qc_message_digest(
         &adapter.context.network_id,
         &candidate,
@@ -1736,6 +1963,19 @@ fn same_round_merge_claims_survive_successful_kura_staging() {
     adapter
         .retain_merge_sidecars_for_global_view(candidate.view, None, None)
         .expect("install exact unlocked reducer directive");
+    let initial_local_share = adapter
+        .drain_effects(usize::MAX)
+        .into_iter()
+        .find_map(|effect| match effect {
+            V2LaneWorkEffect::BroadcastMerge(share) if share.signer == local_index => Some(share),
+            _ => None,
+        })
+        .expect("local leader must publish its exact candidate share");
+    assert_eq!(
+        initial_local_share.leader_candidate_body.as_deref(),
+        Some(candidate.canonical_bytes().as_slice()),
+        "the leader retransmission identity includes its canonical candidate body"
+    );
     assert_eq!(
         adapter
             .merge_claims
@@ -1744,6 +1984,7 @@ fn same_round_merge_claims_survive_successful_kura_staging() {
         "local claim must be recorded before its signature is produced"
     );
     let mut accepted_remote_signers = Vec::new();
+    let mut accepted_remote_share = None;
     for (index, key_pair) in keys.iter().enumerate() {
         let signer = u32::try_from(index).expect("fixture signer index fits u32");
         if signer == local_index {
@@ -1753,33 +1994,41 @@ fn same_round_merge_claims_survive_successful_kura_staging() {
             .expect("sign remote merge share")
             .payload()
             .to_vec();
+        let share = MergeCommitteeSignature {
+            version: MERGE_COMMITTEE_SIGNATURE_VERSION_V2,
+            epoch_id: candidate.epoch_id,
+            view: candidate.view,
+            signer,
+            message_digest: digest,
+            bls_sig: signature,
+            leader_candidate_body: (signer == adapter.context.leader(candidate.view))
+                .then(|| candidate.canonical_bytes()),
+        };
         assert_eq!(
             adapter
-                .accept_merge_signature(
-                    MergeCommitteeSignature {
-                        version: MERGE_COMMITTEE_SIGNATURE_VERSION_V2,
-                        epoch_id: candidate.epoch_id,
-                        view: candidate.view,
-                        signer,
-                        message_digest: digest,
-                        bls_sig: signature,
-                        leader_candidate_body: (signer == adapter.context.leader(candidate.view))
-                            .then(|| candidate.canonical_bytes()),
-                    },
-                    candidate.view,
-                )
+                .accept_merge_signature(share.clone(), candidate.view)
                 .expect("persist remote merge signature"),
             V2LaneIngressOutcome::Inserted
         );
+        accepted_remote_share = Some(share);
         accepted_remote_signers.push(signer);
-        if !adapter.merge_entries.contains_key(&key) {
+        if matches!(
+            adapter
+                .merge_entries
+                .get(&key)
+                .map(|pending| &pending.stage),
+            Some(PendingMergeStage::Persisted(_))
+        ) {
             break;
         }
     }
-    assert!(
-        !adapter.merge_entries.contains_key(&key),
-        "fixture shares must form quorum and publish the certified entry"
-    );
+    assert!(matches!(
+        adapter
+            .merge_entries
+            .get(&key)
+            .map(|pending| &pending.stage),
+        Some(PendingMergeStage::Persisted(_))
+    ));
     for signer in std::iter::once(local_index).chain(accepted_remote_signers) {
         assert_eq!(
             adapter
@@ -1795,11 +2044,54 @@ fn same_round_merge_claims_survive_successful_kura_staging() {
         .expect("read pending certified merge entry")
         .expect("quorum must stage one exact merge entry");
     assert_eq!(staged.merge_qc.message_digest, digest);
+    let validation_checks_after_persistence = adapter.merge_candidate_validation_checks.get();
+    adapter
+        .schedule_retransmission()
+        .expect("retransmit the already-persisted merge quorum");
+    let retransmitted_local_share = adapter
+        .drain_effects(usize::MAX)
+        .into_iter()
+        .find_map(|effect| match effect {
+            V2LaneWorkEffect::BroadcastMerge(share) if share.signer == local_index => Some(share),
+            _ => None,
+        })
+        .expect("persisted quorum must retransmit the local leader share");
+    assert_eq!(retransmitted_local_share, initial_local_share);
+    assert_eq!(
+        adapter.merge_candidate_validation_checks.get(),
+        validation_checks_after_persistence,
+        "retransmission must not reexecute an already-persisted candidate"
+    );
+    assert_eq!(
+        adapter
+            .accept_merge_signature(initial_local_share, candidate.view)
+            .expect("classify an exact persisted leader replay"),
+        V2LaneIngressOutcome::Duplicate
+    );
+    assert_eq!(
+        adapter.merge_candidate_validation_checks.get(),
+        validation_checks_after_persistence,
+        "persisted leader replay must not reexecute the certified candidate"
+    );
+    assert_eq!(
+        adapter
+            .accept_merge_signature(
+                accepted_remote_share.expect("quorum includes one remote share"),
+                candidate.view,
+            )
+            .expect("classify an exact post-persistence replay"),
+        V2LaneIngressOutcome::Duplicate
+    );
+    assert_eq!(
+        adapter.merge_candidate_validation_checks.get(),
+        validation_checks_after_persistence,
+        "post-persistence replay must not reexecute the certified candidate"
+    );
 }
 #[test]
 fn quorate_merge_persistence_failure_latches_restart_required() {
     let (mut adapter, keys) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
-    let candidate = record_production_merge_candidate_for_persistence_retry(&adapter, &keys, 0);
+    let candidate = record_production_merge_candidate_for_persistence_retry(&mut adapter, &keys, 0);
     adapter
         .retain_merge_sidecars_for_global_view(candidate.view, None, None)
         .expect("install exact unlocked reducer directive");
@@ -1827,6 +2119,12 @@ fn quorate_merge_persistence_failure_latches_restart_required() {
             )
         })
         .collect::<BTreeMap<_, _>>();
+    let expected_signers = exact_merge_certificate_signers(
+        &signatures,
+        adapter.context.quorum.min_signers as usize,
+        adapter.context.leader(candidate.view),
+    )
+    .expect("complete fixture shares include the round leader");
     adapter.merge_entries.insert(
         key,
         PendingMerge {
@@ -1864,17 +2162,28 @@ fn quorate_merge_persistence_failure_latches_restart_required() {
         PendingMergeStage::Collecting(_) => {
             panic!("production quorum must advance to Certified before Kura publication")
         }
+        PendingMergeStage::Persisted(_) => {
+            panic!("injected Kura failure must not reach the Persisted stage")
+        }
     };
     assert_eq!(certified_entry.merge_qc.message_digest, key.digest);
-    assert_eq!(certified_entry.merge_qc.signers_bitmap, vec![0b0000_0111]);
+    let certified_signers = certified_entry
+        .merge_qc
+        .signer_proofs
+        .iter()
+        .map(|proof| proof.signer)
+        .collect::<Vec<_>>();
+    assert_eq!(certified_signers, expected_signers);
+    assert!(
+        certified_signers.contains(&adapter.context.leader(candidate.view)),
+        "the exact-cardinality QC must retain its durable round-leader custodian"
+    );
+    let expected_bitmap = certified_signers
+        .iter()
+        .fold(0_u8, |bitmap, signer| bitmap | (1_u8 << *signer));
     assert_eq!(
-        certified_entry
-            .merge_qc
-            .signer_proofs
-            .iter()
-            .map(|proof| proof.signer)
-            .collect::<Vec<_>>(),
-        vec![0, 1, 2]
+        certified_entry.merge_qc.signers_bitmap,
+        vec![expected_bitmap]
     );
     assert_eq!(certified_entry.epoch_id, candidate.epoch_id);
     assert_eq!(certified_entry.lane_snapshots, candidate.lane_snapshots);

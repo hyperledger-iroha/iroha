@@ -1,15 +1,601 @@
-fn explorer_state_signature(state: &LifecycleCoordinator) -> [u8; 32] {
-    let exact_state = format!("{state:?}");
-    *blake3::hash(exact_state.as_bytes()).as_bytes()
+struct ExplorerEncoder {
+    bytes: Vec<u8>,
+    digests: Vec<LifecycleDigest>,
 }
+
+impl ExplorerEncoder {
+    fn new() -> Self {
+        Self {
+            bytes: Vec::with_capacity(1_024),
+            digests: Vec::with_capacity(32),
+        }
+    }
+
+    fn tag(&mut self, value: u8) {
+        self.bytes.push(value);
+    }
+
+    fn u16(&mut self, value: u16) {
+        self.bytes.extend_from_slice(&value.to_le_bytes());
+    }
+
+    fn u64(&mut self, value: u64) {
+        self.bytes.extend_from_slice(&value.to_le_bytes());
+    }
+
+    fn u128(&mut self, value: u128) {
+        self.bytes.extend_from_slice(&value.to_le_bytes());
+    }
+
+    fn usize(&mut self, value: usize) {
+        self.u64(u64::try_from(value).expect("explorer structural length fits u64"));
+    }
+
+    fn digest(&mut self, value: LifecycleDigest) {
+        if let Some(index) = self.digests.iter().position(|digest| *digest == value) {
+            self.tag(1);
+            self.u16(u16::try_from(index).expect("explorer digest dictionary fits u16"));
+        } else {
+            self.tag(0);
+            self.bytes.extend_from_slice(value.as_bytes());
+            self.digests.push(value);
+        }
+    }
+
+    fn optional_digest(&mut self, value: Option<LifecycleDigest>) {
+        match value {
+            None => self.tag(0),
+            Some(value) => {
+                self.tag(1);
+                self.digest(value);
+            }
+        }
+    }
+
+    fn context(&mut self, value: LifecycleContext) {
+        self.digest(value.id);
+        self.u64(value.height);
+    }
+
+    fn round(&mut self, value: LifecycleRound) {
+        self.u64(value.height);
+        self.u64(value.view);
+    }
+
+    fn optional_round(&mut self, value: Option<LifecycleRound>) {
+        match value {
+            None => self.tag(0),
+            Some(value) => {
+                self.tag(1);
+                self.round(value);
+            }
+        }
+    }
+
+    fn phase(&mut self, value: LifecyclePhase) {
+        self.tag(match value {
+            LifecyclePhase::Proposal => 0,
+            LifecyclePhase::Prepare => 1,
+            LifecyclePhase::Commit => 2,
+            LifecyclePhase::Timeout => 3,
+            LifecyclePhase::Fetch => 4,
+            LifecyclePhase::Store => 5,
+            LifecyclePhase::Validate => 6,
+            LifecyclePhase::Apply => 7,
+            LifecyclePhase::BroadcastProposal => 8,
+            LifecyclePhase::BroadcastPrepareVote => 9,
+            LifecyclePhase::BroadcastCommitVote => 10,
+            LifecyclePhase::BroadcastPrepareQc => 11,
+            LifecyclePhase::BroadcastCommitQc => 12,
+            LifecyclePhase::BroadcastTimeoutVote => 13,
+            LifecyclePhase::BroadcastTc => 14,
+            LifecyclePhase::EnterView => 15,
+            LifecyclePhase::DiagnosticProposalEquivocation => 16,
+            LifecyclePhase::DiagnosticVoteEquivocation => 17,
+            LifecyclePhase::DiagnosticTimeoutEquivocation => 18,
+            LifecyclePhase::DiagnosticInvalidBody => 19,
+            LifecyclePhase::Serve => 20,
+            LifecyclePhase::ProducerTurn => 21,
+        });
+    }
+
+    fn key(&mut self, value: LifecycleKey) {
+        self.digest(value.context);
+        self.round(value.round);
+        self.optional_round(value.proposal_round);
+        self.optional_digest(value.subject);
+        self.phase(value.phase);
+        self.optional_digest(value.execution_commitment);
+    }
+
+    fn owner(&mut self, value: OwnerId) {
+        self.digest(value.causal_root.digest());
+        self.u128(value.first_admission_ordinal);
+    }
+
+    fn work_class(&mut self, value: LifecycleWorkClass) {
+        self.tag(match value {
+            LifecycleWorkClass::SignProposal => 0,
+            LifecycleWorkClass::SignVote => 1,
+            LifecycleWorkClass::SignTimeout => 2,
+            LifecycleWorkClass::Fetch => 3,
+            LifecycleWorkClass::Store => 4,
+            LifecycleWorkClass::Validate => 5,
+            LifecycleWorkClass::Apply => 6,
+            LifecycleWorkClass::Broadcast => 7,
+            LifecycleWorkClass::EnterView => 8,
+            LifecycleWorkClass::EquivocationReport => 9,
+            LifecycleWorkClass::InvalidBodyReport => 10,
+            LifecycleWorkClass::CertifiedServe => 11,
+            LifecycleWorkClass::ProducerTurn => 12,
+        });
+    }
+
+    fn stage_kind(&mut self, value: LifecycleStageKind) {
+        self.tag(match value {
+            LifecycleStageKind::SignProposal => 0,
+            LifecycleStageKind::SignPrepareVote => 1,
+            LifecycleStageKind::SignCommitVote => 2,
+            LifecycleStageKind::SignTimeoutVote => 3,
+            LifecycleStageKind::FetchBody => 4,
+            LifecycleStageKind::StoreBody => 5,
+            LifecycleStageKind::ValidateBody => 6,
+            LifecycleStageKind::ApplyDecision => 7,
+            LifecycleStageKind::BroadcastProposal => 8,
+            LifecycleStageKind::BroadcastPrepareVote => 9,
+            LifecycleStageKind::BroadcastCommitVote => 10,
+            LifecycleStageKind::BroadcastPrepareQc => 11,
+            LifecycleStageKind::BroadcastCommitQc => 12,
+            LifecycleStageKind::BroadcastTimeoutVote => 13,
+            LifecycleStageKind::BroadcastTc => 14,
+            LifecycleStageKind::EnterView => 15,
+            LifecycleStageKind::ReportProposalEquivocation => 16,
+            LifecycleStageKind::ReportVoteEquivocation => 17,
+            LifecycleStageKind::ReportTimeoutEquivocation => 18,
+            LifecycleStageKind::ReportInvalidBody => 19,
+            LifecycleStageKind::CertifiedServe => 20,
+            LifecycleStageKind::ProducerTurn => 21,
+        });
+    }
+
+    fn predecessor_scope(&mut self, value: PredecessorScope) {
+        self.tag(match value {
+            PredecessorScope::Independent => 0,
+            PredecessorScope::ReadyOrdinalPrefix => 1,
+            PredecessorScope::ProducerHandoffBarrier => 2,
+        });
+    }
+
+    fn stage(&mut self, value: LifecycleStage) {
+        self.stage_kind(value.kind);
+        self.predecessor_scope(value.predecessor_scope);
+    }
+
+    fn capacity_class(&mut self, value: CapacityClass) {
+        self.tag(match value {
+            CapacityClass::Consensus => 0,
+            CapacityClass::Effect => 1,
+            CapacityClass::Serve => 2,
+            CapacityClass::Producer => 3,
+        });
+    }
+
+    fn physical_slot_id(&mut self, value: PhysicalSlotId) {
+        self.u16(value.0);
+        self.u16(value.1);
+    }
+
+    fn physical_slots(&mut self, value: &BTreeMap<PhysicalSlotId, LifecycleDigest>) {
+        self.usize(value.len());
+        for (slot, digest) in value {
+            self.physical_slot_id(*slot);
+            self.digest(*digest);
+        }
+    }
+
+    fn physical_slot_set(&mut self, value: &BTreeSet<PhysicalSlotId>) {
+        self.usize(value.len());
+        for slot in value {
+            self.physical_slot_id(*slot);
+        }
+    }
+
+    fn physical_geometry(&mut self, value: &PhysicalGeometry) {
+        self.usize(value.initial.len());
+        for slot in &value.initial {
+            self.physical_slot_id(slot.id);
+            self.digest(slot.digest);
+        }
+        self.physical_slot_set(&value.replenishment_slots);
+    }
+
+    fn capacity_geometry(&mut self, value: &CapacityGeometry) {
+        self.usize(value.limits.len());
+        for (class, limit) in &value.limits {
+            self.capacity_class(*class);
+            self.usize(*limit);
+        }
+    }
+
+    fn episode_universe(&mut self, value: &SchedulerEpisodeUniverse) {
+        self.digest(value.target);
+        self.digest(value.context);
+        self.digest(value.leader);
+        self.u64(value.view);
+        self.optional_digest(value.subject);
+        self.phase(value.phase);
+        self.usize(value.authenticated_roster_slots.len());
+        for slot in &value.authenticated_roster_slots {
+            self.u16(*slot);
+        }
+        self.usize(value.capacity_geometry.len());
+        for (class, limit) in &value.capacity_geometry {
+            self.capacity_class(*class);
+            self.usize(*limit);
+        }
+    }
+
+    fn episode(&mut self, value: &SchedulerEpisode) {
+        self.episode_universe(&value.universe);
+        self.physical_slot_set(&value.slot_universe);
+        self.physical_slot_set(&value.consumed_slots);
+        self.usize(value.frozen_predecessors.len());
+        for ordinal in &value.frozen_predecessors {
+            self.u128(*ordinal);
+        }
+    }
+
+    fn wait_source(&mut self, value: WaitSource) {
+        match value {
+            WaitSource::Capacity(class) => {
+                self.tag(0);
+                self.capacity_class(class);
+            }
+            WaitSource::External(digest) => {
+                self.tag(1);
+                self.digest(digest);
+            }
+            WaitSource::Recovery(digest) => {
+                self.tag(2);
+                self.digest(digest);
+            }
+            WaitSource::ProducerTurn(ordinal) => {
+                self.tag(3);
+                self.u128(ordinal);
+            }
+        }
+    }
+
+    fn wait_token(&mut self, value: WaitToken) {
+        self.wait_source(value.source);
+        self.u64(value.observed_generation);
+    }
+
+    fn terminal_outcome(&mut self, value: TerminalOutcome) {
+        match value {
+            TerminalOutcome::Advanced => self.tag(0),
+            TerminalOutcome::Completed(None) => self.tag(1),
+            TerminalOutcome::Completed(Some(digest)) => {
+                self.tag(2);
+                self.digest(digest);
+            }
+            TerminalOutcome::Cancelled => self.tag(3),
+            TerminalOutcome::Rejected(code) => {
+                self.tag(4);
+                self.u16(code);
+            }
+            TerminalOutcome::Failed(code) => {
+                self.tag(5);
+                self.u16(code);
+            }
+        }
+    }
+
+    fn lifecycle_state(&mut self, value: LifecycleState) {
+        match value {
+            LifecycleState::Waiting(wait) => {
+                self.tag(0);
+                self.wait_token(wait);
+            }
+            LifecycleState::Ready => self.tag(1),
+            LifecycleState::Claimed(lease) => {
+                self.tag(2);
+                self.u128(lease.0);
+            }
+            LifecycleState::Terminal(outcome) => {
+                self.tag(3);
+                self.terminal_outcome(outcome);
+            }
+        }
+    }
+
+    fn payload(&mut self, value: DurablePayloadReference) {
+        match value {
+            DurablePayloadReference::None => self.tag(0),
+            DurablePayloadReference::BodyFrame(body) => {
+                self.tag(1);
+                self.digest(body.context);
+                self.round(body.round);
+                self.digest(body.subject);
+                self.digest(body.manifest);
+                self.digest(body.frame);
+            }
+            DurablePayloadReference::CertifiedServePending {
+                request,
+                certificate,
+            } => {
+                self.tag(2);
+                self.digest(request);
+                self.digest(certificate);
+            }
+            DurablePayloadReference::CertifiedServeCompleted {
+                request,
+                certificate,
+                response,
+            } => {
+                self.tag(3);
+                self.digest(request);
+                self.digest(certificate);
+                self.digest(response);
+            }
+            DurablePayloadReference::CertifiedServeNegative {
+                request,
+                certificate,
+                outcome,
+            } => {
+                self.tag(4);
+                self.digest(request);
+                self.digest(certificate);
+                match outcome {
+                    DurableServeNegativeOutcome::Cancelled => self.tag(0),
+                    DurableServeNegativeOutcome::Rejected(code) => {
+                        self.tag(1);
+                        self.u16(code);
+                    }
+                    DurableServeNegativeOutcome::Failed(code) => {
+                        self.tag(2);
+                        self.u16(code);
+                    }
+                }
+            }
+        }
+    }
+
+    fn continuation_edge(&mut self, value: schema::DurableContinuationEdge) {
+        self.tag(match value {
+            schema::DurableContinuationEdge::FetchToStore => 0,
+            schema::DurableContinuationEdge::StoreToValidate => 1,
+            schema::DurableContinuationEdge::ValidateToApply => 2,
+            schema::DurableContinuationEdge::ValidateToInvalidBodyReport => 3,
+            schema::DurableContinuationEdge::ValidateToSignPrepare => 4,
+            schema::DurableContinuationEdge::ValidateToSignCommit => 5,
+            schema::DurableContinuationEdge::SignProposalToBroadcast => 6,
+            schema::DurableContinuationEdge::SignPrepareToBroadcast => 7,
+            schema::DurableContinuationEdge::SignCommitToBroadcast => 8,
+            schema::DurableContinuationEdge::SignTimeoutToBroadcast => 9,
+        });
+    }
+
+    fn continuation(&mut self, value: DurableContinuation) {
+        match value {
+            DurableContinuation::None => self.tag(0),
+            DurableContinuation::AdvancedNoSuccessor => self.tag(1),
+            DurableContinuation::AdvancedSuccessor { edge, ordinal } => {
+                self.tag(2);
+                self.continuation_edge(edge);
+                self.u128(ordinal);
+            }
+        }
+    }
+
+    fn initial_state(&mut self, value: InitialLifecycleState) {
+        match value {
+            InitialLifecycleState::Ready => self.tag(0),
+            InitialLifecycleState::Waiting(wait) => {
+                self.tag(1);
+                self.wait_token(wait);
+            }
+        }
+    }
+
+    fn active_lease(&mut self, value: Option<&TurnLease>) {
+        let Some(lease) = value else {
+            self.tag(0);
+            return;
+        };
+        self.tag(1);
+        self.u128(lease.id.0);
+        self.u128(lease.ordinal);
+        self.owner(lease.owner);
+        self.key(lease.key);
+        self.work_class(lease.work_class);
+        self.stage(lease.stage);
+        for component in lease.rank.components() {
+            self.u64(component);
+        }
+        self.physical_slots(&lease.physical_slots);
+        match lease.output_reservation {
+            None => self.tag(0),
+            Some(reservation) => {
+                self.tag(1);
+                self.capacity_class(reservation.class());
+                self.u64(reservation.wait_token().observed_generation);
+            }
+        }
+    }
+
+    fn fault(&mut self, value: Option<CoordinatorFault>) {
+        let Some(fault) = value else {
+            self.tag(0);
+            return;
+        };
+        self.tag(1);
+        match fault {
+            CoordinatorFault::UnsettledLease(lease) => {
+                self.tag(0);
+                self.u128(lease.0);
+            }
+            CoordinatorFault::StaleLease => self.tag(1),
+            CoordinatorFault::InvalidSchedulerInputs => self.tag(2),
+            CoordinatorFault::InvalidReadyEvent => self.tag(3),
+            CoordinatorFault::InvalidPhysicalTransition => self.tag(4),
+            CoordinatorFault::InvalidTerminalOutcome => self.tag(5),
+            CoordinatorFault::DurabilityFailure => self.tag(6),
+            CoordinatorFault::CapacityAccounting => self.tag(7),
+            CoordinatorFault::LeaseExhausted => self.tag(8),
+            CoordinatorFault::RecoveryRejected => self.tag(9),
+            CoordinatorFault::InvalidRollover => self.tag(10),
+        }
+    }
+}
+
+fn explorer_state_signature(state: &LifecycleCoordinator) -> Vec<u8> {
+    // This dependency-free explorer has neither a ledger store nor the
+    // actor-global durable ordinal allocator. If either becomes part of the
+    // fixture, its state must be added to this structural key.
+    assert!(state.ledger_store.is_none());
+    assert!(state.lifecycle_ordinal_authority.is_none());
+
+    let mut encoder = ExplorerEncoder::new();
+    encoder.context(state.active_context);
+    encoder.capacity_geometry(&state.capacity_geometry);
+
+    // Encode the complete observable scheduler-authority behavior. A rotated
+    // leader sequence plus roster length is equivalent to the private ordered
+    // roster and leader offset used by `universe_for`.
+    let probe_key = |view| {
+        LifecycleKey::new(
+            state.active_context.id,
+            LifecycleRound::new(state.active_context.height, view),
+            None,
+            None,
+            LifecyclePhase::EnterView,
+            None,
+        )
+    };
+    let probe = state
+        .episode_authority
+        .universe_for(probe_key(0))
+        .expect("explorer authority admits its active context");
+    encoder.usize(probe.authenticated_roster_slots.len());
+    for view in 0..probe.authenticated_roster_slots.len() {
+        let universe = state
+            .episode_authority
+            .universe_for(probe_key(
+                u64::try_from(view).expect("finite explorer roster view fits u64"),
+            ))
+            .expect("explorer authority admits each roster view");
+        encoder.digest(universe.leader);
+    }
+
+    encoder.usize(state.records.len());
+    for (map_ordinal, record) in &state.records {
+        encoder.u128(*map_ordinal);
+        encoder.key(record.key);
+        encoder.owner(record.owner);
+        encoder.u128(record.ordinal);
+        encoder.work_class(record.work_class);
+        encoder.stage(record.stage);
+        encoder.lifecycle_state(record.state);
+        encoder.physical_slots(&record.physical_slots);
+        encoder.episode(&record.episode);
+    }
+
+    encoder.usize(state.admission_waits.len());
+    for (map_key, wait) in &state.admission_waits {
+        assert!(
+            wait.serve_payload_receipt.is_none(),
+            "dependency-free explorer has no external Certified-Serve payload store"
+        );
+        encoder.key(*map_key);
+        encoder.key(wait.candidate.key);
+        encoder.digest(wait.candidate.causal_root.digest());
+        encoder.work_class(wait.candidate.work_class);
+        encoder.stage(wait.candidate.stage);
+        encoder.initial_state(wait.candidate.initial_state);
+        encoder.digest(wait.candidate.reconstruction_source);
+        encoder.payload(wait.candidate.payload);
+        encoder.physical_geometry(&wait.candidate.physical_geometry);
+        match wait.candidate.producer_turn.as_ref() {
+            None => encoder.tag(0),
+            Some(producer) => {
+                encoder.tag(1);
+                encoder.key(producer.key);
+                encoder.stage(producer.stage);
+                encoder.digest(producer.reconstruction_source);
+                encoder.physical_geometry(&producer.physical_geometry);
+            }
+        }
+        encoder.wait_token(wait.wait_token);
+    }
+
+    encoder.active_lease(state.active_lease.as_ref());
+    encoder.u128(state.high_water);
+    match state.next_lease {
+        None => encoder.tag(0),
+        Some(next_lease) => {
+            encoder.tag(1);
+            encoder.u128(next_lease);
+        }
+    }
+
+    encoder.usize(state.durable_records.len());
+    for (ordinal, durable) in &state.durable_records {
+        encoder.u128(*ordinal);
+        encoder.digest(durable.reconstruction_source);
+        encoder.payload(durable.payload);
+        encoder.continuation(durable.continuation);
+    }
+
+    encoder.usize(state.capacity_used.len());
+    for (class, used) in &state.capacity_used {
+        encoder.capacity_class(*class);
+        encoder.usize(*used);
+    }
+    encoder.usize(state.capacity_generation.len());
+    for (class, generation) in &state.capacity_generation {
+        encoder.capacity_class(*class);
+        encoder.u64(*generation);
+    }
+    encoder.usize(state.observed_generation.len());
+    for (source, generation) in &state.observed_generation {
+        encoder.wait_source(*source);
+        encoder.u64(*generation);
+    }
+    encoder.usize(state.producer_debts.len());
+    for (producer, debt) in &state.producer_debts {
+        encoder.u128(*producer);
+        encoder.u128(*debt);
+    }
+    encoder.fault(state.fault);
+
+    // Exact replay witnesses and redundant indexes are intentionally excluded:
+    // this fixture mints only canonical witnesses as a pure function of the
+    // encoded key/stage/payload/outcome, while assert_coordinator_invariants
+    // validates every derived index before and after each transition. The
+    // compact structural byte key is injective and compared by exact vector
+    // equality; hashing only selects a lookup bucket and cannot coalesce a
+    // collision.
+    encoder.bytes
+}
+
+// Retain a deterministic representative breadth at every depth. Invariants
+// are checked on every generated successor before this retention bound is
+// applied, so the cap limits only the next layer's memory and trace fan-out.
+const MAX_EXPLORER_REPRESENTATIVES_PER_LAYER: usize = 512;
 
 #[test]
 fn dependency_free_explorer_covers_capacities_peers_stages_and_eight_events() {
+    let mut covered_capacities = BTreeSet::new();
+    let mut covered_depths = BTreeSet::new();
+    let mut covered_peers = BTreeSet::new();
+    let mut covered_settlement_outcomes = BTreeSet::new();
     let mut covered_stages = BTreeSet::new();
     let mut covered_phases = BTreeSet::new();
     let mut covered_work_classes = BTreeSet::new();
     let mut explored_states = 0_usize;
     for capacity in 0..=3 {
+        covered_capacities.insert(capacity);
         let geometry = capacities(capacity);
         for template_start in (0..EXPLORER_TEMPLATES.len()).step_by(4) {
             let candidates: Vec<_> = (0_u8..4)
@@ -30,8 +616,13 @@ fn dependency_free_explorer_covers_capacities_peers_stages_and_eight_events() {
                 .collect();
             let initial = LifecycleCoordinator::new(context(), 0, geometry.clone());
             let mut frontier = vec![initial.clone()];
-            let mut seen = BTreeSet::from([explorer_state_signature(&initial)]);
+            let mut seen = std::collections::HashSet::from([explorer_state_signature(&initial)]);
             for depth in 0_u64..=8 {
+                assert!(
+                    !frontier.is_empty(),
+                    "representative explorer frontier is nonempty at capacity {capacity}, template {template_start}, depth {depth}",
+                );
+                covered_depths.insert(depth);
                 let mut next = Vec::new();
                 for state in frontier {
                     explored_states += 1;
@@ -45,7 +636,8 @@ fn dependency_free_explorer_covers_capacities_peers_stages_and_eight_events() {
                         continue;
                     }
                     let mut successors = Vec::new();
-                    for candidate in &candidates {
+                    for (peer, candidate) in candidates.iter().enumerate() {
+                        covered_peers.insert(peer);
                         let mut admitted = state.clone();
                         admitted.admit(AdmissionRequest::Candidate(candidate.clone()));
                         successors.push(admitted);
@@ -63,20 +655,40 @@ fn dependency_free_explorer_covers_capacities_peers_stages_and_eight_events() {
                             .clone()
                             .expect("active explorer lease is present");
                         let lease_capacity_class = lease.work_class.capacity_class();
-                        for outcome in [
-                            TurnOutcome::Advanced,
-                            TurnOutcome::Terminal(TerminalOutcome::Completed(None)),
-                            TurnOutcome::Terminal(TerminalOutcome::Completed(Some(digest(241)))),
-                            TurnOutcome::Terminal(TerminalOutcome::Cancelled),
-                            TurnOutcome::Blocked(WaitToken::new(
-                                WaitSource::External(digest(240)),
-                                depth,
-                            )),
-                            TurnOutcome::Replenished(PhysicalSlot::new(
-                                PhysicalSlotId::for_capacity(lease_capacity_class, 1),
-                                digest(u8::try_from(depth + 1).expect("depth is at most eight")),
-                            )),
+                        for (outcome_name, outcome) in [
+                            ("advanced", TurnOutcome::Advanced),
+                            (
+                                "completed-none",
+                                TurnOutcome::Terminal(TerminalOutcome::Completed(None)),
+                            ),
+                            (
+                                "completed-digest",
+                                TurnOutcome::Terminal(TerminalOutcome::Completed(Some(digest(
+                                    241,
+                                )))),
+                            ),
+                            (
+                                "cancelled",
+                                TurnOutcome::Terminal(TerminalOutcome::Cancelled),
+                            ),
+                            (
+                                "blocked",
+                                TurnOutcome::Blocked(WaitToken::new(
+                                    WaitSource::External(digest(240)),
+                                    depth,
+                                )),
+                            ),
+                            (
+                                "replenished",
+                                TurnOutcome::Replenished(PhysicalSlot::new(
+                                    PhysicalSlotId::for_capacity(lease_capacity_class, 1),
+                                    digest(
+                                        u8::try_from(depth + 1).expect("depth is at most eight"),
+                                    ),
+                                )),
+                            ),
                         ] {
+                            covered_settlement_outcomes.insert(outcome_name);
                             let mut settled = state.clone();
                             settle_with_test_serve_receipt(&mut settled, lease.clone(), outcome);
                             successors.push(settled);
@@ -150,9 +762,11 @@ fn dependency_free_explorer_covers_capacities_peers_stages_and_eight_events() {
                     for successor in successors {
                         assert_terminal_irreversibility(&state, &successor);
                         assert_coordinator_invariants(&successor);
-                        let signature = explorer_state_signature(&successor);
-                        if seen.insert(signature) {
-                            next.push(successor);
+                        if next.len() < MAX_EXPLORER_REPRESENTATIVES_PER_LAYER {
+                            let signature = explorer_state_signature(&successor);
+                            if seen.insert(signature) {
+                                next.push(successor);
+                            }
                         }
                     }
                 }
@@ -160,6 +774,20 @@ fn dependency_free_explorer_covers_capacities_peers_stages_and_eight_events() {
             }
         }
     }
+    assert_eq!(covered_capacities, BTreeSet::from([0, 1, 2, 3]));
+    assert_eq!(covered_depths, BTreeSet::from_iter(0_u64..=8));
+    assert_eq!(covered_peers, BTreeSet::from([0, 1, 2, 3]));
+    assert_eq!(
+        covered_settlement_outcomes,
+        BTreeSet::from([
+            "advanced",
+            "blocked",
+            "cancelled",
+            "completed-digest",
+            "completed-none",
+            "replenished",
+        ])
+    );
     assert_eq!(covered_stages, BTreeSet::from(LifecycleStageKind::ALL));
     assert_eq!(covered_phases, BTreeSet::from(LifecyclePhase::ALL));
     assert_eq!(

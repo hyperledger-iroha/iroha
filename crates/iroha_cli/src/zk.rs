@@ -840,15 +840,9 @@ mod attachments_cleanup_tests {
 // ---------------- Confidential envelope helpers ----------------
 #[derive(clap::Args, Debug)]
 pub struct EnvelopeArgs {
-    /// Ephemeral public key (hex, 64 chars).
-    #[arg(long, value_name = "HEX32")]
-    ephemeral_pubkey: String,
-    /// XChaCha20-Poly1305 nonce (hex, 48 chars).
-    #[arg(long, value_name = "HEX24")]
-    nonce_hex: String,
-    /// Ciphertext payload (base64) including Poly1305 tag.
-    #[arg(long, value_name = "BASE64")]
-    ciphertext_b64: String,
+    /// Path to one typed `ConfidentialMemoEnvelopeV1` JSON object.
+    #[arg(long, value_name = "PATH")]
+    envelope_json: std::path::PathBuf,
     /// Optional output path for Norito bytes.
     #[arg(long, value_name = "PATH")]
     output: Option<std::path::PathBuf>,
@@ -862,57 +856,39 @@ pub struct EnvelopeArgs {
     #[arg(long, default_value_t = false)]
     print_json: bool,
 }
-fn parse_hex_array<const N: usize>(s: &str) -> eyre::Result<[u8; N]> {
-    let bytes = hex::decode(s).map_err(|e| eyre::eyre!("invalid hex: {e}"))?;
-    if bytes.len() != N {
-        return Err(eyre::eyre!("expected {N} bytes, got {}", bytes.len()));
-    }
-    let mut out = [0u8; N];
-    out.copy_from_slice(&bytes);
-    Ok(out)
-}
-fn build_encrypted_payload(
-    ephemeral_hex: &str,
-    nonce_hex: &str,
-    ciphertext_b64: &str,
-) -> eyre::Result<iroha::data_model::confidential::ConfidentialEncryptedPayload> {
-    use iroha::data_model::confidential::ConfidentialEncryptedPayload;
-    let ephemeral = parse_hex_array::<32>(ephemeral_hex)?;
-    let nonce = parse_hex_array::<24>(nonce_hex)?;
-    let ciphertext = base64::engine::general_purpose::STANDARD
-        .decode(ciphertext_b64)
-        .map_err(|e| eyre::eyre!("invalid ciphertext base64: {e}"))?;
-    validate_encrypted_payload(ConfidentialEncryptedPayload::new(
-        ephemeral, nonce, ciphertext,
-    ))
-}
-fn validate_encrypted_payload(
-    payload: iroha::data_model::confidential::ConfidentialEncryptedPayload,
-) -> eyre::Result<iroha::data_model::confidential::ConfidentialEncryptedPayload> {
+fn parse_confidential_memo_envelope_json(
+    json: &str,
+) -> eyre::Result<iroha::data_model::confidential::ConfidentialMemoEnvelopeV1> {
+    let payload: iroha::data_model::confidential::ConfidentialMemoEnvelopeV1 =
+        norito::json::from_str(json)
+            .map_err(|error| eyre::eyre!("invalid confidential memo JSON: {error}"))?;
     payload
         .validate()
-        .map_err(|e| eyre::eyre!("invalid encrypted payload: {e}"))?;
+        .map_err(|error| eyre::eyre!("invalid confidential memo envelope: {error}"))?;
     Ok(payload)
 }
-fn encode_encrypted_payload(
-    ephemeral_hex: &str,
-    nonce_hex: &str,
-    ciphertext_b64: &str,
+fn encode_confidential_memo_envelope(
+    payload: iroha::data_model::confidential::ConfidentialMemoEnvelopeV1,
 ) -> eyre::Result<(
-    iroha::data_model::confidential::ConfidentialEncryptedPayload,
+    iroha::data_model::confidential::ConfidentialMemoEnvelopeV1,
     Vec<u8>,
 )> {
-    let payload = build_encrypted_payload(ephemeral_hex, nonce_hex, ciphertext_b64)?;
+    payload
+        .validate()
+        .map_err(|error| eyre::eyre!("invalid confidential memo envelope: {error}"))?;
     let bytes = norito::codec::encode_adaptive(&payload);
     Ok((payload, bytes))
 }
 impl Run for EnvelopeArgs {
     fn run<C: RunContext>(self, context: &mut C) -> eyre::Result<()> {
-        let (payload, bytes) = encode_encrypted_payload(
-            &self.ephemeral_pubkey,
-            &self.nonce_hex,
-            &self.ciphertext_b64,
-        )?;
+        let json = std::fs::read_to_string(&self.envelope_json).with_context(|| {
+            format!(
+                "failed to read confidential memo envelope from {}",
+                self.envelope_json.display()
+            )
+        })?;
+        let payload = parse_confidential_memo_envelope_json(&json)?;
+        let (payload, bytes) = encode_confidential_memo_envelope(payload)?;
         if let Some(path) = &self.output {
             std::fs::write(path, &bytes)
                 .with_context(|| format!("failed to write envelope to {}", path.display()))?;
@@ -1031,9 +1007,12 @@ mod tests {
             .expect("canonical IVM execution vk id");
         assert_eq!(parsed.backend.as_str(), "halo2/pasta/ivm-execution-v1");
         assert_eq!(parsed.name.as_str(), "vk_ivm");
-        let parsed =
-            parse_vk_id_pair("stark/fri/poseidon2-goldilocks:vk_stark").expect("stark vk id");
-        assert_eq!(parsed.backend.as_str(), "stark/fri/poseidon2-goldilocks");
+        let parsed = parse_vk_id_pair("stark/fri/poseidon-x7-goldilocks-6x64-v1:vk_stark")
+            .expect("stark vk id");
+        assert_eq!(
+            parsed.backend.as_str(),
+            "stark/fri/poseidon-x7-goldilocks-6x64-v1"
+        );
         assert_eq!(parsed.name.as_str(), "vk_stark");
     }
     #[test]
@@ -1056,36 +1035,51 @@ mod tests {
         }
     }
     #[test]
-    fn parse_hex_array_exact_length() {
-        let value = "01".repeat(32);
-        let arr = parse_hex_array::<32>(&value).expect("parse hex array");
-        assert_eq!(arr, [1u8; 32]);
-    }
-    #[test]
-    fn parse_hex_array_rejects_wrong_length() {
-        let err = parse_hex_array::<24>("00").expect_err("should fail");
-        assert!(format!("{err}").contains("expected 24 bytes"));
-    }
-    #[test]
-    fn encode_encrypted_payload_returns_expected_bytes() {
-        use base64::Engine as _;
-        let epk = "07".repeat(32);
-        let nonce = "22".repeat(24);
-        let (payload, bytes) =
-            encode_encrypted_payload(&epk, &nonce, "AQIDBA==").expect("encode envelope");
-        let expected_b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
-        let decoded: iroha::data_model::confidential::ConfidentialEncryptedPayload =
+    fn encode_confidential_memo_envelope_returns_expected_bytes() {
+        use iroha::data_model::confidential::{
+            CONFIDENTIAL_MEMO_WRAPPED_KEY_BYTES_V1, CONFIDENTIAL_MEMO_XCHACHA_NONCE_BYTES_V1,
+            CONFIDENTIAL_MEMO_XCHACHA_TAG_BYTES_V1, ConfidentialMemoEnvelopeV1,
+            ConfidentialMemoRecipientSlotV1, ConfidentialMemoSuiteV1,
+        };
+        let payload = ConfidentialMemoEnvelopeV1::new(
+            core::array::from_fn(|index| {
+                let suite = ConfidentialMemoSuiteV1::MlKem768XChaCha20Poly1305;
+                ConfidentialMemoRecipientSlotV1::new(
+                    suite,
+                    vec![
+                        u8::try_from(index).expect("slot index fits u8") + 1;
+                        suite.encapsulation_bytes()
+                    ],
+                    [u8::try_from(index).expect("slot index fits u8") + 17;
+                        CONFIDENTIAL_MEMO_XCHACHA_NONCE_BYTES_V1],
+                    [u8::try_from(index).expect("slot index fits u8") + 33;
+                        CONFIDENTIAL_MEMO_WRAPPED_KEY_BYTES_V1],
+                )
+                .expect("canonical slot")
+            }),
+            [0xA5; CONFIDENTIAL_MEMO_XCHACHA_NONCE_BYTES_V1],
+            vec![0x5A; CONFIDENTIAL_MEMO_XCHACHA_TAG_BYTES_V1],
+        )
+        .expect("canonical memo envelope");
+        let (payload, bytes) = encode_confidential_memo_envelope(payload).expect("encode envelope");
+        let decoded: iroha::data_model::confidential::ConfidentialMemoEnvelopeV1 =
             norito::codec::decode_adaptive(&bytes).expect("decode envelope");
         assert_eq!(payload, decoded);
-        assert!(!expected_b64.is_empty());
+        let json = norito::json::to_json(&payload).expect("encode typed JSON");
+        assert_eq!(
+            parse_confidential_memo_envelope_json(&json).expect("parse typed JSON"),
+            payload
+        );
     }
     #[test]
     fn vk_submission_backend_parser_accepts_only_supported_open_verify_engines() {
         use iroha::data_model::zk::BackendTag;
         for (label, expected) in [
             ("halo2/ipa", BackendTag::Halo2IpaPasta),
-            ("stark/fri", BackendTag::Stark),
-            ("stark/fri/sha256-goldilocks", BackendTag::Stark),
+            (
+                "stark/fri/poseidon-x7-goldilocks-6x64-v1",
+                BackendTag::Stark,
+            ),
         ] {
             assert_eq!(
                 vk_backend_tag_from_label(label).expect("supported engine"),
@@ -1203,7 +1197,7 @@ mod tests {
         use base64::Engine as _;
         let limit = iroha_core::zk::STARK_FRI_VERIFYING_KEY_V1_MAX_BYTES;
         let mut inline = sample_vk_submission(None);
-        inline.backend = "stark/fri".to_owned();
+        inline.backend = iroha_core::zk::ZK_BACKEND_STARK_FRI_V1.to_owned();
         inline.commitment_hex = None;
         inline.vk_len = Some(u32::try_from(limit).expect("STARK VK limit fits u32"));
         inline.vk_bytes = Some(base64::engine::general_purpose::STANDARD.encode(vec![0xA5; limit]));
@@ -1219,7 +1213,7 @@ mod tests {
         assert!(error.to_string().contains("backend limit"), "{error}");
 
         let mut commitment_only = sample_vk_submission(None);
-        commitment_only.backend = "stark/fri".to_owned();
+        commitment_only.backend = iroha_core::zk::ZK_BACKEND_STARK_FRI_V1.to_owned();
         commitment_only.vk_len = Some(u32::try_from(limit).expect("STARK VK limit fits u32"));
         assert!(
             build_vk_record(&commitment_only, VkSubmissionOperation::Register).is_ok(),
@@ -1265,24 +1259,13 @@ mod tests {
         assert_eq!(record.status, ConfidentialStatus::Withdrawn);
     }
     #[test]
-    fn encode_encrypted_payload_rejects_empty_ciphertext() {
-        let epk = "07".repeat(32);
-        let nonce = "22".repeat(24);
-        let err = encode_encrypted_payload(&epk, &nonce, "")
-            .expect_err("empty encrypted payload ciphertext must fail");
+    fn typed_memo_json_rejects_invalid_placeholder() {
+        let placeholder = iroha::data_model::confidential::ConfidentialMemoEnvelopeV1::default();
+        let json = norito::json::to_json(&placeholder).expect("serialize placeholder JSON");
+        let err = parse_confidential_memo_envelope_json(&json)
+            .expect_err("invalid confidential memo placeholder must fail");
         assert!(
-            format!("{err}").contains("ciphertext must not be empty"),
-            "unexpected error: {err}"
-        );
-    }
-    #[test]
-    fn encode_encrypted_payload_rejects_low_order_ephemeral_key() {
-        let epk = "00".repeat(32);
-        let nonce = "22".repeat(24);
-        let err = encode_encrypted_payload(&epk, &nonce, "AQIDBA==")
-            .expect_err("low-order X25519 ephemeral key must fail");
-        assert!(
-            format!("{err}").contains("low-order"),
+            format!("{err}").contains("recipient slot 0"),
             "unexpected error: {err}"
         );
     }

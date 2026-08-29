@@ -226,6 +226,7 @@ fn validate_bits_v1(bits: &[F]) -> Result<(), ZkX509AirErrorV1> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::privacy_engines::transparent_stark::GoldilocksDigest384V1;
     use crate::privacy_engines::zk_x509::{
         accumulator_air::{
             ZK_X509_CA_ACCUMULATOR_BASE_WIDTH_V1, ZK_X509_CA_ACCUMULATOR_TRACE_ROWS_V1,
@@ -386,7 +387,8 @@ mod tests {
             &ZkX509ShaCallScheduleV1,
             ZkX509CredentialMainPreAuxV1,
             &[u8],
-        ) -> Result<[u8; 32], ZkX509CaAccumulatorProofErrorV1> =
+        )
+            -> Result<GoldilocksDigest384V1, ZkX509CaAccumulatorProofErrorV1> =
             ca_accumulator_proof_binding_digest_v1;
     }
 }

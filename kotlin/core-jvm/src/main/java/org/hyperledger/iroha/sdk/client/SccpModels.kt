@@ -18,6 +18,21 @@ const val SCCP_OUTBOUND_MESSAGE_MAX_PAYLOAD_BYTES_V1: Int = 4_096
 private val SCCP_U64_MAX_VALUE: BigInteger =
     BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE)
 
+/** Validate one TON value-moving amount against its immutable first-release cap. */
+fun requireSccpTonAmountWithinCapV1(
+    amount: BigInteger,
+    maxWrappedSupply: BigInteger,
+): BigInteger {
+    val maximumTonCoins = BigInteger.ONE.shiftLeft(120).subtract(BigInteger.ONE)
+    require(maxWrappedSupply > BigInteger.ZERO && maxWrappedSupply <= maximumTonCoins) {
+        "TON max_wrapped_supply must be in 1..2^120-1"
+    }
+    require(amount > BigInteger.ZERO && amount <= maxWrappedSupply) {
+        "TON amount must be positive and no greater than max_wrapped_supply"
+    }
+    return amount
+}
+
 /** Fixed SCCP V1 route-registry capacity limits. */
 data class SccpRegistryLimits(
     val maxGovernedLanes: Long,
@@ -68,6 +83,7 @@ data class SccpCapabilities(
     val messageBundlePath: String,
     val proofRequestPath: String,
     val recentMessagesPath: String,
+    val soraOutboundMaterialPath: String,
     val registryLimits: SccpRegistryLimits,
     val resourceLimits: SccpResourceLimits,
     val proofSubmitPath: String?,
@@ -110,6 +126,45 @@ data class SccpInboundFinalityCutoffV1(
     val trustAnchorHash: String,
     val maxAnchorIntervalHeight: BigInteger,
 )
+
+/** Canonical portable verification-key identity for SORA-side execution proofs. */
+data class SccpPortableVerifyingKeyReferenceV1(
+    val backend: String,
+    val name: String,
+    val version: Long,
+    val commitment: String,
+)
+
+/** Mandatory proved burn-and-record execution policy for a governed SCCP route. */
+data class SccpSoraOutboundExecutionPolicyV1(
+    val version: Int,
+    val semantics: String,
+    val contractArtifactSha256: String,
+    val verifyingKeyReference: SccpPortableVerifyingKeyReferenceV1,
+    val gasLimit: Long,
+)
+
+/** Exact ordered five-key TON mint-breaker guardian set. */
+data class SccpTonMintBreakerGuardianKeysV1(
+    val guardian0: String,
+    val guardian1: String,
+    val guardian2: String,
+    val guardian3: String,
+    val guardian4: String,
+) {
+    init {
+        val keys = ordered()
+        require(keys.all { Regex("[0-9A-F]{64}").matches(it) && it.any { char -> char != '0' } }) {
+            "TON mint-breaker guardian keys must be nonzero uppercase 32-byte hex"
+        }
+        require(keys.zipWithNext().all { (left, right) -> left < right }) {
+            "TON mint-breaker guardian keys must be strictly increasing"
+        }
+    }
+
+    /** Keys in canonical TON StateInit and SCCP hash-preimage order. */
+    fun ordered(): List<String> = listOf(guardian0, guardian1, guardian2, guardian3, guardian4)
+}
 
 /** Strictly decoded finalized SCCP message bundle. */
 data class SccpMessageBundleV1(
@@ -367,6 +422,12 @@ object SccpJsonParser {
                 false,
             )!!,
             optionalExactPath(root, "recent_messages_path", "/v1/sccp/messages/recent", false)!!,
+            optionalExactPath(
+                root,
+                "sora_outbound_material_path",
+                "/v1/sccp/routes/{source_profile}/{route_id}/{asset_key}/{revision}/sora-outbound-material",
+                false,
+            )!!,
             parseRegistryLimits(requiredObject(root, "registry_limits")),
             parseResourceLimits(requiredObject(root, "resource_limits")),
             proofSubmitPath,
@@ -672,7 +733,7 @@ object SccpJsonParser {
         }
         val backendMatchesTarget = when (backend) {
             "evm_groth16_bn254_v1" -> target.domainId == 1 || target.domainId == 2
-            "tron_groth16_bn254_v1" -> target.domainId == 5
+            "tron_groth16_bn254_v1" -> target.domainId == 3
             else -> target.domainId == 4
         }
         require(backendMatchesTarget) {
@@ -695,7 +756,7 @@ object SccpJsonParser {
         requiredInt(publicInputs, "version", 1, 1)
         val messageId = prefixedHash(publicInputs, "message_id")
         val payloadHash = prefixedHash(publicInputs, "payload_hash")
-        require(requiredInt(publicInputs, "target_domain", 1, 5) == target.domainId) {
+        require(requiredInt(publicInputs, "target_domain", 1, 4) == target.domainId) {
             "SCCP proof target domain does not match target network"
         }
         val commitmentRoot = prefixedHash(publicInputs, "commitment_root")
@@ -856,6 +917,8 @@ object SccpJsonParser {
         val inboundFinalityCutoff: SccpInboundFinalityCutoffV1?,
         val destinationBindingHash: String,
         val routeConfigurationHash: String,
+        val soraOutboundExecutionPolicy: SccpSoraOutboundExecutionPolicyV1,
+        val maxOutstandingLiability: BigInteger,
     )
 
     private data class SourceRoles(
@@ -989,6 +1052,10 @@ object SccpJsonParser {
         }
         val source = parseSourceIdentity(requiredObject(value, "source_identity"), lane, "$label.source_identity")
         val destination = parseDestination(requiredObject(value, "destination"), lane, "$label.destination")
+        val executionPolicy = parseSoraOutboundExecutionPolicy(
+            requiredObject(value, "sora_outbound_execution_policy"),
+            "$label.sora_outbound_execution_policy",
+        )
         val sourceMatchesDestination = if (source.family == "ton" && destination.family == "ton") {
             source.address == destination.routeAddress &&
                 source.runtimeHash == destination.routeCodeHash
@@ -1003,18 +1070,12 @@ object SccpJsonParser {
         val settlement = requiredObject(value, "settlement")
         exactFields(
             settlement,
-            setOf(
-                "asset_definition_id",
-                "custody_owner",
-                "payload_amount_scale",
-                "max_outstanding_liability",
-            ),
+            setOf("asset_definition_id", "payload_amount_scale", "max_outstanding_liability"),
             "$label.settlement",
         )
         require(requiredText(settlement, "asset_definition_id") == TAIRA_XOR_ASSET_ID) {
             "$label settlement must use canonical Taira XOR"
         }
-        requiredText(settlement, "custody_owner")
         val payloadAmountScale = requiredInt(settlement, "payload_amount_scale", 9, 9)
         val maxOutstandingLiability = requiredUnsignedInteger(
             settlement,
@@ -1022,13 +1083,8 @@ object SccpJsonParser {
             MAX_U128,
             true,
         )
-        val expectedMaxWrappedSupply = checkedU128Product(
-            maxOutstandingLiability,
-            BigInteger.valueOf(destination.multiplier),
-            "$label settlement liability cap",
-        )
-        require(destination.maxWrappedSupply == expectedMaxWrappedSupply) {
-            "$label max_wrapped_supply must equal max_outstanding_liability multiplied by taira_to_token_multiplier"
+        require(maxOutstandingLiability.multiply(BigInteger.valueOf(destination.multiplier)) == destination.maxWrappedSupply) {
+            "$label wrapped-supply cap does not match its SORA liability cap"
         }
         val routeConfigurationHash = routeConfigurationHash(
             lane,
@@ -1041,6 +1097,22 @@ object SccpJsonParser {
         require(source.routeConfigurationHash == routeConfigurationHash) {
             "$label source route_config_hash does not match the immutable deployment"
         }
+        requireDistinctRawHashes(
+            listOf(
+                executionPolicy.contractArtifactSha256,
+                executionPolicy.verifyingKeyReference.commitment,
+                routeConfigurationHash,
+                destination.destinationBindingHash,
+                destination.verifierKeyHash,
+                destination.semanticProfileHash,
+                destination.finalityAnchorHash,
+            ) + if (destination.family == "ton") {
+                destination.governedHashRoles.take(5).filterIndexed { index, _ -> index == 1 || index == 4 }
+            } else {
+                emptyList()
+            },
+            "$label governed execution and deployment",
+        )
         val lineage = "$routeId\u0000$assetKey"
         return ParsedRoute(
             lineage,
@@ -1050,8 +1122,63 @@ object SccpJsonParser {
             inboundFinalityCutoff,
             destination.destinationBindingHash,
             routeConfigurationHash,
+            executionPolicy,
+            maxOutstandingLiability,
         )
     }
+
+    private fun parseSoraOutboundExecutionPolicy(
+        value: Map<String, Any?>,
+        label: String,
+    ): SccpSoraOutboundExecutionPolicyV1 {
+        exactFields(
+            value,
+            setOf("version", "semantics", "contract_artifact_sha256", "vk_ref", "gas_limit"),
+            label,
+        )
+        val version = requiredInt(value, "version", 1, 1)
+        val semantics = requiredText(value, "semantics")
+        require(semantics == SORA_OUTBOUND_EXECUTION_SEMANTICS) {
+            "$label.semantics is unsupported"
+        }
+        val artifact = upperBytes(value, "contract_artifact_sha256", 32)
+        val referenceValue = requiredObject(value, "vk_ref")
+        exactFields(referenceValue, setOf("backend", "name", "version", "commitment"), "$label.vk_ref")
+        val backend = requiredText(referenceValue, "backend")
+        val name = requiredText(referenceValue, "name")
+        require(portableVerifyingKeyField(backend) && portableVerifyingKeyField(name)) {
+            "$label.vk_ref is not a portable verifying-key identity"
+        }
+        val reference = SccpPortableVerifyingKeyReferenceV1(
+            backend,
+            name,
+            requiredLong(referenceValue, "version", 1, 0xffff_ffffL),
+            upperBytes(referenceValue, "commitment", 32),
+        )
+        require(artifact != reference.commitment) {
+            "$label reuses its artifact and verification-key hash roles"
+        }
+        return SccpSoraOutboundExecutionPolicyV1(
+            version,
+            semantics,
+            artifact,
+            reference,
+            requiredLong(value, "gas_limit", 1, 1_000_000_000),
+        )
+    }
+
+    private fun portableVerifyingKeyField(value: String): Boolean {
+        if (value.toByteArray(Charsets.UTF_8).size !in 1..256 ||
+            !value.first().isAsciiLowercaseOrDigit() ||
+            !value.last().isAsciiLowercaseOrDigit()
+        ) return false
+        if (listOf("..", "//", ":::", "/:", ":/", "/.", "./", ":.", ".:").any(value::contains)) {
+            return false
+        }
+        return value.all { it.isAsciiLowercaseOrDigit() || it in "-_/:." }
+    }
+
+    private fun Char.isAsciiLowercaseOrDigit(): Boolean = this in 'a'..'z' || this in '0'..'9'
 
     private fun parseSourceIdentity(
         value: Map<String, Any?>,
@@ -1102,7 +1229,13 @@ object SccpJsonParser {
         val deployment = requiredObject(value, "deployment")
         if (family == "ton") return parseTonDestination(deployment, lane, "$label.deployment")
         exactFields(deployment, DESTINATION_FIELDS, "$label.deployment")
-        val addresses = listOf("token_address", "verifier_address", "route_address").map {
+        val addresses = listOf(
+            "token_address",
+            "verifier_address",
+            "route_address",
+            "replay_verifier_address",
+            "mint_breaker_address",
+        ).map {
             upperBytes(deployment, it, 20)
         }
         val hashes = listOf(
@@ -1110,9 +1243,16 @@ object SccpJsonParser {
             "verifier_code_hash",
             "verifier_key_hash",
             "route_code_hash",
+            "replay_verifier_code_hash",
+            "mint_breaker_code_hash",
         ).map { upperBytes(deployment, it, 32) }
         require(addresses.distinct().size == addresses.size && hashes.distinct().size == hashes.size) {
             "$label deployment reuses a role-separated address or hash"
+        }
+        listOf(hashes[0], hashes[1], hashes[3], hashes[4], hashes[5]).forEach {
+            require(it != KECCAK256_EMPTY_BYTES) {
+                "$label deployment runtime code hash must not identify empty bytecode"
+            }
         }
         validateVerifyingKey(
             requiredObject(deployment, "verifying_key"),
@@ -1148,6 +1288,10 @@ object SccpJsonParser {
             hashes[1],
             hashes[2],
             policyHashes,
+            addresses[3],
+            hashes[4],
+            addresses[4],
+            hashes[5],
         )
         val deploymentConfiguration = mutableListOf(
             abiAddress(addresses[0]),
@@ -1161,6 +1305,10 @@ object SccpJsonParser {
         if (family == "tron") {
             deploymentConfiguration += destinationBindingHash.hexToBytes()
         }
+        deploymentConfiguration += abiAddress(addresses[3])
+        deploymentConfiguration += hashes[4].hexToBytes()
+        deploymentConfiguration += abiAddress(addresses[4])
+        deploymentConfiguration += hashes[5].hexToBytes()
         return DestinationRoles(
             family,
             hashes[0],
@@ -1197,6 +1345,10 @@ object SccpJsonParser {
         val circuit = upperBytes(deployment, "verifier_circuit_hash", 32)
         val keyHash = upperBytes(deployment, "verifier_key_hash", 32)
         val proofProfile = upperBytes(deployment, "proof_profile_commitment", 32)
+        val guardianKeys = tonGuardianKeys(
+            requiredObject(deployment, "mint_breaker_guardian_keys"),
+            "$label.mint_breaker_guardian_keys",
+        )
         validateBls12381VerifyingKey(
             requiredObject(deployment, "verifying_key"),
             keyHash,
@@ -1231,7 +1383,7 @@ object SccpJsonParser {
         val maxWrappedSupply = requiredUnsignedInteger(
             deployment,
             "max_wrapped_supply",
-            MAX_U128,
+            MAX_TON_COINS,
             true,
         )
         val binding = tonDestinationBindingHash(
@@ -1243,6 +1395,7 @@ object SccpJsonParser {
             circuit,
             keyHash,
             proofProfile,
+            guardianKeys,
             policy,
         )
         val configuration = concatenate(
@@ -1254,6 +1407,7 @@ object SccpJsonParser {
                 circuit.hexToBytes(),
                 keyHash.hexToBytes(),
                 proofProfile.hexToBytes(),
+            ) + guardianKeys.ordered().map { it.hexToBytes() } + listOf(
                 policy.profileHash.hexToBytes(),
                 policy.anchorHash.hexToBytes(),
                 binding.hexToBytes(),
@@ -1285,17 +1439,16 @@ object SccpJsonParser {
         verifierCodeHash: String,
         verifierKeyHash: String,
         policyHashes: ParsedProofPolicy,
+        replayVerifierAddress: String,
+        replayVerifierCodeHash: String,
+        mintBreakerAddress: String,
+        mintBreakerCodeHash: String,
     ): String {
         val networkValue = when (network) {
             SccpNetworkV1.ETHEREUM_MAINNET -> 1L
-            SccpNetworkV1.ETHEREUM_SEPOLIA -> 11_155_111L
             SccpNetworkV1.BSC_MAINNET -> 56L
-            SccpNetworkV1.BSC_TESTNET -> 97L
             SccpNetworkV1.TRON_MAINNET -> 0x2b66_53dcL
-            SccpNetworkV1.TRON_NILE -> 0xcd86_90dcL
-            SccpNetworkV1.TRON_SHASTA -> 0x94a9_059eL
             SccpNetworkV1.TON_MAINNET,
-            SccpNetworkV1.TON_TESTNET,
             SccpNetworkV1.SORA_TAIRA -> error("closed destination lane")
         }
         val isTron = family == "tron"
@@ -1317,6 +1470,10 @@ object SccpJsonParser {
             verifierKeyHash.hexToBytes(),
             policyHashes.profileHash.hexToBytes(),
             policyHashes.anchorHash.hexToBytes(),
+            if (isTron) abiTronAddress(replayVerifierAddress) else abiAddress(replayVerifierAddress),
+            replayVerifierCodeHash.hexToBytes(),
+            if (isTron) abiTronAddress(mintBreakerAddress) else abiAddress(mintBreakerAddress),
+            mintBreakerCodeHash.hexToBytes(),
         )
         return keccak(concatenate(payload)).toUpperHex()
     }
@@ -1330,11 +1487,11 @@ object SccpJsonParser {
         verifierCircuitHash: String,
         verifierKeyHash: String,
         proofProfileCommitment: String,
+        guardianKeys: SccpTonMintBreakerGuardianKeysV1,
         policy: ParsedProofPolicy,
     ): String {
         val globalId = when (network) {
             SccpNetworkV1.TON_MAINNET -> -239
-            SccpNetworkV1.TON_TESTNET -> -3
             else -> throw IllegalArgumentException("TON destination binding requires a TON network")
         }
         val payload = ByteArrayOutputStream().also { output ->
@@ -1352,6 +1509,7 @@ object SccpJsonParser {
             output.write(verifierCircuitHash.hexToBytes())
             output.write(verifierKeyHash.hexToBytes())
             output.write(proofProfileCommitment.hexToBytes())
+            guardianKeys.ordered().forEach { output.write(it.hexToBytes()) }
             output.write(policy.profileHash.hexToBytes())
             output.write(policy.anchorHash.hexToBytes())
         }.toByteArray()
@@ -1372,7 +1530,6 @@ object SccpJsonParser {
             ) { "SCCP TON route identity does not match its exact deployment" }
             val globalId = when (lane.source) {
                 SccpNetworkV1.TON_MAINNET -> -239
-                SccpNetworkV1.TON_TESTNET -> -3
                 else -> throw IllegalArgumentException("SCCP TON route requires a TON lane")
             }
             val sourceLaneHash = SccpV1.laneHash(lane).toUpperHex()
@@ -1411,32 +1568,15 @@ object SccpJsonParser {
                 expectedRouteId = "taira_eth_xor"
                 networkValue = 1
             }
-            SccpNetworkV1.ETHEREUM_SEPOLIA -> {
-                expectedRouteId = "taira_eth_xor"
-                networkValue = 11_155_111
-            }
             SccpNetworkV1.BSC_MAINNET -> {
                 expectedRouteId = "taira_bsc_xor"
                 networkValue = 56
-            }
-            SccpNetworkV1.BSC_TESTNET -> {
-                expectedRouteId = "taira_bsc_xor"
-                networkValue = 97
             }
             SccpNetworkV1.TRON_MAINNET -> {
                 expectedRouteId = "taira_tron_xor"
                 networkValue = 0x2b66_53dcL
             }
-            SccpNetworkV1.TRON_NILE -> {
-                expectedRouteId = "taira_tron_xor"
-                networkValue = 0xcd86_90dcL
-            }
-            SccpNetworkV1.TRON_SHASTA -> {
-                expectedRouteId = "taira_tron_xor"
-                networkValue = 0x94a9_059eL
-            }
-            SccpNetworkV1.TON_MAINNET,
-            SccpNetworkV1.TON_TESTNET -> error("TON route handled above")
+            SccpNetworkV1.TON_MAINNET -> error("TON route handled above")
             SccpNetworkV1.SORA_TAIRA -> error("closed source lane")
         }
         require(
@@ -1446,15 +1586,9 @@ object SccpJsonParser {
         val destinationLaneHash = SccpV1.laneHash(
             SccpLaneIdV1(lane.target, lane.source),
         ).toUpperHex()
-        val hashRoles = mutableListOf(
-            sourceLaneHash,
-            destinationLaneHash,
-            destination.tokenCodeHash,
-            destination.verifierCodeHash,
-            destination.verifierKeyHash,
-            destination.semanticProfileHash,
-            destination.finalityAnchorHash,
-        )
+        val hashRoles = mutableListOf(sourceLaneHash, destinationLaneHash).apply {
+            addAll(destination.governedHashRoles)
+        }
         if (destination.family == "tron") {
             hashRoles += destination.destinationBindingHash
         }
@@ -1558,6 +1692,24 @@ object SccpJsonParser {
         val account = upperBytes(value, "account", 32)
         require(workchain == 0) { "$label must use TON basechain workchain 0" }
         return TonAddress(workchain, account)
+    }
+
+    private fun tonGuardianKeys(
+        value: Map<String, Any?>,
+        label: String,
+    ): SccpTonMintBreakerGuardianKeysV1 {
+        exactFields(
+            value,
+            setOf("guardian_0", "guardian_1", "guardian_2", "guardian_3", "guardian_4"),
+            label,
+        )
+        return SccpTonMintBreakerGuardianKeysV1(
+            upperBytes(value, "guardian_0", 32),
+            upperBytes(value, "guardian_1", 32),
+            upperBytes(value, "guardian_2", 32),
+            upperBytes(value, "guardian_3", 32),
+            upperBytes(value, "guardian_4", 32),
+        )
     }
 
     private fun validateOutboundProofPolicyFields(
@@ -1714,7 +1866,7 @@ object SccpJsonParser {
             1 -> "ethereum_beacon_v1"
             2 -> "bsc_parlia_v1"
             4 -> "ton_masterchain_v1"
-            5 -> "tron_dpos_v1"
+            3 -> "tron_dpos_v1"
             else -> error("closed lane")
         }
         require(key == allowed) { "$label backend does not match lane source" }
@@ -1752,26 +1904,26 @@ object SccpJsonParser {
         bytesField: String,
         domain: Int?,
     ) {
-        val codec = requiredInt(value, codecField, 1, 7)
-        require(codec == 1 || codec == 2 || codec == 5 || codec == 7) {
+        val codec = requiredInt(value, codecField, 0, 3)
+        require(codec in 0..3) {
             "$codecField is unsupported or retired"
         }
         if (domain != null) {
             val expected = when (domain) {
-                0 -> 1
-                1, 2 -> 2
-                4 -> 7
-                5 -> 5
+                0 -> 0
+                1, 2 -> 1
+                3 -> 2
+                4 -> 3
                 else -> throw IllegalArgumentException("unsupported SCCP domain")
             }
             require(codec == expected) { "$codecField does not match its domain" }
         }
         val bytes = hexBytes(value, bytesField)
         when (codec) {
-            1 -> require(bytes.isNotEmpty() && bytes.size <= 256 && bytes.all { (it.toInt() and 0xff) in 0x21..0x7e })
-            2 -> require(bytes.size == 20 && bytes.any { it.toInt() != 0 })
-            5 -> require(bytes.size == 21 && bytes[0] == 0x41.toByte() && bytes.drop(1).any { it.toInt() != 0 })
-            7 -> require(
+            0 -> require(bytes.isNotEmpty() && bytes.size <= 256 && bytes.all { (it.toInt() and 0xff) in 0x21..0x7e })
+            1 -> require(bytes.size == 20 && bytes.any { it.toInt() != 0 })
+            2 -> require(bytes.size == 21 && bytes[0] == 0x41.toByte() && bytes.drop(1).any { it.toInt() != 0 })
+            3 -> require(
                 bytes.size == 36 && bytes.take(4).all { it == 0.toByte() } &&
                     bytes.drop(4).any { it != 0.toByte() },
             )
@@ -1788,7 +1940,7 @@ object SccpJsonParser {
         require(lane.isOutbound && source == SccpNetworkV1.SORA_TAIRA) {
             "$label must use a Taira-to-external lane"
         }
-        require(requiredInt(value, "target_domain", 1, 5) == target.domainId) {
+        require(requiredInt(value, "target_domain", 1, 4) == target.domainId) {
             "$label target profile/domain mismatch"
         }
         val messageId = lowerHash(value, "message_id_hex")
@@ -1850,7 +2002,7 @@ object SccpJsonParser {
         exactFields(transfer, PROJECTION_TRANSFER_FIELDS, "$label.Transfer")
         requiredInt(transfer, "version", 1, 1)
         requiredInt(transfer, "source_domain", 0, 0)
-        require(requiredInt(transfer, "dest_domain", 1, 5) == lane.target.domainId) {
+        require(requiredInt(transfer, "dest_domain", 1, 4) == lane.target.domainId) {
             "$label.Transfer.dest_domain does not match the target network"
         }
         requiredUnsignedInteger(transfer, "nonce", MAX_U64, false)
@@ -1882,7 +2034,7 @@ object SccpJsonParser {
             1 -> "taira_eth_xor"
             2 -> "taira_bsc_xor"
             4 -> "taira_ton_xor"
-            5 -> "taira_tron_xor"
+            3 -> "taira_tron_xor"
             else -> error("closed SCCP destination")
         }
         val routeId = projectionCanonicalText(
@@ -1928,7 +2080,7 @@ object SccpJsonParser {
             }
             return
         }
-        val variant = if (target.domainId == 5) "TronAddress21" else "EvmAddress20"
+        val variant = if (target.domainId == 3) "TronAddress21" else "EvmAddress20"
         exactFields(value, setOf(variant), label)
         val inner = requiredObject(value, variant)
         exactFields(inner, setOf("bytes"), "$label.$variant")
@@ -1960,8 +2112,10 @@ object SccpJsonParser {
     private fun parseNetwork(value: Map<String, Any?>, label: String): SccpNetworkV1 {
         exactFields(value, setOf("network", "profile"), label)
         require(value["profile"] == null) { "$label.profile must be null" }
-        val profile = requiredText(value, "network").replace('_', '-')
-        return SccpNetworkV1.fromProfileKey(profile)
+        val wireName = requiredText(value, "network")
+        return SccpNetworkV1.values().singleOrNull {
+            it.profileKey.replace('-', '_') == wireName
+        }
             ?: throw IllegalArgumentException("$label is unsupported or retired")
     }
 
@@ -1974,7 +2128,7 @@ object SccpJsonParser {
     private fun familyFor(network: SccpNetworkV1): String =
         when (network.domainId) {
             4 -> "ton"
-            5 -> "tron"
+            3 -> "tron"
             else -> "evm"
         }
 
@@ -2073,17 +2227,9 @@ object SccpJsonParser {
         }
     }
 
-    private fun checkedU128Product(
-        left: BigInteger,
-        right: BigInteger,
-        label: String,
-    ): BigInteger = left.multiply(right).also {
-        require(it <= MAX_U128) { "$label exceeds u128" }
-    }
-
     private fun requiredDomain(value: Map<String, Any?>, field: String): Int =
-        requiredInt(value, field, 0, 5).also {
-            require(it == 0 || it == 1 || it == 2 || it == 4 || it == 5) {
+        requiredInt(value, field, 0, 4).also {
+            require(it in 0..4) {
                 "$field is an unsupported or retired SCCP domain"
             }
         }
@@ -2311,7 +2457,6 @@ object SccpJsonParser {
     }
 
     private fun writeU128(out: ByteArrayOutputStream, value: BigInteger) {
-        require(value.signum() >= 0 && value <= MAX_U128) { "value must fit u128" }
         repeat(16) { shift ->
             out.write(value.shiftRight(shift * 8).and(BigInteger.valueOf(0xff)).toInt())
         }
@@ -2328,6 +2473,7 @@ object SccpJsonParser {
         "message_bundle_path",
         "proof_request_path",
         "recent_messages_path",
+        "sora_outbound_material_path",
         "registry_limits",
         "resource_limits",
         "proof_submit_path",
@@ -2340,6 +2486,7 @@ object SccpJsonParser {
         "message_bundle_path",
         "proof_request_path",
         "recent_messages_path",
+        "sora_outbound_material_path",
         "registry_limits",
         "resource_limits",
     )
@@ -2390,6 +2537,7 @@ object SccpJsonParser {
         "inbound_finality_cutoff",
         "source_identity",
         "destination",
+        "sora_outbound_execution_policy",
         "settlement",
     )
     private val DESTINATION_FIELDS = setOf(
@@ -2402,6 +2550,10 @@ object SccpJsonParser {
         "outbound_proof_policy",
         "route_address",
         "route_code_hash",
+        "replay_verifier_address",
+        "replay_verifier_code_hash",
+        "mint_breaker_address",
+        "mint_breaker_code_hash",
         "taira_to_token_multiplier",
         "max_wrapped_supply",
     )
@@ -2418,6 +2570,7 @@ object SccpJsonParser {
         "verifying_key",
         "verifier_key_hash",
         "proof_profile_commitment",
+        "mint_breaker_guardian_keys",
         "outbound_proof_policy",
         "taira_to_token_multiplier",
         "max_wrapped_supply",
@@ -2546,6 +2699,8 @@ object SccpJsonParser {
     private const val TON_GROTH16_BACKEND = "ton-groth16-bls12381-v1"
     private const val CONCRETE_ROUTE_CONFIGURATION_DOMAIN = "sccp:concrete-route-config:v1"
     private const val TAIRA_XOR_ASSET_ID = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
+    private const val SORA_OUTBOUND_EXECUTION_SEMANTICS =
+        "ivm_proved_record_sccp_message_v1"
     private val BN254_MODULUS = BigInteger(
         "30644e72e131a029b85045b68181585d97816a916871ca8d3c208c16d87cfd47",
         16,
@@ -2562,6 +2717,9 @@ object SccpJsonParser {
     private val MAX_U64 = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE)
     private val MAX_JSON_SAFE_INTEGER = BigInteger("9007199254740991")
     private val MAX_U128 = BigInteger.ONE.shiftLeft(128).subtract(BigInteger.ONE)
+    private val MAX_TON_COINS = BigInteger.ONE.shiftLeft(120).subtract(BigInteger.ONE)
+    private const val KECCAK256_EMPTY_BYTES =
+        "C5D2460186F7233C927E7DB2DCC703C0E500B653CA82273B7BFAD8045D85A470"
     private val TAIRA_CHAIN_ID_HASH = keccak(
         byteArrayOf(
             0xfc.toByte(), 0x56, 0x98.toByte(), 0x4b, 0x2b, 0xe7.toByte(), 0x43, 0x1d,

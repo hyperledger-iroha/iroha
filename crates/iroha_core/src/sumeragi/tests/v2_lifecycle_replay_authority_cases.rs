@@ -1295,10 +1295,9 @@ fn durable_ready_fetch_digest_ignores_transport_retransmission_but_binds_replay_
             .expect("exact family, pending binding, and receipt project Ready Fetch")
     }
     let fixture = Fixture::new();
-    let tag = fixture.recovered_tag();
     let manifest = fixture.proposal.manifest.clone();
     let effect = AdapterEffect::FetchBody {
-        tag,
+        tag: fixture.recovered_tag(),
         round: manifest.round,
         subject: manifest.subject,
         manifest: Some(manifest.clone()),
@@ -1311,12 +1310,7 @@ fn durable_ready_fetch_digest_ignores_transport_retransmission_but_binds_replay_
         manifest.subject,
         HashOf::new(&manifest),
     );
-    let retransmitted_responder = PeerId::new(
-        KeyPair::try_from_seed(vec![0xD8; 32], Algorithm::Ed25519)
-            .expect("deterministic retransmitted responder")
-            .public_key()
-            .clone(),
-    );
+    let retransmitted_fixture = Fixture::for_record(fixture.context, 1);
     let first_response = wire::CertifiedBodyResponse {
         request_hash: HashOf::from_untyped_unchecked(Hash::new(b"first request occurrence")),
         manifest: manifest.clone(),
@@ -1326,7 +1320,7 @@ fn durable_ready_fetch_digest_ignores_transport_retransmission_but_binds_replay_
     };
     let retransmitted_response = wire::CertifiedBodyResponse {
         request_hash: HashOf::from_untyped_unchecked(Hash::new(b"different request occurrence")),
-        responder: retransmitted_responder,
+        responder: retransmitted_fixture.serve_request.requester,
         signature: vec![0xD4, 0xD5],
         ..first_response.clone()
     };

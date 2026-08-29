@@ -10,7 +10,10 @@ pub mod availability;
 pub(crate) mod carrier;
 /// Committee verification and durable Prepare staging.
 pub(crate) mod committee;
+// TODO: Compile the coordinator in production once the global coordinator
+// runtime owns this deterministic projection; today only its model tests use it.
 /// Bundle-level all-Prepare/all-Commit phase barriers.
+#[cfg(test)]
 pub(crate) mod coordinator;
 /// Globally replicated roots, replay items, outputs, and receipts.
 pub(crate) mod global_state;

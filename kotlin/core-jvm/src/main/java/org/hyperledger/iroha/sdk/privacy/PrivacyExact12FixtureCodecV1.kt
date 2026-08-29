@@ -190,7 +190,7 @@ object PrivacyExact12FixtureCodecV1 {
     const val SCHEMA_NAME: String = "iroha.privacy.exact12-typed-fixture-bundle.v1"
     const val SUBMIT_PROOF_WIRE_ID: String = "iroha.privacy.submit_proof.v1"
     const val CANONICAL_ARCHIVE_SHA256_HEX: String =
-        "d1d77f56ecbf20446a7c79b5756a2bb65f76cf93dd9c87b2bbb54c18aaa41305"
+        "3dc5386272807d792e09725d598bd0821a296717ce7f634239cb95659ae53d38"
     const val VERSION: Int = 1
     const val ROW_COUNT: Int = 12
     const val HASH_BYTES: Int = 32

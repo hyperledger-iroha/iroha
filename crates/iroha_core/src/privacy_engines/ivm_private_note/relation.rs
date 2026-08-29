@@ -36,17 +36,17 @@ pub(super) const ACCUMULATOR_NODE_DOMAIN_V1: &[u8] =
 pub(crate) const IVM_PRIVATE_NOTE_ENGINE_DESCRIPTOR_V1: &[u8] = b"iroha-ivm-private-note-stark-v1:native-rust:first-release:inputs=1..2:outputs=1..2:values=u128-checked:tree=sha256-depth32-exact-ledger-domains:program=IPN1-v1-fixed16x8:registers=8xu128:r4=reserved-zero:producer=typed-redacted-witness+relation-preflight+rand0.9-trycrypto-fixed64-reservoir-zeroize-poison-error-or-unwind-policy-v1+self-verify:wallet=x25519+xchacha20poly1305:wallet-rng=prover-rng:fixed64-reservoir:fallible-refill:reject-initial-constant-half+periods-1,2,4,8,16,32:retain-tail-max63:zeroize+poison-on-error-or-unwind:v1:successor=validator-derived-only:legacy=unrepresentable";
 /// Exact hash framing used inside the AIR and native differential oracle.
 pub(crate) const IVM_PRIVATE_NOTE_HASH_PROFILE_DESCRIPTOR_V1: &[u8] = b"sha256:frame-domain-len-u16be-field-count-u16be-field-len-u64be:program-id+authority+commitment+stable-pool-program-nullifier:proof-managed-leaf-and-level-node-exact-v1";
-/// Closed relation controls shared with a future sibling settlement adapter.
+/// Closed relation controls shared with the atomic private-settlement adapter.
 ///
-/// The public IVM private-note API always selects [`Self::Legacy`].  The
+/// The public IVM private-note API always selects [`Self::IvmPrivateNote`]. The
 /// crate-private three-output variant retains the same hash, VM, tree, and AIR
 /// machinery while fixing the only intentional semantic differences: exact
 /// two-input/three-output geometry, balanced-only value flow, zero-valued
 /// input/output cover notes, and verifier-selected output memo digests.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PrivateNoteRelationProfileV1 {
-    /// Existing public one-or-two input/output relation, byte-for-byte.
-    Legacy,
+    /// Canonical public one-or-two input/output IVM private-note relation.
+    IvmPrivateNote,
     /// Exact balanced two-input/three-output relation with fixed output memos.
     ExactThreeOutputBalanced {
         /// Verifier-fixed memo digest for each canonical output slot.
@@ -54,8 +54,8 @@ pub(crate) enum PrivateNoteRelationProfileV1 {
     },
 }
 impl PrivateNoteRelationProfileV1 {
-    /// Existing public relation profile.
-    pub(crate) const LEGACY: Self = Self::Legacy;
+    /// Canonical public IVM private-note relation profile.
+    pub(crate) const IVM_PRIVATE_NOTE: Self = Self::IvmPrivateNote;
 
     /// Construct the exact three-output balanced profile.
     pub(crate) const fn exact_three_output_balanced(
@@ -76,7 +76,7 @@ impl PrivateNoteRelationProfileV1 {
 
     fn accepts_shape(self, input_count: usize, output_count: usize) -> bool {
         match self {
-            Self::Legacy => {
+            Self::IvmPrivateNote => {
                 (1..=PRIVATE_NOTE_MAX_INPUTS_V1).contains(&input_count)
                     && (1..=PRIVATE_NOTE_MAX_OUTPUTS_V1).contains(&output_count)
             }
@@ -89,7 +89,7 @@ impl PrivateNoteRelationProfileV1 {
 
     pub(super) fn fixed_output_memo(self, output: usize) -> Option<[u8; 32]> {
         match self {
-            Self::Legacy => None,
+            Self::IvmPrivateNote => None,
             Self::ExactThreeOutputBalanced {
                 output_memo_digests,
             } => output_memo_digests.get(output).copied(),
@@ -1114,7 +1114,7 @@ pub(crate) fn accumulator_node_digest_for_testing_v1(
 pub(super) fn validate_statement_v1(
     statement: &IrohaIvmPrivateNoteStarkStatementV1,
 ) -> Result<(), IvmPrivateNoteRelationErrorV1> {
-    validate_statement_with_profile_v1(statement, PrivateNoteRelationProfileV1::LEGACY)
+    validate_statement_with_profile_v1(statement, PrivateNoteRelationProfileV1::IVM_PRIVATE_NOTE)
 }
 /// Validate a statement against one crate-private relation profile.
 pub(crate) fn validate_statement_with_profile_v1(
@@ -1273,7 +1273,7 @@ pub(super) fn validate_private_note_relation_v1(
     validate_private_note_relation_with_profile_v1(
         statement,
         witness,
-        PrivateNoteRelationProfileV1::LEGACY,
+        PrivateNoteRelationProfileV1::IVM_PRIVATE_NOTE,
     )
 }
 /// Preflight a witness under one crate-private relation profile.

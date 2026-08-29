@@ -663,7 +663,7 @@ impl GlobalThresholdBeaconDkgCryptoV1 for AdaptiveGlobalThresholdBeaconDkgCrypto
             })
             .collect::<Result<Vec<_>, _>>()?;
         let transcript = AdaptiveThresholdBlsPublicTranscript::from_qualified_dealers(
-            parameters,
+            &parameters,
             &qualified,
             qualified_dealers,
             event_hash,
@@ -1389,7 +1389,7 @@ fn reconstruct_adaptive_beacon_transcript(
         })
         .collect::<Result<Vec<_>, _>>()?;
     let transcript = AdaptiveThresholdBlsPublicTranscript::from_qualified_dealers(
-        parameters,
+        &parameters,
         &qualified,
         &public_dkg.qualified_dealers,
         public_dkg.event_hash,
@@ -1431,7 +1431,7 @@ impl ValidatedGlobalThresholdBeaconSessionV1 {
     ///
     /// Only a transcript reconstructed from verified qualified dealer proofs
     /// can inhabit this validated session type.
-    pub const fn ensure_adaptive_protocol_ready(&self) -> Result<(), ThresholdBlsError> {
+    pub fn ensure_adaptive_protocol_ready(&self) -> Result<(), ThresholdBlsError> {
         self.transcript.ensure_adaptive_protocol_ready()
     }
 }

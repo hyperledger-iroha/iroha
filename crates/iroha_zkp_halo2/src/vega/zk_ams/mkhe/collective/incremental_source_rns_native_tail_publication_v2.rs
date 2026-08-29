@@ -2194,7 +2194,9 @@ fn _reader_error_is_closed_v2(_: RnsNativePublicPolynomialReaderErrorV1) {}
 
 #[path = "incremental_source_rns_native_tail_publication_v2/pretranscript_public_statement_v2.rs"]
 mod pretranscript_public_statement_v2;
-pub(in crate::vega::zk_ams::mkhe) use pretranscript_public_statement_v2::RnsNativeClaimedDirectNumericOriginV2;
+pub(in crate::vega::zk_ams::mkhe) use pretranscript_public_statement_v2::{
+    RnsNativeClaimedDirectNumericOriginV2, RnsNativeQpcsCompositeAuthorityV2,
+};
 
 #[path = "incremental_source_rns_native_tail_publication_v2/numeric_opening_handoff_v2.rs"]
 mod numeric_opening_handoff_v2;

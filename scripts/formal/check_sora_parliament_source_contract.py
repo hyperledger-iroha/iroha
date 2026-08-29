@@ -1263,7 +1263,7 @@ def main() -> int:
             "finalized_height > opening_deadline_height",
             "pub trait TlePartialReleaseSignerV1: Send + Sync",
             "fn attest_partial_release_capability(",
-            "Err(TlePartialReleaseCapabilityErrorV1::Unsupported)",
+            "expected_participant_index: u16,\n    ) -> Result<TlePartialReleaseCapabilityAttestationV1, TlePartialReleaseCapabilityErrorV1>;",
             "pub struct TlePartialReleaseCapabilityAttestationV1",
             "pub enum TlePartialReleaseCapabilityErrorV1",
             "impl TlePartialReleaseSignerV1 for InMemoryTlePartialReleaseSignerV1",
@@ -1848,9 +1848,9 @@ def main() -> int:
         tle_broker_backend,
         (
             "fn attest_partial_release_capability(",
-            "_session: &iroha_core::tle_release::ValidatedTleKeySessionV1",
-            "_expected_participant_index: u16",
-            "Err(ParliamentTlePartialReleaseSignerBrokerBackendErrorV1::Rejected)",
+            "session: &iroha_core::tle_release::ValidatedTleKeySessionV1",
+            "expected_participant_index: u16",
+            "ParliamentTlePartialReleaseSignerBrokerBackendErrorV1,\n    >;",
         ),
     )
     broker_client_path = (

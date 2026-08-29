@@ -177,26 +177,36 @@ fn successful_report_finalizes_a_suppressed_provisional_receipt_without_reverifi
 }
 
 #[test]
-fn failed_legacy_report_without_disposition_is_retried() {
+fn failed_report_with_explicit_null_disposition_is_retried() {
     let _env = TestDataDirGuard::new();
     configure_test_cfg(Vec::new());
     let tenant_key = anon_tenant_key();
     let body = fixture_attachment_bytes();
     let id = store_scanner_attachment(&tenant_key, &body, "application/x-norito");
-    let mut legacy = sample_report(
+    let mut report = sample_report(
         id.clone(),
         false,
-        Some("legacy failure without retry disposition"),
+        Some("failure with explicit null retry disposition"),
         "application/x-norito",
         now_ms(),
     );
-    legacy.processing = None;
-    save_report(&legacy).expect("persist legacy report fixture");
+    report.processing = None;
+    save_report(&report).expect("persist explicit-null report fixture");
+    let persisted = fs::read_to_string(report_path_from_sanitized(&id))
+        .expect("read explicit-null report fixture");
+    let persisted: json::Value =
+        json::from_json(&persisted).expect("decode explicit-null report fixture");
+    assert!(
+        persisted
+            .get("processing")
+            .is_some_and(norito::json::Value::is_null),
+        "the first-release report schema must persist an explicit null disposition"
+    );
 
     let scan = block_on_scan();
     assert_eq!(
         scan.processed_reports, 1,
-        "an undecidable legacy failure must not suppress a fresh attempt"
+        "a failure with an explicit null disposition must not suppress a fresh attempt"
     );
     let repaired = load_report(&id).expect("retried report");
     assert!(repaired.ok);

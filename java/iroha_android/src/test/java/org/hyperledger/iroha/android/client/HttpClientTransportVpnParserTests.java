@@ -532,7 +532,7 @@ final class HttpClientTransportVpnParserTests {
     private TransportRequest lastRequest;
 
     private StubResponseExecutor(final int statusCode, final byte[] body) {
-      response = new TransportResponse(statusCode, body, "accepted", Map.of());
+      response = new TransportResponse(statusCode, body, "accepted", Map.of(), null, false);
     }
 
     @Override

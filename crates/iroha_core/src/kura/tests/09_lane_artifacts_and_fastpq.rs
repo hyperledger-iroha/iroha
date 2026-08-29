@@ -957,12 +957,13 @@ fn sample_fastpq_snapshot(
         block_hash,
         entry_hash: Hash::new(format!("fastpq-entry-{height}-{proof_len}").into_bytes()),
         batch_index: 0,
-        parameter: "fastpq-lane-balanced".to_string(),
+        parameter: "fastpq-state-transition-stark-v1".to_string(),
         transition_count: 0,
-        trace_commitment: Hash::new(b"trace-commitment"),
+        trace_commitment: GoldilocksDigest384V1::new([0x41; 6])
+            .expect("canonical test FASTPQ trace commitment"),
         proof_digest: Hash::new(&proof),
         batch: fastpq_prover::TransitionBatch::new(
-            "fastpq-lane-balanced",
+            "fastpq-state-transition-stark-v1",
             fastpq_prover::PublicInputs::default(),
         ),
         proof,
@@ -1027,12 +1028,13 @@ fn fastpq_proof_snapshot_merges_into_pipeline_sidecar() {
         block_hash,
         entry_hash: Hash::prehashed([0x11; 32]),
         batch_index: 0,
-        parameter: "fastpq-lane-balanced".to_string(),
+        parameter: "fastpq-state-transition-stark-v1".to_string(),
         transition_count: 0,
-        trace_commitment: Hash::new(b"trace-commitment"),
+        trace_commitment: GoldilocksDigest384V1::new([0x41; 6])
+            .expect("canonical test FASTPQ trace commitment"),
         proof_digest: Hash::new(&proof),
         batch: fastpq_prover::TransitionBatch::new(
-            "fastpq-lane-balanced",
+            "fastpq-state-transition-stark-v1",
             fastpq_prover::PublicInputs::default(),
         ),
         proof,

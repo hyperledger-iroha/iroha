@@ -660,7 +660,7 @@ fn fastpq_proof_snapshot_recovery_json(
     );
     object.insert(
         "trace_commitment".to_owned(),
-        norito::json::to_value(&snapshot.trace_commitment.to_string())
+        norito::json::to_value(&hex::encode(snapshot.trace_commitment.to_le_bytes()))
             .expect("serialize FASTPQ trace commitment"),
     );
     object.insert(

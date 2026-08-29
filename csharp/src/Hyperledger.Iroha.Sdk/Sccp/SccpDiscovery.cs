@@ -2,7 +2,6 @@ using System.Buffers.Binary;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
-using Hyperledger.Iroha.Address;
 
 namespace Hyperledger.Iroha.Sccp;
 
@@ -54,6 +53,7 @@ public sealed record SccpCapabilities(
     string MessageBundlePath,
     string ProofRequestPath,
     string RecentMessagesPath,
+    string SoraOutboundMaterialPath,
     SccpRegistryLimits RegistryLimits,
     SccpResourceLimits ResourceLimits,
     string? ProofSubmitPath,
@@ -181,6 +181,43 @@ public sealed class SccpTonSourceEmitterV1 : SccpSourceEmitterV1
     public byte[] RouteConfigHash => [.. routeConfigHash];
 }
 
+/// <summary>Exact ordered five-key TON mint-breaker guardian set.</summary>
+public sealed class SccpTonMintBreakerGuardianKeysV1
+{
+    private readonly byte[][] keys;
+
+    public SccpTonMintBreakerGuardianKeysV1(
+        byte[] guardian0,
+        byte[] guardian1,
+        byte[] guardian2,
+        byte[] guardian3,
+        byte[] guardian4)
+    {
+        keys = new[] { guardian0, guardian1, guardian2, guardian3, guardian4 }
+            .Select(static key => key is null ? throw new ArgumentNullException(nameof(key)) : key.ToArray())
+            .ToArray();
+        if (keys.Any(static key => key.Length != 32 || key.All(static value => value == 0))
+            || keys.Zip(keys.Skip(1)).Any(static pair => pair.First.AsSpan().SequenceCompareTo(pair.Second) >= 0))
+        {
+            throw new ArgumentException(
+                "TON mint-breaker guardians must be five nonzero, strictly increasing 32-byte keys.");
+        }
+    }
+
+    public byte[] Guardian0 => [.. keys[0]];
+
+    public byte[] Guardian1 => [.. keys[1]];
+
+    public byte[] Guardian2 => [.. keys[2]];
+
+    public byte[] Guardian3 => [.. keys[3]];
+
+    public byte[] Guardian4 => [.. keys[4]];
+
+    /// <summary>Keys in canonical TON StateInit and SCCP hash-preimage order.</summary>
+    public IReadOnlyList<byte[]> Ordered => keys.Select(static key => key.ToArray()).ToArray();
+}
+
 public sealed record SccpSoraFinalityAnchorV1(
     ushort ProtocolVersion,
     byte[] ChainIdHash,
@@ -190,6 +227,27 @@ public sealed record SccpSoraFinalityAnchorV1(
     byte[] CheckpointFinalityArtifactHash,
     byte[] AnchorHash);
 
+/// <summary>Exact destination proof policy bound into one governed deployment.</summary>
+public sealed record SccpOutboundProofPolicyV1(
+    byte Version,
+    SccpSemanticProofProfileV1 SemanticProfile,
+    SccpSoraFinalityAnchorV1 SoraFinalityAnchor);
+
+/// <summary>Strict portable reference to one governance-registered IVM key.</summary>
+public sealed record SccpPortableVerifyingKeyRefV1(
+    string Backend,
+    string Name,
+    uint Version,
+    byte[] Commitment);
+
+/// <summary>Mandatory Taira-side execution policy for one outbound SCCP route.</summary>
+public sealed record SccpSoraOutboundExecutionPolicyV1(
+    byte Version,
+    string Semantics,
+    byte[] ContractArtifactSha256,
+    SccpPortableVerifyingKeyRefV1 VerifyingKeyReference,
+    ulong GasLimit);
+
 public sealed record SccpDestinationDeploymentV1(
     SccpDestinationProofBackendV1 Family,
     byte[] TokenAddress,
@@ -197,14 +255,23 @@ public sealed record SccpDestinationDeploymentV1(
     byte[] VerifierAddress,
     byte[] VerifierCodeHash,
     byte[] VerifierKeyHash,
-    SccpSemanticProofProfileV1 SemanticProofProfile,
-    SccpSoraFinalityAnchorV1 SoraFinalityAnchor,
+    SccpOutboundProofPolicyV1 OutboundProofPolicy,
     byte[] RouteAddress,
     byte[] RouteCodeHash,
+    byte[] ReplayVerifierAddress,
+    byte[] ReplayVerifierCodeHash,
+    byte[] MintBreakerAddress,
+    byte[] MintBreakerCodeHash,
     ulong TairaToTokenMultiplier,
     UInt128 MaxWrappedSupply,
     byte[] DestinationBindingHash)
 {
+    /// <summary>Audited semantic circuit selected by <see cref="OutboundProofPolicy"/>.</summary>
+    public SccpSemanticProofProfileV1 SemanticProofProfile => OutboundProofPolicy.SemanticProfile;
+
+    /// <summary>Taira finality anchor selected by <see cref="OutboundProofPolicy"/>.</summary>
+    public SccpSoraFinalityAnchorV1 SoraFinalityAnchor => OutboundProofPolicy.SoraFinalityAnchor;
+
     /// <summary>TON Jetton master address; populated only for the TON family.</summary>
     public SccpTonAddressV1? TonJettonMasterAddress { get; init; }
 
@@ -226,8 +293,35 @@ public sealed record SccpDestinationDeploymentV1(
     /// <summary>TON proof-format commitment; populated only for the TON family.</summary>
     public byte[]? TonProofProfileCommitment { get; init; }
 
+    /// <summary>TON ordered mint-breaker guardians; populated only for the TON family.</summary>
+    public SccpTonMintBreakerGuardianKeysV1? TonMintBreakerGuardianKeys { get; init; }
+
     /// <summary>Canonical curve-specific verifying-key bytes.</summary>
     public byte[]? VerifyingKeyBytes { get; init; }
+
+    /// <summary>Validate one positive TON Jetton amount against this deployment's immutable cap.</summary>
+    public UInt128 RequireTonAmountWithinCap(UInt128 amount)
+    {
+        var maximumTonCoins = (UInt128.One << 120) - 1;
+        if (Family != SccpDestinationProofBackendV1.TonGroth16Bls12381)
+        {
+            throw new InvalidOperationException("TON amount validation requires a TON destination deployment.");
+        }
+
+        if (MaxWrappedSupply == 0 || MaxWrappedSupply > maximumTonCoins)
+        {
+            throw new InvalidOperationException("TON max_wrapped_supply must be in 1..2^120-1.");
+        }
+
+        if (amount == 0 || amount > MaxWrappedSupply)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(amount),
+                "TON amount must be positive and no greater than max_wrapped_supply.");
+        }
+
+        return amount;
+    }
 }
 
 public sealed record SccpGovernedRouteV1(
@@ -239,8 +333,8 @@ public sealed record SccpGovernedRouteV1(
     SccpInboundFinalityCutoffV1? InboundFinalityCutoff,
     SccpSourceEmitterV1 SourceEmitter,
     SccpDestinationDeploymentV1 Destination,
+    SccpSoraOutboundExecutionPolicyV1 SoraOutboundExecutionPolicy,
     string AssetDefinitionId,
-    string CustodyOwner,
     uint PayloadAmountScale,
     UInt128 MaxOutstandingLiability,
     byte[] RouteConfigurationHash);
@@ -377,6 +471,7 @@ internal static class SccpExactParser
             ["message_bundle_path"] = "/v1/sccp/proofs/message/{message_id}",
             ["proof_request_path"] = "/v1/sccp/proof-requests/{message_id}",
             ["recent_messages_path"] = "/v1/sccp/messages/recent",
+            ["sora_outbound_material_path"] = "/v1/sccp/routes/{source_profile}/{route_id}/{asset_key}/{revision}/sora-outbound-material",
             ["proof_submit_path"] = "/v1/bridge/proofs/submit",
             ["native_message_submit_path"] = "/v1/bridge/messages",
         };
@@ -393,6 +488,7 @@ internal static class SccpExactParser
             "message_bundle_path",
             "proof_request_path",
             "recent_messages_path",
+            "sora_outbound_material_path",
             "registry_limits",
             "resource_limits",
         ];
@@ -416,6 +512,7 @@ internal static class SccpExactParser
             FixedPath(root, "message_bundle_path"),
             FixedPath(root, "proof_request_path"),
             FixedPath(root, "recent_messages_path"),
+            FixedPath(root, "sora_outbound_material_path"),
             ParseRegistryLimits(Object(root, "registry_limits")),
             ParseResourceLimits(Object(root, "resource_limits")),
             proofSubmitPath,
@@ -895,7 +992,7 @@ internal static class SccpExactParser
             ["version", "message_id", "payload_hash", "target_domain", "commitment_root", "finality_height", "finality_block_hash"],
             "SCCP proof public inputs");
         RequireVersion(inputs, "SCCP proof public inputs");
-        var targetDomain = SccpJson.UInt32(inputs, "target_domain", 1, 5);
+        var targetDomain = SccpJson.UInt32(inputs, "target_domain", 1, 4);
         if (targetDomain != target.DomainId())
         {
             throw new ArgumentException("SCCP target profile/domain mismatch.");
@@ -1095,7 +1192,7 @@ internal static class SccpExactParser
             var source = SccpNetworkV1Extensions.ParseProfileKey(SccpJson.Text(item, "source_profile"));
             var target = SccpNetworkV1Extensions.ParseProfileKey(SccpJson.Text(item, "target_profile"));
             var lane = new SccpLaneIdV1(source, target);
-            var targetDomain = SccpJson.UInt32(item, "target_domain", 1, 5);
+            var targetDomain = SccpJson.UInt32(item, "target_domain", 1, 4);
             if (!lane.IsOutbound || source != SccpNetworkV1.SoraTaira
                 || targetDomain != target.DomainId())
             {
@@ -1221,6 +1318,7 @@ internal static class SccpExactParser
                 "inbound_finality_cutoff",
                 "source_identity",
                 "destination",
+                "sora_outbound_execution_policy",
                 "settlement",
             ],
             label);
@@ -1259,6 +1357,9 @@ internal static class SccpExactParser
         }
         var source = ParseSourceIdentity(Object(item, "source_identity"), lane, $"{label}.source_identity");
         var destination = ParseDestination(Object(item, "destination"), lane, $"{label}.destination");
+        var executionPolicy = ParseSoraOutboundExecutionPolicy(
+            Object(item, "sora_outbound_execution_policy"),
+            $"{label}.sora_outbound_execution_policy");
         var sourceParts = SourceParts(source);
         if (sourceParts.Family != destination.Family)
         {
@@ -1280,7 +1381,7 @@ internal static class SccpExactParser
 
         var settlement = Object(item, "settlement");
         SccpJson.ExactFields(settlement,
-            ["asset_definition_id", "custody_owner", "payload_amount_scale", "max_outstanding_liability"],
+            ["asset_definition_id", "payload_amount_scale", "max_outstanding_liability"],
             $"{label}.settlement");
         var assetDefinition = SccpJson.Text(settlement, "asset_definition_id");
         if (assetDefinition != "6TEAJqbb8oEPmLncoNiMRbLEK6tw")
@@ -1288,36 +1389,37 @@ internal static class SccpExactParser
             throw new ArgumentException($"{label} must settle canonical Taira XOR.");
         }
 
-        var custody = SccpJson.Text(settlement, "custody_owner");
-        AccountAddress custodyAddress;
-        try
-        {
-            custodyAddress = AccountAddress.Parse(custody, AccountAddress.DefaultChainDiscriminant);
-        }
-        catch (Exception error) when (error is ArgumentException or FormatException)
-        {
-            throw new ArgumentException($"{label}.custody_owner must be canonical.", error);
-        }
-
-        if (custodyAddress.ToI105() != custody)
-        {
-            throw new ArgumentException($"{label}.custody_owner must be canonical.");
-        }
-
         var scale = SccpJson.UInt32(settlement, "payload_amount_scale", 9, 9);
-        var maxOutstandingLiability = PositiveUInt128(
+        var maxOutstandingLiability = DecimalUInt128(
             settlement,
             "max_outstanding_liability",
-            $"{label}.settlement");
+            1);
         var multiplier = (UInt128)destination.TairaToTokenMultiplier;
         if (maxOutstandingLiability > UInt128.MaxValue / multiplier
-            || maxOutstandingLiability * multiplier
-            != destination.MaxWrappedSupply)
+            || maxOutstandingLiability * multiplier != destination.MaxWrappedSupply)
         {
             throw new ArgumentException(
-                $"{label} wrapped supply cap must equal its SORA liability times the destination multiplier.");
+                $"{label} destination wrapped-supply cap does not match its liability cap.");
         }
         var configuration = RouteConfigurationHash(lane, routeId, assetKey, revision, destination);
+        var executionPolicyRoles = new List<byte[]>
+        {
+            executionPolicy.ContractArtifactSha256,
+            executionPolicy.VerifyingKeyReference.Commitment,
+            configuration,
+            destination.DestinationBindingHash,
+            destination.VerifierKeyHash,
+            destination.SemanticProofProfile.ProfileHash,
+            destination.SoraFinalityAnchor.AnchorHash,
+        };
+        if (destination.Family == SccpDestinationProofBackendV1.TonGroth16Bls12381)
+        {
+            executionPolicyRoles.Add(destination.TonJettonMasterInitialDataHash
+                ?? throw new ArgumentException("TON Jetton master initial-data hash is missing."));
+            executionPolicyRoles.Add(destination.TonRouteInitialDataHash
+                ?? throw new ArgumentException("TON route initial-data hash is missing."));
+        }
+        RequireDistinctBytes(executionPolicyRoles, $"{label}.sora_outbound_execution_policy hash roles");
         if (!sourceParts.Configuration.AsSpan().SequenceEqual(configuration))
         {
             throw new ArgumentException($"{label} source route_config_hash does not match the immutable deployment.");
@@ -1331,7 +1433,7 @@ internal static class SccpExactParser
 
         return new SccpGovernedRouteV1(
             lane, routeId, assetKey, revision, activation, cutoff, source, destination,
-            assetDefinition, custody, scale, maxOutstandingLiability, configuration);
+            executionPolicy, assetDefinition, scale, maxOutstandingLiability, configuration);
     }
 
     private static SccpDestinationDeploymentV1 ParseDestination(JsonElement item, SccpLaneIdV1 lane, string label)
@@ -1373,6 +1475,10 @@ internal static class SccpExactParser
             "outbound_proof_policy",
             "route_address",
             "route_code_hash",
+            "replay_verifier_address",
+            "replay_verifier_code_hash",
+            "mint_breaker_address",
+            "mint_breaker_code_hash",
             "taira_to_token_multiplier",
             "max_wrapped_supply",
         ], $"{label}.deployment");
@@ -1381,6 +1487,8 @@ internal static class SccpExactParser
             UpperHex(deployment, "token_address", 20),
             UpperHex(deployment, "verifier_address", 20),
             UpperHex(deployment, "route_address", 20),
+            UpperHex(deployment, "replay_verifier_address", 20),
+            UpperHex(deployment, "mint_breaker_address", 20),
         };
         var hashes = new[]
         {
@@ -1388,18 +1496,31 @@ internal static class SccpExactParser
             UpperHex(deployment, "verifier_code_hash", 32),
             UpperHex(deployment, "verifier_key_hash", 32),
             UpperHex(deployment, "route_code_hash", 32),
+            UpperHex(deployment, "replay_verifier_code_hash", 32),
+            UpperHex(deployment, "mint_breaker_code_hash", 32),
         };
         RequireDistinctBytes(addresses, $"{label}.deployment addresses");
         RequireDistinctBytes(hashes, $"{label}.deployment hashes");
+        var emptyRuntimeHash = SccpV1.Keccak256([]);
+        foreach (var index in new[] { 0, 1, 3, 4, 5 })
+        {
+            if (hashes[index].AsSpan().SequenceEqual(emptyRuntimeHash))
+            {
+                throw new ArgumentException(
+                    $"{label}.deployment runtime code hash must not identify empty bytecode.");
+            }
+        }
         var key = ParseVerifyingKey(Object(deployment, "verifying_key"), $"{label}.deployment.verifying_key");
         if (!SccpV1.Keccak256(key).AsSpan().SequenceEqual(hashes[2]))
         {
             throw new ArgumentException($"{label}.deployment.verifier_key_hash does not match verifying_key.");
         }
 
-        var (semantic, anchor) = ParseOutboundPolicy(
+        var proofPolicy = ParseOutboundPolicy(
             Object(deployment, "outbound_proof_policy"),
             $"{label}.deployment.outbound_proof_policy");
+        var semantic = proofPolicy.SemanticProfile;
+        var anchor = proofPolicy.SoraFinalityAnchor;
         if (semantic.Kind != SccpSemanticProofProfileKindV1.Groth16Bn254)
         {
             throw new ArgumentException($"{label}.deployment requires the BN254 semantic profile.");
@@ -1411,14 +1532,12 @@ internal static class SccpExactParser
         {
             throw new ArgumentException($"{label}.deployment has the wrong Taira/token multiplier.");
         }
-        var maxWrappedSupply = PositiveUInt128(
-            deployment,
-            "max_wrapped_supply",
-            $"{label}.deployment");
+        var maxWrappedSupply = DecimalUInt128(deployment, "max_wrapped_supply", 1);
 
         var partial = new SccpDestinationDeploymentV1(
-            family, addresses[0], hashes[0], addresses[1], hashes[1], hashes[2], semantic, anchor,
-            addresses[2], hashes[3], 1_000_000_000, maxWrappedSupply, [])
+            family, addresses[0], hashes[0], addresses[1], hashes[1], hashes[2], proofPolicy,
+            addresses[2], hashes[3], addresses[3], hashes[4], addresses[4], hashes[5],
+            1_000_000_000, maxWrappedSupply, [])
         {
             VerifyingKeyBytes = key,
         };
@@ -1444,6 +1563,7 @@ internal static class SccpExactParser
             "verifying_key",
             "verifier_key_hash",
             "proof_profile_commitment",
+            "mint_breaker_guardian_keys",
             "outbound_proof_policy",
             "taira_to_token_multiplier",
             "max_wrapped_supply",
@@ -1467,6 +1587,9 @@ internal static class SccpExactParser
         var circuit = UpperHex(deployment, "verifier_circuit_hash", 32);
         var keyHash = UpperHex(deployment, "verifier_key_hash", 32);
         var proofProfile = UpperHex(deployment, "proof_profile_commitment", 32);
+        var guardians = ParseTonGuardianKeys(
+            Object(deployment, "mint_breaker_guardian_keys"),
+            $"{label}.mint_breaker_guardian_keys");
         var key = ParseBls12381VerifyingKey(
             Object(deployment, "verifying_key"),
             $"{label}.verifying_key");
@@ -1475,9 +1598,11 @@ internal static class SccpExactParser
             throw new ArgumentException($"{label}.verifier_key_hash does not match verifying_key.");
         }
 
-        var (semantic, anchor) = ParseOutboundPolicy(
+        var proofPolicy = ParseOutboundPolicy(
             Object(deployment, "outbound_proof_policy"),
             $"{label}.outbound_proof_policy");
+        var semantic = proofPolicy.SemanticProfile;
+        var anchor = proofPolicy.SoraFinalityAnchor;
         if (semantic.Kind != SccpSemanticProofProfileKindV1.Groth16Bls12381
             || !semantic.CircuitCommitment.AsSpan().SequenceEqual(circuit)
             || !proofProfile.AsSpan().SequenceEqual(TonProofProfileCommitment()))
@@ -1503,7 +1628,12 @@ internal static class SccpExactParser
         {
             throw new ArgumentException($"{label} has the wrong Taira/Jetton multiplier.");
         }
-        var maxWrappedSupply = PositiveUInt128(deployment, "max_wrapped_supply", label);
+        var maxWrappedSupply = DecimalUInt128(deployment, "max_wrapped_supply", 1);
+        var maximumTonCoins = (UInt128.One << 120) - 1;
+        if (maxWrappedSupply > maximumTonCoins)
+        {
+            throw new ArgumentException($"{label}.max_wrapped_supply exceeds the TON 120-bit coin range.");
+        }
 
         var partial = new SccpDestinationDeploymentV1(
             SccpDestinationProofBackendV1.TonGroth16Bls12381,
@@ -1512,10 +1642,13 @@ internal static class SccpExactParser
             [],
             verifierCode,
             keyHash,
-            semantic,
-            anchor,
+            proofPolicy,
             route.RegistryBytes(),
             routeCode,
+            [],
+            [],
+            [],
+            [],
             1,
             maxWrappedSupply,
             [])
@@ -1527,12 +1660,75 @@ internal static class SccpExactParser
             TonRouteInitialDataHash = routeInitialData,
             TonVerifierCircuitHash = circuit,
             TonProofProfileCommitment = proofProfile,
+            TonMintBreakerGuardianKeys = guardians,
             VerifyingKeyBytes = key,
         };
         return partial with { DestinationBindingHash = DestinationBindingHash(lane, partial) };
     }
 
-    private static (SccpSemanticProofProfileV1 Semantic, SccpSoraFinalityAnchorV1 Anchor) ParseOutboundPolicy(
+    private static SccpSoraOutboundExecutionPolicyV1 ParseSoraOutboundExecutionPolicy(
+        JsonElement item,
+        string label)
+    {
+        SccpJson.ExactFields(
+            item,
+            ["version", "semantics", "contract_artifact_sha256", "vk_ref", "gas_limit"],
+            label);
+        if (SccpJson.UInt32(item, "version", 1, 1) != 1)
+        {
+            throw new ArgumentException($"{label}.version must equal 1.");
+        }
+        var semantics = SccpJson.Text(item, "semantics");
+        if (semantics != "ivm_proved_record_sccp_message_v1")
+        {
+            throw new ArgumentException($"{label}.semantics is unsupported or retired.");
+        }
+        var artifact = UpperHex(item, "contract_artifact_sha256", 32);
+        var referenceItem = Object(item, "vk_ref");
+        SccpJson.ExactFields(
+            referenceItem,
+            ["backend", "name", "version", "commitment"],
+            $"{label}.vk_ref");
+        var reference = new SccpPortableVerifyingKeyRefV1(
+            PortableVerifyingKeyIdField(
+                SccpJson.Text(referenceItem, "backend"),
+                $"{label}.vk_ref.backend"),
+            PortableVerifyingKeyIdField(
+                SccpJson.Text(referenceItem, "name"),
+                $"{label}.vk_ref.name"),
+            SccpJson.UInt32(referenceItem, "version", 1, uint.MaxValue),
+            UpperHex(referenceItem, "commitment", 32));
+        var gasLimit = SccpJson.UInt64(item, "gas_limit", 1, 1_000_000_000);
+        RequireDistinctBytes(
+            [artifact, reference.Commitment],
+            $"{label} artifact and verification-key commitments");
+        return new SccpSoraOutboundExecutionPolicyV1(
+            1,
+            semantics,
+            artifact,
+            reference,
+            gasLimit);
+    }
+
+    private static string PortableVerifyingKeyIdField(string value, string label)
+    {
+        static bool IsEdge(char value) => value is >= 'a' and <= 'z' or >= '0' and <= '9';
+        static bool IsPortable(char value) => IsEdge(value) || value is '-' or '_' or '/' or ':' or '.';
+
+        if (Encoding.UTF8.GetByteCount(value) > 256
+            || !IsEdge(value[0])
+            || !IsEdge(value[^1])
+            || value.Any(static character => !IsPortable(character))
+            || new[] { "..", "//", ":::", "/:", ":/", "/.", "./", ":.", ".:" }
+                .Any(value.Contains))
+        {
+            throw new ArgumentException(
+                $"{label} must use portable verification-key registry syntax.");
+        }
+        return value;
+    }
+
+    private static SccpOutboundProofPolicyV1 ParseOutboundPolicy(
         JsonElement item,
         string label)
     {
@@ -1552,7 +1748,7 @@ internal static class SccpExactParser
             anchor.CheckpointFinalityArtifactHash,
             anchor.AnchorHash,
         ], $"{label} hashes");
-        return (semantic, anchor);
+        return new SccpOutboundProofPolicyV1(1, semantic, anchor);
     }
 
     private static SccpSemanticProofProfileV1 ParseSemanticProfile(JsonElement item, string label)
@@ -1701,6 +1897,22 @@ internal static class SccpExactParser
         }
 
         return address;
+    }
+
+    private static SccpTonMintBreakerGuardianKeysV1 ParseTonGuardianKeys(
+        JsonElement item,
+        string label)
+    {
+        SccpJson.ExactFields(
+            item,
+            ["guardian_0", "guardian_1", "guardian_2", "guardian_3", "guardian_4"],
+            label);
+        return new SccpTonMintBreakerGuardianKeysV1(
+            UpperHex(item, "guardian_0", 32),
+            UpperHex(item, "guardian_1", 32),
+            UpperHex(item, "guardian_2", 32),
+            UpperHex(item, "guardian_3", 32),
+            UpperHex(item, "guardian_4", 32));
     }
 
     private static byte[] ParseBls12381VerifyingKey(JsonElement item, string label)
@@ -1964,8 +2176,8 @@ internal static class SccpExactParser
             "route_id",
         ], "SCCP transfer payload");
         RequireVersion(item, "SCCP transfer payload");
-        if (SccpJson.UInt32(item, "source_domain", 0, 5) != lane.Source.DomainId()
-            || SccpJson.UInt32(item, "dest_domain", 0, 5) != lane.Target.DomainId())
+        if (SccpJson.UInt32(item, "source_domain", 0, 4) != lane.Source.DomainId()
+            || SccpJson.UInt32(item, "dest_domain", 0, 4) != lane.Target.DomainId())
         {
             throw new ArgumentException("SCCP transfer payload does not match its exact lane.");
         }
@@ -2072,7 +2284,7 @@ internal static class SccpExactParser
             $"{label}.Transfer");
         if (SccpJson.UInt64(transfer, "version", 1) != 1
             || SccpJson.UInt32(transfer, "source_domain", 0, 0) != 0
-            || SccpJson.UInt32(transfer, "dest_domain", 1, 5) != expectedDestinationDomain
+            || SccpJson.UInt32(transfer, "dest_domain", 1, 4) != expectedDestinationDomain
             || SccpJson.UInt32(transfer, "asset_home_domain", 0, 0) != 0)
         {
             throw new ArgumentException($"{label}.Transfer domains or version do not match the recent message.");
@@ -2212,12 +2424,8 @@ internal static class SccpExactParser
         ulong network = lane.Source switch
         {
             SccpNetworkV1.EthereumMainnet => 1,
-            SccpNetworkV1.EthereumSepolia => 11_155_111,
             SccpNetworkV1.BscMainnet => 56,
-            SccpNetworkV1.BscTestnet => 97,
             SccpNetworkV1.TronMainnet => 0x2b66_53dc,
-            SccpNetworkV1.TronNile => 0xcd86_90dc,
-            SccpNetworkV1.TronShasta => 0x94a9_059e,
             _ => throw new ArgumentException("SCCP destination binding lane is unsupported."),
         };
         var bindingDomain = tron
@@ -2235,7 +2443,11 @@ internal static class SccpExactParser
             destination.VerifierCodeHash,
             destination.VerifierKeyHash,
             destination.SemanticProofProfile.ProfileHash,
-            destination.SoraFinalityAnchor.AnchorHash));
+            destination.SoraFinalityAnchor.AnchorHash,
+            tron ? AbiTronAddress(destination.ReplayVerifierAddress) : AbiAddress(destination.ReplayVerifierAddress),
+            destination.ReplayVerifierCodeHash,
+            tron ? AbiTronAddress(destination.MintBreakerAddress) : AbiAddress(destination.MintBreakerAddress),
+            destination.MintBreakerCodeHash));
     }
 
     private static byte[] RouteConfigurationHash(
@@ -2262,12 +2474,8 @@ internal static class SccpExactParser
         var (expectedRoute, network) = lane.Source switch
         {
             SccpNetworkV1.EthereumMainnet => ("taira_eth_xor", 1UL),
-            SccpNetworkV1.EthereumSepolia => ("taira_eth_xor", 11_155_111UL),
             SccpNetworkV1.BscMainnet => ("taira_bsc_xor", 56UL),
-            SccpNetworkV1.BscTestnet => ("taira_bsc_xor", 97UL),
             SccpNetworkV1.TronMainnet => ("taira_tron_xor", 0x2b66_53dcUL),
-            SccpNetworkV1.TronNile => ("taira_tron_xor", 0xcd86_90dcUL),
-            SccpNetworkV1.TronShasta => ("taira_tron_xor", 0x94a9_059eUL),
             _ => throw new ArgumentException("SCCP route external profile is unsupported."),
         };
         if (routeId != expectedRoute)
@@ -2280,7 +2488,9 @@ internal static class SccpExactParser
         var routeHashRoles = new List<byte[]>
         {
             sourceHash, reverseHash, destination.TokenCodeHash, destination.VerifierCodeHash,
-            destination.VerifierKeyHash, destination.SemanticProofProfile.ProfileHash,
+            destination.RouteCodeHash, destination.ReplayVerifierCodeHash,
+            destination.MintBreakerCodeHash, destination.VerifierKeyHash,
+            destination.SemanticProofProfile.ProfileHash,
             destination.SoraFinalityAnchor.AnchorHash,
         };
         if (destination.Family == SccpDestinationProofBackendV1.TronGroth16Bn254)
@@ -2299,6 +2509,10 @@ internal static class SccpExactParser
         {
             deploymentParts.Add(destination.DestinationBindingHash);
         }
+        deploymentParts.AddRange([
+            AbiAddress(destination.ReplayVerifierAddress), destination.ReplayVerifierCodeHash,
+            AbiAddress(destination.MintBreakerAddress), destination.MintBreakerCodeHash,
+        ]);
 
         var deploymentHash = SccpV1.Keccak256(Concat(deploymentParts.ToArray()));
         var assetRouteHash = SccpV1.Keccak256(Concat(
@@ -2331,7 +2545,6 @@ internal static class SccpExactParser
         var globalId = lane.Source switch
         {
             SccpNetworkV1.TonMainnet => -239,
-            SccpNetworkV1.TonTestnet => -3,
             _ => throw new ArgumentException("SCCP TON destination binding lane is unsupported."),
         };
         using var payload = new MemoryStream();
@@ -2349,6 +2562,11 @@ internal static class SccpExactParser
         payload.Write(circuit);
         payload.Write(destination.VerifierKeyHash);
         payload.Write(proofProfile);
+        foreach (var guardian in destination.TonMintBreakerGuardianKeys
+                     ?.Ordered ?? throw new ArgumentException("TON mint-breaker guardians are missing."))
+        {
+            payload.Write(guardian);
+        }
         payload.Write(destination.SemanticProofProfile.ProfileHash);
         payload.Write(destination.SoraFinalityAnchor.AnchorHash);
         return SHA256.HashData(payload.ToArray());
@@ -2372,7 +2590,6 @@ internal static class SccpExactParser
         var globalId = lane.Source switch
         {
             SccpNetworkV1.TonMainnet => -239,
-            SccpNetworkV1.TonTestnet => -3,
             _ => throw new ArgumentException("SCCP TON route lane is unsupported."),
         };
         var sourceHash = SccpV1.LaneHash(lane);
@@ -2403,6 +2620,11 @@ internal static class SccpExactParser
         deployment.Write(circuit);
         deployment.Write(destination.VerifierKeyHash);
         deployment.Write(proofProfile);
+        foreach (var guardian in destination.TonMintBreakerGuardianKeys
+                     ?.Ordered ?? throw new ArgumentException("TON mint-breaker guardians are missing."))
+        {
+            deployment.Write(guardian);
+        }
         deployment.Write(destination.SemanticProofProfile.ProfileHash);
         deployment.Write(destination.SoraFinalityAnchor.AnchorHash);
         deployment.Write(destination.DestinationBindingHash);
@@ -2496,7 +2718,7 @@ internal static class SccpExactParser
         byte[] proofProfileCommitment)
     {
         if (source != SccpNetworkV1.SoraTaira
-            || target is not (SccpNetworkV1.TonMainnet or SccpNetworkV1.TonTestnet)
+            || target != SccpNetworkV1.TonMainnet
             || targetDomain != 4
             || semantic.Kind != SccpSemanticProofProfileKindV1.Groth16Bls12381)
         {
@@ -2884,23 +3106,6 @@ internal static class SccpExactParser
         return value;
     }
 
-    private static UInt128 PositiveUInt128(JsonElement item, string field, string label)
-    {
-        var property = item.GetProperty(field);
-        var raw = property.GetRawText();
-        if (property.ValueKind != JsonValueKind.Number
-            || raw.Any(static character => !char.IsAsciiDigit(character))
-            || raw.Length > 1 && raw[0] == '0'
-            || !TryParseUInt128(raw, out var result)
-            || result == 0)
-        {
-            throw new ArgumentException(
-                $"{label}.{field} must be a canonical positive UInt128 JSON integer.");
-        }
-
-        return result;
-    }
-
     private static bool TryParseUInt128(string value, out UInt128 result)
     {
         result = 0;
@@ -2917,6 +3122,17 @@ internal static class SccpExactParser
         }
 
         return value.Length != 0;
+    }
+
+    private static UInt128 DecimalUInt128(JsonElement item, string field, UInt128 minimum)
+    {
+        var value = DecimalText(item, field, minimum == 0 ? 0UL : 1UL);
+        if (!TryParseUInt128(value, out var result) || result < minimum)
+        {
+            throw new ArgumentException($"{field} must be a canonical UInt128 decimal.");
+        }
+
+        return result;
     }
 
     private static ulong DecimalUInt64(JsonElement item, string field, ulong minimum)

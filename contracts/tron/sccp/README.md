@@ -14,9 +14,9 @@ accepts an arbitrary SCCP digest.
   network, and source/target domains. It deliberately has no
   direct proof-submission or replay state.
 - `TairaXorSccpBridge.sol` is the value-moving route. It validates exact
-  payloads, owns replay protection, burns wrapped XOR for TRON-to-Taira
-  transfers, verifies Taira finality proofs, and mints wrapped XOR for
-  Taira-to-TRON transfers.
+  payloads, owns the sharded SHA-256 sparse-Merkle replay forest, burns wrapped
+  XOR for TRON-to-Taira transfers, verifies Taira finality proofs, and mints
+  wrapped XOR for Taira-to-TRON transfers.
 
 Direct allowance replacement is zero-first: after any nonzero grant,
 `approve(spender, nonzero)` fails until the owner explicitly revokes that
@@ -27,9 +27,10 @@ replacement.
 
 ## Exact source event
 
-`transferToTaira(bytes,uint256,uint64)` accepts a canonical Taira account
-payload, a raw token amount, and the caller's exact expected transfer nonce,
-then constructs the complete SCCP Transfer payload in the contract. The call
+`transferToTaira(bytes,uint256,uint64,bytes)` accepts a canonical Taira account
+payload, a raw token amount, the caller's exact expected transfer nonce, and a
+canonical sparse-Merkle witness, then constructs the complete SCCP Transfer
+payload in the contract. The call
 requires `expectedNonce == transferNonces(caller)`, then advances only that
 caller's counter. Unrelated holders may therefore use the same nonce without
 invalidating each other's transactions; the payload commits both sender and
@@ -54,7 +55,8 @@ The event digest is
 `keccak256("sccp:source:event:v1" || 0x01 || laneHash || messageId || payloadHash)`.
 The event cannot be produced without a successful token burn, and the route
 rejects zero amounts, stale or future expected nonces, nonce exhaustion,
-malformed recipients, changed token code, and replayed message ids. Every
+malformed recipients, changed token code, stale/noncanonical replay witnesses,
+and occupied message leaves. Every
 payload commits the constructor-bound,
 nonzero governed route revision immediately after the nonce, preventing a new
 route whose nonce restarts at zero from colliding with an earlier revision.
@@ -69,13 +71,14 @@ outbound lock is created.
 
 ## Exact destination binding
 
-`finalizeFromTaira(bytes,bytes32[6],bytes32,bytes)` parses the canonical SCCP
-payload and requires the fixed `xor` asset, `taira_tron_xor` route, SORA-to-TRON
-domains, TRON address codec, nonzero recipient, exact payload hash, and exact
-lane-derived message id before verifier dispatch. A verified payload amount is
-multiplied by `10^9`, with an explicit overflow check, before minting. The route
-constructor requires one positive u128-sized `maxWrappedSupply`, stores it
-immutably, and every mint rejects `totalSupply + amount` above that ceiling.
+`finalizeFromTaira(bytes,bytes32[6],bytes32,bytes,bytes)` parses the canonical
+SCCP payload and requires the fixed `xor` asset, `taira_tron_xor` route,
+SORA-to-TRON domains, TRON address codec, nonzero recipient, exact payload hash,
+exact lane-derived message id, and a caller-supplied current-state sparse witness
+for an empty message leaf before verifier dispatch. A verified payload amount is multiplied by `10^9`, with an
+explicit overflow check, before minting. The route constructor requires one
+positive u128-sized `maxWrappedSupply`, stores it immutably, and every mint
+rejects `totalSupply + amount` above that ceiling.
 
 The Groth16 public statement commits a route-specific destination binding:
 
@@ -91,7 +94,11 @@ keccak256(abi.encode(
   verifierRuntimeCodeHash,
   verifyingKeyHash,
   semanticProofProfileHash,
-  soraFinalityAnchorHash
+  soraFinalityAnchorHash,
+  tronAddressWord(replayVerifier),
+  replayVerifierRuntimeCodeHash,
+  tronAddressWord(mintBreaker),
+  mintBreakerRuntimeCodeHash
 ))
 ```
 
@@ -100,7 +107,12 @@ from being replayed through another route that shares the same verifier. The
 route pins the verifier runtime code and key, supplies its own immutable binding
 to the stateless verifier, and records consumed destination message ids before
 minting. The verifier contract therefore remains safely shareable without
-pretending that a verifier-only hash identifies a value-moving route.
+pretending that a verifier-only hash identifies a value-moving route. The
+route stores and exposes the deployment-time runtime hash of both the replay
+verifier and mint breaker. It rechecks the live breaker runtime hash and its
+disabled latch before every new mint admission. Three of the immutable five
+guardians can permanently disable minting; no operation can re-enable it, and
+the breaker is never consulted for outbound burns.
 The route's separate `routeConfigHash` is public signal 9 (the tenth signal), so
 the proof directly commits the governed token, code hashes, lane hashes,
 profile, destination binding, and route revision instead of relying only on a
@@ -121,14 +133,16 @@ fields or an operator-provided “expected binding” alias.
 
 Before activating a route, independently verify all of the following:
 
-1. The token, verifier, and route are distinct nonzero deployed contracts.
-2. The verifier network is the intended TRON profile and its domains are
-   SORA-to-TRON.
+1. The token, verifier, replay verifier, mint breaker, and route are distinct
+   nonzero deployed contracts.
+2. The verifier and route network are exactly TRON mainnet profile `0x43` and
+   their domains are SORA-to-TRON. No Nile, Shasta, or other testnet profile is
+   accepted by the first-release contract.
 3. `verifierCodeHash`, `verifierKeyHash`, `semanticProofProfileHash`,
-   `soraFinalityAnchorHash`, `tokenCodeHash`,
-   `destinationBindingHash`, both lane hashes, `maxWrappedSupply`, and
-   `routeConfigHash` match the
-   governed typed deployment record.
+   `soraFinalityAnchorHash`, `tokenCodeHash`, `replayVerifierCodeHash`,
+   `mintBreakerCodeHash`, the exact five guardians, `destinationBindingHash`,
+   both lane hashes, `maxWrappedSupply`, and `routeConfigHash` match the governed
+   typed deployment record.
 4. Precompute the route address, deploy the token with that exact immutable
    bridge, then deploy the route at the precomputed address with the exact
    token address. Verify `token.bridge()`, `route.token()`, token code, and the
@@ -181,9 +195,10 @@ canonical cross-language vectors, zero and mismatched revisions, malformed
 payloads and codecs, hash-role separation, wrong networks/routes/assets, token
 failures, zero-first allowance replacement, independent per-sender nonces,
 small-order and mixed-torsion Ed25519 rejection, reentrancy, changed code/key
-identities, deployment-size and BLAKE2b-parity checks, Groth16 point and
-public-input failures, replay, and the cross-route TRON proof attack described
-above.
+identities (including mint-breaker runtime replacement), deployment-size and
+BLAKE2b-parity checks, Groth16 point and public-input failures, canonical replay
+witnesses, the one-way breaker with outbound burns still open, and the
+cross-route TRON proof attack described above.
 
 Release TVM evidence is produced only by `scripts/contract_tvm_runner.sh` on
 the immutable official TRE image. The runner snapshots the authenticated

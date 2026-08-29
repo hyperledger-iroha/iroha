@@ -633,7 +633,11 @@ mod tests {
             })
             .commit_unchecked()
             .unpack(|_| {});
-        let block: Arc<SignedBlock> = Arc::new(committed.into());
+        let mut executed_block: SignedBlock = committed.into();
+        executed_block
+            .set_transaction_results(Vec::new(), &[], Vec::new())
+            .expect("attach deterministic penalties fixture results");
+        let block = Arc::new(executed_block);
         state
             .kura()
             .store_block(Arc::clone(&block))

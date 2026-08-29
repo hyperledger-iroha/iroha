@@ -52,10 +52,7 @@ def test_offline_proof_backend_type_is_the_exact_closed_registry_v1() -> None:
         "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
         "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
         "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
-        "stark/fri",
-        "stark/fri/sha256-goldilocks",
-        "stark/fri/poseidon2-goldilocks",
-        "stark/fri/sha256_goldilocks.v1",
+        "stark/fri/poseidon-x7-goldilocks-6x64-v1",
     }
     actual = get_args(client_module.OfflineProofBackend)
     assert len(actual) == len(expected)
@@ -75,6 +72,9 @@ def test_offline_proof_backend_type_is_the_exact_closed_registry_v1() -> None:
         "sis-with-hints",
         "unsupported",
         "stark",
+        "stark/fri",
+        "stark/fri/poseidon2-goldilocks",
+        "stark/fri/sha256_goldilocks.v1",
         " halo2/ipa",
         "halo2/ipa ",
         "HALO2/IPA",

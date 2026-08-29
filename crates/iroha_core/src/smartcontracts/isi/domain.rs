@@ -1288,13 +1288,10 @@ pub mod isi {
             if crate::smartcontracts::isi::asset::isi::is_sccp_custody_account(
                 state_transaction,
                 &account_id,
-            ) || crate::smartcontracts::isi::asset::isi::is_sccp_custody_owner(
-                state_transaction,
-                &account_id,
             ) {
                 return Err(InstructionExecutionError::InvariantViolation(
                     format!(
-                        "cannot unregister account {account_id}: it is retained SCCP protocol escrow or an immutable route custody owner"
+                        "cannot unregister account {account_id}: it is retained SCCP protocol escrow"
                     )
                     .into(),
                 )

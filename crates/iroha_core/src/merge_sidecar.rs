@@ -5779,6 +5779,7 @@ impl MergeSidecarTransport {
             height,
             view,
             reference,
+            None,
             requester,
             committed_height,
             now,
@@ -5804,37 +5805,12 @@ impl MergeSidecarTransport {
             height,
             view,
             reference,
+            None,
             requester,
             committed_height,
             now,
             InboundPriority::Decided,
             false,
-        )
-    }
-    /// Register ordinary validation work under lifecycle ownership.
-    ///
-    /// This retains the same durable carrier across executor cleanup without
-    /// borrowing the capacity priority reserved for a decided Apply.
-    pub(crate) fn defer_lifecycle_block(
-        &mut self,
-        block_hash: HashOf<BlockHeader>,
-        height: u64,
-        view: u64,
-        reference: CertifiedMergeLedgerReference,
-        requester: &PeerId,
-        committed_height: u64,
-        now: Instant,
-    ) -> Result<Option<MergeSidecarPost>, MergeSidecarError> {
-        self.defer_block_with_priority(
-            block_hash,
-            height,
-            view,
-            reference,
-            requester,
-            committed_height,
-            now,
-            InboundPriority::Ordinary,
-            true,
         )
     }
     /// Register a lifecycle-owned decided carrier in reserved capacity.
@@ -5857,11 +5833,50 @@ impl MergeSidecarTransport {
             height,
             view,
             reference,
+            None,
             requester,
             committed_height,
             now,
             InboundPriority::Decided,
             true,
+        )
+    }
+    /// Register a carrier and contact its authenticated durable custodian first.
+    ///
+    /// The caller has authenticated the frozen height context and therefore
+    /// supplies its round leader. The transport independently requires that
+    /// peer to belong to the certified validator set before changing holder
+    /// order; this preserves recovery for pre-fix V1 QCs that omitted the
+    /// leader from their exact signer subset.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn defer_block_with_preferred_holder(
+        &mut self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        reference: CertifiedMergeLedgerReference,
+        preferred_holder: &PeerId,
+        requester: &PeerId,
+        committed_height: u64,
+        now: Instant,
+        decided: bool,
+        lifecycle_owned: bool,
+    ) -> Result<Option<MergeSidecarPost>, MergeSidecarError> {
+        self.defer_block_with_priority(
+            block_hash,
+            height,
+            view,
+            reference,
+            Some(preferred_holder),
+            requester,
+            committed_height,
+            now,
+            if decided {
+                InboundPriority::Decided
+            } else {
+                InboundPriority::Ordinary
+            },
+            lifecycle_owned,
         )
     }
     #[allow(clippy::too_many_arguments)]
@@ -5871,6 +5886,7 @@ impl MergeSidecarTransport {
         height: u64,
         view: u64,
         reference: CertifiedMergeLedgerReference,
+        preferred_holder: Option<&PeerId>,
         requester: &PeerId,
         committed_height: u64,
         now: Instant,
@@ -5883,7 +5899,23 @@ impl MergeSidecarTransport {
         {
             return Err(MergeSidecarError::InvalidCarrierHeight);
         }
-        let holders = certified_merge_sidecar_holders(&reference)?;
+        let mut holders = certified_merge_sidecar_holders(&reference)?;
+        if let Some(preferred_holder) = preferred_holder {
+            if !reference
+                .merge_qc
+                .validator_set
+                .iter()
+                .any(|validator| validator == preferred_holder)
+            {
+                return Err(MergeSidecarError::MalformedReference(
+                    "preferred holder is not in the certified validator set",
+                ));
+            }
+            if let Some(position) = holders.iter().position(|holder| holder == preferred_holder) {
+                holders.remove(position);
+            }
+            holders.insert(0, preferred_holder.clone());
+        }
         let entry_hash = reference.entry_hash;
         let key = (entry_hash, certified_merge_reference_digest(&reference));
         let already_deferred = self

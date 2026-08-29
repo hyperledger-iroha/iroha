@@ -218,7 +218,7 @@ pub fn normalized_numeric_to_u64(value: &Numeric, target_scale: u32) -> Option<u
 )]
 #[norito(schema_name = "iroha_data_model::fastpq::FastpqTransitionBatchV1")]
 pub struct FastpqTransitionBatch {
-    /// Parameter set name (e.g., `fastpq-lane-balanced`).
+    /// Parameter set name (`fastpq-state-transition-stark-v1`).
     pub parameter: String,
     /// Public inputs committed by the prover and replayed by the verifier.
     pub public_inputs: FastpqPublicInputs,
@@ -370,7 +370,7 @@ mod tests {
             expected
         );
         let batch = FastpqTransitionBatch {
-            parameter: "fastpq-lane-balanced".into(),
+            parameter: "fastpq-state-transition-stark-v1".into(),
             public_inputs: FastpqPublicInputs {
                 dsid: [0; 16],
                 slot: 0,

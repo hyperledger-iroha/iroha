@@ -1910,7 +1910,6 @@ fn sample_status() -> Status {
             prf_view: 2,
             lane_governance_sealed_total: 0,
             lane_governance_sealed_aliases: Vec::new(),
-            ..SumeragiConsensusStatus::default()
         }),
         governance: GovernanceStatus {
             proposals: GovernanceProposalCounters {

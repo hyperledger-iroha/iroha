@@ -618,14 +618,14 @@ checksum-repaired mutations. `DecodeCanonicalBase64` expects a single padded
 standard-Base64 string with no whitespace; remove the fixture file's one final
 LF only after checking that it is the sole line terminator.
 
-The enum contains exactly twelve IDs: `zk-ace-pq-authorization-v0`,
+The enum contains exactly twelve IDs: `zk-ace-pq-authorization-v1`,
 `anonymous-pgc-k-out-of-n-v1`, `verange-transparent-range-v1`,
-`iroha-zk-ams-v1`, `vega-existing-credential-zk-v0`,
-`iroha-zk-x509-stark-p256-v0`,
-`iroha-jindo-polynomial-commitment-v0`,
+`iroha-zk-ams-v1`, `vega-existing-credential-zk-v1`,
+`iroha-zk-x509-stark-p256-v1`,
+`iroha-jindo-polynomial-commitment-v1`,
 `iroha-bootle-lantern-anoncred-v1`, `orchard-halo2-actions-v1`,
 `monero-fcmp-plus-plus-v1`, `iroha-ivm-private-note-stark-v1`, and
-`pq-masp-stark-v0`. `ParseCanonicalLabel` rejects aliases, retired IDs, case
+`pq-masp-stark-v1`. `ParseCanonicalLabel` rejects aliases, retired IDs, case
 changes, and whitespace normalization.
 
 ## Native SoraFS Reference Validation
@@ -813,6 +813,19 @@ catch (ToriiApiException exception)
     Console.WriteLine(exception.ResponseBody);
 }
 ```
+
+## Canonical Norito fixtures
+
+C# consumes the Rust-owned corpus directly from `../fixtures/norito_rpc`; it
+does not maintain an SDK-local mirror. The test project links the canonical
+manifest, source descriptor, and all 27 `.norito` payloads into its build output
+from that root. Its closed-schema parity suite opens every manifest
+`encoded_file`, compares it byte-for-byte with the canonical Base64 payload,
+length, Iroha hash, and Norito frame, and also sends
+`../fixtures/kotodama/entrypoint_argument_record_v1.json` through the production
+contract-call client boundary. Regenerate only with the two independent
+absent-root `norito-rpc-fixtures` publications and validate the reviewed result
+with `norito-rpc-verify`; never use copied C# test output as fixture authority.
 
 ## Layout
 

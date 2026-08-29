@@ -3851,6 +3851,16 @@ def test_call_contract_preserves_shared_rust_argument_record_fixture() -> None:
     )
 
     boundary = fixture["torii_boundary"]
+    assert isinstance(boundary["payload"]["exact_int"], str)
+    assert boundary["payload"]["exact_int"] == (
+        "1606938044258990275541962092341162602522202993782792835301376"
+    )
+    assert isinstance(boundary["payload"]["exact_decimal"], str)
+    assert boundary["payload"]["exact_decimal"] == "-12345678901234567890.125"
+    assert isinstance(boundary["payload"]["exact_quantity"], str)
+    assert boundary["payload"]["exact_quantity"] == (
+        "12345678901234567890.0000000000000000000000000001"
+    )
     session = RecordingSession()
     session.queue(
         StubResponse(

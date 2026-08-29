@@ -32,7 +32,7 @@ PAYLOAD = bytes(range(256)) * 256
 CUTOFF = 8192
 RETRY_FLAG = re.compile(r"--retry(?:\b|=)")
 FROZEN_BUILDER_SHA256 = (
-    "679e109b358de0c78d84d3e6bd0677d12ac88ceed7dae7ab060a8bb930a4ede7"
+    "370f51fb84902544d7bd70ebdc37ebdf83cf1801c224ded5861ed452da2a98c0"
 )
 
 
@@ -92,7 +92,7 @@ def _assert_vcs_build_source_contract(source: str) -> None:
         source.index('\necho "[tlapm] downloading pinned opam')
     ]
     identity_gates = source[
-        source.index('readonly BUILT_ARCHIVE='):
+        source.index('readonly UPSTREAM_ARCHIVE='):
         source.index('\nreadonly ATTESTATION=')
     ]
     local_checkout = (
@@ -103,7 +103,7 @@ def _assert_vcs_build_source_contract(source: str) -> None:
 
     assert hashlib.sha256(helpers.encode()).hexdigest() == "182a8338f62b69348d0a1d28c95595e294e2bbf34f474906b1cd91fd94874f67"
     assert hashlib.sha256(lifecycle.encode()).hexdigest() == "8e0e7c3aec75067ab2cffec5a2bff1164fde3c995043046fe59bfe0201fff0e1"
-    assert hashlib.sha256(identity_gates.encode()).hexdigest() == "7b9d4fc3185db052bb0590da728129740832d7b2503c12d8260d58a21e347580"
+    assert hashlib.sha256(identity_gates.encode()).hexdigest() == "436886d45aa3fa0b124ab6cd6a3a5b07acf4d02d51ee49d06a54a260767370e8"
     assert normalized.count(local_checkout) == 1
     for marker in ("TLAPM source\"", local_checkout, "seal_build_source_checkout", "opam repository"):
         assert marker in normalized_lifecycle
@@ -141,11 +141,29 @@ def _assert_vcs_build_source_contract(source: str) -> None:
     assert (
         'tlapm-${TLAPM_SOURCE_VERSION}-${PLATFORM}.tar.gz' in identity_gates
     )
-    assert identity_gates.count('${TLAPM_SOURCE_COMMIT:0:7}') == 4
+    assert identity_gates.count('${TLAPM_SOURCE_COMMIT:0:7}') == 6
     assert '[[ "$built_version" ==' in identity_gates
+    assert '[[ "$projected_version" ==' in identity_gates
     assert '[[ "$archived_version" ==' in identity_gates
     assert 'echo "actual:   ${built_version}"' in identity_gates
+    assert 'echo "actual:   ${projected_version}"' in identity_gates
     assert 'echo "actual:   ${archived_version}"' in identity_gates
+    assert 'readonly BUILT_ISABELLE="${SOURCE_DIR}/_build/default/deps/isabelle/Isabelle"' in identity_gates
+    assert 'readonly PROJECTED_ISABELLE="${AUTHENTICATED_DISTRIBUTION}/lib/tlapm/backends/Isabelle"' in identity_gates
+    assert '/bin/rm -rf -- "$PROJECTED_ISABELLE"' in identity_gates
+    assert '/bin/cp -R "$BUILT_ISABELLE" "$PROJECTED_ISABELLE"' in identity_gates
+    assert '/bin/cp -p "$BUILT_ISABELLE_EXEC_FILES" "$PROJECTED_ISABELLE_EXEC_FILES"' in identity_gates
+    projection_markers = (
+        'dune install --root "$SOURCE_DIR" --relocatable',
+        '/bin/rm -rf -- "$PROJECTED_ISABELLE"',
+        '/bin/cp -R "$BUILT_ISABELLE" "$PROJECTED_ISABELLE"',
+        '/bin/cp -p "$BUILT_ISABELLE_EXEC_FILES" "$PROJECTED_ISABELLE_EXEC_FILES"',
+        'clean_command make --jobs=1 -C "$AUTHENTICATED_DISTRIBUTION/lib/tlapm"',
+    )
+    assert all(identity_gates.count(marker) == 1 for marker in projection_markers)
+    assert [identity_gates.index(marker) for marker in projection_markers] == sorted(
+        identity_gates.index(marker) for marker in projection_markers
+    )
 
 
 DOWNLOAD_FUNCTIONS = "\n\n".join(
@@ -772,10 +790,18 @@ def test_vcs_build_source_contract_is_frozen_and_identity_domains_stay_distinct(
             '"RELEASE_VERSION=${TLAPM_SOURCE_VERSION}"',
             '"RELEASE_VERSION=${TLAPM_SOURCE_COMMIT:0:7}"',
         ),
-        (
-            'tlapm-${TLAPM_SOURCE_VERSION}-${PLATFORM}.tar.gz',
-            'tlapm-${TLAPM_SOURCE_COMMIT:0:7}-${PLATFORM}.tar.gz',
-        ),
+            (
+                'readonly UPSTREAM_ARCHIVE="${SOURCE_DIR}/_build/'
+                'tlapm-${TLAPM_SOURCE_VERSION}-${PLATFORM}.tar.gz"',
+                'readonly UPSTREAM_ARCHIVE="${SOURCE_DIR}/_build/'
+                'tlapm-${TLAPM_SOURCE_COMMIT:0:7}-${PLATFORM}.tar.gz"',
+            ),
+            (
+                'readonly BUILT_ARCHIVE="${tmp_dir}/'
+                'tlapm-${TLAPM_SOURCE_VERSION}-${PLATFORM}.tar.gz"',
+                'readonly BUILT_ARCHIVE="${tmp_dir}/'
+                'tlapm-${TLAPM_SOURCE_COMMIT:0:7}-${PLATFORM}.tar.gz"',
+            ),
         (
             '[[ "$built_version" == "${TLAPM_SOURCE_COMMIT:0:7}" ]]',
             '[[ "$built_version" == "$TLAPM_SOURCE_VERSION" ]]',
@@ -1025,9 +1051,9 @@ def test_download_resume_static_contract_is_exact() -> None:
     normalized = " ".join(BUILDER_SOURCE.replace("\\\n", "").split())
     _assert_frozen_builder(BUILDER_SOURCE)
     assert hashlib.sha256(DOWNLOAD_BOUNDARY_SOURCE.encode()).hexdigest() == (
-        "9bb197012b87fab5422c5fe496bbd70d77f552ad15e22cbab0f42e0b4ef03250"
+        "2fbda6879085a14e2241ea406cde7ffb12ef2e3ae25985c95a9562bfc92637dd"
     )
-    assert "18|28|52|55|56) return 0" in normalized
+    assert "18|28|35|52|55|56) return 0" in normalized
     assert "local -r max_attempts=4" in BUILDER_SOURCE
     assert "1|2|4) /bin/sleep" in normalized
     assert "--disable --proto '=https' --proto-redir '=https'" in normalized
@@ -1196,7 +1222,7 @@ def test_download_checked_stops_at_exact_attempt_cap(tmp_path: Path) -> None:
     assert "exhausted 4 bounded download attempts" in result.stderr
 
 
-@pytest.mark.parametrize("status", (18, 28, 52, 55, 56))
+@pytest.mark.parametrize("status", (18, 28, 35, 52, 55, 56))
 def test_download_checked_retries_only_each_allowlisted_transport_class(
     tmp_path: Path,
     status: int,
@@ -1291,7 +1317,6 @@ def test_download_checked_rejects_http_range_and_hash_failures(
         (22, "503"),
         (23, "200"),
         (33, "206"),
-        (35, "000"),
         (36, "206"),
         (47, "000"),
         (60, "000"),

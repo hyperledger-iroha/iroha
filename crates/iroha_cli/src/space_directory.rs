@@ -1291,7 +1291,7 @@ mod quantity_tests {
             " per-day",
             "per-day ",
         ] {
-            parse_allowance_window(Some(retired))
+            let _error = parse_allowance_window(Some(retired))
                 .expect_err("allowance window aliases and normalized spellings must fail");
         }
     }
@@ -1307,7 +1307,7 @@ mod quantity_tests {
             Some(AmxRole::Participant)
         );
         for retired in ["Initiator", "PARTICIPANT", " initiator", "participant "] {
-            opt_amx_role(Some(retired), "--allow-role")
+            let _error = opt_amx_role(Some(retired), "--allow-role")
                 .expect_err("AMX role aliases and normalized spellings must fail");
         }
     }

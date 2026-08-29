@@ -6,10 +6,10 @@
 # and comments or test-only lookalikes cannot satisfy this contract.
 _PRODUCTION_FAIR_V2_INGRESS_TOP_LEVEL_ITEM_SHA256 = {
     "fair_v2_ingress_leader_wire_selector_projection": (
-        "76784616876c15608e352a93941912c2002d252ceda70ebefedf4a10495a8730"
+        "cb5b0f1088bd200ae57a9d5c8ca6fcdf97332fa376379e2f354d0b9706e36d67"
     ),
     "fair_v2_ingress_queue_gate_verdict": (
-        "217a9045fe04898fdbe2190451c990e44f75fb54b07f73197fb88a755a0cf75d"
+        "c55656b8ec95bbb766c81c2e6366251087127686224f0c490e64bea95b30121d"
     ),
     "fair_v2_ingress_required_capacity": (
         "8ad1236ac1728e777706855b7fe53bdaf43e85bfe1e613d2fd0efd18ff9eac50"
@@ -33,7 +33,7 @@ _PRODUCTION_FAIR_V2_INGRESS_TOP_LEVEL_ITEM_SHA256 = {
         "5904b0cb28ad048ab778e75e1f99bc19336b6712d817d33ac7a07e050f25c7e3"
     ),
     "fair_v2_ingress_required_quorum_certificate_bytes": (
-        "0335a87586cee9c0d8bf68ba87581f873ccbfdce5c316b1e033ccf0019801629"
+        "c44dd950171564027aa08f003115c496b21b32ddd80d63db26beac5e3bf38bb3"
     ),
     "fair_v2_ingress_required_certified_fence_escape_bytes": (
         "1706b7bac95b09fd83b5f1b111364c47639ec7c74b0ae156c80127277f89838e"
@@ -48,10 +48,10 @@ _PRODUCTION_FAIR_V2_INGRESS_TOP_LEVEL_ITEM_SHA256 = {
         "5e605df8dc71ee5961cf2c40b3dc8c6108c1c745662a5249d533b1dc8c9fd6eb"
     ),
     "fair_v2_ingress_required_p2p_frame_bytes": (
-        "a72706f96788cbab7cb43997ec1dc97e8168b2e5dc8e5d1817db641179f8d7ae"
+        "2cb3ddf73beb4b0243d8b348c3252b9289c86b9cf6ef63cbfae912303832ee10"
     ),
     "fair_v2_ingress_required_lane_p2p_frame_bytes": (
-        "db83412d500e2f53d7959462f230a02afe85cfa87d1ebf05dd1744a1aacf88d6"
+        "b0a82ccd34f3f401cfb505f6a76d52b1818bd606973f041bf65a9a8e179c7151"
     ),
     "fair_v2_ingress_v2_envelope_bytes": (
         "6a5e066c134eb45a8b64fb5e3b62aab6527ef05f4f6c4459666d56929f13723e"
@@ -63,7 +63,7 @@ _PRODUCTION_FAIR_V2_INGRESS_TOP_LEVEL_ITEM_SHA256 = {
         "8456504122db0dfe12337fce4f14d0e107a3802f990bcf3b9f28dc946ee67b8c"
     ),
     "fair_v2_ingress_required_merge_sidecar_chunk_p2p_frame_bytes": (
-        "67264f5f5699090643b5ba1554f750f89ade5b6f8e36e12f6d10c15607783b9f"
+        "820fe21eadc449f2bffbc1e7028e385b81fceb990eb8ccfd8f4db1e9876d36a5"
     ),
     "fair_v2_ingress_required_block_sync_p2p_frame_bytes": (
         "dbbe6e8853781b0d42843c59a4028d103a938493d45d5f5e5551356b884a6aec"
@@ -81,7 +81,7 @@ _PRODUCTION_FAIR_V2_INGRESS_TOP_LEVEL_ITEM_SHA256 = {
         "a799e86fd78987da5fea276ffbda96d6078e628e3943c1edb223aa60c89fb81c"
     ),
     "fair_v2_ingress_required_transport_completion_bytes": (
-        "a8816bf106a1a62a8b8c411f5964aeeef1ec14f86d14f2313b5cae353e1b359c"
+        "11b218df248b818739cdd1c170cb8ac7c08f5bfe46e1964273184f4dbcb11610"
     ),
 }
 
@@ -93,6 +93,7 @@ _PRODUCTION_EXACT_OUTPUT_TOKEN_SEQUENCES = {
 pub(crate) struct FairV2IngressOwnershipEvidence {
     first: FairV2IngressOwnershipOccurrence,
     latest: FairV2IngressOwnershipOccurrence,
+    request_bound_non_roster_completion: bool,
     runtime_physical_cut: Option<u128>,
     leader_wire_token: Option<FairV2IngressLeaderWireToken>,
     leader_wire_runtime_receipt: Option<serviced_candidate_store::LeaderWireLifecycleRuntimeReceipt>,
@@ -118,6 +119,7 @@ let merged = Self {
     latest: candidate.latest,
     leader_wire_token: self.leader_wire_token.clone(),
     leader_wire_runtime_receipt: self.leader_wire_runtime_receipt.clone(),
+    request_bound_non_roster_completion: self.request_bound_non_roster_completion,
     runtime_physical_cut: self.runtime_physical_cut,
     admission_count,
     occurrence_count,
@@ -653,16 +655,21 @@ if let Err(error) = geometry {
 }
 """,
     "pending_lifecycle_rollover_wait": """
-let rollover_ready = activated.with_runner_runtime(
-    &mut active_runner,
-    |executor, _services, lane_work| {
-        super::preflight_finalized_lane_rollover(
-            executor,
-            lane_work,
-            &mut canonical_lane_body_recovered,
-        )
-    },
-)?;
+let finalization_ready = activated.ready_for_finalized_rollover(&mut active_runner)?;
+let rollover_ready = if finalization_ready {
+    activated.with_runner_runtime(
+        &mut active_runner,
+        |executor, _services, lane_work| {
+            super::preflight_finalized_lane_rollover(
+                executor,
+                lane_work,
+                &mut canonical_lane_body_recovered,
+            )
+        },
+    )?
+} else {
+    false
+};
 if !rollover_ready {
     let _ = wake_rx.recv_timeout(IDLE_POLL);
     continue;
@@ -732,19 +739,19 @@ _PRODUCTION_FAIR_V2_INGRESS_CLASS_ITEM_SHA256 = {
 }
 _PRODUCTION_FAIR_V2_INGRESS_IMPL_ITEM_SHA256 = {
     "new_with_source_geometry_and_transport_frame_caps": (
-        "cb0a4afccddb9b23417de8471d44d9e82bdecf6931c5af21e2d15ead8a3a68d9"
+        "f0bc42bff9b365f0bddbbb38f7e29c59d70fc122d6b3d9c10e7a60671d1b9384"
     ),
     "configure_roster_for_context": (
-        "19c00b3b692c6dba9ada1003dff9483ea7a90a47263a506dd6c764f1d24fc68c"
+        "db4aa3f011c020f74565d1d710186e7d179b5a2184063a588699b032b7af1cda"
     ),
     "configure_roster_with_byte_requirements": (
-        "a514f0b70ec918a0457ab4fcf90aecab3a5d3370302ae15cc4b161b5d03c92f3"
+        "72e5badbe5ad46ee780ae2d07380c696550a2b52e4dd69850c9c6ffc6c511bf0"
     ),
     "open": (
         "5009fc5c34fbcd3f75897ef7f37e7c331e948ac00e555b749ca1a4bff85cadf7"
     ),
     "try_push_at": (
-        "41efad869d70a96aadd0e31053c4691158a61b0bd894e98981859523a79a1419"
+        "c62e141f38dc2621b341aaf57338ed36c065fc38061fcc11e616ee14206d95c1"
     ),
     "try_recv_if_at_checked": (
         "73722eaedc36f6ef5265f77198fb95ea520b686ea71406cca9326a8376c2c13b"
@@ -756,9 +763,20 @@ _PRODUCTION_FAIR_V2_INGRESS_IMPL_ITEM_SHA256 = {
         "09219d6ee0f38a277e24a57d4cc9938be2902ec9f7cb45f2aea9e421bb5a24d3"
     ),
 }
+_PRODUCTION_FAIR_V2_INGRESS_HISTORY_ITEM_SHA256 = {
+    "FairV2IngressHistoryServeRequest::height": (
+        "4e163650fc1dec3f73a40dd21469f35983ee1cc5fab310cf37c218b531488248"
+    ),
+    "FairV2IngressHistoryServeRequest::matches_configured_network": (
+        "6db7312f502ca4c5a6a19add98c1886ff809ea42d02efb1a0b61ce891acf1ed4"
+    ),
+    "fair_v2_ingress_history_serve_request": (
+        "c7c972265a9a26d010dce851999988e40bacbd4c0fb2e1583b586d7fc428f9e6"
+    ),
+}
 _PRODUCTION_FAIR_V2_INGRESS_TEST_ITEM_SHA256 = {
     "fair_v2_ingress_recommended_context_fits_default_disjoint_byte_partitions": (
-        "9fdace5f2d7203c48221a9ea47be4bf0522a126403cb3dfd6d9397fefd63e989"
+        "8c399a680c43dcc37ba129b95ad1594bb280ccd1df3aa4da5da9bb3e32450ce3"
     ),
     "fair_v2_ingress_coalesces_stale_timeout_vote_retry_without_regressing_route": (
         "6f7d5a69eed80d1f0969993aa2dabcae9903031851feb3e7b37fe27649f079ae"
@@ -792,6 +810,680 @@ _PRODUCTION_LIFECYCLE_INGRESS_PUBLICATION_FENCE_ITEM_SHA256 = {
 
 _TIMEOUT_VOTE_EPISODE_INGRESS_REGRESSION_SHA256 = {
     "ordinary_selector_preserves_certified_response_before_timeout_vote": (
-        "971861171d4551fe890d1ae0399e32b137b4db5826416ebe274166e6fe008df3"
+        "6b08d0587e7725f8c0d8ba6f2890d250e272d821ac2fc3f80a328376f6da96bf"
     ),
 }
+
+
+def _successor_recovery_ready_proposal_sign_source_fidelity_errors(
+    paths,
+    sources,
+    errors,
+    item,
+    require_order,
+    blocked_lane_local_permit_mint,
+):
+    """Pin blocked-lane authority and Ready Proposal-Sign preemption."""
+
+    require_order(
+        "height_driver",
+        blocked_lane_local_permit_mint,
+        "only a non-Apply ordinary-ingress blocker may mint lane-local authority",
+        (
+            "self.blocks_ingress()",
+            "!self.permits_decided_lane_recovery_ingress()",
+            "Some(LifecycleBlockedOrdinaryLaneLocalIngressPermitV1",
+            "None",
+        ),
+    )
+    expected_ready_proposal_sign_items = {
+        "scheduler::ProductionLifecycleOwnerV1::ready_proposal_sign_preempts_bounded_producer_point",
+        "height::LifecycleReadyProposalSignPreemptionPermitV1",
+        "height::LifecycleProducerClaimDispositionV1::ready_proposal_sign_preemption_permit",
+        "height::drain_lifecycle_v2_ingress",
+        "height_test::only_an_eligible_claim_can_preempt_an_ordinary_head_for_ready_proposal_sign",
+        "driver::LaunchedProductionLifecycleV1::drive_completion_pre_gate_with_ready_proposal_sign_preemption",
+        "driver::LaunchedProductionLifecycleV1::drive_completion_pre_gate_inner",
+        "driver::ActivatedProductionLifecycleV1::drive_completion_pre_gate_with_ready_proposal_sign_preemption",
+        "worker_test::LifecyclePlannerIoFixture::publish_auxiliary_completion_fixture",
+        "launch_test::LaunchedProductionLifecycleV1::install_ordinary_completion_head_for_ready_sign_test",
+        "launch_test::LaunchedProductionLifecycleV1::ordinary_completion_head_retained_for_ready_sign_test",
+        "launch_test::LaunchedProductionLifecycleV1::drain_ordinary_completion_head_for_ready_sign_test",
+        "dispatch_test::local_proposal_intent_live_wal_sign_fixture",
+        "wal_test::ready_proposal_sign_boundary_predicate_authenticates_exact_control_carrier",
+        "wal_test::ready_local_proposal_sign_and_exact_output_precede_pending_timeout_certificate",
+    }
+    observed_ready_proposal_sign_items = set(
+        _PRODUCTION_READY_PROPOSAL_SIGN_PREEMPTION_ITEM_SHA256
+    )
+    if observed_ready_proposal_sign_items != expected_ready_proposal_sign_items:
+        errors.append(
+            "Ready Proposal-Sign preemption source-seal inventory must be exact; "
+            f"missing={sorted(expected_ready_proposal_sign_items - observed_ready_proposal_sign_items)}, "
+            f"extra={sorted(observed_ready_proposal_sign_items - expected_ready_proposal_sign_items)}"
+        )
+    ready_proposal_sign_preemption = _require_qualified_rust_item(
+        paths["scheduler"],
+        sources["scheduler"],
+        "ProductionLifecycleOwnerV1",
+        "ready_proposal_sign_preempts_bounded_producer_point",
+        errors,
+        "Ready Proposal-Sign producer-point preemption predicate",
+    )
+    _require_rust_item_token_sha256(
+        paths["scheduler"],
+        ready_proposal_sign_preemption,
+        _PRODUCTION_READY_PROPOSAL_SIGN_PREEMPTION_ITEM_SHA256[
+            "scheduler::ProductionLifecycleOwnerV1::ready_proposal_sign_preempts_bounded_producer_point"
+        ],
+        "Ready Proposal-Sign producer-point preemption predicate",
+        errors,
+    )
+    require_order(
+        "scheduler",
+        ready_proposal_sign_preemption,
+        "only an exact attested bounded-I/O Proposal Sign may preempt Producer",
+        (
+            "self.classify_completion_ready_work(fence)",
+            "ProductionCompletionReadyWorkV1::CompletionIo",
+            "if exact_ready != self.coordinator.ready_index",
+            "record.work_class == LifecycleWorkClass::SignProposal",
+            "attest_ready_recovered_lifecycle_sign",
+            "ReadyRecoveredLifecycleSignDemandV1::BoundedIo",
+            ".matches_height_context(self.verified.context())",
+            "Ok(true)",
+        ),
+    )
+    ready_proposal_sign_permit_structs = rust_struct_items(
+        sources["height_driver"], "LifecycleReadyProposalSignPreemptionPermitV1"
+    )
+    if len(ready_proposal_sign_permit_structs) != 1:
+        errors.append(
+            f"{paths['height_driver']}: Ready Proposal-Sign preemption permit must "
+            f"have exactly one struct declaration; found {len(ready_proposal_sign_permit_structs)}"
+        )
+        ready_proposal_sign_permit = None
+    else:
+        ready_proposal_sign_permit = ready_proposal_sign_permit_structs[0]
+    _require_rust_item_token_sha256(
+        paths["height_driver"],
+        ready_proposal_sign_permit,
+        _PRODUCTION_READY_PROPOSAL_SIGN_PREEMPTION_ITEM_SHA256[
+            "height::LifecycleReadyProposalSignPreemptionPermitV1"
+        ],
+        "sealed Ready Proposal-Sign ordinary-head preemption permit",
+        errors,
+    )
+    ready_proposal_sign_permit_mint = _require_qualified_rust_item(
+        paths["height_driver"],
+        sources["height_driver"],
+        "LifecycleProducerClaimDispositionV1",
+        "ready_proposal_sign_preemption_permit",
+        errors,
+        "eligible-only Ready Proposal-Sign preemption permit mint",
+    )
+    _require_rust_item_token_sha256(
+        paths["height_driver"],
+        ready_proposal_sign_permit_mint,
+        _PRODUCTION_READY_PROPOSAL_SIGN_PREEMPTION_ITEM_SHA256[
+            "height::LifecycleProducerClaimDispositionV1::ready_proposal_sign_preemption_permit"
+        ],
+        "eligible-only Ready Proposal-Sign preemption permit mint",
+        errors,
+    )
+    require_order(
+        "height_driver",
+        ready_proposal_sign_permit_mint,
+        "only Eligible may mint the sealed ordinary-head preemption authority",
+        (
+            "matches!(self, Self::Eligible)",
+            "Some(LifecycleReadyProposalSignPreemptionPermitV1",
+            "LifecycleReadyProposalSignPreemptionPermitSealV1",
+            "None",
+        ),
+    )
+    ready_proposal_sign_height_route = item(
+        "height_driver", "drain_lifecycle_v2_ingress"
+    )
+    _require_rust_item_token_sha256(
+        paths["height_driver"],
+        ready_proposal_sign_height_route,
+        _PRODUCTION_READY_PROPOSAL_SIGN_PREEMPTION_ITEM_SHA256[
+            "height::drain_lifecycle_v2_ingress"
+        ],
+        "live eligible-height Ready Proposal-Sign Completion route",
+        errors,
+    )
+    require_order(
+        "height_driver",
+        ready_proposal_sign_height_route,
+        "the live height driver uses the exception only through its sealed permit",
+        (
+            "LifecycleRunnerRankTarget::Completion",
+            "producer_claim.ready_proposal_sign_preemption_permit()",
+            "match proposal_sign_preemption.as_ref()",
+            "Some(permit)",
+            ".drive_completion_pre_gate_with_ready_proposal_sign_preemption(",
+            "current_turn",
+            "lane_work",
+            "permit",
+            "None => activated.drive_completion_pre_gate(current_turn, lane_work)",
+        ),
+    )
+    ready_proposal_sign_eligibility_regression = item(
+        "height_driver",
+        "only_an_eligible_claim_can_preempt_an_ordinary_head_for_ready_proposal_sign",
+    )
+    _require_rust_item_context(
+        paths["height_driver"],
+        ready_proposal_sign_eligibility_regression,
+        (("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),),
+        "eligible-only Ready Proposal-Sign preemption release regression",
+        errors,
+        expected_attributes=("#[test]",),
+    )
+    _require_rust_item_token_sha256(
+        paths["height_driver"],
+        ready_proposal_sign_eligibility_regression,
+        _PRODUCTION_READY_PROPOSAL_SIGN_PREEMPTION_ITEM_SHA256[
+            "height_test::only_an_eligible_claim_can_preempt_an_ordinary_head_for_ready_proposal_sign"
+        ],
+        "eligible-only Ready Proposal-Sign preemption release regression",
+        errors,
+    )
+    require_order(
+        "height_driver",
+        ready_proposal_sign_eligibility_regression,
+        "the named release regression accepts Eligible and rejects non-Producer owners",
+        (
+            "LifecycleProducerClaimDispositionV1::Eligible",
+            ".ready_proposal_sign_preemption_permit()",
+            ".is_some()",
+            "LifecycleProducerClaimDispositionV1::AwaitingCompletion",
+            "LifecycleProducerClaimDispositionV1::AwaitingValidateSidecar",
+            "LifecycleProducerClaimDispositionV1::AwaitingApplyCompletion",
+            "LifecycleProducerClaimDispositionV1::ApplyTerminalSettled",
+            "claim.ready_proposal_sign_preemption_permit().is_none()",
+        ),
+    )
+    launched_ready_proposal_sign_pre_gate = _require_qualified_rust_item(
+        paths["driver"],
+        sources["driver"],
+        "LaunchedProductionLifecycleV1",
+        "drive_completion_pre_gate_with_ready_proposal_sign_preemption",
+        errors,
+        "launched Ready Proposal-Sign ordinary-head pre-gate",
+    )
+    _require_rust_item_token_sha256(
+        paths["driver"],
+        launched_ready_proposal_sign_pre_gate,
+        _PRODUCTION_READY_PROPOSAL_SIGN_PREEMPTION_ITEM_SHA256[
+            "driver::LaunchedProductionLifecycleV1::drive_completion_pre_gate_with_ready_proposal_sign_preemption"
+        ],
+        "launched Ready Proposal-Sign ordinary-head pre-gate",
+        errors,
+    )
+    require_order(
+        "driver",
+        launched_ready_proposal_sign_pre_gate,
+        "the sealed permit reaches only the private Completion classifier",
+        (
+            "LifecycleReadyProposalSignPreemptionPermitV1",
+            "self.drive_completion_pre_gate_inner(runner, lane_work, Some(permit))",
+        ),
+    )
+    ready_proposal_sign_pre_gate_inner = _require_qualified_rust_item(
+        paths["driver"],
+        sources["driver"],
+        "LaunchedProductionLifecycleV1",
+        "drive_completion_pre_gate_inner",
+        errors,
+        "Ready Proposal-Sign physical Completion classifier",
+    )
+    _require_rust_item_token_sha256(
+        paths["driver"],
+        ready_proposal_sign_pre_gate_inner,
+        _PRODUCTION_READY_PROPOSAL_SIGN_PREEMPTION_ITEM_SHA256[
+            "driver::LaunchedProductionLifecycleV1::drive_completion_pre_gate_inner"
+        ],
+        "Ready Proposal-Sign physical Completion classifier",
+        errors,
+    )
+    require_order(
+        "driver",
+        ready_proposal_sign_pre_gate_inner,
+        "parked and dedicated lifecycle heads retain priority; only PassThrough may expose Ready Sign",
+        (
+            "if let Some(pending) = self.pending_lifecycle_completion.take()",
+            "return ProductionLifecycleCompletionPreGateV1::Selected(selected)",
+            "self.services.take_next_lifecycle_completion()",
+            "Ok(LifecycleCompletionTakeV1::PassThrough)",
+            "if proposal_sign_preemption.is_none()",
+            "return ProductionLifecycleCompletionPreGateV1::Ordinary(runner)",
+            ".ready_proposal_sign_preempts_bounded_producer_point(fence)",
+            "Ok(true)",
+            "Ok(false)",
+            "return ProductionLifecycleCompletionPreGateV1::Ordinary(runner)",
+            "ProductionLifecycleCompletionSelectionV1::RestartRequired",
+            "Ok(LifecycleCompletionTakeV1::CertifiedFetch(completion))",
+        ),
+    )
+    activated_ready_proposal_sign_pre_gate = _require_qualified_rust_item(
+        paths["driver"],
+        sources["driver"],
+        "ActivatedProductionLifecycleV1",
+        "drive_completion_pre_gate_with_ready_proposal_sign_preemption",
+        errors,
+        "activated Ready Proposal-Sign ordinary-head pre-gate",
+    )
+    _require_rust_item_token_sha256(
+        paths["driver"],
+        activated_ready_proposal_sign_pre_gate,
+        _PRODUCTION_READY_PROPOSAL_SIGN_PREEMPTION_ITEM_SHA256[
+            "driver::ActivatedProductionLifecycleV1::drive_completion_pre_gate_with_ready_proposal_sign_preemption"
+        ],
+        "activated Ready Proposal-Sign ordinary-head pre-gate",
+        errors,
+    )
+    require_order(
+        "driver",
+        activated_ready_proposal_sign_pre_gate,
+        "the activated owner delegates the same sealed authority without widening it",
+        (
+            "LifecycleReadyProposalSignPreemptionPermitV1",
+            ".drive_completion_pre_gate_with_ready_proposal_sign_preemption(",
+            "runner, lane_work, permit",
+        ),
+    )
+    tracked_auxiliary_completion_publisher = item(
+        "worker", "publish_auxiliary_completion_fixture"
+    )
+    _require_rust_item_context(
+        paths["worker"],
+        tracked_auxiliary_completion_publisher,
+        (
+            (
+                "#",
+                "[",
+                "cfg",
+                "(",
+                "test",
+                ")",
+                "]",
+                "pub",
+                "(",
+                "super",
+                ")",
+                "mod",
+                "tests",
+            ),
+            ("impl", "LifecyclePlannerIoFixture"),
+        ),
+        "tracked ordinary Completion physical-owner publisher",
+        errors,
+    )
+    _require_rust_item_token_sha256(
+        paths["worker"],
+        tracked_auxiliary_completion_publisher,
+        _PRODUCTION_READY_PROPOSAL_SIGN_PREEMPTION_ITEM_SHA256[
+            "worker_test::LifecyclePlannerIoFixture::publish_auxiliary_completion_fixture"
+        ],
+        "tracked ordinary Completion physical-owner publisher",
+        errors,
+    )
+    require_order(
+        "worker",
+        tracked_auxiliary_completion_publisher,
+        "the ordinary physical owner enters Completion through the tracked worker publisher",
+        (
+            "try_send_tracked_completion(",
+            "&self.completion_tx",
+            "&self.admission",
+            "V2IoCompletion::AuxiliaryNoop",
+            ").expect(",
+        ),
+    )
+    for helper_name, required_tokens in (
+        (
+            "install_ordinary_completion_head_for_ready_sign_test",
+            (
+                "planner: &crate::sumeragi::v2_worker::tests::LifecyclePlannerIoFixture",
+                "planner.publish_auxiliary_completion_fixture()",
+            ),
+        ),
+        (
+            "ordinary_completion_head_retained_for_ready_sign_test",
+            ("self.services.has_auxiliary_completion_head_for_test()",),
+        ),
+        (
+            "drain_ordinary_completion_head_for_ready_sign_test",
+            (
+                "self.services",
+                ".drain_one_ordinary_completion_after_lifecycle_pass_through(&mut self.executor)",
+            ),
+        ),
+    ):
+        helper = _require_qualified_rust_item(
+            paths["launch_tests"],
+            sources["launch_tests"],
+            "LaunchedProductionLifecycleV1",
+            helper_name,
+            errors,
+            f"Ready Proposal-Sign fixture helper {helper_name}",
+        )
+        _require_rust_item_token_sha256(
+            paths["launch_tests"],
+            helper,
+            _PRODUCTION_READY_PROPOSAL_SIGN_PREEMPTION_ITEM_SHA256[
+                f"launch_test::LaunchedProductionLifecycleV1::{helper_name}"
+            ],
+            f"Ready Proposal-Sign fixture helper {helper_name}",
+            errors,
+        )
+        require_order(
+            "launch_tests",
+            helper,
+            f"Ready Proposal-Sign fixture helper {helper_name} retains exact production semantics",
+            required_tokens,
+        )
+    ready_proposal_sign_driver_fixture = item(
+        "dispatch_test", "local_proposal_intent_live_wal_sign_fixture"
+    )
+    _require_rust_item_context(
+        paths["dispatch_test"],
+        ready_proposal_sign_driver_fixture,
+        (),
+        "production Ready local-Proposal Sign lifecycle driver fixture",
+        errors,
+        expected_attributes=(
+            "#[cfg(feature = \"bls\")]",
+            "#[allow(clippy::too_many_lines)]",
+        ),
+    )
+    _require_rust_item_token_sha256(
+        paths["dispatch_test"],
+        ready_proposal_sign_driver_fixture,
+        _PRODUCTION_READY_PROPOSAL_SIGN_PREEMPTION_ITEM_SHA256[
+            "dispatch_test::local_proposal_intent_live_wal_sign_fixture"
+        ],
+        "production Ready local-Proposal Sign lifecycle driver fixture",
+        errors,
+    )
+    require_order(
+        "dispatch_test",
+        ready_proposal_sign_driver_fixture,
+        "the production fixture retains then drains the ordinary head before Sign settlement and timeout work",
+        (
+            "runtime.enqueue_network(",
+            "TimeoutCertificate",
+            "launched.install_ordinary_completion_head_for_ready_sign_test(&planner_io)",
+            ".ready_proposal_sign_preemption_permit()",
+            ".drive_completion_pre_gate_with_ready_proposal_sign_preemption(",
+            "ProductionLifecycleCompletionPreGateV1::Ready(ready)",
+            "launched.drive_ready_completion_turn(ready)",
+            "ProductionCompletionDispatchV1::SignQueued { ordinal }",
+            "launched.ordinary_completion_head_retained_for_ready_sign_test()",
+            "launched.execute_ready_local_proposal_sign_for_test(",
+            ".drain_ordinary_completion_head_for_ready_sign_test()",
+            "1",
+            "!launched.ordinary_completion_head_retained_for_ready_sign_test()",
+            ".retain_recovered_lifecycle_sign_completion()",
+            "settle_recovered_lifecycle_proposal_prepare_wal()",
+            "ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1::Applied",
+            ".retry_exact_output_for_ready_sign_test()",
+            '"exact Proposal output drains before any TimeoutCertificate runtime work"',
+        ),
+    )
+    ready_proposal_sign_regression = item(
+        "wal_test",
+        "ready_proposal_sign_boundary_predicate_authenticates_exact_control_carrier",
+    )
+    _require_rust_item_context(
+        paths["wal_test"],
+        ready_proposal_sign_regression,
+        (),
+        "recovered-WAL Ready Proposal-Sign boundary regression",
+        errors,
+        expected_attributes=("#[test]",),
+    )
+    _require_rust_item_token_sha256(
+        paths["wal_test"],
+        ready_proposal_sign_regression,
+        _PRODUCTION_READY_PROPOSAL_SIGN_PREEMPTION_ITEM_SHA256[
+            "wal_test::ready_proposal_sign_boundary_predicate_authenticates_exact_control_carrier"
+        ],
+        "recovered-WAL Ready Proposal-Sign boundary regression",
+        errors,
+    )
+    require_order(
+        "wal_test",
+        ready_proposal_sign_regression,
+        "ProposalIntent preempts, TimeoutIntent preserves fairness, and a missing carrier fails closed",
+        (
+            "recovered_control_producer_boundary_result(true, false, 0xC3)",
+            "Ok(true)",
+            "recovered_control_producer_boundary_result(false, false, 0xC4)",
+            "Ok(false)",
+            "recovered_control_producer_boundary_result(true, true, 0xC5)",
+            "ProductionCompletionDispatchErrorV1::InvalidCarrier",
+        ),
+    )
+    ready_proposal_sign_driver_regression = item(
+        "wal_test",
+        "ready_local_proposal_sign_and_exact_output_precede_pending_timeout_certificate",
+    )
+    _require_rust_item_context(
+        paths["wal_test"],
+        ready_proposal_sign_driver_regression,
+        (),
+        "production Ready local-Proposal Sign lifecycle driver regression",
+        errors,
+        expected_attributes=("#[cfg(feature = \"bls\")]", "#[test]"),
+    )
+    _require_rust_item_token_sha256(
+        paths["wal_test"],
+        ready_proposal_sign_driver_regression,
+        _PRODUCTION_READY_PROPOSAL_SIGN_PREEMPTION_ITEM_SHA256[
+            "wal_test::ready_local_proposal_sign_and_exact_output_precede_pending_timeout_certificate"
+        ],
+        "production Ready local-Proposal Sign lifecycle driver regression",
+        errors,
+    )
+    require_order(
+        "wal_test",
+        ready_proposal_sign_driver_regression,
+        "the named release regression runs the genuine production lifecycle driver fixture",
+        (
+            'const THREAD_NAME: &str = "ready-local-proposal-sign-output-boundary"',
+            ".stack_size(32 * 1024 * 1024)",
+            ".spawn(ready_local_proposal_sign_and_exact_output_precede_pending_timeout_certificate)",
+            "rbc_status_test_guard()",
+            "ProductionLifecycleOwnerV1::run_ready_local_proposal_sign_boundary_fixture_for_test()",
+        ),
+    )
+
+
+def _transport_geometry_stale_route_retry_source_fidelity_errors(
+    core_path: Path,
+    push: RustItem | None,
+    errors: list[str],
+) -> None:
+    """Pin the sole stale-route coalescing exception to TimeoutVote."""
+
+    _require_rust_token_sequence(
+        core_path,
+        push,
+        """
+let is_timeout_vote = fair_v2_ingress_is_timeout_vote(&inbound);
+let is_transport_completion = class == FairV2IngressClass::TransportCompletion;
+""",
+        "the stale-route exception must be bound to the authenticated inbound TimeoutVote classification before admission",
+        errors,
+    )
+    _require_rust_token_sequence(
+        core_path,
+        push,
+        """
+let action = match fair_v2_ingress_route_action(
+    &prior_evidence.attempts,
+    routes_candidate.as_ref(),
+) {
+    Ok(action) => action,
+    Err(NetworkReplyRouteError::Stale)
+        if is_timeout_vote
+            && routes_candidate
+                .as_ref()
+                .is_some_and(|routes| routes.len() == 1) =>
+    {
+        return Ok(FairV2IngressPushDisposition::Coalesced);
+    }
+    Err(_) => {
+        return Err(FairV2IngressPushError::rejected(
+            inbound,
+            FairV2IngressRejectReason::RouteOwnershipInvalid,
+        ));
+    }
+};
+""",
+        "only an exact one-route stale TimeoutVote retry may stutter without mutating retained route or ownership evidence",
+        errors,
+    )
+
+
+def _transport_geometry_fair_ingress_test_source_fidelity_errors(
+    core_path: Path,
+    core_source: str,
+    errors: list[str],
+) -> None:
+    """Seal fair-ingress byte geometry and stale-route regressions."""
+
+    fair_ingress_tests = {}
+    for test_name, expected_sha256 in _PRODUCTION_FAIR_V2_INGRESS_TEST_ITEM_SHA256.items():
+        test_item = _require_rust_item(core_path, core_source, test_name, errors)
+        fair_ingress_tests[test_name] = test_item
+        _require_rust_item_context(
+            core_path,
+            test_item,
+            (("#", "[", "cfg", "(", "test", ")", "]", "mod", "authoritative_runtime_gate_tests"),),
+            f"authoritative fair-ingress regression {test_name}",
+            errors,
+            expected_attributes=("#[test]",),
+        )
+        _require_rust_item_token_sha256(
+            core_path,
+            test_item,
+            expected_sha256,
+            f"authoritative fair-ingress regression {test_name}",
+            errors,
+        )
+    certified_fence_test = fair_ingress_tests.get(
+        "fair_v2_ingress_recommended_context_fits_default_disjoint_byte_partitions"
+    )
+    _require_rust_token_sequence(
+        core_path,
+        certified_fence_test,
+        """
+assert_eq!(
+    encoded_v2_len(&maximum_timeout_certificate),
+    required_certified_fence_escape,
+    "maximal-roster TC must equal the checked certified-fence ceiling",
+);
+""",
+        "maximal canonical TC must equal the certified byte requirement",
+        errors,
+    )
+    _require_rust_token_sequence(
+        core_path,
+        certified_fence_test,
+        """
+assert!(
+    required_certified_fence_escape <= super::CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES,
+    "the production certified partition must contain every legal TC/CommitQC envelope",
+);
+""",
+        "default certified partition must contain the protocol maximum",
+        errors,
+    )
+    stale_timeout_retry_test = fair_ingress_tests.get(
+        "fair_v2_ingress_coalesces_stale_timeout_vote_retry_without_regressing_route"
+    )
+    _require_rust_token_sequence(
+        core_path,
+        stale_timeout_retry_test,
+        """
+assert!(matches!(
+    ingress.try_push(inbound(stale_route)),
+    Ok(super::FairV2IngressPushDisposition::Coalesced)
+));
+assert_eq!(
+    ingress.len(),
+    1,
+    "the exact TimeoutVote remains queued once"
+);
+let delivered = ingress
+    .try_recv()
+    .expect("deliver the retained TimeoutVote");
+let evidence = delivered
+    .ingress_ownership()
+    .expect("queued TimeoutVote retains exact ingress ownership");
+assert!(evidence.validate_exact());
+assert_eq!(
+    evidence.occurrence_count, 1,
+    "a stale retry does not enter the admitted ownership history"
+);
+assert_eq!(
+    evidence.latest_action(),
+    super::FairV2IngressOwnershipAction::New
+);
+let retained = evidence
+    .current_reply_routes()
+    .expect("the newer reply-route snapshot remains attached");
+assert_eq!(retained.len(), 1);
+assert!(
+    retained
+        .iter()
+        .any(|route| route.same_delivery(&retained_route)),
+    "coalescing an older retry must not regress the retained route"
+);
+""",
+        "stale TimeoutVote retry must preserve the newer route and exact single admitted occurrence",
+        errors,
+    )
+    stale_non_timeout_test = fair_ingress_tests.get(
+        "fair_v2_ingress_rejects_stale_non_timeout_vote_route"
+    )
+    _require_rust_token_sequence(
+        core_path,
+        stale_non_timeout_test,
+        """
+let rejection = ingress.try_push(inbound(stale_route));
+assert!(matches!(
+    rejection,
+    Err(super::FairV2IngressPushError::Rejected(
+        super::FairV2IngressRejection {
+            reason: super::FairV2IngressRejectReason::RouteOwnershipInvalid,
+            ..
+        }
+    ))
+));
+assert_eq!(
+    ingress.len(),
+    1,
+    "rejection preserves the queued Vote owner"
+);
+let delivered = ingress.try_recv().expect("deliver the retained Vote");
+let retained = delivered
+    .ingress_ownership()
+    .and_then(|evidence| evidence.current_reply_routes())
+    .expect("the newer reply-route snapshot remains attached");
+assert_eq!(retained.len(), 1);
+assert!(
+    retained
+        .iter()
+        .any(|route| route.same_delivery(&retained_route)),
+    "rejecting a stale Vote route must not regress the retained route"
+);
+""",
+        "the stale-route exception must remain closed to response-capable non-TimeoutVote traffic",
+        errors,
+    )

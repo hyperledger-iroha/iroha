@@ -11124,7 +11124,7 @@ impl TransactionBuilder {
         canonical_statement_archive: &[u8],
     ) -> PyResult<Bound<'py, PyBytes>> {
         self.require_empty_privacy_action_builder_v1(
-            PrivacyProtocolIdV1::IrohaZkX509StarkP256V0,
+            PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
             "ZK-X509",
         )?;
         let canonical_genesis_hash = *self.network_id.as_bytes();
@@ -11149,8 +11149,7 @@ impl TransactionBuilder {
     /// The profile-owned worker returns only a typed public statement and its fixed-capacity `X5S1`
     /// proof. Native code authenticates their exact transaction/genesis binding before the
     /// transaction is signed. Signing remains unavailable until the production compiled profile
-    /// passes every release-readiness gate; unsigned release-candidate material is never accepted
-    /// here.
+    /// passes every release-readiness gate.
     fn sign_privacy_zk_x509_identity_presentation_action_v1(
         &mut self,
         py: Python<'_>,
@@ -11159,7 +11158,7 @@ impl TransactionBuilder {
         credential_proof: &[u8],
     ) -> PyResult<PrivacyNativeActionBuildResultV1> {
         self.require_empty_privacy_action_builder_v1(
-            PrivacyProtocolIdV1::IrohaZkX509StarkP256V0,
+            PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
             "ZK-X509",
         )?;
         let maximum = crate::privacy_native_actions::PRIVACY_ZK_X509_MAX_PROOF_BYTES_V1;
@@ -13424,7 +13423,7 @@ fn privacy_vega_device_authentication_digest_v1_py(
     let session_transcript_digest =
         python_nonzero_privacy_digest_v1(session_transcript_digest, "session_transcript_digest")?;
     let profile = python_compiled_privacy_profile_v1(
-        PrivacyProtocolIdV1::VegaExistingCredentialZkV0,
+        PrivacyProtocolIdV1::VegaExistingCredentialZkV1,
         "Vega",
     )?;
     let statement = python_vega_statement_v1(
@@ -13563,15 +13562,15 @@ fn inspect_signed_privacy_zk_ace_transfer_action_v1_py(
     let signed = decode_canonical_signed_transaction_v1(signed_transaction_versioned)?;
     let (transaction_intent_digest, envelope) = python_authenticated_privacy_action_envelope_v1(
         &signed,
-        PrivacyProtocolIdV1::ZkAcePqAuthorizationV0,
+        PrivacyProtocolIdV1::ZkAcePqAuthorizationV1,
         "ZK-ACE",
     )?;
-    let PrivacyStatementV1::ZkAcePqAuthorizationV0(statement) = &envelope.statement else {
+    let PrivacyStatementV1::ZkAcePqAuthorizationV1(statement) = &envelope.statement else {
         return Err(PyValueError::new_err(
             "signed_transaction_versioned has a mismatched ZK-ACE statement",
         ));
     };
-    if !matches!(&envelope.proof, PrivacyProofV1::ZkAcePqAuthorizationV0(_)) {
+    if !matches!(&envelope.proof, PrivacyProofV1::ZkAcePqAuthorizationV1(_)) {
         return Err(PyValueError::new_err(
             "signed_transaction_versioned has a mismatched ZK-ACE proof variant",
         ));
@@ -13638,7 +13637,7 @@ fn inspect_signed_privacy_jindo_action_v1_py(
             PyValueError::new_err("signed_transaction_versioned contains no direct privacy action")
         })?;
     let envelope = &submission.envelope;
-    if envelope.protocol_id != PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0 {
+    if envelope.protocol_id != PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1 {
         return Err(PyValueError::new_err(
             "signed_transaction_versioned is not a Jindo action",
         ));
@@ -13650,7 +13649,7 @@ fn inspect_signed_privacy_jindo_action_v1_py(
                 "signed_transaction_versioned has an invalid Jindo proof envelope",
             )
         })?;
-    let PrivacyStatementV1::IrohaJindoPolynomialCommitmentV0(statement) = &envelope.statement
+    let PrivacyStatementV1::IrohaJindoPolynomialCommitmentV1(statement) = &envelope.statement
     else {
         return Err(PyValueError::new_err(
             "signed_transaction_versioned has a mismatched Jindo statement",
@@ -13707,9 +13706,9 @@ fn inspect_signed_privacy_jindo_action_v1_py(
         submitted_versioned_transaction_bytes,
     )?;
     result.set_item("polynomial_count", polynomial_count)?;
-    result.set_item("availability", "available-experimental")?;
+    result.set_item("construction_state", "constructed")?;
     result.set_item(
-        "limitations",
+        "missing_evidence",
         PyList::new(py, ["MissingDistributionWideKnowledgeSoundnessEvidence"])?,
     )?;
     Ok(result.unbind())
@@ -13768,10 +13767,10 @@ fn inspect_signed_privacy_vega_action_v1_py(
     let signed = decode_canonical_signed_transaction_v1(signed_transaction_versioned)?;
     let (transaction_intent_digest, envelope) = python_authenticated_privacy_action_envelope_v1(
         &signed,
-        PrivacyProtocolIdV1::VegaExistingCredentialZkV0,
+        PrivacyProtocolIdV1::VegaExistingCredentialZkV1,
         "Vega",
     )?;
-    let PrivacyStatementV1::VegaExistingCredentialZkV0(statement) = &envelope.statement else {
+    let PrivacyStatementV1::VegaExistingCredentialZkV1(statement) = &envelope.statement else {
         return Err(PyValueError::new_err(
             "signed_transaction_versioned has a mismatched Vega statement",
         ));
@@ -13842,10 +13841,10 @@ fn inspect_signed_privacy_zk_x509_identity_presentation_action_v1_py(
     })?;
     let (intent, envelope) = python_authenticated_privacy_action_envelope_v1(
         &signed,
-        PrivacyProtocolIdV1::IrohaZkX509StarkP256V0,
+        PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
         "ZK-X509",
     )?;
-    let PrivacyStatementV1::IrohaZkX509StarkP256V0(statement) = &envelope.statement else {
+    let PrivacyStatementV1::IrohaZkX509StarkP256V1(statement) = &envelope.statement else {
         return Err(PyValueError::new_err(
             "signed_transaction_versioned has a mismatched ZK-X509 statement",
         ));
@@ -14476,10 +14475,10 @@ fn inspect_signed_privacy_pq_masp_note_action_v1_py(
     )?;
     let (intent, envelope) = python_authenticated_privacy_action_envelope_v1(
         &signed,
-        PrivacyProtocolIdV1::PqMaspStarkV0,
+        PrivacyProtocolIdV1::PqMaspStarkV1,
         "PQ-MASP",
     )?;
-    let PrivacyStatementV1::PqMaspStarkV0(statement) = &envelope.statement else {
+    let PrivacyStatementV1::PqMaspStarkV1(statement) = &envelope.statement else {
         return Err(PyValueError::new_err(
             "signed_transaction_versioned has a mismatched PQ-MASP statement",
         ));

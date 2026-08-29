@@ -1823,6 +1823,33 @@ impl LifecycleIoCapacityReservation<'_> {
             .complete();
         prepared
     }
+    /// Fail closed before releasing the reserved queue cut, then restore the
+    /// one-shot target solely for ownership-preserving fatal diagnostics.
+    pub(crate) fn fail_closed_into_prepared(
+        mut self,
+        mut prepared: PreparedLifecycleIngressSelector,
+    ) -> PreparedLifecycleIngressSelector {
+        let target = self
+            .target
+            .take()
+            .expect("fatal reservation retains its one-shot target");
+        prepared
+            .restore_lifecycle_io_target(target)
+            .expect("fatal reservation target must restore only into its source selector");
+        let operation = self
+            .operation
+            .take()
+            .expect("fatal reservation retains its fail-stop operation");
+        drop(operation);
+        let state = self
+            .state
+            .take()
+            .expect("fatal reservation retains the queue guard");
+        self.queue.admission.release();
+        drop(state);
+        self.queue.ready.notify_all();
+        prepared
+    }
     /// Consume the locked reservation into the preflighted exact persistence
     /// command and publish the FIFO only after its ownership index is installed.
     pub(in crate::sumeragi) fn commit_certified_fetch_body_persistence(

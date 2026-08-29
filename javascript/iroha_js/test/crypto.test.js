@@ -26,6 +26,11 @@ import {
   deriveConfidentialKeyset,
   deriveConfidentialKeysetFromHex,
   deriveConfidentialNullifierV2,
+  ConfidentialMemoKeypairV1,
+  CONFIDENTIAL_MEMO_SUITES_V1,
+  generateConfidentialMemoKeypairV1,
+  sealConfidentialMemoV1,
+  openConfidentialMemoV1,
   generateSm2KeyPair,
   deriveSm2KeyPairFromSeed,
   loadSm2KeyPair,
@@ -606,6 +611,108 @@ test("deriveConfidentialKeyset delegates to native binding when available", () =
     const keyset = deriveConfidentialKeyset(seed);
     assert.deepEqual(keyset.skSpend, expected.sk_spend);
     assert.equal(keyset.nkHex, expected.nk.toString("hex"));
+  });
+});
+
+test("confidential memo SDK keeps ML-KEM secrets behind a typed destroyable keypair", () => {
+  const suite = CONFIDENTIAL_MEMO_SUITES_V1.ML_KEM_768_XCHACHA20_POLY1305;
+  const calls = [];
+  const binding = {
+    generateConfidentialMemoKeypairV1(receivedSuite) {
+      calls.push(["generate", receivedSuite]);
+      return {
+        suite: receivedSuite,
+        publicKey: Buffer.alloc(1184, 0x41),
+        secretKey: Buffer.alloc(2400, 0x42),
+      };
+    },
+    sealConfidentialMemoV1(receivedSuite, recipients, plaintext) {
+      calls.push(["seal", receivedSuite, recipients, Buffer.from(plaintext)]);
+      return Buffer.from("495248434d31a55a", "hex");
+    },
+    openConfidentialMemoV1(receivedSuite, secretKey, envelope) {
+      calls.push([
+        "open",
+        receivedSuite,
+        Buffer.from(secretKey),
+        Buffer.from(envelope),
+      ]);
+      return Buffer.from("opened memo");
+    },
+  };
+
+  withNativeBinding(binding, () => {
+    const keypair = generateConfidentialMemoKeypairV1({ suite });
+    assert.ok(keypair instanceof ConfidentialMemoKeypairV1);
+    assert.equal("secretKey" in keypair, false);
+    assert.equal(keypair.publicKey.length, 1184);
+    const envelope = sealConfidentialMemoV1({
+      suite,
+      recipients: [keypair],
+      plaintext: Buffer.from("memo"),
+    });
+    assert.equal(envelope.toString("hex"), "495248434d31a55a");
+    assert.equal(
+      openConfidentialMemoV1({ keypair, envelope }).toString(),
+      "opened memo",
+    );
+    assert.equal(keypair.open(envelope).toString(), "opened memo");
+    keypair.destroy();
+    assert.equal(keypair.destroyed, true);
+    assert.throws(() => keypair.publicKey, /has been destroyed/u);
+    assert.throws(() => keypair.open(envelope), /has been destroyed/u);
+  });
+
+  assert.deepEqual(calls[0], ["generate", suite]);
+  assert.equal(calls[1][0], "seal");
+  assert.equal(calls[1][2].length, 1);
+  assert.equal(calls[1][2][0].length, 1184);
+  assert.equal(calls[2][0], "open");
+  assert.equal(calls[2][2].length, 2400);
+});
+
+test("confidential memo SDK rejects aliases, mixed suites, and raw secret keys", () => {
+  const suite = CONFIDENTIAL_MEMO_SUITES_V1.ML_KEM_768_XCHACHA20_POLY1305;
+  const binding = {
+    generateConfidentialMemoKeypairV1(receivedSuite) {
+      return {
+        suite: receivedSuite,
+        publicKey: Buffer.alloc(1184, 1),
+        secretKey: Buffer.alloc(2400, 2),
+      };
+    },
+    sealConfidentialMemoV1() {
+      throw new Error("must not dispatch invalid input");
+    },
+    openConfidentialMemoV1() {
+      throw new Error("must not dispatch invalid input");
+    },
+  };
+  withNativeBinding(binding, () => {
+    assert.throws(
+      () => generateConfidentialMemoKeypairV1({ suite, version: 1 }),
+      /unknown field version/u,
+    );
+    const keypair = generateConfidentialMemoKeypairV1({ suite });
+    assert.throws(
+      () => sealConfidentialMemoV1({
+        suite,
+        recipients: [{
+          suite: CONFIDENTIAL_MEMO_SUITES_V1.ML_KEM_1024_XCHACHA20_POLY1305,
+          publicKey: Buffer.alloc(1568, 3),
+        }],
+        plaintext: Buffer.from("memo"),
+      }),
+      /does not match the memo suite/u,
+    );
+    assert.throws(
+      () => openConfidentialMemoV1({
+        keypair: { suite, secretKey: Buffer.alloc(2400, 2) },
+        envelope: Buffer.alloc(1),
+      }),
+      /live ConfidentialMemoKeypairV1/u,
+    );
+    keypair.destroy();
   });
 });
 

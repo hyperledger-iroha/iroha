@@ -271,6 +271,9 @@ captures the key points so implementers can line them up with the codec spec.
   followed by ordered `(chunk_id, is_parity, payload_len, payload)` frames.
   Source chunks precede parity shards; frame count, individual payload size,
   aggregate window size, and outstanding stream concurrency are all bounded.
+  Bidirectional stream credit is zero. Each complete window open/accept through
+  FIN uses one absolute transfer deadline capped at 30 seconds and derived from
+  the configured idle timeout; timeout or stream failure closes the connection.
   Public QUIC construction remains fail-closed until Quinn is upgraded and
   requalified. Torii exposes no peer-transport tunnel. Chunk framing, Norito
   manifest commitments, and privacy masks remain identical across DATAGRAM and

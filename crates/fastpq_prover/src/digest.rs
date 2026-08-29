@@ -1,22 +1,34 @@
 use crate::{
     Error, Result,
     batch::TransitionBatch,
-    poseidon_profile_sha256,
-    trace::{ColumnDigests, Trace, build_trace, column_hashes, merkle_root_with_first_level},
+    field::GOLDILOCKS_MODULUS_V1,
+    trace::{Trace, build_trace},
 };
-use fastpq_isi::StarkParameterSet;
-use iroha_crypto::Hash;
-/// Domain separator applied to the V1 commitment payload.
-const TRACE_COMMITMENT_DOMAIN: &[u8] = b"fastpq:v1:trace_commitment";
+use fastpq_isi::{
+    FASTPQ_CATALOG_V1, FASTPQ_FINAL_V1_ID, GoldilocksDigest384V1 as NativeDigest384V1,
+    GoldilocksDigestDomainV1, StarkParameterSet, hash_bytes_384_v1,
+};
+use iroha_data_model::privacy::GoldilocksDigest384V1;
+
+/// Typed role for the canonical preprocessing-trace commitment tree.
+const TRACE_COMMITMENT_ROLE_V1: &[u8] = b"fastpq:v1:preprocessing-trace";
+/// Typed phase for one named trace-column leaf.
+const TRACE_COLUMN_LEAF_PHASE_V1: &[u8] = b"column-leaf";
+/// Typed phase for a binary trace-commitment interior node.
+const TRACE_NODE_PHASE_V1: &[u8] = b"binary-node";
+/// Typed phase for an empty trace-commitment tree.
+const TRACE_EMPTY_PHASE_V1: &[u8] = b"empty-tree";
+/// Typed phase for the final shape-bound preprocessing commitment.
+const TRACE_FINAL_PHASE_V1: &[u8] = b"final-commitment";
 /// Compute the deterministic commitment over a transition batch.
 ///
 /// The commitment is derived by building the canonical FASTPQ trace,
-/// hashing each column with Poseidon, folding the resulting digests into a
-/// Poseidon Merkle root, and finally hashing a length-prefixed payload with
-/// `Hash::new`. The payload captures the domain separator, parameter name, trace
-/// dimensions, exact Poseidon profile digest, column digests, and the Merkle
-/// root so downstream consumers can validate the commitment using only public
-/// data.
+/// hashing each named column into six independently parameterised Poseidon-x7
+/// Goldilocks lanes, folding those digests through a typed binary Merkle tree,
+/// and binding the exact trace shape into one final six-lane digest. The typed
+/// frame binds the final catalog, protocol, profile, tree role, phase,
+/// level/index, lane, and counter; no legacy 32-byte hash participates in this
+/// native-STARK commitment.
 ///
 /// # Errors
 ///
@@ -25,7 +37,10 @@ const TRACE_COMMITMENT_DOMAIN: &[u8] = b"fastpq:v1:trace_commitment";
 /// padded rows exceed the parameter domain, [`Error::VerifierLimitExceeded`]
 /// when the canonical trace schema is too wide, or propagates trace encoding
 /// failures.
-pub fn trace_commitment(params: &StarkParameterSet, batch: &TransitionBatch) -> Result<Hash> {
+pub fn trace_commitment(
+    params: &StarkParameterSet,
+    batch: &TransitionBatch,
+) -> Result<GoldilocksDigest384V1> {
     if params.name != batch.parameter {
         return Err(Error::ParameterMismatch {
             expected: params.name.to_string(),
@@ -35,8 +50,7 @@ pub fn trace_commitment(params: &StarkParameterSet, batch: &TransitionBatch) -> 
     ensure_trace_capacity(params, batch.transitions.len())?;
     crate::trace::ensure_trace_schema_limit(batch, crate::trace::DEFAULT_MAX_TRACE_COLUMNS)?;
     let trace = build_trace(batch)?;
-    let column_digests = column_hashes(&trace, params)?;
-    trace_commitment_from_digests(params, &trace, &column_digests)
+    trace_commitment_from_trace(params, &trace)
 }
 /// Ensure the mandatory power-of-two trace padding fits the selected parameter domain.
 ///
@@ -64,15 +78,11 @@ pub fn ensure_trace_capacity(params: &StarkParameterSet, transition_rows: usize)
     }
     Ok(())
 }
-pub fn trace_commitment_from_digests(
+pub(crate) fn trace_commitment_from_trace(
     params: &StarkParameterSet,
     trace: &Trace,
-    column_digests: &ColumnDigests,
-) -> Result<Hash> {
-    let root = merkle_root_with_first_level(
-        column_digests.leaves(),
-        column_digests.first_level_parents(),
-    );
+) -> Result<GoldilocksDigest384V1> {
+    let root = trace_column_root_v1(params, trace)?;
     let rows: u64 = trace
         .rows
         .try_into()
@@ -91,49 +101,116 @@ pub fn trace_commitment_from_digests(
             .map_err(|_| Error::PayloadLengthOverflow {
                 length: trace.columns.len(),
             })?;
-    let mut payload = Vec::with_capacity(
-        TRACE_COMMITMENT_DOMAIN.len()
-            + params.name.len()
-            + poseidon_profile_sha256().len()
-            + core::mem::size_of_val(column_digests.leaves())
-            + 32,
-    );
-    append_length_prefixed(&mut payload, TRACE_COMMITMENT_DOMAIN)?;
-    append_length_prefixed(&mut payload, params.name.as_bytes())?;
-    append_length_prefixed(&mut payload, poseidon_profile_sha256().as_bytes())?;
-    payload.extend_from_slice(&rows.to_le_bytes());
-    payload.extend_from_slice(&padded_len.to_le_bytes());
-    payload.extend_from_slice(&column_count.to_le_bytes());
-    for digest in column_digests.leaves() {
-        payload.extend_from_slice(&digest.to_le_bytes());
-    }
-    payload.extend_from_slice(&root.to_le_bytes());
-    Ok(Hash::new(payload))
+    let rows = rows.to_le_bytes();
+    let padded_len = padded_len.to_le_bytes();
+    let column_count = column_count.to_le_bytes();
+    hash_trace_bytes_v1(
+        params,
+        TRACE_FINAL_PHASE_V1,
+        0,
+        0,
+        &[&rows, &padded_len, &column_count, &root.to_le_bytes()],
+    )
+    .map(Into::into)
 }
-fn append_length_prefixed(buffer: &mut Vec<u8>, bytes: &[u8]) -> Result<(), Error> {
-    let len: u64 = bytes
-        .len()
-        .try_into()
-        .map_err(|_| Error::PayloadLengthOverflow {
-            length: bytes.len(),
-        })?;
-    buffer.extend_from_slice(&len.to_le_bytes());
-    buffer.extend_from_slice(bytes);
-    Ok(())
+
+fn trace_column_root_v1(params: &StarkParameterSet, trace: &Trace) -> Result<NativeDigest384V1> {
+    let mut current = trace
+        .columns
+        .iter()
+        .enumerate()
+        .map(|(index, column)| {
+            if column.values.len() != trace.padded_len {
+                return Err(Error::InvalidTraceShape {
+                    details: format!(
+                        "column `{}` has {} values; expected {}",
+                        column.name,
+                        column.values.len(),
+                        trace.padded_len
+                    ),
+                });
+            }
+            let mut values = Vec::with_capacity(column.values.len().saturating_mul(8));
+            for (row, value) in column.values.iter().copied().enumerate() {
+                if value >= GOLDILOCKS_MODULUS_V1 {
+                    return Err(Error::NonCanonicalGoldilocksElement {
+                        context: "trace_commitment_column",
+                        indices: vec![index, row],
+                    });
+                }
+                values.extend_from_slice(&value.to_le_bytes());
+            }
+            hash_trace_bytes_v1(
+                params,
+                TRACE_COLUMN_LEAF_PHASE_V1,
+                0,
+                index,
+                &[column.name.as_bytes(), &values],
+            )
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    if current.is_empty() {
+        return hash_trace_bytes_v1(params, TRACE_EMPTY_PHASE_V1, 0, 0, &[]);
+    }
+    let mut level = 1_usize;
+    while current.len() > 1 {
+        if !current.len().is_multiple_of(2) {
+            current.push(*current.last().expect("non-empty trace commitment level"));
+        }
+        current = current
+            .chunks_exact(2)
+            .enumerate()
+            .map(|(index, children)| {
+                hash_trace_bytes_v1(
+                    params,
+                    TRACE_NODE_PHASE_V1,
+                    level,
+                    index,
+                    &[&children[0].to_le_bytes(), &children[1].to_le_bytes()],
+                )
+            })
+            .collect::<Result<Vec<_>>>()?;
+        level = level
+            .checked_add(1)
+            .ok_or(Error::QueryIndexOverflow { index: level })?;
+    }
+    Ok(current[0])
+}
+
+fn hash_trace_bytes_v1(
+    params: &StarkParameterSet,
+    phase: &[u8],
+    level: usize,
+    index: usize,
+    fields: &[&[u8]],
+) -> Result<NativeDigest384V1> {
+    let domain = GoldilocksDigestDomainV1 {
+        catalog: FASTPQ_CATALOG_V1.as_bytes(),
+        protocol: FASTPQ_FINAL_V1_ID.as_bytes(),
+        profile: params.name.as_bytes(),
+        role: TRACE_COMMITMENT_ROLE_V1,
+        phase,
+        level: u64::try_from(level).map_err(|_| Error::QueryIndexOverflow { index: level })?,
+        index: u64::try_from(index).map_err(|_| Error::QueryIndexOverflow { index })?,
+        counter: 0,
+    };
+    hash_bytes_384_v1(domain, fields).ok_or_else(|| Error::PayloadLengthOverflow {
+        length: fields
+            .iter()
+            .fold(0_usize, |total, field| total.saturating_add(field.len())),
+    })
 }
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{
-        OperationKind, Planner, PublicInputs, StateTransition, TransitionBatch,
-        backend::{self, ExecutionMode},
+        OperationKind, PublicInputs, StateTransition, TransitionBatch,
         gadgets::transfer,
-        trace::{
-            ColumnDigests, RowUsage, TraceColumn, derive_polynomial_data,
-            hash_columns_from_coefficients,
-        },
+        trace::{RowUsage, TraceColumn},
     };
     use fastpq_isi::CANONICAL_PARAMETER_SETS;
+    use iroha_crypto::Hash;
     use iroha_data_model::{
         DomainId,
         asset::id::AssetDefinitionId,
@@ -143,7 +220,8 @@ mod tests {
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use norito::to_bytes;
     fn sample_batch() -> TransitionBatch {
-        let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
+        let mut batch =
+            TransitionBatch::new("fastpq-state-transition-stark-v1", PublicInputs::default());
         batch.public_inputs.dsid = [0xAA; 16];
         batch.public_inputs.slot = 42;
         batch.public_inputs.old_root = [0x11; 32];
@@ -166,7 +244,8 @@ mod tests {
         batch
     }
     fn build_fixture(name: &str) -> TransitionBatch {
-        let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
+        let mut batch =
+            TransitionBatch::new("fastpq-state-transition-stark-v1", PublicInputs::default());
         batch.public_inputs.dsid = [0xAA; 16];
         batch.public_inputs.slot = 42;
         batch.public_inputs.old_root = [0x11; 32];
@@ -189,20 +268,6 @@ mod tests {
                     TRANSFER_TRANSCRIPTS_METADATA_KEY.into(),
                     to_bytes(&vec![transcript]).expect("encode transcripts"),
                 );
-            }
-            "metadata" => {
-                batch.push(StateTransition::new(
-                    b"metadata/reserve".to_vec(),
-                    b"old".to_vec(),
-                    b"new".to_vec(),
-                    OperationKind::MetaSet,
-                ));
-                batch.push(StateTransition::new(
-                    b"metadata/treasury".to_vec(),
-                    b"pending".to_vec(),
-                    b"active".to_vec(),
-                    OperationKind::MetaSet,
-                ));
             }
             other => panic!("unknown fixture {other}"),
         }
@@ -303,7 +368,7 @@ mod tests {
     #[test]
     fn trace_commitment_rejects_parameter_mismatch_before_trace_build() {
         let mut params = CANONICAL_PARAMETER_SETS[0];
-        params.name = "test-mismatched-parameter";
+        params.name = "retired-fastpq-profile-v0";
         let batch = sample_batch();
         let err = trace_commitment(&params, &batch).unwrap_err();
         assert!(matches!(
@@ -311,7 +376,7 @@ mod tests {
             Error::ParameterMismatch {
                 expected,
                 actual
-            } if expected == "test-mismatched-parameter" && actual == "fastpq-lane-balanced"
+            } if expected == "retired-fastpq-profile-v0" && actual == "fastpq-state-transition-stark-v1"
         ));
     }
     #[test]
@@ -363,128 +428,74 @@ mod tests {
         ));
     }
     #[test]
-    fn trace_commitment_from_digests_binds_parameter_name_trace_shape_and_leaves() {
-        let balanced = CANONICAL_PARAMETER_SETS
-            .iter()
-            .find(|set| set.name == "fastpq-lane-balanced")
-            .copied()
-            .expect("canonical balanced parameter set");
-        let mut other_parameter_set = balanced;
-        other_parameter_set.name = "test-other-parameter";
+    fn trace_commitment_from_trace_binds_parameter_name_shape_names_and_values() {
+        let canonical = CANONICAL_PARAMETER_SETS[0];
+        let mut relabelled = canonical;
+        relabelled.name = "different-fastpq-profile-v1";
         let trace = synthetic_trace();
-        let digests = ColumnDigests::new(vec![1, 2, 3], None);
-        let base =
-            trace_commitment_from_digests(&balanced, &trace, &digests).expect("base commitment");
-        let other_parameter = trace_commitment_from_digests(&other_parameter_set, &trace, &digests)
-            .expect("parameter change");
+        let base = trace_commitment_from_trace(&canonical, &trace).expect("base commitment");
+        let other_parameter =
+            trace_commitment_from_trace(&relabelled, &trace).expect("parameter change");
         assert_ne!(base, other_parameter);
         let mut row_changed = trace.clone();
         row_changed.rows = 2;
-        let other_rows =
-            trace_commitment_from_digests(&balanced, &row_changed, &digests).expect("row change");
+        let other_rows = trace_commitment_from_trace(&canonical, &row_changed).expect("row change");
         assert_ne!(base, other_rows);
         let mut padded_changed = trace.clone();
         padded_changed.padded_len = 2;
-        let other_padded = trace_commitment_from_digests(&balanced, &padded_changed, &digests)
-            .expect("padded length change");
-        assert_ne!(base, other_padded);
-        let mut column_changed = trace.clone();
-        column_changed.columns.push(TraceColumn {
+        assert!(matches!(
+            trace_commitment_from_trace(&canonical, &padded_changed),
+            Err(Error::InvalidTraceShape { .. })
+        ));
+        let mut name_changed = trace.clone();
+        name_changed.columns[0].name = "renamed".to_owned();
+        assert_ne!(
+            base,
+            trace_commitment_from_trace(&canonical, &name_changed).expect("column-name change")
+        );
+        let mut value_changed = trace.clone();
+        value_changed.columns[0].values[0] = 10;
+        assert_ne!(
+            base,
+            trace_commitment_from_trace(&canonical, &value_changed).expect("column-value change")
+        );
+        let mut extra_column = trace.clone();
+        extra_column.columns.push(TraceColumn {
             name: "extra".to_owned(),
             values: vec![0],
         });
-        let other_columns = trace_commitment_from_digests(&balanced, &column_changed, &digests)
-            .expect("column count change");
-        assert_ne!(base, other_columns);
-        let other_leaves = trace_commitment_from_digests(
-            &balanced,
-            &trace,
-            &ColumnDigests::new(vec![1, 2, 4], None),
-        )
-        .expect("leaf change");
-        assert_ne!(base, other_leaves);
-    }
-    #[test]
-    fn trace_commitment_from_digests_uses_precomputed_parent_roots() {
-        let params = CANONICAL_PARAMETER_SETS
-            .iter()
-            .find(|set| set.name == "fastpq-lane-balanced")
-            .copied()
-            .expect("canonical balanced parameter set");
-        let trace = synthetic_trace();
-        let leaves = vec![11, 22, 33, 44];
-        let scalar = ColumnDigests::new(leaves.clone(), None);
-        let precomputed = ColumnDigests::new(leaves, Some(vec![55, 66]));
-        let scalar_commitment =
-            trace_commitment_from_digests(&params, &trace, &scalar).expect("scalar commitment");
-        let precomputed_commitment = trace_commitment_from_digests(&params, &trace, &precomputed)
-            .expect("precomputed commitment");
-        assert_ne!(scalar_commitment, precomputed_commitment);
-    }
-    #[test]
-    fn append_length_prefixed_writes_little_endian_length_and_payload() {
-        let mut payload = vec![0xAA];
-        append_length_prefixed(&mut payload, b"fastpq").unwrap();
-        assert_eq!(payload[0], 0xAA);
-        assert_eq!(&payload[1..9], &6u64.to_le_bytes());
-        assert_eq!(&payload[9..], b"fastpq");
+        assert_ne!(
+            base,
+            trace_commitment_from_trace(&canonical, &extra_column).expect("column-count change")
+        );
+        let mut noncanonical = trace;
+        noncanonical.columns[0].values[0] = GOLDILOCKS_MODULUS_V1;
+        assert!(matches!(
+            trace_commitment_from_trace(&canonical, &noncanonical),
+            Err(Error::NonCanonicalGoldilocksElement {
+                context: "trace_commitment_column",
+                indices,
+            }) if indices == vec![0, 0]
+        ));
     }
     #[test]
     fn commitment_matches_manual_merkle() {
         let params = CANONICAL_PARAMETER_SETS
             .iter()
-            .find(|set| set.name == "fastpq-lane-balanced")
+            .find(|set| set.name == "fastpq-state-transition-stark-v1")
             .copied()
             .expect("canonical parameter set");
-        let planner = Planner::new(&params);
         let cases = [
             ("synthetic", sample_batch()),
             ("transfer", build_fixture("transfer")),
-            ("metadata", build_fixture("metadata")),
         ];
         for (label, batch) in cases {
             let commitment = trace_commitment(&params, &batch).expect("trace commitment");
             let trace = build_trace(&batch).expect("build trace");
-            let data = derive_polynomial_data(&trace, &planner);
-            let digests = hash_columns_from_coefficients(
-                &trace,
-                &data.coefficients,
-                crate::trace::PoseidonPipelinePolicy::for_mode(ExecutionMode::Cpu),
-            );
-            let manual =
-                trace_commitment_from_digests(&params, &trace, &digests).expect("manual commit");
+            let manual = trace_commitment_from_trace(&params, &trace).expect("manual commitment");
             assert_eq!(
                 commitment, manual,
                 "{label} manual commitment must match trace_commitment()"
-            );
-        }
-    }
-    #[test]
-    fn row_hash_extension_is_idempotent_for_cpu_mode() {
-        let params = CANONICAL_PARAMETER_SETS
-            .iter()
-            .find(|set| set.name == "fastpq-lane-balanced")
-            .copied()
-            .expect("canonical parameter set");
-        let planner = Planner::new(&params);
-        let cases = [
-            ("synthetic", sample_batch()),
-            ("transfer", build_fixture("transfer")),
-            ("metadata", build_fixture("metadata")),
-        ];
-        for (label, batch) in cases {
-            let trace = build_trace(&batch).expect("trace");
-            let data = derive_polynomial_data(&trace, &planner);
-            let row_hashes = backend::hash_trace_rows(data.lde_columns());
-            let extended = backend::extend_row_hashes(
-                &planner,
-                ExecutionMode::Cpu,
-                row_hashes.clone(),
-                trace.padded_len,
-            );
-            assert_eq!(
-                extended, row_hashes,
-                "{label} CPU extension should not alter hashed LDE rows"
             );
         }
     }

@@ -6,7 +6,7 @@
 //! constants and an independently generated initial state, so the result is
 //! not six squeezes from one capacity-one sponge.
 
-use std::sync::OnceLock;
+use std::{fmt, sync::OnceLock};
 
 use crate::poseidon::{FIELD_MODULUS, MDS, RATE, STATE_WIDTH};
 
@@ -20,6 +20,8 @@ const FULL_ROUNDS_HALF_V1: usize = 4;
 const PARTIAL_ROUNDS_V1: usize = 57;
 /// Total width-three Poseidon rounds.
 const TOTAL_ROUNDS_V1: usize = FULL_ROUNDS_HALF_V1 * 2 + PARTIAL_ROUNDS_V1;
+/// Number of Poseidon rounds in every canonical digest lane.
+pub const GOLDILOCKS_DIGEST384_ROUNDS_V1: usize = TOTAL_ROUNDS_V1;
 /// Maximum byte length accepted for one framed field.
 const MAX_FRAMED_FIELD_BYTES_V1: usize = u32::MAX as usize;
 /// Parameter-generation algorithm identifier.
@@ -110,6 +112,97 @@ impl GoldilocksDigest384V1 {
             bytes[index * 8..index * 8 + 8].copy_from_slice(&word.to_le_bytes());
         }
         bytes
+    }
+}
+
+/// Failure returned by the incremental final-field digest builder.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GoldilocksDigest384LastFieldStreamErrorV1 {
+    /// A domain field, prefix field, final-field length, or total field count
+    /// exceeds the canonical 32-bit framing ceiling.
+    FramingLimitExceeded,
+    /// An update would consume more bytes than the length bound at construction.
+    InputOverrun {
+        /// Exact final-field length bound at construction.
+        expected: usize,
+        /// Bytes already accepted before the rejected update.
+        received: usize,
+        /// Bytes in the rejected update.
+        additional: usize,
+    },
+    /// Finalization was requested before the bound final-field length was met.
+    InputUnderrun {
+        /// Exact final-field length bound at construction.
+        expected: usize,
+        /// Bytes accepted before finalization.
+        received: usize,
+    },
+}
+
+impl fmt::Display for GoldilocksDigest384LastFieldStreamErrorV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::FramingLimitExceeded => {
+                formatter.write_str("Goldilocks digest framing limit exceeded")
+            }
+            Self::InputOverrun {
+                expected,
+                received,
+                additional,
+            } => write!(
+                formatter,
+                "Goldilocks digest final field expects {expected} bytes, but {received} were already received and the update contains {additional} more"
+            ),
+            Self::InputUnderrun { expected, received } => write!(
+                formatter,
+                "Goldilocks digest final field expects {expected} bytes, but only {received} were received"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for GoldilocksDigest384LastFieldStreamErrorV1 {}
+
+/// Cloneable incremental builder for the final byte field of a typed digest.
+///
+/// The domain, all preceding fields, and the exact final-field byte length are
+/// bound by [`Self::new`]. The builder keeps only the six lane permutation
+/// states plus one shared rate block and one shared seven-byte input chunk.
+#[derive(Clone, Copy, Debug)]
+pub struct GoldilocksDigest384LastFieldStreamV1 {
+    lane_states: [[u64; STATE_WIDTH]; GOLDILOCKS_DIGEST384_LANES_V1],
+    pending: [u64; RATE],
+    pending_len: usize,
+    byte_chunk: [u8; 7],
+    byte_chunk_len: usize,
+    expected_final_field_len: usize,
+    received_final_field_len: usize,
+}
+
+/// Read-only AIR handoff for one canonical digest lane after the typed prefix.
+///
+/// `state` includes any already-buffered rate words, while
+/// `next_rate_position` identifies where the first word of the final byte
+/// field must be added.  The next permutation is performed when that position
+/// advances to the rate.  Keeping the fields private prevents callers from
+/// constructing an invalid prefix snapshot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GoldilocksDigest384LanePrefixV1 {
+    state: [u64; STATE_WIDTH],
+    next_rate_position: usize,
+}
+
+impl GoldilocksDigest384LanePrefixV1 {
+    /// Prefix state with all pending rate words folded in.
+    #[must_use]
+    pub const fn state(self) -> [u64; STATE_WIDTH] {
+        self.state
+    }
+
+    /// Rate position for the first final-field word.
+    #[must_use]
+    pub const fn next_rate_position(self) -> usize {
+        self.next_rate_position
     }
 }
 
@@ -268,6 +361,31 @@ fn sha3_256_v1(fields: &[&[u8]]) -> [u8; 32] {
 
 fn lane_parameters_v1() -> &'static [LaneParametersV1; GOLDILOCKS_DIGEST384_LANES_V1] {
     LANE_PARAMETERS_V1.get_or_init(generate_lane_parameters_v1)
+}
+
+/// Return the generated initial state of one canonical digest lane.
+///
+/// `None` is returned for every lane index outside `0..6`.
+#[must_use]
+pub fn goldilocks_digest384_lane_initial_state_v1(lane: usize) -> Option<[u64; STATE_WIDTH]> {
+    lane_parameters_v1()
+        .get(lane)
+        .map(|parameters| parameters.initial_state)
+}
+
+/// Return one generated round-constant row for a canonical digest lane.
+///
+/// `None` is returned when either the lane or round is outside the fixed
+/// first-release profile.
+#[must_use]
+pub fn goldilocks_digest384_lane_round_constants_v1(
+    lane: usize,
+    round: usize,
+) -> Option<[u64; STATE_WIDTH]> {
+    lane_parameters_v1()
+        .get(lane)
+        .and_then(|parameters| parameters.round_constants.get(round))
+        .copied()
 }
 
 fn generate_lane_parameters_v1() -> [LaneParametersV1; GOLDILOCKS_DIGEST384_LANES_V1] {
@@ -465,6 +583,246 @@ fn absorb_domain_v1(
     Some(())
 }
 
+impl GoldilocksDigest384LastFieldStreamV1 {
+    /// Bind a typed domain, all fields preceding the streamed final field, and
+    /// the final field's exact byte length.
+    ///
+    /// The prefix fields are absorbed during construction and need not remain
+    /// alive afterward. An empty final field is valid and can be finalized
+    /// without an update.
+    ///
+    /// # Errors
+    ///
+    /// Returns
+    /// [`GoldilocksDigest384LastFieldStreamErrorV1::FramingLimitExceeded`] when
+    /// any byte field or the resulting field count exceeds the canonical
+    /// 32-bit framing ceiling.
+    pub fn new(
+        domain: GoldilocksDigestDomainV1<'_>,
+        prefix_fields: &[&[u8]],
+        final_field_len: usize,
+    ) -> Result<Self, GoldilocksDigest384LastFieldStreamErrorV1> {
+        let field_count = prefix_fields
+            .len()
+            .checked_add(1)
+            .ok_or(GoldilocksDigest384LastFieldStreamErrorV1::FramingLimitExceeded)?;
+        let domain_fields = [
+            domain.catalog,
+            domain.protocol,
+            domain.profile,
+            domain.role,
+            domain.phase,
+        ];
+        if field_count > MAX_FRAMED_FIELD_BYTES_V1
+            || final_field_len > MAX_FRAMED_FIELD_BYTES_V1
+            || prefix_fields
+                .iter()
+                .chain(domain_fields.iter())
+                .any(|field| field.len() > MAX_FRAMED_FIELD_BYTES_V1)
+        {
+            return Err(GoldilocksDigest384LastFieldStreamErrorV1::FramingLimitExceeded);
+        }
+
+        let lanes: [LaneSpongeV1<'_>; GOLDILOCKS_DIGEST384_LANES_V1] =
+            core::array::from_fn(|lane| {
+                let mut sponge = LaneSpongeV1::new(&lane_parameters_v1()[lane]);
+                absorb_domain_v1(
+                    &mut sponge,
+                    domain,
+                    u64::try_from(lane).expect("six-lane index fits u64"),
+                )
+                .expect("domain fields passed the shared size check");
+                sponge
+            });
+        let pending = lanes[0].pending;
+        let pending_len = lanes[0].pending_len;
+        debug_assert!(
+            lanes
+                .iter()
+                .all(|lane| lane.pending == pending && lane.pending_len == pending_len)
+        );
+
+        let mut stream = Self {
+            lane_states: core::array::from_fn(|lane| lanes[lane].state),
+            pending,
+            pending_len,
+            byte_chunk: [0; 7],
+            byte_chunk_len: 0,
+            expected_final_field_len: final_field_len,
+            received_final_field_len: 0,
+        };
+        stream.absorb_element(11);
+        stream.absorb_element(
+            u64::try_from(field_count).expect("field count passed the framing ceiling"),
+        );
+        for (index, field) in prefix_fields.iter().enumerate() {
+            stream.absorb_framed_byte_field(
+                12 + u64::try_from(index).expect("field count passed the framing ceiling"),
+                field,
+            );
+        }
+        stream.absorb_element(
+            12 + u64::try_from(prefix_fields.len())
+                .expect("prefix field count passed the framing ceiling"),
+        );
+        stream.absorb_element(
+            u64::try_from(final_field_len).expect("final field length passed the framing ceiling"),
+        );
+        Ok(stream)
+    }
+
+    /// Return the exact final-field byte length bound at construction.
+    #[must_use]
+    pub const fn expected_len(&self) -> usize {
+        self.expected_final_field_len
+    }
+
+    /// Return the number of final-field bytes accepted so far.
+    #[must_use]
+    pub const fn received_len(&self) -> usize {
+        self.received_final_field_len
+    }
+
+    /// Return the number of final-field bytes that remain before finalization.
+    #[must_use]
+    pub const fn remaining_len(&self) -> usize {
+        self.expected_final_field_len - self.received_final_field_len
+    }
+
+    /// Return the canonical post-prefix state for one lane.
+    ///
+    /// The returned state has the shared pending rate block folded into its
+    /// corresponding state words, but has not performed the next permutation.
+    /// This is the exact boundary consumed by AIR implementations that prove
+    /// the streamed final field without reimplementing typed-domain framing.
+    #[must_use]
+    pub fn lane_prefix_v1(&self, lane: usize) -> Option<GoldilocksDigest384LanePrefixV1> {
+        let mut state = *self.lane_states.get(lane)?;
+        for (state_word, pending_word) in state.iter_mut().zip(self.pending).take(self.pending_len)
+        {
+            *state_word = add_v1(*state_word, pending_word);
+        }
+        Some(GoldilocksDigest384LanePrefixV1 {
+            state,
+            next_rate_position: self.pending_len,
+        })
+    }
+
+    /// Absorb the next bytes of the final field.
+    ///
+    /// A rejected update is atomic: no bytes from it are absorbed, so the
+    /// builder can still accept an update that fits the remaining length.
+    ///
+    /// # Errors
+    ///
+    /// Returns
+    /// [`GoldilocksDigest384LastFieldStreamErrorV1::InputOverrun`] when `bytes`
+    /// is longer than the unfilled portion of the length bound at construction.
+    pub fn update(
+        &mut self,
+        bytes: &[u8],
+    ) -> Result<(), GoldilocksDigest384LastFieldStreamErrorV1> {
+        if bytes.len() > self.remaining_len() {
+            return Err(GoldilocksDigest384LastFieldStreamErrorV1::InputOverrun {
+                expected: self.expected_final_field_len,
+                received: self.received_final_field_len,
+                additional: bytes.len(),
+            });
+        }
+
+        let mut remaining = bytes;
+        while !remaining.is_empty() {
+            let copied = (self.byte_chunk.len() - self.byte_chunk_len).min(remaining.len());
+            self.byte_chunk[self.byte_chunk_len..self.byte_chunk_len + copied]
+                .copy_from_slice(&remaining[..copied]);
+            self.byte_chunk_len += copied;
+            remaining = &remaining[copied..];
+            if self.byte_chunk_len == self.byte_chunk.len() {
+                let mut word = [0_u8; 8];
+                word[..self.byte_chunk.len()].copy_from_slice(&self.byte_chunk);
+                self.absorb_element(u64::from_le_bytes(word));
+                self.byte_chunk = [0; 7];
+                self.byte_chunk_len = 0;
+            }
+        }
+        self.received_final_field_len += bytes.len();
+        Ok(())
+    }
+
+    /// Finalize the canonical frame and return its six-lane digest.
+    ///
+    /// # Errors
+    ///
+    /// Returns
+    /// [`GoldilocksDigest384LastFieldStreamErrorV1::InputUnderrun`] unless the
+    /// exact final-field byte length bound at construction has been absorbed.
+    pub fn finalize(
+        mut self,
+    ) -> Result<GoldilocksDigest384V1, GoldilocksDigest384LastFieldStreamErrorV1> {
+        if self.received_final_field_len != self.expected_final_field_len {
+            return Err(GoldilocksDigest384LastFieldStreamErrorV1::InputUnderrun {
+                expected: self.expected_final_field_len,
+                received: self.received_final_field_len,
+            });
+        }
+
+        let mut terminal = [0_u8; 8];
+        terminal[..self.byte_chunk_len].copy_from_slice(&self.byte_chunk[..self.byte_chunk_len]);
+        terminal[self.byte_chunk_len] = 1;
+        self.absorb_element(u64::from_le_bytes(terminal));
+        // Match `LaneSpongeV1::finish`: a final field element equal to one
+        // makes the complete field-element stream prefix-free.
+        self.absorb_element(1);
+        if self.pending_len != 0 {
+            self.flush_pending();
+        }
+        let words = core::array::from_fn(|lane| self.lane_states[lane][0]);
+        Ok(GoldilocksDigest384V1::new(words)
+            .expect("Poseidon permutations preserve canonical Goldilocks elements"))
+    }
+
+    fn absorb_framed_byte_field(&mut self, tag: u64, bytes: &[u8]) {
+        debug_assert!(bytes.len() <= MAX_FRAMED_FIELD_BYTES_V1);
+        self.absorb_element(tag);
+        self.absorb_element(
+            u64::try_from(bytes.len()).expect("byte field length passed the framing ceiling"),
+        );
+        let mut chunks = bytes.chunks_exact(7);
+        for chunk in &mut chunks {
+            let mut word = [0_u8; 8];
+            word[..7].copy_from_slice(chunk);
+            self.absorb_element(u64::from_le_bytes(word));
+        }
+        let remainder = chunks.remainder();
+        let mut terminal = [0_u8; 8];
+        terminal[..remainder.len()].copy_from_slice(remainder);
+        terminal[remainder.len()] = 1;
+        self.absorb_element(u64::from_le_bytes(terminal));
+    }
+
+    fn absorb_element(&mut self, value: u64) {
+        debug_assert!(value < FIELD_MODULUS);
+        self.pending[self.pending_len] = value;
+        self.pending_len += 1;
+        if self.pending_len == RATE {
+            self.flush_pending();
+        }
+    }
+
+    fn flush_pending(&mut self) {
+        debug_assert!((1..=RATE).contains(&self.pending_len));
+        let parameters = lane_parameters_v1();
+        for (lane, state) in self.lane_states.iter_mut().enumerate() {
+            for (state_word, value) in state.iter_mut().zip(self.pending) {
+                *state_word = add_v1(*state_word, value);
+            }
+            permute_v1(state, &parameters[lane]);
+        }
+        self.pending = [0; RATE];
+        self.pending_len = 0;
+    }
+}
+
 /// Hash a typed domain and ordered byte fields into six independent lanes.
 ///
 /// Returns `None` only if the part count or one field length exceeds the
@@ -561,6 +919,106 @@ mod tests {
         }
     }
 
+    fn patterned_bytes(length: usize) -> Vec<u8> {
+        (0..length)
+            .map(|index| {
+                let mixed = index.wrapping_mul(73).wrapping_add(length.wrapping_mul(19)) ^ 0xa5;
+                u8::try_from(mixed & 0xff).expect("pattern byte is masked to eight bits")
+            })
+            .collect()
+    }
+
+    fn one_shot_with_final_field(
+        digest_domain: GoldilocksDigestDomainV1<'_>,
+        prefix_fields: &[&[u8]],
+        final_field: &[u8],
+    ) -> GoldilocksDigest384V1 {
+        let mut fields = Vec::with_capacity(prefix_fields.len() + 1);
+        fields.extend_from_slice(prefix_fields);
+        fields.push(final_field);
+        hash_bytes_384_v1(digest_domain, &fields).expect("test fields fit the framing ceiling")
+    }
+
+    fn permute_from_public_parameters(lane: usize, state: &mut [u64; STATE_WIDTH]) {
+        for round in 0..GOLDILOCKS_DIGEST384_ROUNDS_V1 {
+            let constants = goldilocks_digest384_lane_round_constants_v1(lane, round)
+                .expect("canonical lane and round");
+            for (word, constant) in state.iter_mut().zip(constants) {
+                *word = add_v1(*word, constant);
+            }
+            let full =
+                !(FULL_ROUNDS_HALF_V1..FULL_ROUNDS_HALF_V1 + PARTIAL_ROUNDS_V1).contains(&round);
+            if full {
+                for word in state.iter_mut() {
+                    *word = pow7_v1(*word);
+                }
+            } else {
+                state[0] = pow7_v1(state[0]);
+            }
+            apply_mds_v1(state);
+        }
+    }
+
+    #[test]
+    fn public_air_accessors_reconstruct_the_canonical_stream_digest() {
+        let prefix_fields: [&[u8]; 2] = [b"public-prefix", b"second-prefix"];
+        let payload = patterned_bytes(64);
+        let stream =
+            GoldilocksDigest384LastFieldStreamV1::new(domain(), &prefix_fields, payload.len())
+                .expect("bounded typed prefix");
+        let expected = one_shot_with_final_field(domain(), &prefix_fields, &payload);
+
+        let mut final_words = payload
+            .chunks_exact(7)
+            .map(|chunk| {
+                let mut word = [0_u8; 8];
+                word[..7].copy_from_slice(chunk);
+                u64::from_le_bytes(word)
+            })
+            .collect::<Vec<_>>();
+        let remainder = payload.chunks_exact(7).remainder();
+        let mut terminal = [0_u8; 8];
+        terminal[..remainder.len()].copy_from_slice(remainder);
+        terminal[remainder.len()] = 1;
+        final_words.push(u64::from_le_bytes(terminal));
+        final_words.push(1);
+
+        for lane in 0..GOLDILOCKS_DIGEST384_LANES_V1 {
+            assert_eq!(
+                goldilocks_digest384_lane_initial_state_v1(lane),
+                Some(lane_parameters_v1()[lane].initial_state)
+            );
+            let prefix = stream.lane_prefix_v1(lane).expect("canonical lane");
+            let mut state = prefix.state();
+            let mut position = prefix.next_rate_position();
+            for word in &final_words {
+                state[position] = add_v1(state[position], *word);
+                position += 1;
+                if position == RATE {
+                    permute_from_public_parameters(lane, &mut state);
+                    position = 0;
+                }
+            }
+            if position != 0 {
+                permute_from_public_parameters(lane, &mut state);
+            }
+            assert_eq!(state[0], expected.words()[lane]);
+        }
+
+        assert!(
+            goldilocks_digest384_lane_initial_state_v1(GOLDILOCKS_DIGEST384_LANES_V1).is_none()
+        );
+        assert!(
+            goldilocks_digest384_lane_round_constants_v1(0, GOLDILOCKS_DIGEST384_ROUNDS_V1)
+                .is_none()
+        );
+        assert!(
+            stream
+                .lane_prefix_v1(GOLDILOCKS_DIGEST384_LANES_V1)
+                .is_none()
+        );
+    }
+
     #[test]
     fn internal_keccak_matches_empty_string_kats() {
         assert_eq!(
@@ -636,6 +1094,217 @@ mod tests {
         let trailing_zero = hash_bytes_384_v1(domain(), &[b"abcdef\0"]).unwrap();
         assert_ne!(split, joined);
         assert_ne!(joined, trailing_zero);
+    }
+
+    #[test]
+    fn last_field_stream_matches_one_shot_at_every_boundary_split() {
+        let prefix_fields: [&[u8]; 3] = [b"", b"12345678901234", b"fixed-prefix"];
+        // These cover both sides of every seven-byte packing boundary and
+        // repeated two-element Poseidon rate boundaries.
+        let lengths = [
+            0, 1, 2, 5, 6, 7, 8, 9, 12, 13, 14, 15, 16, 20, 21, 22, 27, 28, 29, 41, 42, 43, 55, 56,
+            57,
+        ];
+        for length in lengths {
+            let final_field = patterned_bytes(length);
+            let expected = one_shot_with_final_field(domain(), &prefix_fields, &final_field);
+            for split in 0..=length {
+                let mut stream =
+                    GoldilocksDigest384LastFieldStreamV1::new(domain(), &prefix_fields, length)
+                        .unwrap();
+                stream.update(&final_field[..split]).unwrap();
+                stream.update(&final_field[split..]).unwrap();
+                assert_eq!(
+                    stream.finalize().unwrap().to_le_bytes(),
+                    expected.to_le_bytes(),
+                    "length {length}, split {split}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn last_field_stream_matches_deterministic_multisplit_patterns() {
+        let prefix_fields: [&[u8]; 2] = [b"prefix-a", b"prefix-b-with-rate-shift"];
+        for length in (0..=32).chain([47, 48, 49, 63, 64, 65, 97, 98, 99]) {
+            let final_field = patterned_bytes(length);
+            let expected = one_shot_with_final_field(domain(), &prefix_fields, &final_field);
+            for seed in 0..8_u64 {
+                let mut stream =
+                    GoldilocksDigest384LastFieldStreamV1::new(domain(), &prefix_fields, length)
+                        .unwrap();
+                stream.update(&[]).unwrap();
+                let mut state = seed
+                    ^ u64::try_from(length)
+                        .expect("small test length fits u64")
+                        .wrapping_mul(0x9e37_79b9_7f4a_7c15);
+                let mut offset = 0;
+                while offset < length {
+                    state = state
+                        .wrapping_mul(6_364_136_223_846_793_005)
+                        .wrapping_add(1_442_695_040_888_963_407);
+                    let chunk_len = usize::try_from((state >> 32) % 17 + 1)
+                        .expect("bounded test chunk length fits usize")
+                        .min(length - offset);
+                    stream
+                        .update(&final_field[offset..offset + chunk_len])
+                        .unwrap();
+                    offset += chunk_len;
+                }
+                assert_eq!(
+                    stream.finalize().unwrap().to_le_bytes(),
+                    expected.to_le_bytes(),
+                    "length {length}, deterministic split seed {seed}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn last_field_stream_clone_preserves_and_can_fork_state() {
+        let prefix_fields: [&[u8]; 1] = [b"clone-prefix"];
+        let common = b"common-";
+        let final_a = b"common-alpha-tail";
+        let final_b = b"common-bravo-tail";
+        assert_eq!(final_a.len(), final_b.len());
+
+        let mut original =
+            GoldilocksDigest384LastFieldStreamV1::new(domain(), &prefix_fields, final_a.len())
+                .unwrap();
+        assert_eq!(original.expected_len(), final_a.len());
+        original.update(common).unwrap();
+        assert_eq!(original.received_len(), common.len());
+        assert_eq!(original.remaining_len(), final_a.len() - common.len());
+        let mut fork = Clone::clone(&original);
+        original.update(&final_a[common.len()..]).unwrap();
+        fork.update(&final_b[common.len()..]).unwrap();
+
+        let digest_a = original.finalize().unwrap();
+        let digest_b = fork.finalize().unwrap();
+        assert_eq!(
+            digest_a,
+            one_shot_with_final_field(domain(), &prefix_fields, final_a)
+        );
+        assert_eq!(
+            digest_b,
+            one_shot_with_final_field(domain(), &prefix_fields, final_b)
+        );
+        assert_ne!(digest_a, digest_b);
+    }
+
+    #[test]
+    fn last_field_stream_rejects_overrun_atomically_and_underrun() {
+        let prefix_fields: [&[u8]; 1] = [b"length-prefix"];
+        let mut stream =
+            GoldilocksDigest384LastFieldStreamV1::new(domain(), &prefix_fields, 3).unwrap();
+        assert_eq!(
+            stream.update(b"four"),
+            Err(GoldilocksDigest384LastFieldStreamErrorV1::InputOverrun {
+                expected: 3,
+                received: 0,
+                additional: 4,
+            })
+        );
+        assert_eq!(stream.received_len(), 0);
+        stream.update(b"ab").unwrap();
+        assert_eq!(
+            stream.update(b"cd"),
+            Err(GoldilocksDigest384LastFieldStreamErrorV1::InputOverrun {
+                expected: 3,
+                received: 2,
+                additional: 2,
+            })
+        );
+        assert_eq!(stream.received_len(), 2);
+        assert_eq!(
+            Clone::clone(&stream).finalize(),
+            Err(GoldilocksDigest384LastFieldStreamErrorV1::InputUnderrun {
+                expected: 3,
+                received: 2,
+            })
+        );
+        stream.update(b"c").unwrap();
+        assert_eq!(
+            stream.finalize().unwrap(),
+            one_shot_with_final_field(domain(), &prefix_fields, b"abc")
+        );
+    }
+
+    #[test]
+    fn last_field_stream_accepts_an_exact_empty_final_field() {
+        let prefix_fields: [&[u8]; 0] = [];
+        let stream =
+            GoldilocksDigest384LastFieldStreamV1::new(domain(), &prefix_fields, 0).unwrap();
+        assert_eq!(stream.expected_len(), 0);
+        assert_eq!(stream.remaining_len(), 0);
+        assert_eq!(
+            stream.finalize().unwrap(),
+            one_shot_with_final_field(domain(), &prefix_fields, b"")
+        );
+    }
+
+    #[test]
+    fn last_field_stream_rejects_lengths_above_the_framing_ceiling() {
+        if let Some(too_long) = MAX_FRAMED_FIELD_BYTES_V1.checked_add(1) {
+            assert_eq!(
+                GoldilocksDigest384LastFieldStreamV1::new(domain(), &[], too_long).unwrap_err(),
+                GoldilocksDigest384LastFieldStreamErrorV1::FramingLimitExceeded
+            );
+        }
+    }
+
+    #[test]
+    fn last_field_stream_binds_every_typed_domain_coordinate() {
+        let prefix_fields: [&[u8]; 1] = [b"domain-prefix"];
+        let payload = b"domain-payload";
+        let digest_for = |digest_domain| {
+            let mut stream = GoldilocksDigest384LastFieldStreamV1::new(
+                digest_domain,
+                &prefix_fields,
+                payload.len(),
+            )
+            .unwrap();
+            stream.update(payload).unwrap();
+            stream.finalize().unwrap()
+        };
+        let original = digest_for(domain());
+        let variants = [
+            GoldilocksDigestDomainV1 {
+                catalog: b"other-catalog-v1",
+                ..domain()
+            },
+            GoldilocksDigestDomainV1 {
+                protocol: b"other-protocol-v1",
+                ..domain()
+            },
+            GoldilocksDigestDomainV1 {
+                profile: b"other-profile-v1",
+                ..domain()
+            },
+            GoldilocksDigestDomainV1 {
+                role: b"other-role-v1",
+                ..domain()
+            },
+            GoldilocksDigestDomainV1 {
+                phase: b"other-phase-v1",
+                ..domain()
+            },
+            GoldilocksDigestDomainV1 {
+                level: 1,
+                ..domain()
+            },
+            GoldilocksDigestDomainV1 {
+                index: 8,
+                ..domain()
+            },
+            GoldilocksDigestDomainV1 {
+                counter: 1,
+                ..domain()
+            },
+        ];
+        for variant in variants {
+            assert_ne!(original, digest_for(variant));
+        }
     }
 
     #[test]

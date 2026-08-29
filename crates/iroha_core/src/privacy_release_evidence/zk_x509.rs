@@ -332,7 +332,7 @@ pub fn build_privacy_release_zk_x509_resource_certificate_v1(
         .digest();
     let mut certificate = PrivacyReleaseZkX509ResourceCertificateV1 {
         schema_version: ZK_X509_RESOURCE_CERTIFICATE_SCHEMA_VERSION_V1,
-        protocol_id: PrivacyProtocolIdV1::IrohaZkX509StarkP256V0,
+        protocol_id: PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
         compiled_profile_digest,
         environment,
         expectations_norito_sha256,
@@ -361,7 +361,7 @@ pub fn privacy_release_zk_x509_resource_environment_v1() -> PrivacyReleaseZkX509
 pub fn validate_privacy_release_zk_x509_resource_capture_v1(
     certificate: &PrivacyReleaseZkX509ResourceCertificateV1,
 ) -> bool {
-    if certificate.protocol_id != PrivacyProtocolIdV1::IrohaZkX509StarkP256V0 {
+    if certificate.protocol_id != PrivacyProtocolIdV1::IrohaZkX509StarkP256V1 {
         return false;
     }
     let Ok(compiled_profile) = construct_zk_x509_compiled_profile_v1() else {
@@ -408,7 +408,7 @@ pub const fn privacy_release_process_profile_v1(
     protocol_id: PrivacyProtocolIdV1,
 ) -> Option<PrivacyReleaseProcessProfileV1> {
     match protocol_id {
-        PrivacyProtocolIdV1::IrohaZkX509StarkP256V0 => {
+        PrivacyProtocolIdV1::IrohaZkX509StarkP256V1 => {
             let elapsed_ceiling_millis = match ZK_X509_PROVER_TARGET_SECONDS_V1.checked_mul(1_000) {
                 Some(value) => value,
                 None => panic!("zk-X509 release target milliseconds overflow u64"),
@@ -454,8 +454,10 @@ fn zk_x509_network_envelope_v1(
     statement: &IrohaZkX509StarkP256StatementV1,
     proof: Vec<u8>,
 ) -> Result<PrivacyProofEnvelopeV1, PrivacyReleaseEvidenceErrorClassV1> {
-    let typed_statement = PrivacyStatementV1::IrohaZkX509StarkP256V0(statement.clone());
+    let typed_statement = PrivacyStatementV1::IrohaZkX509StarkP256V1(statement.clone());
     let envelope = PrivacyProofEnvelopeV1 {
+        wire_magic: Default::default(),
+        catalog_commitment: Default::default(),
         protocol_id: profile.protocol_id,
         proof_system_id: profile.proof_system_id,
         engine_id: profile.engine_id,
@@ -468,7 +470,7 @@ fn zk_x509_network_envelope_v1(
             .digest()
             .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?,
         statement: typed_statement,
-        proof: PrivacyProofV1::IrohaZkX509StarkP256V0(PrivacyProofBytesV1::new(proof)),
+        proof: PrivacyProofV1::IrohaZkX509StarkP256V1(PrivacyProofBytesV1::new(proof)),
     };
     envelope
         .validate_with_limits(&PrivacyConsensusLimitsV1::taira_default())
@@ -638,6 +640,8 @@ fn zk_x509_network_draft_envelope_v1(
     statement: &IrohaZkX509StarkP256StatementV1,
 ) -> PrivacyProofEnvelopeV1 {
     PrivacyProofEnvelopeV1 {
+        wire_magic: Default::default(),
+        catalog_commitment: Default::default(),
         protocol_id: profile.protocol_id,
         proof_system_id: profile.proof_system_id,
         engine_id: profile.engine_id,
@@ -647,8 +651,8 @@ fn zk_x509_network_draft_envelope_v1(
         statement_schema_digest: profile.statement_schema_digest,
         engine_manifest_digest: profile.engine_manifest_digest,
         statement_digest: PrivacyStatementDigestV1::new([0; 32]),
-        statement: PrivacyStatementV1::IrohaZkX509StarkP256V0(statement.clone()),
-        proof: PrivacyProofV1::IrohaZkX509StarkP256V0(PrivacyProofBytesV1::new(Vec::new())),
+        statement: PrivacyStatementV1::IrohaZkX509StarkP256V1(statement.clone()),
+        proof: PrivacyProofV1::IrohaZkX509StarkP256V1(PrivacyProofBytesV1::new(Vec::new())),
     }
 }
 /// Build one genuine canonical X.509 action and a corruption control.
@@ -656,7 +660,7 @@ fn zk_x509_network_draft_envelope_v1(
 /// The production compiled-profile accessor is deliberately the first gate.
 /// Until every authenticated expectation and resource pin is installed this
 /// function returns [`PrivacyReleaseEvidenceErrorClassV1::ProtocolUnavailable`]
-/// and cannot expose candidate material as a network action.
+/// and cannot expose unqualified profile material as a network action.
 ///
 /// `resource_certificate` must be the canonical installed certificate and must match every
 /// authenticated source pin. The authenticated process ceiling is reduced by `admission_reserve`,
@@ -788,7 +792,7 @@ fn prepare_zk_x509_network_action_v1(
     crl_lineage: &ZkX509NetworkCrlLineageV1,
     build_started: &Instant,
 ) -> Result<PreparedZkX509NetworkActionV1, PrivacyReleaseEvidenceErrorClassV1> {
-    let protocol_id = PrivacyProtocolIdV1::IrohaZkX509StarkP256V0;
+    let protocol_id = PrivacyProtocolIdV1::IrohaZkX509StarkP256V1;
     let profile = compiled_privacy_profile_v1(protocol_id)
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::ProtocolUnavailable)?;
     if transaction_context.network_id.as_bytes() != &transaction_context.genesis_hash
@@ -901,9 +905,13 @@ struct PreparedZkX509StageV1 {
 fn prepare_zk_x509_stage_v1(
     case_kind: PrivacyReleaseCaseKindV1,
 ) -> Result<PreparedZkX509StageV1, PrivacyReleaseEvidenceErrorClassV1> {
-    let protocol_id = PrivacyProtocolIdV1::IrohaZkX509StarkP256V0;
-    let profile = zk_x509_release_candidate_profile_material_v1()
-        .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::ProtocolUnavailable)?;
+    let protocol_id = PrivacyProtocolIdV1::IrohaZkX509StarkP256V1;
+    let profile = compiled_privacy_profile_v1(protocol_id).map_err(|error| match error {
+        crate::privacy_profiles::CompiledPrivacyProfileErrorV1::EngineUnavailable {
+            protocol_id: unavailable,
+        } if unavailable == protocol_id => PrivacyReleaseEvidenceErrorClassV1::ProtocolUnavailable,
+        _ => PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed,
+    })?;
     let context =
         PrivacyStatementContextV1 {
             network_id: release_network_id_from_genesis_hash(ZK_X509_RELEASE_GENESIS_HASH_V1),
@@ -979,7 +987,7 @@ pub(super) fn run_zk_x509_stage_v1(
         trusted_block_timestamp_ms,
         proof,
     } = prepare_zk_x509_stage_v1(case_kind)?;
-    let protocol_id = PrivacyProtocolIdV1::IrohaZkX509StarkP256V0;
+    let protocol_id = PrivacyProtocolIdV1::IrohaZkX509StarkP256V1;
     let resources = PrivacyReleaseResourceFactsV1 {
         primary_units: u64::try_from(fixture.witness.certificate_chain_der.len())
             .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?,
@@ -997,7 +1005,7 @@ pub(super) fn run_zk_x509_stage_v1(
     if Some(resources) != privacy_release_resource_facts_v1(protocol_id, case_kind) {
         return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
     }
-    let typed_statement = PrivacyStatementV1::IrohaZkX509StarkP256V0(fixture.statement.clone());
+    let typed_statement = PrivacyStatementV1::IrohaZkX509StarkP256V1(fixture.statement.clone());
     let original_material = norito::encode_canonical(&typed_statement)
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
     let authoritative_network_id =
@@ -1079,7 +1087,7 @@ pub(super) fn run_zk_x509_stage_v1(
             }
             let envelope_mutations: [fn(&mut PrivacyProofEnvelopeV1); 9] = [
                 |envelope| {
-                    envelope.protocol_id = PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0;
+                    envelope.protocol_id = PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1;
                 },
                 |envelope| {
                     envelope.proof_system_id = PrivacyProofSystemIdV1::JindoPolynomialCommitment;
@@ -1117,7 +1125,7 @@ pub(super) fn run_zk_x509_stage_v1(
             }
             let activation_mutations: [fn(&mut PrivacyProtocolActivationRecordV1); 9] = [
                 |activation| {
-                    activation.protocol_id = PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0;
+                    activation.protocol_id = PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1;
                 },
                 |activation| {
                     activation.proof_system_id = PrivacyProofSystemIdV1::JindoPolynomialCommitment;
@@ -1132,7 +1140,7 @@ pub(super) fn run_zk_x509_stage_v1(
                 |activation| activation.engine_manifest_digest.0[0] ^= 0x80,
                 |activation| {
                     activation.protocol_limits =
-                        PrivacyProtocolActivationLimitsV1::ZkAcePqAuthorizationV0;
+                        PrivacyProtocolActivationLimitsV1::ZkAcePqAuthorizationV1;
                 },
             ];
             for mutate_activation in activation_mutations {
@@ -1246,7 +1254,7 @@ pub(super) fn run_zk_x509_stage_v1(
                 return Err(PrivacyReleaseEvidenceErrorClassV1::PublicStatementMutationAccepted);
             }
             (
-                norito::encode_canonical(&PrivacyStatementV1::IrohaZkX509StarkP256V0(wrong_intent))
+                norito::encode_canonical(&PrivacyStatementV1::IrohaZkX509StarkP256V1(wrong_intent))
                     .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?,
                 PrivacyReleaseFailureClassV1::PublicStatementBindingRejected,
             )
@@ -1435,11 +1443,13 @@ fn verify_zk_x509_release_production_envelope_with_mutations_v1<
         },
     ));
     mutate_activation(&mut activation);
-    let typed_statement = PrivacyStatementV1::IrohaZkX509StarkP256V0(statement.clone());
+    let typed_statement = PrivacyStatementV1::IrohaZkX509StarkP256V1(statement.clone());
     let statement_digest = typed_statement
         .digest()
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
     let mut envelope = PrivacyProofEnvelopeV1 {
+        wire_magic: Default::default(),
+        catalog_commitment: Default::default(),
         protocol_id: profile.protocol_id,
         proof_system_id: profile.proof_system_id,
         engine_id: profile.engine_id,
@@ -1450,7 +1460,7 @@ fn verify_zk_x509_release_production_envelope_with_mutations_v1<
         engine_manifest_digest: profile.engine_manifest_digest,
         statement_digest,
         statement: typed_statement,
-        proof: PrivacyProofV1::IrohaZkX509StarkP256V0(PrivacyProofBytesV1::new(proof.to_vec())),
+        proof: PrivacyProofV1::IrohaZkX509StarkP256V1(PrivacyProofBytesV1::new(proof.to_vec())),
     };
     mutate_envelope(&mut envelope);
     let expected_encoded_action_bytes = norito::to_bytes(&envelope)
@@ -1458,7 +1468,7 @@ fn verify_zk_x509_release_production_envelope_with_mutations_v1<
         .and_then(|encoded| u64::try_from(encoded.len()).ok())
         .ok_or(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
     let limits = PrivacyConsensusLimitsV1::taira_default();
-    let effects = verify_zk_x509_release_candidate_envelope_v1(
+    let effects = verify_privacy_envelope_v1(
         &envelope,
         PrivacyVerificationContextV1 {
             activation: &activation,
@@ -1487,7 +1497,7 @@ fn verify_zk_x509_release_production_envelope_with_mutations_v1<
         }
         _ => PrivacyReleaseEvidenceErrorClassV1::ProductionEnvelopeRejected,
     })?;
-    if effects.protocol_id() != PrivacyProtocolIdV1::IrohaZkX509StarkP256V0
+    if effects.protocol_id() != PrivacyProtocolIdV1::IrohaZkX509StarkP256V1
         || effects.statement_digest() != statement_digest
         || effects.action_index() != authoritative_action_index
         || effects.encoded_action_bytes() != expected_encoded_action_bytes
@@ -1539,7 +1549,7 @@ mod release_kat_tests {
     };
     const SECOND_PROOF_PURPOSE_V1: &[u8] = b"cross-subproof-splice-control";
     const RELEASE_KAT_THREAD_STACK_BYTES_V1: usize = 8 * 1024 * 1024;
-    fn verify_candidate_v1(
+    fn verify_qualification_proof_v1(
         fixture: &crate::privacy_engines::zk_x509::relation::release_fixture::ZkX509ReleaseFixtureV1,
         genesis_hash: [u8; 32],
         encoded: &[u8],
@@ -1573,7 +1583,7 @@ mod release_kat_tests {
             proof: encoded,
         } = prepare_zk_x509_stage_v1(case_kind).expect("canonical positive release stage");
         let elapsed = started.elapsed();
-        let protocol_id = PrivacyProtocolIdV1::IrohaZkX509StarkP256V0;
+        let protocol_id = PrivacyProtocolIdV1::IrohaZkX509StarkP256V1;
         let proof_bytes = u32::try_from(encoded.len()).expect("KAT proof length fits u32");
         let proof_sha256 = sha256_v1(&encoded);
         let proof_sha256_hex = proof_sha256
@@ -1605,7 +1615,7 @@ mod release_kat_tests {
             );
         }
         assert!(proof_bytes <= ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1);
-        verify_candidate_v1(&fixture, ZK_X509_RELEASE_GENESIS_HASH_V1, &encoded)
+        verify_qualification_proof_v1(&fixture, ZK_X509_RELEASE_GENESIS_HASH_V1, &encoded)
             .expect("canonical release-stage KAT independently verifies");
         let envelope =
             decode_zk_x509_credential_envelope_v1(&encoded).expect("canonical KAT envelope");
@@ -1646,7 +1656,8 @@ mod release_kat_tests {
             let mut changed = encoded.clone();
             changed[offset] ^= 1;
             assert!(
-                verify_candidate_v1(&fixture, ZK_X509_RELEASE_GENESIS_HASH_V1, &changed).is_err(),
+                verify_qualification_proof_v1(&fixture, ZK_X509_RELEASE_GENESIS_HASH_V1, &changed)
+                    .is_err(),
                 "mutated X5S1 byte {offset} was accepted"
             );
         }
@@ -1667,7 +1678,7 @@ mod release_kat_tests {
             &mut second_rng,
         )
         .expect("same-context purpose-separated control proof");
-        verify_candidate_v1(&fixture, ZK_X509_RELEASE_GENESIS_HASH_V1, &second_encoded)
+        verify_qualification_proof_v1(&fixture, ZK_X509_RELEASE_GENESIS_HASH_V1, &second_encoded)
             .expect("control proof independently verifies");
         let second_envelope = decode_zk_x509_credential_envelope_v1(&second_encoded)
             .expect("canonical control envelope");
@@ -1690,7 +1701,8 @@ mod release_kat_tests {
                 encode_zk_x509_credential_envelope_v1(envelope.public, main_aggregate, ca_subproof)
                     .expect("mixed valid subproofs remain canonically framed");
             assert!(
-                verify_candidate_v1(&fixture, ZK_X509_RELEASE_GENESIS_HASH_V1, &spliced).is_err(),
+                verify_qualification_proof_v1(&fixture, ZK_X509_RELEASE_GENESIS_HASH_V1, &spliced)
+                    .is_err(),
                 "{label} was accepted"
             );
         }
@@ -1709,7 +1721,7 @@ mod release_kat_tests {
         truncations.dedup();
         for length in truncations {
             assert!(
-                verify_candidate_v1(
+                verify_qualification_proof_v1(
                     &fixture,
                     ZK_X509_RELEASE_GENESIS_HASH_V1,
                     &encoded[..length],
@@ -1732,7 +1744,7 @@ mod release_kat_tests {
         );
         let mut wrong_genesis = ZK_X509_RELEASE_GENESIS_HASH_V1;
         wrong_genesis[0] ^= 1;
-        assert!(verify_candidate_v1(&fixture, wrong_genesis, &encoded).is_err());
+        assert!(verify_qualification_proof_v1(&fixture, wrong_genesis, &encoded).is_err());
     }
 }
 #[cfg(test)]
@@ -1745,7 +1757,7 @@ mod resource_certificate_tests {
         peak_address_space_bytes: u64,
     ) -> PrivacyReleaseZkX509ResourceObservationV1 {
         let resources = privacy_release_resource_facts_v1(
-            PrivacyProtocolIdV1::IrohaZkX509StarkP256V0,
+            PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
             case_kind,
         )
         .expect("X.509 release resource shape");
@@ -1805,7 +1817,7 @@ mod resource_certificate_tests {
         );
         reject_mutation!(
             |value: &mut PrivacyReleaseZkX509ResourceCertificateV1| value.protocol_id =
-                PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0
+                PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1
         );
         reject_mutation!(
             |value: &mut PrivacyReleaseZkX509ResourceCertificateV1| value

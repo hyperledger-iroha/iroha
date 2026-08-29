@@ -29,7 +29,12 @@ NORITO_TARGETS = (
     "aos_ncb_equiv_str_u32",
     "aos_ncb_equiv_bytes_u32",
 )
-IVM_TARGETS = ("tlv_validate", "kotodama_lower", "numeric_v1")
+IVM_TARGETS = (
+    "tlv_validate",
+    "kotodama_lower",
+    "numeric_v1",
+    "artifact_admission_v1",
+)
 
 
 def manifest_bins(manifest: Path) -> tuple[tuple[str, str], ...]:
@@ -137,12 +142,12 @@ class FuzzSmokeInventoryTests(unittest.TestCase):
         )
 
     def test_strict_mode_invokes_exact_supported_inventory(self) -> None:
-        """Nine Norito and three IVM targets run once each in stable order."""
+        """Nine Norito and four IVM targets run once each in stable order."""
 
         result = self.run_strict()
         self.assertEqual(result.returncode, 0, result.stderr)
         invocations = self.log.read_text(encoding="utf-8").splitlines()
-        self.assertEqual(len(invocations), 12)
+        self.assertEqual(len(invocations), 13)
 
         observed: list[tuple[str, str]] = []
         for invocation in invocations:

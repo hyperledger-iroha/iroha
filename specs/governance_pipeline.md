@@ -299,9 +299,9 @@ Research boundary reviewed through 2026-08-28:
 
 - Das and Ren, [*Adaptively Secure BLS Threshold Signatures from DDH and
   co-CDH*](https://eprint.iacr.org/2023/1553).
-- Ciampi, Crites, Komlo, and Maller, [*On the Adaptive Security of Threshold
-  Signatures*](https://eprint.iacr.org/2025/943).
-- Rønne, Finogina, and Herranz, [*Expanding the Toolbox: Coercion and
+- Ciampi, Crites, Komlo, and Maller, [*On the Adaptive Security of Key-Unique
+  Threshold Signatures*](https://eprint.iacr.org/2025/943).
+- Finogina, Herranz, and Rønne, [*Expanding the Toolbox: Coercion and
   Vote-Selling at Vote-Casting Revisited*](https://eprint.iacr.org/2024/1167).
 - Michalas, [*Coercion-Resistant Voting via Anamorphic
   Encryption*](https://doi.org/10.1145/3750555.3811888), ACM SACMAT 2026,
@@ -324,8 +324,9 @@ Research boundary reviewed through 2026-08-28:
 - Glaeser, Seres, Zhu, and Bonneau,
   [*Cicada: A Framework for Private Non-Interactive On-Chain Auctions and
   Voting*](https://eprint.iacr.org/2023/1473).
-- Shang and Chen, [*Economic Security of VDF-Based Randomness
-  Beacons*](https://arxiv.org/abs/2604.04744), 6 April 2026.
+- Shang and Chen, [*Economic Security of VDF-Based Randomness Beacons: Models,
+  Thresholds, and Design Guidelines*](https://arxiv.org/abs/2604.04744), 6
+  April 2026.
 - Gaži, Quader, and Russell, [*Taming Iterative Grinding Attacks on
   Blockchain Beacons*](https://eprint.iacr.org/2025/1974), ASIACRYPT 2025.
 - Balietti, Saggese, and Strohmaier, [*Voting Biases in Decentralized
@@ -336,8 +337,13 @@ Research boundary reviewed through 2026-08-28:
 - Cortier, Debant, and Gaudry, [*Breaking Verifiability and Vote
   Privacy in CHVote*](https://eprint.iacr.org/2025/080), ESORICS 2025.
 - NIST, [*Considerations for Achieving Crypto Agility: Strategies and
-  Practices*, CSWP 39 update
-  1](https://csrc.nist.gov/pubs/cswp/39/upd1/final), 29 June 2026.
+  Practices*, CSWP
+  39upd1](https://doi.org/10.6028/NIST.CSWP.39-upd1), 29 June 2026.
+
+As of 28 August 2026, the NIST Threshold Call remains in its three-round
+preview phase; package submissions are expected in November 2026. The BBDL
+tBLS document above is a preview writeup, not a completed package, NIST
+standard, or approval of Parliament's construction.
 
 # Standalone referendum boundary
 
@@ -352,8 +358,9 @@ mode, client finalization, or client enactment path.
 
 # Outstanding release gates
 
-- Settle the merge candidate and pass focused data-model/Core/Torii tests,
-  workspace tests, strict Clippy, formatting, and the source/model contract.
+- Re-run the already-green focused data-model/Core/Torii and source/model gates
+  from one clean immutable candidate, then pass workspace tests, strict Clippy,
+  formatting, and the remaining release matrix with archived provenance.
 - Qualify the implemented live threshold-beacon partial-share transport,
   per-session runtime custody, threshold aggregation, candidate-effect
   assembly, and authoritative finalized-pulse persistence on at least four
@@ -399,36 +406,45 @@ mode, client finalization, or client enactment path.
   complete platform-keystore wrappers and archive refresh, and prove that no
   seed, registration secret, dropout set, masked ballot, share, or opening is
   returned by the read surface.
-- The feature-isolated four-validator corridor exercises two independently
-  validated global-beacon DKG transcripts. It installs the predecessor, applies
+- The feature-isolated four-validator target contains a corridor for two
+  independently validated global-beacon DKG transcripts. It installs the
+  predecessor, applies
   a `2f + 1` compare-and-set rotation in an epoch-boundary block, verifies that
   the same block's pre-boundary pulse still uses the parent session, and verifies
   that the next pre-boundary pulse and epoch seed use the activated successor.
   The same corridor covers proof-valid timed release, exact-height enactment,
-  and normal restart/restore; stale-head supersession and rollback-isolated
-  execution failure still require four-validator evidence.
-- The four-validator public-finding branch covers authority-bound self-absence,
+  and normal restart/restore. The target also contains stale-head supersession
+  and rollback-isolated execution-failure corridors; all require fresh
+  same-source four-validator evidence before promotion.
+- The four-validator public-finding target contains authority-bound self-absence,
   early impossible-quorum `NoResult`, a fresh governance retry, immutable
   competing roots, post-deadline endorsement rejection, permissionless
   `PublicFindingDeadlineExpired`, a second retry, four-peer state equality, and
   normal validator restore. Progress still assumes an eligible transaction
   eventually submits the deterministic deadline trigger.
-- Complete Torii, MCP, CLI, OpenAPI, Rust/JavaScript/Kotlin/Java/Swift SDK, and
-  shared-fixture coverage for the typed attempt and certificate surface; verify
-  the retired equal Parliament ballot stays absent and remove remaining
-  proposal-backed referendum surfaces.
-- Qualify the aggregate-only transition/failure counters and committed
-  status/stage gauges across restart and four-peer execution, then add reviewed
-  stuck-attempt/deadline alarms. Keep identifiers, roots, registrations,
+- Candidate-qualify the implemented Torii, MCP, CLI, OpenAPI,
+  Rust/JavaScript/Kotlin/Java/Swift SDK, and shared-fixture coverage for the
+  typed attempt and certificate surface. Regenerate signed OpenAPI provenance,
+  execute candidate-native SDK artifacts, verify canonical ballot rendering
+  across clients, and keep the already-retired equal Parliament ballot and
+  proposal-backed finalize/enact surfaces absent.
+- Candidate-qualify the implemented aggregate-only transition/failure counters,
+  committed status/stage gauges, and reviewed stuck-attempt/deadline alarms
+  across restart and four-peer execution. Keep identifiers, roots, registrations,
   ballots, shares, individual openings, and account labels out of metrics.
-- Add focused and four-peer evidence for automatic enactment, stale-head
-  supersession, and rollback-isolated `ExecutionFailed` recording, including
-  restart validation and rejection of every signed terminal-outcome draft.
+- Candidate-qualify the existing focused automatic-enactment, stale-head
+  supersession, and rollback-isolated `ExecutionFailed` coverage on four peers,
+  including restart validation and rejection of every signed terminal-outcome
+  draft.
 - Obtain an independent review of the exact timed-OVN arithmetic,
   Fiat--Shamir statements, constant-time/side-channel boundary, threshold-BLS
   corruption assumptions, implementation, build artifacts, and target matrix.
   The official publication manifest validator exists, but no external audit
   report or evidence archive is embedded or claimed by this repository.
-- Run the bounded model as counterexample search and archive its same-source
-  output. It is complementary evidence, not a replacement for proof review,
+- Run the bounded model as counterexample search, exhaustively check the
+  configured state space with pinned TLC 2.19, and archive both same-source
+  outputs. These are complementary evidence, not replacements for proof review,
   cryptographic test vectors, implementation tests, or multi-peer execution.
+- Complete the candidate-native ABI-23 Swift and Android replay, capacity/rekey/
+  validation-fee restore scenarios, same-source benchmark archive, strict TLAPS
+  and pinned-Verus gates, chaos/soak qualification, and external release signing.

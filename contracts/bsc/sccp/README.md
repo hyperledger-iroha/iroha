@@ -10,7 +10,7 @@ emitted by the value-moving route after wrapped XOR is burned.
   exact EVM token. Its sole mint/burn route is fixed in the constructor; there
   is no owner, setter, lock flag, or upgrade hook.
 - `TairaXorBscSccpBridge.sol` specializes the shared exact EVM route for BSC
-  mainnet or testnet and the fixed `taira_bsc_xor` route.
+  mainnet (profile `0x42`, chain id `56`) and the fixed `taira_bsc_xor` route.
 
 The route constructor pins the token code hash, verifier address/runtime code
 hash/verifying-key hash, semantic-proof-profile hash, Taira-finality-anchor
@@ -20,18 +20,26 @@ immutable cap is committed as the final asset-route word and every mint rejects
 `totalSupply + amount` above it. The revision is encoded after the Transfer
 nonce and prevents message-id reuse when a replacement route restarts its local
 nonce. The destination binding includes both policy hashes and both verifier
-and route identities, so a proof for one deployment cannot be replayed through
-another route that shares its verifier.
+and route identities, followed by the replay-verifier address/runtime hash and
+mint-breaker address/runtime hash. The route configuration commits the same
+quartet. A proof for one deployment therefore cannot be replayed through
+another route that shares its verifier or substitutes either helper contract.
+The route exposes both helper runtime hashes and rechecks the immutable
+mint-breaker hash and one-way disabled latch before each new mint admission.
+Three of the constructor-bound five guardians may permanently disable minting;
+the breaker cannot re-enable minting or block outbound burns.
 The governed destination deployment requires the corresponding typed
 `outbound_proof_policy`; policy-less JSON and Norito records are invalid.
 
-`transferToTaira(bytes,uint256)` constructs the complete canonical Transfer
-payload, burns wrapped XOR, and emits the exact six-field `SccpTransfer` event.
-`finalizeFromTaira(bytes,bytes32[6],bytes32,bytes)` parses the canonical payload,
-checks the fixed asset/route/domains/address codec and lane-derived message id,
-verifies the route-bound Groth16 statement, records replay state, and mints the
-scaled wrapped amount subject to the immutable supply cap. All checks and replay writes precede external token
-state changes, and both paths are non-reentrant.
+`transferToTaira(bytes,uint256,bytes)` constructs the complete canonical
+Transfer payload, verifies and occupies the caller's sparse-Merkle replay leaf,
+burns wrapped XOR, and emits the exact six-field `SccpTransfer` event.
+`finalizeFromTaira(bytes,bytes32[6],bytes32,bytes,bytes)` parses the canonical
+payload, checks the fixed asset/route/domains/address codec and lane-derived
+message id, verifies the route-bound Groth16 statement and canonical replay
+witness, and mints the scaled wrapped amount subject to the immutable supply
+cap. All checks and replay-root writes precede external token state changes,
+and both paths are non-reentrant.
 
 The burn recipient must be the exact discriminant-`369` `test...` I105 spelling
 of a canonical, non-weak single-key Ed25519 account. A proof-authenticated Taira
@@ -47,13 +55,14 @@ operator-selected expected binding.
 
 Before activation, independently verify:
 
-1. Token, verifier, and route are distinct nonzero contracts with the exact
-   governed runtime code hashes.
-2. The route profile and chain id are BSC mainnet (`56`) or BSC testnet (`97`)
-   as intended.
+1. Token, verifier, replay verifier, mint breaker, and route are distinct
+   nonzero contracts with the exact governed runtime code hashes.
+2. The route profile and chain id are exactly BSC mainnet (`0x42`, `56`). No
+   testnet profile is accepted by the first-release contract.
 3. Verifier key, `semanticProofProfileHash`, `soraFinalityAnchorHash`, both lane
-   hashes, destination binding, and route-config hash match the typed deployment
-   and route revision.
+   hashes, destination binding, route-config hash, `replayVerifierCodeHash`,
+   `mintBreakerCodeHash`, guardian set, and maximum wrapped supply match the
+   typed deployment and route revision.
 4. Precompute the route address, deploy `TairaXOR` with that exact immutable
    bridge, then deploy the route at the precomputed address with the exact
    token address. Verify `TairaXOR.bridge()`, `route.token()`, token code, and
@@ -75,6 +84,7 @@ bash scripts/sccp_evm_contract_smoke.sh
 ```
 
 It covers exact cross-language vectors, mint/burn accounting, zero and
-mismatched revisions, malformed and cross-network payloads, replay,
-reentrancy, token failure, immutable code/key drift, deployment-size and
-BLAKE2F parity, route-binding separation, and adversarial BN254 inputs.
+mismatched revisions, malformed and cross-network payloads, sparse-Merkle
+replay witnesses, reentrancy, token failure, immutable token/verifier/breaker
+code drift, the one-way breaker with outbound burns still open, deployment-size
+and BLAKE2F parity, route-binding separation, and adversarial BN254 inputs.

@@ -22,8 +22,8 @@ mod ballot_proof_json;
 mod ballot_proof_roundtrip;
 #[path = "../blockheader_roundtrip.rs"]
 mod blockheader_roundtrip;
-#[path = "../confidential_encrypted_payload_vectors.rs"]
-mod confidential_encrypted_payload_vectors;
+#[path = "../confidential_memo_envelope_v1.rs"]
+mod confidential_memo_envelope_v1;
 #[path = "../consensus_roundtrip.rs"]
 mod consensus_roundtrip;
 #[path = "../consensus_state_roundtrip.rs"]

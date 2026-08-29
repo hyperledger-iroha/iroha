@@ -106,20 +106,14 @@ pub trait ParliamentTlePartialReleaseSignerBrokerBackendV1: Send + Sync {
         ParliamentTlePartialReleaseSignerBrokerBackendErrorV1,
     >;
     /// Attest live custody for one exact validated public session and seat.
-    ///
-    /// The default refusal keeps existing backend implementations source
-    /// compatible while preventing a signing-only provider from satisfying
-    /// startup readiness without an explicit live custody lookup.
     fn attest_partial_release_capability(
         &self,
-        _session: &iroha_core::tle_release::ValidatedTleKeySessionV1,
-        _expected_participant_index: u16,
+        session: &iroha_core::tle_release::ValidatedTleKeySessionV1,
+        expected_participant_index: u16,
     ) -> Result<
         iroha_core::tle_release::TlePartialReleaseCapabilityAttestationV1,
         ParliamentTlePartialReleaseSignerBrokerBackendErrorV1,
-    > {
-        Err(ParliamentTlePartialReleaseSignerBrokerBackendErrorV1::Rejected)
-    }
+    >;
     /// Sign one exact broker-validated public release projection.
     fn sign_projected_partial_release(
         &self,

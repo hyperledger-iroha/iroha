@@ -6207,7 +6207,7 @@ mod tests {
         let _gpu_lane = crate::backend::acquire_gpu_lane();
         let params = CANONICAL_PARAMETER_SETS[0];
         let planner = Planner::new(&params);
-        // Balanced parameters use blowup_log=3, so this crosses the 256-word
+        // Canonical V1 parameters use blowup_log=3, so this crosses the 256-word
         // threadgroup tile boundary and exercises the post-tile stage.
         let trace_log = 6;
         let trace_len = 1usize << trace_log;
