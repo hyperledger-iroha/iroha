@@ -45,26 +45,11 @@ fn transaction_batch_submission_response(accepted_count: usize) -> Response {
 }
 async fn allow_transaction_batch_rate_limit(
     limiter: &limits::RateLimiter,
-    api_token: Option<&str>,
-    transactions: &[DecodedVersionedSignedTransaction],
+    verified_authorities: &[AccountId],
 ) -> bool {
-    if let Some(token) = api_token {
-        return limiter.allow_repeated(token, transactions.len()).await;
-    }
-    let mut index = 0;
-    while index < transactions.len() {
-        let authority = transactions[index].authority();
-        let start = index;
-        index += 1;
-        while index < transactions.len() && transactions[index].authority() == authority {
-            index += 1;
-        }
-        let key = authority.to_string();
-        if !limiter.allow_repeated(&key, index - start).await {
-            return false;
-        }
-    }
-    true
+    admit_verified_transaction_authorities(limiter, verified_authorities)
+        .await
+        .is_ok()
 }
 async fn handler_post_transactions_batch(
     State(app): State<SharedAppState>,
@@ -93,14 +78,15 @@ async fn handler_post_transactions_batch(
         },
     )
     .await?;
-    if !allow_transaction_batch_rate_limit(&app.tx_rate_limiter, token_hdr, &transactions).await {
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
-    let accepted_count = {
+    admit_transaction_api_token_preauth(
+        &app.tx_preauth_rate_limiter,
+        token_hdr,
+        transactions.len(),
+    )
+    .await?;
+    let ((accepted_transactions, stateless_cache_warm), compute_permit) = {
         let app = app.clone();
-        let (accepted_count, _compute_permit) = run_transaction_ingress_compute_job(
+        run_transaction_ingress_compute_job(
             compute_permit,
             "transaction_batch_admission_worker_failed",
             move || {
@@ -158,22 +144,39 @@ async fn handler_post_transactions_batch(
                     }
                     accepted.push((accepted_tx, routing_plan));
                 }
-                let accepted_count = accepted.len();
-                routing::push_accepted_transactions_for_ingress_with_routing_plans(
-                    app.queue.clone(),
-                    app.state.clone(),
-                    accepted,
-                )?;
-                app.state.warm_stateless_validation_cache_for_torii_prechecked_batch(
-                    &stateless_cache_warm,
-                );
-                Ok::<usize, Error>(accepted_count)
+                Ok::<_, Error>((accepted, stateless_cache_warm))
             },
         )
-        .await
-        ?;
-        accepted_count
+        .await?
     };
+    let verified_authorities = accepted_transactions
+        .iter()
+        .map(|(transaction, _)| transaction.authority().clone())
+        .collect::<Vec<_>>();
+    if !allow_transaction_batch_rate_limit(&app.tx_rate_limiter, &verified_authorities).await {
+        drop(compute_permit);
+        return Err(transaction_rate_limit_error());
+    }
+    let accepted_count = accepted_transactions.len();
+    let app_for_push = app.clone();
+    let (_, _compute_permit) = run_transaction_ingress_compute_job(
+        compute_permit,
+        "transaction_batch_queue_worker_failed",
+        move || {
+            routing::push_accepted_transactions_for_ingress_with_routing_plans(
+                app_for_push.queue.clone(),
+                app_for_push.state.clone(),
+                accepted_transactions,
+            )?;
+            app_for_push
+                .state
+                .warm_stateless_validation_cache_for_torii_prechecked_batch(
+                    &stateless_cache_warm,
+                );
+            Ok::<(), Error>(())
+        },
+    )
+    .await?;
     Ok(transaction_batch_submission_response(accepted_count))
 }
 #[cfg(feature = "app_api")]
@@ -346,13 +349,15 @@ async fn handler_pipeline_recovery(
     .await?;
     let admission = acquire_query_admission(&app, true).await?;
     let kura = Arc::clone(&app.kura);
-    let (result, _admission) = tokio::task::spawn_blocking(move || {
+    let (result, _admission) = crate::panic_recovery::join_recoverable(
+        crate::panic_recovery::spawn_blocking_recoverable(move || {
         // Keep both general-query and heavy-work permits in the physical worker.
         // Cancelling the HTTP future cannot release capacity while Kura reads,
         // JSON projection, or encoding still consume memory.
         let result = build_pipeline_recovery_response(&kura, height);
         (result, admission)
-    })
+    }),
+    )
     .await
     .map_err(|error| Error::AppServiceUnavailable {
         code: "pipeline_recovery_worker_failed",
@@ -413,7 +418,8 @@ mod pipeline_recovery_response_bounds_tests {
         assert!(handler.contains("check_operator_rate_limit("));
         assert!(!handler.contains("validate_api_token("));
         assert!(handler.contains("acquire_query_admission(&app, true)"));
-        assert!(handler.contains("tokio::task::spawn_blocking"));
+        assert!(handler.contains("spawn_blocking_recoverable"));
+        assert!(handler.contains("join_recoverable"));
         assert!(handler.contains("(result, admission)"));
     }
     #[test]
@@ -484,13 +490,15 @@ async fn handler_pipeline_recovery_fastpq_proofs(
     let page = PipelineFastpqRecoveryPage::parse(&query)?;
     let admission = acquire_query_admission(&app, true).await?;
     let kura = Arc::clone(&app.kura);
-    let (result, _admission) = tokio::task::spawn_blocking(move || {
+    let (result, _admission) = crate::panic_recovery::join_recoverable(
+        crate::panic_recovery::spawn_blocking_recoverable(move || {
         // Keep both general-query and heavy-work permits in the physical worker.
         // Cancelling the HTTP future therefore cannot release capacity while
         // Kura reads, transcript reconstruction, or encoding still run.
         let result = build_pipeline_recovery_fastpq_response(&kura, height, page);
         (result, admission)
-    })
+    }),
+    )
     .await
     .map_err(|error| Error::AppServiceUnavailable {
         code: "pipeline_recovery_fastpq_worker_failed",

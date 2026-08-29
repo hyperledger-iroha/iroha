@@ -513,6 +513,8 @@ pub(in crate::sumeragi) struct ReleasedLifecycleValidatedMarkerSealPermitV1 {
 /// Durable resolution of one lifecycle-owned Validate row.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::sumeragi) enum LifecycleValidateRetryResolutionV1 {
+    /// A certified newer view retired an unprotected missing-sidecar row.
+    Cancelled,
     /// The row terminalized without a successor and may authenticate a later
     /// current-Decision standalone Apply.
     AdvancedNoSuccessor,

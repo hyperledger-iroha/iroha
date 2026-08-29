@@ -1,6 +1,6 @@
 # Torii Contract Lifecycle App API (TORII-APP-4)
 
-Status: Completed 2026-04-04 · refreshed 2026-07-18
+Status: Completed 2026-04-04 · refreshed 2026-08-29
 Owners: Torii Platform, Smart Contract WG  
 Roadmap reference: TORII-APP-4 — Contract lifecycle app endpoints
 
@@ -38,6 +38,11 @@ Torii when the `app_api` feature is enabled.
   disabled on those routes.
 - Historical `/v1/contracts/instance*` server-side-signing routes are no
   longer part of the public lifecycle surface.
+- Every deployed address retains a first-release `ContractLifecycleControlV1`
+  after deactivation. The record commits immutable deployment origin, current
+  and pending owner, revocable Parliament delegation, active code hash,
+  compare-and-swap revision, and any bounded emergency hold. The legacy active
+  instance index is validated against that record and cannot disagree with it.
 
 ## Locally signed deployment
 
@@ -51,6 +56,22 @@ expected previous alias target. Consensus checks those values together with the
 derived address and registered code before activating the new address and
 rotating the alias. The nonce is reserved consensus state and cannot be changed
 through generic metadata instructions.
+
+Raw `ActivateContractInstance` can reactivate an existing retained address but
+cannot create lifecycle ownership. Activation stores the code hash in the
+lifecycle record; deactivation clears it, advances the revision, and retains
+origin and ownership. Each lifecycle event carries the complete post-transition
+record so indexers do not have to infer ownership from historical operators.
+
+## `GET /v1/gov/contracts/{contract_address}`
+
+Returns the retained lifecycle for a canonical address. `found` means a
+lifecycle record exists, not that code is active. A found response always
+includes `active`, `contract_subject_account`, `lifecycle`, and
+`emergency_hold_active`; inactive contracts omit artifact-only
+`code_hash_hex`, `abi_hash_hex`, and `public_entrypoints`. The lifecycle
+projection exposes exact origin provenance, current and pending owner,
+delegation, active code hash, revision, and the complete retained hold record.
 
 ## `POST /v1/contracts/call`
 

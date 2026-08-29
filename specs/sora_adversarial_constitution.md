@@ -862,6 +862,29 @@ Rules:
 
 The goal is to make delay a truth-discovery tool, not a veto market.
 
+### 12.1 First-Release Public Moderation Challenges
+
+The authoritative SoraFS moderation ledger applies these deterministic rules:
+
+- submission and resolution are separate windows, with exactly 24 hours of
+  resolution grace after challenge submission closes;
+- every challenge locks 150 units of the current governance voting asset in
+  the configured governance bond-custody account, and the asset and custody
+  destinations are snapshotted in the challenge record;
+- one account may submit at most one challenge per case and duplicate evidence
+  digests are rejected;
+- an accepted challenge refunds the whole bond and vetoes the ballot;
+- a rejected challenge sends 25% to the configured slash receiver, rounded
+  toward zero at the voting asset's declared scale, and refunds the remainder;
+  and
+- an unresolved challenge may be expired permissionlessly after the grace,
+  refunds the whole bond, and fails open. Finalization performs an idempotent
+  sweep of any still-pending challenges before tallying.
+
+These values are first-release protocol constants. Changing them requires a
+new explicitly enacted schema/policy revision rather than interpreting old
+records under new settings.
+
 ## 13. Phoenix Series Governance
 
 Phoenix must attract early capital without creating a permanent rentier class.

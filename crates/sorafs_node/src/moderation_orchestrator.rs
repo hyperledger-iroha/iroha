@@ -6904,7 +6904,10 @@ fn validate_case_against_appeal(
         || spec.jurors != expected_jurors
         || spec.quorum != intake.quorum
         || spec.commit_deadline_unix_ms != intake.commit_deadline_unix_ms
-        || spec.challenge_deadline_unix_ms != intake.challenge_deadline_unix_ms
+        || spec.challenge_submission_deadline_unix_ms
+            != intake.challenge_submission_deadline_unix_ms
+        || spec.challenge_resolution_deadline_unix_ms
+            != intake.challenge_resolution_deadline_unix_ms
         || spec.reveal_deadline_unix_ms != intake.reveal_deadline_unix_ms
         || spec.policy_digest != intake.policy_digest
         || case.case.policy != appeal.appeal.policy

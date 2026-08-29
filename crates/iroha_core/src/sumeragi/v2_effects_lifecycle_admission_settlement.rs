@@ -1813,6 +1813,19 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             selected_body.is_some_and(|selected| self.decision_body_drained || selected != key);
         if has_seal {
             match resolution {
+                LifecycleValidateRetryResolutionV1::Cancelled => {
+                    if self
+                        .durable_validate_retry_seals
+                        .get(&key)
+                        .and_then(DurableValidateRetrySealV1::lifecycle_ordinal)
+                        != Some(lifecycle_ordinal)
+                    {
+                        return Err(EffectExecutorError::Contract(
+                            "cancelled Validate changed its retry ordinal".to_owned(),
+                        ));
+                    }
+                    self.durable_validate_retry_seals.remove(&key);
+                }
                 LifecycleValidateRetryResolutionV1::AdvancedNoSuccessor => {
                     self.durable_validate_retry_seals
                         .get_mut(&key)
@@ -1841,6 +1854,19 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         }
         if has_marker {
             match resolution {
+                LifecycleValidateRetryResolutionV1::Cancelled => {
+                    if self
+                        .published_lifecycle_validate_retry_markers
+                        .get(&key)
+                        .and_then(|marker| marker.lifecycle_ordinal)
+                        != Some(lifecycle_ordinal)
+                    {
+                        return Err(EffectExecutorError::Contract(
+                            "cancelled lifecycle Validate changed its retry ordinal".to_owned(),
+                        ));
+                    }
+                    self.published_lifecycle_validate_retry_markers.remove(&key);
+                }
                 LifecycleValidateRetryResolutionV1::AdvancedNoSuccessor => {
                     self.published_lifecycle_validate_retry_markers
                         .get_mut(&key)

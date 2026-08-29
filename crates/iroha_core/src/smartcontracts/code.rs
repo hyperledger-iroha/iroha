@@ -16,7 +16,9 @@ use iroha_data_model::{
     },
     prelude::ValidationFail,
     smart_contract::manifest::{ContractManifest, EntryPointKind},
-    smart_contract::{ContractAddress, ContractAlias},
+    smart_contract::{
+        ContractAddress, ContractAlias, ContractLifecycleControlV1, ContractLifecycleOwnerV1,
+    },
     state_path::StatePath,
 };
 use mv::storage::StorageReadOnly;
@@ -40,14 +42,41 @@ use thiserror::Error;
 pub struct ContractSubjectBinding {
     /// Exact account authority used while this contract executes.
     pub(crate) subject: AccountId,
+    /// Exact ownership and lifecycle-control state for this address.
+    pub(crate) lifecycle: ContractLifecycleControlV1,
 }
 impl ContractSubjectBinding {
-    /// Construct the canonical first-release binding for an address.
+    /// Construct the canonical direct-deployment binding for an address.
     #[must_use]
-    pub(crate) fn new(address: &ContractAddress) -> Self {
+    pub(crate) fn new_direct(address: &ContractAddress, deployer: AccountId) -> Self {
         Self {
             subject: address.subject_id(),
+            lifecycle: ContractLifecycleControlV1::direct(deployer),
         }
+    }
+    /// Construct the canonical Parliament-deployment binding for an address.
+    #[must_use]
+    pub(crate) fn new_parliament(
+        address: &ContractAddress,
+        proposer: AccountId,
+        proposal_content_id: [u8; 32],
+        governance_attempt_id: [u8; 32],
+    ) -> Self {
+        Self {
+            subject: address.subject_id(),
+            lifecycle: ContractLifecycleControlV1::parliament(
+                proposer,
+                proposal_content_id,
+                governance_attempt_id,
+            ),
+        }
+    }
+    /// Seed an already-active binding while constructing an internally consistent fixture.
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    #[must_use]
+    pub(crate) fn with_active_code_hash(mut self, code_hash: Hash) -> Self {
+        self.lifecycle.active_code_hash = Some(code_hash);
+        self
     }
     /// Validate that the persisted subject matches the canonical address derivation.
     pub(crate) fn validate_for(&self, address: &ContractAddress) -> Result<(), String> {
@@ -58,6 +87,9 @@ impl ContractSubjectBinding {
                 self.subject
             ));
         }
+        self.lifecycle
+            .validate()
+            .map_err(|error| format!("invalid lifecycle binding for `{address}`: {error}"))?;
         Ok(())
     }
 }
@@ -72,13 +104,11 @@ pub(crate) fn initialize_contract_subject_bindings(
         .map(|(address, _)| address.clone())
         .collect();
     for address in addresses {
-        if let Some(binding) = world.contract_subject_bindings.view().get(&address) {
-            binding.validate_for(&address)?;
-        } else {
-            world
-                .contract_subject_bindings
-                .insert(address.clone(), ContractSubjectBinding::new(&address));
-        }
+        let bindings = world.contract_subject_bindings.view();
+        let binding = bindings.get(&address).ok_or_else(|| {
+            format!("active contract instance `{address}` has no lifecycle binding; legacy snapshots are not accepted")
+        })?;
+        binding.validate_for(&address)?;
     }
     rebuild_contract_subject_addresses(world)?;
     validate_contract_subject_bindings(world)
@@ -110,6 +140,23 @@ pub(crate) fn validate_contract_subject_bindings(
     let bindings = world.contract_subject_bindings.view();
     for (address, binding) in bindings.iter() {
         binding.validate_for(address)?;
+        let indexed_active_code_hash = world.contract_instances.view().get(address).copied();
+        if binding.lifecycle.active_code_hash != indexed_active_code_hash {
+            return Err(format!(
+                "contract lifecycle active code hash for `{address}` does not match the active-instance index"
+            ));
+        }
+        for owner in core::iter::once(&binding.lifecycle.owner)
+            .chain(binding.lifecycle.pending_owner.as_ref())
+        {
+            if let ContractLifecycleOwnerV1::Account(account) = owner
+                && world.accounts.view().get(account).is_none()
+            {
+                return Err(format!(
+                    "contract lifecycle owner `{account}` for `{address}` does not exist"
+                ));
+            }
+        }
     }
     for (address, _) in world.contract_instances.view().iter() {
         if bindings.get(address).is_none() {
@@ -136,12 +183,85 @@ pub(crate) fn validate_contract_subject_bindings(
     }
     Ok(())
 }
+/// Read the complete lifecycle record for a contract address, including inactive addresses.
+///
+/// The returned subject is the consensus-persisted non-signing execution authority. `None` means
+/// the address has never been deployed; malformed persisted bindings fail closed with an error.
+///
+/// # Errors
+/// Returns an invariant explanation when the binding or its active-code index is inconsistent.
+pub fn fetch_contract_lifecycle(
+    world: &impl WorldReadOnly,
+    address: &ContractAddress,
+) -> Result<Option<(AccountId, ContractLifecycleControlV1)>, String> {
+    let Some(binding) = world.contract_subject_bindings().get(address) else {
+        if world.contract_instances().get(address).is_some() {
+            return Err(format!(
+                "active contract instance `{address}` has no lifecycle binding"
+            ));
+        }
+        return Ok(None);
+    };
+    binding.validate_for(address)?;
+    let indexed_active_code_hash = world.contract_instances().get(address).copied();
+    if binding.lifecycle.active_code_hash != indexed_active_code_hash {
+        return Err(format!(
+            "contract lifecycle active code hash for `{address}` does not match the active-instance index"
+        ));
+    }
+    Ok(Some((binding.subject.clone(), binding.lifecycle.clone())))
+}
 /// Return whether an account is an irreversible historical contract subject.
 pub(crate) fn is_historical_contract_subject(
     world: &impl WorldReadOnly,
     subject: &AccountId,
 ) -> bool {
     world.contract_subject_addresses().get(subject).is_some()
+}
+/// Return a contract that retains `account` as its current or pending lifecycle owner.
+pub(crate) fn contract_owned_or_pending_for_account(
+    world: &impl WorldReadOnly,
+    account: &AccountId,
+) -> Option<ContractAddress> {
+    world
+        .contract_subject_bindings()
+        .iter()
+        .find_map(|(address, binding)| {
+            let owns = matches!(
+                &binding.lifecycle.owner,
+                ContractLifecycleOwnerV1::Account(owner) if owner == account
+            );
+            let pending = matches!(
+                binding.lifecycle.pending_owner.as_ref(),
+                Some(ContractLifecycleOwnerV1::Account(owner)) if owner == account
+            );
+            (owns || pending).then(|| address.clone())
+        })
+}
+/// Reject execution while a certified Parliament emergency hold is active.
+pub(crate) fn ensure_contract_execution_allowed(
+    world: &impl WorldReadOnly,
+    address: &ContractAddress,
+    height: u64,
+) -> Result<(), String> {
+    let binding = world
+        .contract_subject_bindings()
+        .get(address)
+        .ok_or_else(|| format!("contract `{address}` has no lifecycle binding"))?;
+    binding.validate_for(address)?;
+    if binding.lifecycle.is_held_at(height) {
+        let hold = binding
+            .lifecycle
+            .emergency_hold
+            .as_ref()
+            .expect("active hold predicate requires a retained hold");
+        return Err(format!(
+            "contract `{address}` execution is held by Parliament through block {}: {}",
+            hold.expires_at_height.saturating_sub(1),
+            hold.reason
+        ));
+    }
+    Ok(())
 }
 /// Smart contract registry errors.
 #[derive(Debug, Error)]
@@ -494,12 +614,11 @@ pub fn register_code_bytes(
     RegisterSmartContractBytes { code_hash, code }.execute(authority, state_transaction)?;
     Ok(code_hash)
 }
-/// Bind `contract_address` to a `code_hash` to activate or perform `kaizen`/`改善` on an instance.
+/// Bind `contract_address` to a `code_hash` at an exact lifecycle revision.
 ///
-/// The authority must hold `CanRegisterSmartContractCode`, including for an
-/// idempotent request. Rebinding an active address to different verified code
-/// additionally requires `CanEnactGovernance`; it is a genuine in-place
-/// `kaizen`/`改善` and stages its declared `kaizen`/`改善` hook.
+/// The address must already have a retained lifecycle record owned by
+/// `authority`. A stale `expected_revision` fails closed. Rebinding an active
+/// address is a genuine in-place `kaizen`/`改善` and stages its declared hook.
 ///
 /// # Errors
 ///
@@ -507,11 +626,13 @@ pub fn register_code_bytes(
 pub fn activate_instance(
     authority: &AccountId,
     contract_address: ContractAddress,
+    expected_revision: u64,
     code_hash: Hash,
     state_transaction: &mut StateTransaction<'_, '_>,
 ) -> Result<(), RegistryError> {
     ActivateContractInstance {
         contract_address,
+        expected_revision,
         code_hash,
     }
     .execute(authority, state_transaction)?;
@@ -692,6 +813,9 @@ pub fn fetch_bound_contract_record(
         .contract_subject_bindings()
         .get(contract_address)?;
     subject_binding.validate_for(contract_address).ok()?;
+    if subject_binding.lifecycle.active_code_hash != Some(code_hash) {
+        return None;
+    }
     let manifest = fetch_manifest(state, &code_hash)?;
     let code_bytes = fetch_code_bytes(state, &code_hash)?;
     let contract_alias_binding = state
@@ -901,7 +1025,7 @@ mod tests {
             DataSpaceId::UNIVERSAL,
         )
         .expect("contract address");
-        activate_instance(&authority, contract_address.clone(), code_hash, &mut stx)
+        activate_instance(&authority, contract_address.clone(), 1, code_hash, &mut stx)
             .expect("activate instance");
         assert_eq!(
             pending_contract_lifecycle(&stx.world, &contract_address)
@@ -1002,7 +1126,7 @@ mod tests {
             DataSpaceId::UNIVERSAL,
         )
         .expect("contract address");
-        activate_instance(&authority, contract_address.clone(), code_hash, &mut stx)
+        activate_instance(&authority, contract_address.clone(), 1, code_hash, &mut stx)
             .expect("governed activation");
         stx.apply();
         block
@@ -1316,6 +1440,7 @@ seiyaku LifecycleAba {
         deactivate.tx_call_hash = Some(Hash::new(b"lifecycle-aba-deactivation"));
         DeactivateContractInstance {
             contract_address: contract_address.clone(),
+            expected_revision: 1,
             reason: Some("ABA regression fixture".to_owned()),
         }
         .execute(&authority, &mut deactivate)
@@ -1544,14 +1669,38 @@ seiyaku LifecycleAba {
         )
         .expect("contract address");
         let mut world = World::default();
+        world.accounts.insert(
+            authority.clone(),
+            iroha_data_model::account::AccountValue::new(
+                iroha_data_model::account::AccountDetails::default(),
+            ),
+        );
+        let subject = address.subject_id();
+        world.accounts.insert(
+            subject.clone(),
+            iroha_data_model::account::AccountValue::new(
+                iroha_data_model::account::AccountDetails::default(),
+            ),
+        );
+        let active_code_hash = Hash::new(b"active-contract");
         world
             .contract_instances
-            .insert(address.clone(), Hash::new(b"active-contract"));
+            .insert(address.clone(), active_code_hash);
+        world.contract_subject_bindings.insert(
+            address.clone(),
+            ContractSubjectBinding::new_direct(&address, authority.clone())
+                .with_active_code_hash(active_code_hash),
+        );
         initialize_contract_subject_bindings(&mut world).expect("initialize subject ledger");
         let bindings = world.contract_subject_bindings.view();
         let binding = bindings.get(&address).expect("binding");
         assert_eq!(binding.subject, address.subject_id());
         let world_view = world.view();
+        let (persisted_subject, lifecycle) = fetch_contract_lifecycle(&world_view, &address)
+            .expect("valid lifecycle lookup")
+            .expect("retained lifecycle");
+        assert_eq!(persisted_subject, subject);
+        assert_eq!(lifecycle.active_code_hash, Some(active_code_hash));
         assert_eq!(
             borrow_bound_contract_subject_from_world(&world_view, &address),
             Some(&binding.subject),
@@ -1564,6 +1713,31 @@ seiyaku LifecycleAba {
             Some(&address)
         );
         validate_contract_subject_bindings(&world).expect("validated subject ledger");
+    }
+    #[test]
+    fn lifecycle_lookup_rejects_active_index_drift() {
+        let authority = AccountId::new(checked_keypair().public_key().clone());
+        let address = ContractAddress::derive(
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
+            &authority,
+            70,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+        let mut world = World::default();
+        world.contract_subject_bindings.insert(
+            address.clone(),
+            ContractSubjectBinding::new_direct(&address, authority),
+        );
+        world
+            .contract_instances
+            .insert(address.clone(), Hash::new(b"drifted active index"));
+        let world_view = world.view();
+        let error = fetch_contract_lifecycle(&world_view, &address)
+            .expect_err("active-index drift must fail closed");
+        assert!(error.contains("does not match the active-instance index"));
     }
     #[test]
     fn subject_binding_initialization_rejects_mismatched_existing_binding() {
@@ -1586,6 +1760,7 @@ seiyaku LifecycleAba {
             address.clone(),
             ContractSubjectBinding {
                 subject: authority.clone(),
+                lifecycle: ContractLifecycleControlV1::direct(authority.clone()),
             },
         );
         let error = initialize_contract_subject_bindings(&mut world)

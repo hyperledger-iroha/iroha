@@ -605,9 +605,24 @@
         "contract_address",
         "contract_subject_account",
         "dataspace",
+        "active",
+        "lifecycle",
+        "emergency_hold_active",
         "code_hash_hex",
         "abi_hash_hex",
         "public_entrypoints"
+      ]
+    },
+    {
+      "id": "governed.inactive.fields",
+      "values": [
+        "found",
+        "contract_address",
+        "contract_subject_account",
+        "dataspace",
+        "active",
+        "lifecycle",
+        "emergency_hold_active"
       ]
     },
     {

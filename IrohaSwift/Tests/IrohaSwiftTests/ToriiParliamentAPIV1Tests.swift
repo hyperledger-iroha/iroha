@@ -32,6 +32,10 @@ final class ToriiParliamentAPIV1Tests: XCTestCase {
         let routes = try XCTUnwrap(fixture["routes"] as? [String: String])
         let limits = try XCTUnwrap(fixture["limits"] as? [String: Int])
         XCTAssertEqual(
+            fixture["proposal_kinds"] as? [String],
+            ToriiParliamentAPIV1.proposalKinds
+        )
+        XCTAssertEqual(
             limits["timed_ovn_ballot_chunk_max_records"],
             ToriiParliamentAPIV1.maximumTimedOvnBallotChunkRecords
         )

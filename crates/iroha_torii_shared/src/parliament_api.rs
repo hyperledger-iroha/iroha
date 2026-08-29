@@ -2301,6 +2301,7 @@ mod tests {
             ParliamentNoResultKindV1::BallotOpeningDeadlineExpired,
             ParliamentNoResultKindV1::SortitionRetriesExhausted,
             ParliamentNoResultKindV1::ConfirmationJuryCapacityUnavailable,
+            ParliamentNoResultKindV1::RandomnessRedrawBudgetExhausted,
         ];
         let fixture_no_result_kinds = fixture
             .get("no_result_kinds")

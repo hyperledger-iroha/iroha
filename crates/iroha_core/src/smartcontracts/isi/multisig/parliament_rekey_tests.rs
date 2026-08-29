@@ -8,10 +8,9 @@ use iroha_data_model::{
     governance::types::{
         BeaconSessionId, BodyElectionAttemptId, GovernanceAttemptId, GovernanceAttemptStatusV1,
         GovernanceAttemptV1, GovernanceExpectedHeadAbsentV1, GovernanceExpectedHeadV1,
-        GovernanceStageV1, MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1,
-        MAX_PARLIAMENT_SORTITION_RETRIES_V1, ParliamentBody, ProposalContentId, ProposalKind,
-        RiskTierV1, SortitionRequestId, SortitionRequestV1, ValidationFeePolicyProposal,
-        parliament_candidate_root_v1,
+        GovernanceStageV1, MAX_PARLIAMENT_SORTITION_RETRIES_V1, ParliamentBody, ProposalContentId,
+        ProposalKind, RiskTierV1, SortitionRequestId, SortitionRequestV1,
+        ValidationFeePolicyProposal, parliament_candidate_root_v1,
     },
     isi::governance::ParliamentSortitionRequestRegistrationV1,
     validation_fee::{
@@ -49,10 +48,10 @@ fn validation_fee_policy_proposal_for_rekey_test(
     })
 }
 
-fn rejected_validation_fee_attempt_for_rekey_test(
+fn exhausted_validation_fee_attempt_for_rekey_test(
     proposal: &ProposalKind,
-    governance_attempt_sequence: u32,
 ) -> ParliamentAttemptStateV1 {
+    let governance_attempt_sequence = 0;
     let proposal_content_id = ProposalContentId::new(proposal.fingerprint());
     let governance_attempt_id =
         GovernanceAttemptId::derive_v1(proposal_content_id, governance_attempt_sequence);
@@ -315,7 +314,7 @@ fn account_rekey_rejects_immutable_validation_fee_authorization_without_partial_
 }
 
 #[test]
-fn account_rekey_rejects_retryable_terminal_validation_fee_history() {
+fn account_rekey_rejects_terminal_validation_fee_without_proven_exhaustion() {
     tx!(
         state,
         block,
@@ -341,9 +340,6 @@ fn account_rekey_rejects_retryable_terminal_validation_fee_history() {
     );
     let proposal_id = proposal.fingerprint();
     tx.world
-        .put_parliament_attempt(rejected_validation_fee_attempt_for_rekey_test(&proposal, 0))
-        .expect("persist retryable rejected validation-fee attempt");
-    tx.world
         .put_governance_proposal(
             proposal_id,
             crate::state::GovernanceProposalRecord {
@@ -353,10 +349,10 @@ fn account_rekey_rejects_retryable_terminal_validation_fee_history() {
                 status: crate::state::GovernanceProposalStatus::Rejected,
             },
         )
-        .expect("persist retryable rejected validation-fee proposal");
+        .expect("persist terminal validation-fee proposal with missing attempt history");
 
     let error = rekey_account_id(&mut tx, &old_account, &new_account, Some(&domain_id))
-        .expect_err("retryable terminal validation-fee history still has executable effect");
+        .expect_err("missing attempt history must not prove redraw exhaustion");
     assert!(
         error
             .to_string()
@@ -372,7 +368,7 @@ fn account_rekey_rejects_retryable_terminal_validation_fee_history() {
         .world
         .governance_proposals
         .get(&proposal_id)
-        .expect("failed rekey preserves retryable fee history");
+        .expect("failed rekey preserves unproven fee history");
     assert_eq!(retained.proposer, old_account);
     assert_eq!(retained.kind, proposal);
     assert_eq!(
@@ -407,13 +403,9 @@ fn account_rekey_preserves_exhausted_terminal_validation_fee_history() {
         tx.network_id.clone(),
     );
     let proposal_id = proposal.fingerprint();
-    for sequence in 0..=MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1 {
-        tx.world
-            .put_parliament_attempt(rejected_validation_fee_attempt_for_rekey_test(
-                &proposal, sequence,
-            ))
-            .expect("persist contiguous exhausted validation-fee attempt history");
-    }
+    tx.world
+        .put_parliament_attempt(exhausted_validation_fee_attempt_for_rekey_test(&proposal))
+        .expect("persist one attempt that exhausts the proposal-wide redraw budget");
     tx.world
         .put_governance_proposal(
             proposal_id,
@@ -450,9 +442,5 @@ fn account_rekey_preserves_exhausted_terminal_validation_fee_history() {
         .iter()
         .filter(|(_, attempt)| attempt.proposal_content_id() == ProposalContentId::new(proposal_id))
         .count();
-    assert_eq!(
-        retained_attempts,
-        usize::try_from(MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1 + 1)
-            .expect("bounded retry count fits usize")
-    );
+    assert_eq!(retained_attempts, 1);
 }

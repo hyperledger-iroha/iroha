@@ -852,7 +852,8 @@ pub(crate) async fn execute_admitted_verified_query_with_server_owned_memory(
     );
     let state_cloned = Arc::clone(&state);
     let store_cloned = live_query_store.clone();
-    let response = tokio::task::spawn_blocking(move || {
+    let response = crate::panic_recovery::join_recoverable(
+        crate::panic_recovery::spawn_blocking_recoverable(move || {
         // Cancellation detaches blocking work. Both permits therefore belong
         // to the worker until validation and execution have actually ended.
         let _admission = admission;
@@ -867,7 +868,8 @@ pub(crate) async fn execute_admitted_verified_query_with_server_owned_memory(
             plan.ordinary_limits,
             memory_lease,
         )
-    })
+    }),
+    )
     .await
     .map_err(|error| ValidationFail::InternalError(format!("query worker join error: {error}")))
     .and_then(|result| {
@@ -1090,7 +1092,8 @@ async fn execute_verified_query_with_opts_inner(
             }
         };
     }
-    let resp = tokio::task::spawn_blocking(move || {
+    let resp = crate::panic_recovery::join_recoverable(
+        crate::panic_recovery::spawn_blocking_recoverable(move || {
         // A cancelled HTTP future detaches `spawn_blocking`. Keep both the
         // physical-work admission and the shared fanout-memory reservation in
         // this worker until validation and execution have actually stopped.
@@ -1116,7 +1119,8 @@ async fn execute_verified_query_with_opts_inner(
                 stored_start_budget,
             ),
         }
-    })
+    }),
+    )
     .await
     .map_err(|e| ValidationFail::InternalError(format!("query worker join error: {e}")))
     .and_then(|r| {

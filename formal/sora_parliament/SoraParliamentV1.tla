@@ -14,6 +14,7 @@ CONSTANTS
     MaxHeight,
     SortitionPulseDelayBlocks,
     MaxSortitionRetries,
+    MaxRandomnessRedraws,
     RegistrationBlocks,
     SurvivorBlocks,
     CommitmentBlocks,
@@ -41,6 +42,7 @@ CONSTANTS
 ASSUME /\ MaxHeight \in Nat \ {0}
        /\ SortitionPulseDelayBlocks \in Nat \ {0}
        /\ MaxSortitionRetries \in Nat
+       /\ MaxRandomnessRedraws \in Nat \ {0}
        /\ RegistrationBlocks \in Nat \ {0}
        /\ SurvivorBlocks \in Nat \ {0}
        /\ CommitmentBlocks \in Nat \ {0}
@@ -72,6 +74,8 @@ ASSUME /\ MaxHeight \in Nat \ {0}
 VARIABLES
     height,
     attemptStatus,
+    governanceAttemptSequence,
+    randomnessRedrawsBeforeAttempt,
     sortitionState,
     sortitionSequence,
     sortitionFailureKind,
@@ -142,6 +146,8 @@ VARIABLES
 vars == <<
     height,
     attemptStatus,
+    governanceAttemptSequence,
+    randomnessRedrawsBeforeAttempt,
     sortitionState,
     sortitionSequence,
     sortitionFailureKind,
@@ -240,6 +246,24 @@ NonConflictingReservation ==
 CertificateStates == {"Certified", "Enacted", "Superseded", "ExecutionFailed"}
 OptionalHeight == (0..MaxHeight) \cup {None}
 
+BoolToNat(predicate) == IF predicate THEN 1 ELSE 0
+
+InitialSortitionRedrawCost == BoolToNat(governanceAttemptSequence > 0)
+
+SortitionRandomnessRedrawsUsed ==
+    IF sortitionState = "None"
+    THEN 0
+    ELSE sortitionSequence + InitialSortitionRedrawCost
+
+BallotRandomnessRedrawsUsed ==
+    IF ballotState = "None" THEN 0 ELSE ballotSequence
+
+ProposalRandomnessRedrawsUsed ==
+    randomnessRedrawsBeforeAttempt +
+        SortitionRandomnessRedrawsUsed +
+        BallotRandomnessRedrawsUsed +
+        BoolToNat(confirmationRequestCommitted)
+
 PublicFindingQuorum ==
     (2 * Cardinality(SeatedAssignments) + 2) \div 3
 
@@ -273,6 +297,11 @@ FindingEvidenceRoots ==
 Init ==
     /\ height = 0
     /\ attemptStatus = "Active"
+    /\ \/ /\ governanceAttemptSequence = 0
+           /\ randomnessRedrawsBeforeAttempt = 0
+       \/ /\ governanceAttemptSequence = 1
+           /\ randomnessRedrawsBeforeAttempt \in
+                 0..(MaxRandomnessRedraws - 1)
     /\ sortitionState = "None"
     /\ sortitionSequence = 0
     /\ sortitionFailureKind = None
@@ -352,6 +381,7 @@ FindingLifecycleFrame ==
 
 FindingCertificateFrame ==
     UNCHANGED <<
+        governanceAttemptSequence, randomnessRedrawsBeforeAttempt,
         certificateFindingRoot, certificateFindingEndorsementRoot,
         certificateFindingEndorsingAssignments,
         certificateFindingEndorsementCount, certificateFindingQuorum
@@ -439,6 +469,8 @@ Tick ==
 CommitInitialSortitionBatch ==
     /\ attemptStatus = "Active"
     /\ sortitionState = "None"
+    /\ ProposalRandomnessRedrawsUsed + InitialSortitionRedrawCost <=
+          MaxRandomnessRedraws
     /\ height + SortitionPulseDelayBlocks <= MaxHeight
     /\ sortitionState' = "AwaitingPulse"
     /\ requestHeight' = height
@@ -463,6 +495,8 @@ CommitInitialSortitionBatch ==
 RecordInitialHiddenSortitionCapacityFailure(candidateCount) ==
     /\ attemptStatus = "Active"
     /\ sortitionState = "None"
+    /\ ProposalRandomnessRedrawsUsed + InitialSortitionRedrawCost <=
+          MaxRandomnessRedraws
     /\ candidateCount \in 0..1
     /\ height + SortitionPulseDelayBlocks <= MaxHeight
     /\ sortitionState' = "NoRoster"
@@ -475,7 +509,11 @@ RecordInitialHiddenSortitionCapacityFailure(candidateCount) ==
     /\ sortitionCandidateCount' = candidateCount
     /\ candidateSnapshotFrozen' = TRUE
     /\ attemptStatus' =
-          IF MaxSortitionRetries = 0 THEN "Rejected" ELSE attemptStatus
+          IF (MaxSortitionRetries = 0 \/
+                ProposalRandomnessRedrawsUsed + InitialSortitionRedrawCost =
+                    MaxRandomnessRedraws)
+          THEN "Rejected"
+          ELSE attemptStatus
     /\ UNCHANGED <<
         height, sortitionSequence, supersededSortitionAttempts, rosterBodies,
         invitationCloseHeight, ballotState, ballotSequence, currentTleSession,
@@ -541,7 +579,9 @@ FailSortitionPulseUnavailable ==
     /\ sortitionFailureKind' = "PulseUnavailable"
     /\ sortitionFailureHeight' = height
     /\ attemptStatus' =
-          IF sortitionSequence = MaxSortitionRetries THEN "Rejected"
+          IF (sortitionSequence = MaxSortitionRetries \/
+                ProposalRandomnessRedrawsUsed = MaxRandomnessRedraws)
+          THEN "Rejected"
           ELSE attemptStatus
     /\ UNCHANGED <<
         height, sortitionSequence, supersededSortitionAttempts,
@@ -571,6 +611,7 @@ RetryInitialSortitionBatch ==
        }
     /\ sortitionFailureHeight # None
     /\ sortitionSequence < MaxSortitionRetries
+    /\ ProposalRandomnessRedrawsUsed < MaxRandomnessRedraws
     /\ SortitionRetryHeightEligible
     /\ height + SortitionPulseDelayBlocks <= MaxHeight
     /\ sortitionState' = "AwaitingPulse"
@@ -604,6 +645,7 @@ RecordRetryHiddenSortitionCapacityFailure(candidateCount) ==
        }
     /\ sortitionFailureHeight # None
     /\ sortitionSequence < MaxSortitionRetries
+    /\ ProposalRandomnessRedrawsUsed < MaxRandomnessRedraws
     /\ SortitionRetryHeightEligible
     /\ candidateCount \in 0..1
     /\ height + SortitionPulseDelayBlocks <= MaxHeight
@@ -618,7 +660,8 @@ RecordRetryHiddenSortitionCapacityFailure(candidateCount) ==
     /\ sortitionFailureKind' = "HiddenElectorateCapacityUnavailable"
     /\ sortitionFailureHeight' = height
     /\ attemptStatus' =
-          IF sortitionSequence + 1 = MaxSortitionRetries
+          IF (sortitionSequence + 1 = MaxSortitionRetries \/
+                ProposalRandomnessRedrawsUsed + 1 = MaxRandomnessRedraws)
           THEN "Rejected"
           ELSE attemptStatus
     /\ UNCHANGED <<
@@ -790,6 +833,8 @@ RegisterPrivateBallot ==
     /\ height > invitationCloseHeight
     /\ ballotState \in {"None", "NoResult"}
     /\ ballotState = "None" \/ ballotSequence < MaxRetries
+    /\ ballotState = "None" \/
+          ProposalRandomnessRedrawsUsed < MaxRandomnessRedraws
     /\ IF ballotState = "NoResult"
           THEN /\ failureHeight # None
                /\ height >= failureHeight
@@ -968,7 +1013,10 @@ FailPrivateBallotNoResult ==
     /\ ballotState' = "NoResult"
     /\ failureHeight' = height
     /\ attemptStatus' =
-          IF ballotSequence = MaxRetries THEN "Rejected" ELSE attemptStatus
+          IF (ballotSequence = MaxRetries \/
+                ProposalRandomnessRedrawsUsed = MaxRandomnessRedraws)
+          THEN "Rejected"
+          ELSE attemptStatus
     /\ UNCHANGED <<
         height, sortitionState, sortitionSequence, sortitionFailureKind,
         sortitionFailureHeight, supersededSortitionAttempts, requestHeight,
@@ -1062,6 +1110,43 @@ FinalizeNarrowPolicyCapacityNoResult(eligibleCount) ==
     /\ FindingLifecycleFrame
     /\ FindingCertificateFrame
 
+\* Typed concrete classification:
+\* ParliamentBallotFailureKindV1::RandomnessRedrawBudgetExhausted.
+FinalizeNarrowPolicyRandomnessRedrawBudgetExhausted ==
+    /\ attemptStatus = "Active"
+    /\ findingState = "Approved"
+    /\ ballotState = "Opening"
+    /\ height >= openingHeight
+    /\ height <= releaseHeight + OpeningBlocks
+    /\ ProposalRandomnessRedrawsUsed = MaxRandomnessRedraws
+    /\ ballotState' = "NoResult"
+    /\ ballotApproved' = FALSE
+    /\ failureHeight' = height
+    /\ attemptStatus' = "Rejected"
+    /\ policyRequiresConfirmation' = TRUE
+    /\ eligibleConfirmationCandidates' = 2
+    /\ policyResultHeight' = height
+    /\ policyBindingCommitted' = FALSE
+    /\ confirmationRequirementCommitted' = FALSE
+    /\ confirmationRequestCommitted' = FALSE
+    /\ confirmationRequestHeight' = None
+    /\ confirmationPulseHeight' = None
+    /\ UNCHANGED <<
+        height, sortitionState, sortitionSequence, sortitionFailureKind,
+        sortitionFailureHeight, supersededSortitionAttempts, requestHeight,
+        sortitionPulseHeight, sortitionPulseKnown, sortitionPulseConsumed,
+        sortitionCandidateCount, candidateSnapshotFrozen, rosterBodies,
+        invitationCloseHeight, ballotSequence, currentTleSession,
+        usedTleSessions, registeredAtHeight, registrationCloseHeight,
+        survivorFreezeHeight, commitmentCloseHeight, releaseHeight,
+        registrationClosedAt, survivorsFrozenAt, commitmentClosedAt,
+        releasePulseKnown, openingHeight, certifiedAtHeight, enactAtHeight,
+        certificateHead, observedHead, effectApplied, terminalHeight,
+        plaintextPath, fallbackPath
+        >>
+    /\ FindingLifecycleFrame
+    /\ FindingCertificateFrame
+
 FinalizeNarrowPolicyAndRegisterConfirmationRequest ==
     /\ attemptStatus = "Active"
     /\ findingState = "Approved"
@@ -1069,6 +1154,7 @@ FinalizeNarrowPolicyAndRegisterConfirmationRequest ==
     /\ height >= openingHeight
     /\ height <= releaseHeight + OpeningBlocks
     /\ height + SortitionPulseDelayBlocks <= MaxHeight
+    /\ ProposalRandomnessRedrawsUsed < MaxRandomnessRedraws
     /\ ballotState' = "Approved"
     /\ ballotApproved' = TRUE
     /\ policyRequiresConfirmation' = TRUE
@@ -1247,8 +1333,19 @@ ReleaseTimedOvnResourceReservation(candidate) ==
     /\ CoreFrame
     /\ FindingFrame
 
+\* An exact replay of an already committed request or session is transport,
+\* not a fresh adversarial draw. It therefore stutters over the complete
+\* proposal state, including the cumulative randomness-redraw expression.
+ReplayCommittedTransportIdempotently ==
+    /\ attemptStatus = "Active"
+    /\ \/ sortitionState # "None"
+       \/ ballotState # "None"
+       \/ confirmationRequestCommitted
+    /\ UNCHANGED vars
+
 ReducerNext ==
     \/ Tick
+    \/ ReplayCommittedTransportIdempotently
     \/ CommitInitialSortitionBatch
     \/ \E candidateCount \in 0..1:
           RecordInitialHiddenSortitionCapacityFailure(candidateCount)
@@ -1274,6 +1371,7 @@ ReducerNext ==
     \/ FinalizeAggregateApprovedAndCertify
     \/ \E eligibleCount \in 0..1:
           FinalizeNarrowPolicyCapacityNoResult(eligibleCount)
+    \/ FinalizeNarrowPolicyRandomnessRedrawBudgetExhausted
     \/ FinalizeNarrowPolicyAndRegisterConfirmationRequest
     \/ FinalizeAggregateRejected
     \/ ChangeGovernedHead
@@ -1318,6 +1416,8 @@ Spec == Init /\ [][Next]_vars
 TypeOK ==
     /\ height \in 0..MaxHeight
     /\ attemptStatus \in AttemptStates
+    /\ governanceAttemptSequence \in 0..1
+    /\ randomnessRedrawsBeforeAttempt \in 0..MaxRandomnessRedraws
     /\ sortitionState \in SortitionStates
     /\ sortitionSequence \in 0..MaxSortitionRetries
     /\ sortitionFailureKind \in SortitionFailureKinds
@@ -1389,6 +1489,19 @@ TypeOK ==
     /\ rejectedReservationSnapshot \in OptionalReservationSet
     /\ reservationAuditStep \in 0..8
 
+ProposalWideRandomnessRedrawBudget ==
+    /\ ProposalRandomnessRedrawsUsed \in 0..MaxRandomnessRedraws
+    /\ governanceAttemptSequence = 0 =>
+          randomnessRedrawsBeforeAttempt = 0
+    /\ governanceAttemptSequence > 0 =>
+          randomnessRedrawsBeforeAttempt < MaxRandomnessRedraws
+    /\ (sortitionState = "NoRoster" /\
+          ProposalRandomnessRedrawsUsed = MaxRandomnessRedraws) =>
+          attemptStatus = "Rejected"
+    /\ (ballotState = "NoResult" /\
+          ProposalRandomnessRedrawsUsed = MaxRandomnessRedraws) =>
+          attemptStatus = "Rejected"
+
 FuturePulseSortition ==
     /\ (sortitionState = "None")
        \/ /\ candidateSnapshotFrozen
@@ -1426,7 +1539,8 @@ ObjectiveBoundedSortitionRetries ==
                 ELSE /\ sortitionFailureHeight = requestHeight
                      /\ sortitionCandidateCount \in 0..1
           /\ attemptStatus =
-                IF sortitionSequence = MaxSortitionRetries
+                IF (sortitionSequence = MaxSortitionRetries \/
+                      ProposalRandomnessRedrawsUsed = MaxRandomnessRedraws)
                 THEN "Rejected"
                 ELSE "Active"
     /\ sortitionState \in {"Drawn", "RosterSealed"} =>
@@ -1615,8 +1729,10 @@ AtomicPolicyConfirmationCapacity ==
     /\ policyRequiresConfirmation =>
           /\ eligibleConfirmationCandidates \in 0..2
           /\ policyResultHeight # None
-          /\ IF eligibleConfirmationCandidates \in 0..1
-                THEN /\ attemptStatus = "Rejected"
+          /\ IF ~confirmationRequestCommitted
+                THEN /\ (eligibleConfirmationCandidates \in 0..1 \/
+                          ProposalRandomnessRedrawsUsed = MaxRandomnessRedraws)
+                     /\ attemptStatus = "Rejected"
                      /\ ballotState = "NoResult"
                      /\ ~ballotApproved
                      /\ failureHeight = policyResultHeight
@@ -1626,6 +1742,7 @@ AtomicPolicyConfirmationCapacity ==
                      /\ confirmationRequestHeight = None
                      /\ confirmationPulseHeight = None
                 ELSE /\ eligibleConfirmationCandidates = 2
+                     /\ ProposalRandomnessRedrawsUsed <= MaxRandomnessRedraws
                      /\ attemptStatus = "Active"
                      /\ ballotState = "Approved"
                      /\ ballotApproved
@@ -1685,10 +1802,12 @@ CertifiedCannotPassDueHeight ==
 NoResultTerminalization ==
     /\ ballotState = "NoResult" =>
           attemptStatus =
-              IF policyRequiresConfirmation /\
-                    eligibleConfirmationCandidates \in 0..1
+              IF (policyRequiresConfirmation /\
+                    eligibleConfirmationCandidates \in 0..1) \/
+                    ballotSequence = MaxRetries \/
+                    ProposalRandomnessRedrawsUsed = MaxRandomnessRedraws
               THEN "Rejected"
-              ELSE IF ballotSequence = MaxRetries THEN "Rejected" ELSE "Active"
+              ELSE "Active"
     /\ findingState = "NoResult" => attemptStatus = "Rejected"
 
 =============================================================================

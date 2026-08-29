@@ -1962,7 +1962,7 @@ mod tests {
             register_code_bytes(authority, code, &mut stx).expect("register contract bytes");
         let manifest = verified.manifest.signed(authority_keypair);
         register_manifest(authority, manifest, &mut stx).expect("register manifest");
-        activate_instance(authority, contract_address.clone(), code_hash, &mut stx)
+        activate_instance(authority, contract_address.clone(), 1, code_hash, &mut stx)
             .expect("activate instance");
         stx.apply();
         block

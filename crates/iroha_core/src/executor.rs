@@ -5627,6 +5627,12 @@ impl Executor {
         call: &ContractInvocation,
         ivm_cache: &mut IvmCache,
     ) -> Result<ResolvedContractInvocation, ValidationFail> {
+        code::ensure_contract_execution_allowed(
+            &state_transaction.world,
+            &call.contract_address,
+            state_transaction.block_height(),
+        )
+        .map_err(ValidationFail::NotPermitted)?;
         let identity =
             code::fetch_bound_contract_identity(state_transaction, &call.contract_address)
                 .ok_or_else(|| {
@@ -7262,9 +7268,9 @@ impl Executor {
             .id()
             .starts_with(core::any::type_name::<Register<Trigger>>());
         let reg_trg = if is_reg_trigger {
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            crate::panic_hook::catch_unwind_suppressed(|| {
                 Register::<Trigger>::decode(&mut &instruction.dyn_encode()[..])
-            }))
+            })
             .ok()
             .and_then(Result::ok)
         } else {
@@ -7979,9 +7985,11 @@ fn extract_mint_asset(instruction: &InstructionBox) -> Option<Mint<Quantity, Ass
         return None;
     }
     let bytes = instruction.dyn_encode();
-    std::panic::catch_unwind(|| Mint::<Quantity, Asset>::decode(&mut bytes.as_slice()).ok())
-        .ok()
-        .flatten()
+    crate::panic_hook::catch_unwind_suppressed(|| {
+        Mint::<Quantity, Asset>::decode(&mut bytes.as_slice()).ok()
+    })
+    .ok()
+    .flatten()
 }
 fn extract_transfer_asset(
     instruction: &InstructionBox,
@@ -8000,7 +8008,7 @@ fn extract_transfer_asset(
         return None;
     }
     let bytes = instruction.dyn_encode();
-    std::panic::catch_unwind(|| {
+    crate::panic_hook::catch_unwind_suppressed(|| {
         let mut slice = &bytes[..];
         Transfer::<Asset, Quantity, Account>::decode(&mut slice).ok()
     })
@@ -8024,7 +8032,7 @@ fn extract_transfer_domain(
         return None;
     }
     let bytes = instruction.dyn_encode();
-    std::panic::catch_unwind(|| {
+    crate::panic_hook::catch_unwind_suppressed(|| {
         let mut slice = &bytes[..];
         Transfer::<Account, DomainId, Account>::decode(&mut slice).ok()
     })
@@ -8051,7 +8059,7 @@ fn extract_transfer_asset_definition(
         return None;
     }
     let bytes = instruction.dyn_encode();
-    std::panic::catch_unwind(|| {
+    crate::panic_hook::catch_unwind_suppressed(|| {
         let mut slice = &bytes[..];
         Transfer::<Account, AssetDefinitionId, Account>::decode(&mut slice).ok()
     })
@@ -8079,7 +8087,7 @@ fn extract_transfer_nft(
         return None;
     }
     let bytes = instruction.dyn_encode();
-    std::panic::catch_unwind(|| {
+    crate::panic_hook::catch_unwind_suppressed(|| {
         let mut slice = &bytes[..];
         Transfer::<Account, iroha_data_model::NftId, Account>::decode(&mut slice).ok()
     })
@@ -9326,6 +9334,10 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
         iroha_data_model::isi::smart_contract_code::RegisterSmartContractCode,
         iroha_data_model::isi::smart_contract_code::DeactivateContractInstance,
         iroha_data_model::isi::smart_contract_code::ActivateContractInstance,
+        iroha_data_model::isi::smart_contract_code::SetContractParliamentDelegation,
+        iroha_data_model::isi::smart_contract_code::OfferContractOwnership,
+        iroha_data_model::isi::smart_contract_code::AcceptContractOwnership,
+        iroha_data_model::isi::smart_contract_code::CancelContractOwnershipOffer,
         iroha_data_model::isi::smart_contract_code::CommitContractDeployment,
         iroha_data_model::isi::smart_contract_code::RegisterSmartContractBytes,
         iroha_data_model::isi::smart_contract_code::UploadSmartContractCodeChunk,
@@ -9403,6 +9415,8 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
         iroha_data_model::isi::bridge::RecordSccpMessage,
         iroha_data_model::isi::bridge::SubmitSccpTonBreakerObservationV1,
         iroha_data_model::isi::governance::ProposeDeployContract,
+        iroha_data_model::isi::governance::ProposeContractLifecycleGovernance,
+        iroha_data_model::isi::governance::ProposeContractEmergencyHold,
         iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal,
         iroha_data_model::isi::governance::ProposeSccpRouteGovernance,
         iroha_data_model::isi::governance::ProposeValidationFeePayoutLifecycle,
@@ -10098,6 +10112,12 @@ where
         // validating every call against the pre-batch world would break atomic state visibility.
         Executable::Instructions(_) | Executable::Batch(_) => Ok(()),
         Executable::ContractCall(call) => {
+            code::ensure_contract_execution_allowed(
+                state.world(),
+                &call.contract_address,
+                u64::try_from(state.height()).unwrap_or(u64::MAX),
+            )
+            .map_err(ValidationFail::NotPermitted)?;
             let identity = code::fetch_bound_contract_identity(state, &call.contract_address)
                 .ok_or_else(|| {
                     ValidationFail::NotPermitted(format!(
@@ -10523,7 +10543,7 @@ pub(crate) fn extract_register_asset_definition(
         return None;
     }
     let bytes = instruction.dyn_encode();
-    std::panic::catch_unwind(|| {
+    crate::panic_hook::catch_unwind_suppressed(|| {
         let mut slice = &bytes[..];
         Register::<AssetDefinition>::decode(&mut slice).ok()
     })
@@ -10878,7 +10898,6 @@ impl LoadedExecutor {
 /// and provide a materialization path that loads a `LoadedExecutor` when required.
 pub mod executor_norito {
     use super::*;
-    use std::panic::{AssertUnwindSafe, catch_unwind};
     /// Local DTO used for Norito encoding of `Executor`.
     #[derive(Encode, Decode)]
     enum ExecutorDto {
@@ -10908,8 +10927,9 @@ pub mod executor_norito {
     /// # Errors
     /// Returns an error if the byte slice does not represent a valid executor value.
     pub fn from_bytes(bytes: &[u8]) -> Result<Executor, String> {
-        let decoded = catch_unwind(AssertUnwindSafe(|| norito::decode_from_bytes(bytes)))
-            .map_err(|_| "executor decode failed: panic during Norito decode".to_owned())?;
+        let decoded =
+            crate::panic_hook::catch_unwind_suppressed(|| norito::decode_from_bytes(bytes))
+                .map_err(|_| "executor decode failed: panic during Norito decode".to_owned())?;
         let dto: ExecutorDto = decoded.map_err(|e| format!("executor decode failed: {e}"))?;
         match dto {
             ExecutorDto::Initial => Ok(Executor::Initial),
@@ -13774,12 +13794,14 @@ mod tests {
             InstructionBox::from(
                 iroha_data_model::isi::smart_contract_code::ActivateContractInstance {
                     contract_address: contract_address.clone(),
+                    expected_revision: 1,
                     code_hash: Hash::new(b"executor-lifecycle-activation"),
                 },
             ),
             InstructionBox::from(
                 iroha_data_model::isi::smart_contract_code::DeactivateContractInstance {
                     contract_address: contract_address.clone(),
+                    expected_revision: 1,
                     reason: Some("executor lifecycle guard".to_owned()),
                 },
             ),
@@ -14823,8 +14845,11 @@ mod tests {
                 Json::new(()),
             )]),
         );
-        let subject_binding =
-            crate::smartcontracts::code::ContractSubjectBinding::new(&contract_address);
+        let subject_binding = crate::smartcontracts::code::ContractSubjectBinding::new_direct(
+            &contract_address,
+            authority.clone(),
+        )
+        .with_active_code_hash(code_hash);
         state_transaction
             .world
             .contract_subject_addresses
@@ -17728,12 +17753,17 @@ mod tests {
                     [],
                 );
                 seed_test_asset_supply(&mut world, &asset_definition);
+                let contract_code_hash = Hash::new(b"contract-batch-code");
                 world
                     .contract_instances
-                    .insert(contract_address.clone(), Hash::new(b"contract-batch-code"));
+                    .insert(contract_address.clone(), contract_code_hash);
                 world.contract_subject_bindings.insert(
                     contract_address.clone(),
-                    crate::smartcontracts::code::ContractSubjectBinding::new(&contract_address),
+                    crate::smartcontracts::code::ContractSubjectBinding::new_direct(
+                        &contract_address,
+                        deployer.clone(),
+                    )
+                    .with_active_code_hash(contract_code_hash),
                 );
                 world
                     .contract_subject_addresses
@@ -17855,7 +17885,11 @@ mod tests {
             .insert(contract_address.clone(), code_hash);
         world.contract_subject_bindings.insert(
             contract_address.clone(),
-            crate::smartcontracts::code::ContractSubjectBinding::new(&contract_address),
+            crate::smartcontracts::code::ContractSubjectBinding::new_direct(
+                &contract_address,
+                deployer.clone(),
+            )
+            .with_active_code_hash(code_hash),
         );
         world
             .contract_subject_addresses

@@ -4,7 +4,7 @@ async fn handler_post_transaction_entrypoint_uses_authenticated_api_token_rate_l
     {
         let app_mut = Arc::get_mut(&mut app).expect("unique app state");
         app_mut.high_load_tx_threshold = usize::MAX;
-        app_mut.tx_rate_limiter = limits::RateLimiter::new(Some(1), Some(1));
+        app_mut.tx_preauth_rate_limiter = limits::RateLimiter::new(Some(1), Some(1));
         app_mut.fee_policy = FeePolicy::Disabled;
         app_mut.require_api_token = true;
         app_mut.api_tokens_set = Arc::new(HashSet::from(["entrypoint-token".to_owned()]));
@@ -339,7 +339,7 @@ async fn handler_post_transactions_batch_rate_limits_api_token_as_single_key_bat
     {
         let app_mut = Arc::get_mut(&mut app).expect("unique app state");
         app_mut.high_load_tx_threshold = usize::MAX;
-        app_mut.tx_rate_limiter = limits::RateLimiter::new(Some(1), Some(2));
+        app_mut.tx_preauth_rate_limiter = limits::RateLimiter::new(Some(1), Some(2));
         app_mut.require_api_token = true;
         app_mut.api_tokens_set = Arc::new(HashSet::from(["batch-token".to_owned()]));
     }
@@ -376,7 +376,10 @@ async fn handler_post_transactions_batch_rate_limits_api_token_as_single_key_bat
     assert_eq!(err.into_response().status(), StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(app.queue.active_len(), 0);
     assert!(
-        !app.tx_rate_limiter.allow("batch-token").await,
+        !app
+            .tx_preauth_rate_limiter
+            .allow(&transaction_api_token_preauth_key("batch-token"))
+            .await,
         "failed same-key batch should consume the token prefix that would have passed"
     );
 }
@@ -386,7 +389,7 @@ async fn handler_post_transactions_batch_uses_authenticated_token_for_distinct_a
     {
         let app_mut = Arc::get_mut(&mut app).expect("unique app state");
         app_mut.high_load_tx_threshold = usize::MAX;
-        app_mut.tx_rate_limiter = limits::RateLimiter::new(Some(1), Some(2));
+        app_mut.tx_preauth_rate_limiter = limits::RateLimiter::new(Some(1), Some(2));
         app_mut.require_api_token = true;
         app_mut.api_tokens_set = Arc::new(HashSet::from(["batch-distinct-token".to_owned()]));
     }
@@ -425,7 +428,10 @@ async fn handler_post_transactions_batch_uses_authenticated_token_for_distinct_a
     assert_eq!(err.into_response().status(), StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(app.queue.active_len(), 0);
     assert!(
-        !app.tx_rate_limiter.allow("batch-distinct-token").await,
+        !app
+            .tx_preauth_rate_limiter
+            .allow(&transaction_api_token_preauth_key("batch-distinct-token"))
+            .await,
         "distinct authorities should still consume the shared API-token key"
     );
 }
@@ -1900,6 +1906,78 @@ async fn signed_foreign_account_reads_do_not_gain_target_routes_without_a_grant(
         true,
     ));
 }
+
+#[cfg(feature = "app_api")]
+#[tokio::test]
+async fn can_read_all_ledger_data_expands_every_dataspace_read_route() {
+    let caller = checked_torii_test_account_id(0xda, "derive global reader fixture key");
+    let mut app = mk_app_state_for_tests_with_world(world_with_account(&caller));
+    let (_, restricted_dataspace) = configure_private_ingress_routes_for_test(&mut app);
+
+    let public_only = super::torii_visible_account_read_routes(app.as_ref(), Some(&caller));
+    assert!(
+        public_only
+            .iter()
+            .all(|route| route.dataspace_id != restricted_dataspace)
+    );
+
+    grant_account_permission_for_test(&app, &caller, CanReadAllLedgerData.into());
+    let all_routes = super::torii_visible_account_read_routes(app.as_ref(), Some(&caller));
+    assert!(
+        all_routes
+            .iter()
+            .any(|route| route.dataspace_id == restricted_dataspace)
+    );
+    assert!(super::torii_dataspace_read_visibility(app.as_ref(), Some(&caller)).can_read_all());
+}
+
+#[cfg(feature = "app_api")]
+#[test]
+fn long_lived_dataspace_context_rechecks_permission_revocation() {
+    let caller = checked_torii_test_account_id(0xdb, "derive revocable stream reader fixture key");
+    let mut app = mk_app_state_for_tests_with_world(world_with_account(&caller));
+    let (_, restricted_dataspace) = configure_private_ingress_routes_for_test(&mut app);
+    let permission: Permission = CanReadRestrictedDataspace {
+        dataspace: restricted_dataspace,
+    }
+    .into();
+    let context = super::ToriiAccountReadVisibility::Signed(caller.clone())
+        .into_dataspace_context(app.clone());
+
+    assert!(!context.current_visibility().allows_dataspace(restricted_dataspace));
+    grant_account_permission_for_test(&app, &caller, permission.clone());
+    assert!(context.current_visibility().allows_dataspace(restricted_dataspace));
+
+    let next_height = app
+        .state
+        .latest_block_header_fast()
+        .map_or(1, |header| header.height().get().saturating_add(1));
+    let header = BlockHeader::new(
+        NonZeroU64::new(next_height).expect("non-zero height"),
+        None,
+        None,
+        None,
+        0,
+        0,
+    );
+    let mut block = app.state.block(header);
+    let mut tx = block.transaction();
+    assert!(
+        tx.world_mut_for_testing()
+            .remove_account_permission(&caller, &permission),
+        "seeded permission must be removed"
+    );
+    tx.apply();
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit permission revocation");
+
+    assert!(
+        !context.current_visibility().allows_dataspace(restricted_dataspace),
+        "an established stream/read context must not retain a revoked grant"
+    );
+}
+
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn handler_account_assets_fanout_reports_merged_route_headers() {

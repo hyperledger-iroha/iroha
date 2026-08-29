@@ -992,6 +992,218 @@ fn final_private_ballot_retry_failure_rejects_the_governance_attempt() {
 }
 
 #[test]
+fn proposal_wide_redraw_budget_composes_sortition_and_timed_ovn_retries() {
+    let mut state = policy_only_state();
+    state.randomness_redraws_before_attempt = MAX_PARLIAMENT_RANDOMNESS_REDRAWS_V1 - 2;
+    let governance_attempt_id = state.attempt.id;
+    state
+        .complete_qualification(governance_attempt_id)
+        .expect("enter Policy Jury stage");
+
+    let (initial_request, initial_candidates) = sortition_request(
+        governance_attempt_id,
+        0,
+        ParliamentBody::PolicyJury,
+        180,
+        3,
+        3,
+        10,
+        20,
+        beacon_session(181),
+        None,
+    );
+    let initial_election_id = initial_request.body_election_attempt_id;
+    state
+        .register_sortition_request(
+            governance_attempt_id,
+            0,
+            initial_request,
+            initial_candidates,
+        )
+        .expect("the proposal's baseline draw remains free");
+    state
+        .fail_body_election_no_roster(governance_attempt_id, initial_election_id, false, 21)
+        .expect("record an objectively missing initial pulse");
+
+    let (retry_request, retry_candidates) = sortition_request(
+        governance_attempt_id,
+        1,
+        ParliamentBody::PolicyJury,
+        182,
+        3,
+        3,
+        21,
+        31,
+        beacon_session(183),
+        None,
+    );
+    let retry_election_id = retry_request.body_election_attempt_id;
+    let retry_request_id = retry_request.id;
+    state
+        .register_sortition_request(governance_attempt_id, 1, retry_request, retry_candidates)
+        .expect("one fresh sortition generation consumes the penultimate unit");
+    assert_eq!(
+        state
+            .randomness_redraws_used_v1()
+            .expect("bounded redraw count"),
+        MAX_PARLIAMENT_RANDOMNESS_REDRAWS_V1 - 1
+    );
+    consume_sortition(
+        &mut state,
+        governance_attempt_id,
+        vec![retry_request_id],
+        beacon_session(183),
+        31,
+        pulse_id(184),
+    )
+    .expect("consume the retry pulse");
+    state
+        .begin_invitation_acceptance(governance_attempt_id, retry_election_id, 31, 1)
+        .expect("open retry invitations");
+    let selected = state
+        .election(&retry_election_id)
+        .expect("drawn retry election")
+        .primary_assignments()
+        .iter()
+        .map(|assignment| assignment.member.clone())
+        .collect::<Vec<_>>();
+    for member in selected {
+        state
+            .record_invitation_response(governance_attempt_id, retry_election_id, &member, true, 31)
+            .expect("accept retry assignment");
+    }
+    let body_id = state
+        .seal_body_roster(governance_attempt_id, retry_election_id, 32)
+        .expect("seal the retained retry roster");
+    for phase in [
+        DeliberationPhaseV1::Orientation,
+        DeliberationPhaseV1::Evidence,
+        DeliberationPhaseV1::Questions,
+        DeliberationPhaseV1::Responses,
+        DeliberationPhaseV1::Deliberation,
+        DeliberationPhaseV1::Reflection,
+        DeliberationPhaseV1::Vote,
+    ] {
+        state
+            .advance_body_phase(governance_attempt_id, body_id, phase, 33, 10)
+            .expect("advance retained roster to its hidden ballot");
+    }
+
+    let policy = timed_ovn_policy();
+    let initial_ballot_id = BallotAttemptId::derive_v1(body_id, 0);
+    let initial_key_session_id = tle_key_session(185);
+    let initial_release_session_id = beacon_session(186);
+    let initial_release_height = 53;
+    let initial_tle_session_id = TleSessionId::derive_v1(
+        initial_ballot_id,
+        initial_key_session_id,
+        initial_release_session_id,
+        initial_release_height,
+    );
+    state
+        .register_ballot_attempt(
+            governance_attempt_id,
+            body_id,
+            initial_ballot_id,
+            0,
+            initial_tle_session_id,
+            initial_key_session_id,
+            initial_release_session_id,
+            40,
+            policy,
+            initial_release_height,
+        )
+        .expect("register the roster's initial timed-OVN session");
+
+    let retained_transport_snapshot = state.clone();
+    assert!(matches!(
+        state.register_ballot_attempt(
+            governance_attempt_id,
+            body_id,
+            initial_ballot_id,
+            0,
+            initial_tle_session_id,
+            initial_key_session_id,
+            initial_release_session_id,
+            40,
+            policy,
+            initial_release_height,
+        ),
+        Err(ParliamentReducerErrorV1::DuplicateOrZeroIdentifier(
+            ParliamentReducerEntityV1::BallotAttempt
+        ))
+    ));
+    assert_eq!(
+        state, retained_transport_snapshot,
+        "an exact transport retry over the retained roster/session must be state-idempotent"
+    );
+    assert_eq!(
+        state
+            .randomness_redraws_used_v1()
+            .expect("bounded redraw count"),
+        MAX_PARLIAMENT_RANDOMNESS_REDRAWS_V1 - 1,
+        "an exact transport retry must not spend a redraw unit"
+    );
+
+    state
+        .fail_ballot_no_result(governance_attempt_id, initial_ballot_id, false, 45)
+        .expect("objectively expire initial registration");
+    let retry_ballot_id = BallotAttemptId::derive_v1(body_id, 1);
+    let retry_key_session_id = tle_key_session(187);
+    let retry_release_session_id = beacon_session(188);
+    let retry_release_height = 58;
+    let retry_tle_session_id = TleSessionId::derive_v1(
+        retry_ballot_id,
+        retry_key_session_id,
+        retry_release_session_id,
+        retry_release_height,
+    );
+    state
+        .register_ballot_attempt(
+            governance_attempt_id,
+            body_id,
+            retry_ballot_id,
+            1,
+            retry_tle_session_id,
+            retry_key_session_id,
+            retry_release_session_id,
+            45,
+            policy,
+            retry_release_height,
+        )
+        .expect("the final proposal-wide unit admits one fresh timed-OVN session");
+    assert_eq!(
+        state
+            .randomness_redraws_used_v1()
+            .expect("bounded redraw count"),
+        MAX_PARLIAMENT_RANDOMNESS_REDRAWS_V1
+    );
+    state
+        .fail_ballot_no_result(governance_attempt_id, retry_ballot_id, false, 50)
+        .expect("failure at the cumulative ceiling rejects the attempt");
+    assert_eq!(state.attempt.status, GovernanceAttemptStatusV1::Rejected);
+    state
+        .validate()
+        .expect("nested redraw exhaustion is canonical persisted state");
+
+    let encoded = norito::to_bytes(&state).expect("encode redraw-bounded attempt");
+    let decoded = norito::decode_from_bytes::<ParliamentAttemptStateV1>(&encoded)
+        .expect("decode redraw-bounded attempt");
+    assert_eq!(decoded, state);
+    decoded
+        .validate()
+        .expect("decoded redraw prefix and derived usage remain canonical");
+
+    let mut mutated_prefix = decoded;
+    mutated_prefix.randomness_redraws_before_attempt -= 1;
+    assert_eq!(
+        mutated_prefix.validate(),
+        Err(ParliamentReducerErrorV1::RetrySequenceMismatch),
+        "a lowered persisted prefix must not justify terminal exhaustion"
+    );
+}
+
+#[test]
 fn ballot_failure_reason_is_derived_from_the_frozen_phase() {
     let BodyFixture {
         mut state, body_id, ..

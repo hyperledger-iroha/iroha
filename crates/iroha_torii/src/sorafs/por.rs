@@ -1498,23 +1498,25 @@ impl PorCoordinatorRuntime {
             let storage = Arc::clone(&self.storage);
             let coordinator = Arc::clone(&self.coordinator);
             let challenge_for_worker = challenge.clone();
-            tokio::task::spawn_blocking(move || {
-                // Cancellation detaches a blocking task. Retain the pipeline
-                // guard in the physical worker so no later delta can overtake
-                // the durable node mutation or its projection update.
-                let _pipeline = pipeline;
-                match storage.record_challenge(&challenge_for_worker) {
-                    Ok(update) => coordinator
-                        .apply_authoritative_update(update)
-                        .map_err(PorAutomationError::Coordinator),
-                    Err(error) => {
-                        if error.disposition().invalidates_projection() {
-                            coordinator.invalidate_authoritative_projection();
+            crate::panic_recovery::join_recoverable(
+                crate::panic_recovery::spawn_blocking_recoverable(move || {
+                    // Cancellation detaches a blocking task. Retain the pipeline
+                    // guard in the physical worker so no later delta can overtake
+                    // the durable node mutation or its projection update.
+                    let _pipeline = pipeline;
+                    match storage.record_challenge(&challenge_for_worker) {
+                        Ok(update) => coordinator
+                            .apply_authoritative_update(update)
+                            .map_err(PorAutomationError::Coordinator),
+                        Err(error) => {
+                            if error.disposition().invalidates_projection() {
+                                coordinator.invalidate_authoritative_projection();
+                            }
+                            Err(PorAutomationError::Storage(error))
                         }
-                        Err(PorAutomationError::Storage(error))
                     }
-                }
-            })
+                }),
+            )
             .await
             .map_err(|error| {
                 self.coordinator.invalidate_authoritative_projection();

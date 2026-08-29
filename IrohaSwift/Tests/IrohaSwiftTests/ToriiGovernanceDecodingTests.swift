@@ -297,7 +297,7 @@ final class ToriiGovernanceDecodingTests: XCTestCase {
         XCTAssertThrowsError(try JSONDecoder().decode(ToriiGovernanceTallyResponse.self, from: json))
     }
 
-    func testGovernanceProposalKindDecodesAllSevenV1Variants() throws {
+    func testGovernanceProposalKindDecodesAllNineV1Variants() throws {
         let deploy = proposalKindJSON(
             kind: "DeployContract",
             payload: """
@@ -386,6 +386,103 @@ final class ToriiGovernanceDecodingTests: XCTestCase {
             return XCTFail("expected SoraFS establish")
         }
         XCTAssertEqual(action.providerId.bytes, Data(repeating: 9, count: 32))
+
+        let contractLifecycle = proposalKindJSON(
+            kind: "ContractLifecycleGovernance",
+            payload: """
+            {"contract_address":"\(Self.contractAddress)","expected_revision":1,"action":{"action":"CompleteEmergencyHoldRetrospective","payload":{"hold_proposal_content_id":\(fixedBytes(17)),"hold_governance_attempt_id":\(fixedBytes(34)),"incident_digest":\(fixedBytes(51)),"retrospective_finding_root":\(fixedBytes(68))}}}
+            """
+        )
+        guard case .contractLifecycleGovernance(let contractLifecyclePayload) =
+            try JSONDecoder().decode(ToriiGovernanceProposalKind.self, from: contractLifecycle),
+            case .completeEmergencyHoldRetrospective(let retrospective) =
+                contractLifecyclePayload.action else {
+            return XCTFail("expected contract emergency-hold retrospective")
+        }
+        XCTAssertEqual(retrospective.holdProposalContentId, Data(repeating: 17, count: 32))
+        XCTAssertEqual(retrospective.holdGovernanceAttemptId, Data(repeating: 34, count: 32))
+        XCTAssertEqual(retrospective.incidentDigest, Data(repeating: 51, count: 32))
+        XCTAssertEqual(retrospective.retrospectiveFindingRoot, Data(repeating: 68, count: 32))
+
+        let emergencyHold = proposalKindJSON(
+            kind: "ContractEmergencyHold",
+            payload: """
+            {"contract_address":"\(Self.contractAddress)","expected_revision":2,"expected_code_hash":"\(String(repeating: "ab", count: 32))","incident_digest":\(fixedBytes(85)),"reason":"contain compromised entrypoint","duration_blocks":3600}
+            """
+        )
+        guard case .contractEmergencyHold(let emergencyHoldPayload) =
+            try JSONDecoder().decode(ToriiGovernanceProposalKind.self, from: emergencyHold) else {
+            return XCTFail("expected ContractEmergencyHold")
+        }
+        XCTAssertEqual(emergencyHoldPayload.expectedRevision, 2)
+        XCTAssertEqual(emergencyHoldPayload.expectedCodeHash, Data(repeating: 0xab, count: 32))
+        XCTAssertEqual(emergencyHoldPayload.incidentDigest, Data(repeating: 85, count: 32))
+        XCTAssertEqual(emergencyHoldPayload.durationBlocks, 3_600)
+    }
+
+    func testContractLifecycleActionInventoryUsesCanonicalPayloadShapes() throws {
+        let actionPayloads = [
+            """
+            {"action":"Activate","payload":{"code_hash":"\(String(repeating: "11", count: 32))","abi_hash":"\(String(repeating: "22", count: 32))","abi_version":1,"manifest_provenance":null}}
+            """,
+            """
+            {"action":"Deactivate","payload":{"expected_code_hash":"\(String(repeating: "33", count: 32))","reason":null}}
+            """,
+            """
+            {"action":"OfferOwnership","payload":{"new_owner":"\(Self.governanceOwner)"}}
+            """,
+            "{\"action\":\"CancelOwnershipOffer\",\"payload\":null}",
+            "{\"action\":\"AcceptParliamentOwnership\",\"payload\":null}",
+            """
+            {"action":"CompleteEmergencyHoldRetrospective","payload":{"hold_proposal_content_id":\(fixedBytes(17)),"hold_governance_attempt_id":\(fixedBytes(34)),"incident_digest":\(fixedBytes(51)),"retrospective_finding_root":\(fixedBytes(68))}}
+            """,
+        ]
+        for payload in actionPayloads {
+            XCTAssertNoThrow(
+                try JSONDecoder().decode(
+                    ToriiGovernanceContractLifecycleActionV1.self,
+                    from: Data(payload.utf8)
+                )
+            )
+        }
+
+        let zeroRoot = fixedBytes(0)
+        let invalidActions = [
+            "{\"action\":\"CancelOwnershipOffer\"}",
+            "{\"action\":\"AcceptParliamentOwnership\",\"payload\":{}}",
+            "{\"action\":\"LegacyActivate\",\"payload\":null}",
+            """
+            {"action":"Activate","payload":{"code_hash":"\(String(repeating: "AA", count: 32))","abi_hash":"\(String(repeating: "22", count: 32))","abi_version":1,"manifest_provenance":null}}
+            """,
+            """
+            {"action":"CompleteEmergencyHoldRetrospective","payload":{"hold_proposal_content_id":\(fixedBytes(17)),"hold_governance_attempt_id":\(fixedBytes(34)),"incident_digest":\(fixedBytes(51)),"retrospective_finding_root":\(zeroRoot)}}
+            """,
+        ]
+        for payload in invalidActions {
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(
+                    ToriiGovernanceContractLifecycleActionV1.self,
+                    from: Data(payload.utf8)
+                )
+            )
+        }
+    }
+
+    func testContractEmergencyHoldRejectsNoncanonicalContainmentFields() {
+        let validPrefix =
+            "{\"kind\":\"ContractEmergencyHold\",\"payload\":{\"contract_address\":\"\(Self.contractAddress)\",\"expected_revision\":1,\"expected_code_hash\":\"\(String(repeating: "11", count: 32))\",\"incident_digest\":\(fixedBytes(7)),"
+        for suffix in [
+            "\"reason\":\" containment\",\"duration_blocks\":1}}",
+            "\"reason\":\"containment\",\"duration_blocks\":0}}",
+            "\"reason\":\"containment\",\"duration_blocks\":3601}}",
+        ] {
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(
+                    ToriiGovernanceProposalKind.self,
+                    from: Data((validPrefix + suffix).utf8)
+                )
+            )
+        }
     }
 
     func testGovernanceSccpDestinationUsesClosedTypedDeployment() throws {

@@ -2755,7 +2755,7 @@ impl ProductionLifecycleOwnerV1 {
         let recovered_validate_sidecar =
             RegisteredLifecycleValidateSidecarWaitV1::recover_at_launch(
                 &mut self.coordinator,
-                &self.registry,
+                &mut self.registry,
             )
             .map_err(|error| {
                 ProductionLifecycleLaunchErrorV1::ValidateSidecarRegistration(error.to_string())

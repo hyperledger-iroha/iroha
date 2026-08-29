@@ -105,6 +105,7 @@ export const PARLIAMENT_NO_RESULT_KINDS_V1 = Object.freeze([
   [6, "BallotOpeningDeadlineExpired"],
   [7, "SortitionRetriesExhausted"],
   [8, "ConfirmationJuryCapacityUnavailable"],
+  [9, "RandomnessRedrawBudgetExhausted"],
 ].map(([noritoIndex, jsonTag]) => Object.freeze({ noritoIndex, jsonTag })));
 
 export const PARLIAMENT_BODY_STATE_FIELDS_V1 = Object.freeze([

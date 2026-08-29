@@ -11890,6 +11890,19 @@
               "reason"
             ],
             "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "reason": {
+                "const": "RandomnessRedrawBudgetExhausted",
+                "type": "string"
+              }
+            },
+            "required": [
+              "reason"
+            ],
+            "type": "object"
           }
         ]
       },
@@ -13819,77 +13832,138 @@
         ],
         "type": "object"
       },
+      "GovernedContractEmergencyHoldV1": {
+        "additionalProperties": false,
+        "properties": {
+          "expires_at_height": { "format": "uint64", "minimum": 1, "type": "integer" },
+          "governance_attempt_id_hex": { "pattern": "^[0-9a-f]{64}$", "type": "string" },
+          "imposed_at_height": { "format": "uint64", "minimum": 1, "type": "integer" },
+          "incident_digest_hex": { "pattern": "^[0-9a-f]{64}$", "type": "string" },
+          "proposal_content_id_hex": { "pattern": "^[0-9a-f]{64}$", "type": "string" },
+          "reason": { "minLength": 1, "type": "string" }
+        },
+        "required": [
+          "incident_digest_hex",
+          "proposal_content_id_hex",
+          "governance_attempt_id_hex",
+          "reason",
+          "imposed_at_height",
+          "expires_at_height"
+        ],
+        "type": "object"
+      },
+      "GovernedContractLifecycleV1": {
+        "additionalProperties": false,
+        "properties": {
+          "active_code_hash_hex": {
+            "anyOf": [
+              { "pattern": "^[0-9a-f]{64}$", "type": "string" },
+              { "type": "null" }
+            ]
+          },
+          "emergency_hold": {
+            "anyOf": [
+              { "$ref": "#/components/schemas/GovernedContractEmergencyHoldV1" },
+              { "type": "null" }
+            ]
+          },
+          "origin": { "enum": ["direct", "parliament"], "type": "string" },
+          "origin_account": { "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1" },
+          "origin_governance_attempt_id_hex": {
+            "anyOf": [
+              { "pattern": "^[0-9a-f]{64}$", "type": "string" },
+              { "type": "null" }
+            ]
+          },
+          "origin_proposal_content_id_hex": {
+            "anyOf": [
+              { "pattern": "^[0-9a-f]{64}$", "type": "string" },
+              { "type": "null" }
+            ]
+          },
+          "owner": {
+            "oneOf": [
+              { "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1" },
+              { "enum": ["parliament"], "type": "string" }
+            ]
+          },
+          "parliament_delegated": { "type": "boolean" },
+          "pending_owner": {
+            "anyOf": [
+              { "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1" },
+              { "enum": ["parliament"], "type": "string" },
+              { "type": "null" }
+            ]
+          },
+          "revision": { "format": "uint64", "minimum": 1, "type": "integer" }
+        },
+        "required": [
+          "origin",
+          "origin_account",
+          "origin_proposal_content_id_hex",
+          "origin_governance_attempt_id_hex",
+          "owner",
+          "pending_owner",
+          "parliament_delegated",
+          "active_code_hash_hex",
+          "revision",
+          "emergency_hold"
+        ],
+        "type": "object"
+      },
       "GovernedContractResponse": {
         "oneOf": [
           {
             "additionalProperties": false,
             "properties": {
-              "abi_hash_hex": {
-                "pattern": "^[0-9a-f]{64}$",
-                "type": "string"
-              },
-              "code_hash_hex": {
-                "pattern": "^[0-9a-f]{64}$",
-                "type": "string"
-              },
-              "contract_address": {
-                "type": "string"
-              },
-              "contract_subject_account": {
-                "type": "string"
-              },
-              "dataspace": {
-                "type": "string"
-              },
-              "found": {
-                "enum": [
-                  true
-                ],
-                "type": "boolean"
-              },
+              "abi_hash_hex": { "pattern": "^[0-9a-f]{64}$", "type": "string" },
+              "active": { "enum": [true], "type": "boolean" },
+              "code_hash_hex": { "pattern": "^[0-9a-f]{64}$", "type": "string" },
+              "contract_address": { "type": "string" },
+              "contract_subject_account": { "type": "string" },
+              "dataspace": { "type": "string" },
+              "emergency_hold_active": { "type": "boolean" },
+              "found": { "enum": [true], "type": "boolean" },
+              "lifecycle": { "$ref": "#/components/schemas/GovernedContractLifecycleV1" },
               "public_entrypoints": {
                 "description": "Lexicographically sorted Kotoage and View entrypoint names from the authenticated artifact.",
-                "items": {
-                  "pattern": "^[a-z][a-z0-9_]{0,127}$",
-                  "type": "string"
-                },
+                "items": { "pattern": "^[a-z][a-z0-9_]{0,127}$", "type": "string" },
                 "minItems": 1,
                 "type": "array",
                 "uniqueItems": true
               }
             },
             "required": [
-              "found",
-              "contract_address",
-              "contract_subject_account",
-              "dataspace",
-              "code_hash_hex",
-              "abi_hash_hex",
-              "public_entrypoints"
+              "found", "contract_address", "contract_subject_account", "dataspace", "active",
+              "lifecycle", "emergency_hold_active", "code_hash_hex", "abi_hash_hex", "public_entrypoints"
             ],
             "type": "object"
           },
           {
             "additionalProperties": false,
             "properties": {
-              "contract_address": {
-                "type": "string"
-              },
-              "dataspace": {
-                "type": "string"
-              },
-              "found": {
-                "enum": [
-                  false
-                ],
-                "type": "boolean"
-              }
+              "active": { "enum": [false], "type": "boolean" },
+              "contract_address": { "type": "string" },
+              "contract_subject_account": { "type": "string" },
+              "dataspace": { "type": "string" },
+              "emergency_hold_active": { "type": "boolean" },
+              "found": { "enum": [true], "type": "boolean" },
+              "lifecycle": { "$ref": "#/components/schemas/GovernedContractLifecycleV1" }
             },
             "required": [
-              "found",
-              "contract_address",
-              "dataspace"
+              "found", "contract_address", "contract_subject_account", "dataspace", "active",
+              "lifecycle", "emergency_hold_active"
             ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "contract_address": { "type": "string" },
+              "dataspace": { "type": "string" },
+              "found": { "enum": [false], "type": "boolean" }
+            },
+            "required": ["found", "contract_address", "dataspace"],
             "type": "object"
           }
         ]

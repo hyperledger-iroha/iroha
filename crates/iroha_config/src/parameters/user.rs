@@ -2258,6 +2258,40 @@ impl Default for ParliamentTimedOvn {
         }
     }
 }
+/// Consensus-critical activation, expiry, and use bounds for Parliament TLE keys.
+#[derive(Debug, ReadConfig, Clone, Copy)]
+pub struct ParliamentTleKeyLifecycle {
+    /// Inclusive new-ballot lifetime after the mandatory next-height activation.
+    #[config(
+        default = "defaults::governance::parliament_tle_key_lifecycle::SESSION_LIFETIME_BLOCKS"
+    )]
+    pub session_lifetime_blocks: u64,
+    /// Maximum committed fresh ballots admitted under one unrefreshed key.
+    #[config(
+        default = "defaults::governance::parliament_tle_key_lifecycle::MAX_FRESH_BALLOTS_PER_SESSION"
+    )]
+    pub max_fresh_ballots_per_session: u32,
+}
+impl ParliamentTleKeyLifecycle {
+    fn parse(self) -> actual::ParliamentTleKeyLifecycle {
+        let policy = actual::ParliamentTleKeyLifecycle {
+            session_lifetime_blocks: self.session_lifetime_blocks,
+            max_fresh_ballots_per_session: self.max_fresh_ballots_per_session,
+        };
+        policy.assert_valid();
+        policy
+    }
+}
+impl Default for ParliamentTleKeyLifecycle {
+    fn default() -> Self {
+        Self {
+            session_lifetime_blocks:
+                defaults::governance::parliament_tle_key_lifecycle::SESSION_LIFETIME_BLOCKS,
+            max_fresh_ballots_per_session:
+                defaults::governance::parliament_tle_key_lifecycle::MAX_FRESH_BALLOTS_PER_SESSION,
+        }
+    }
+}
 /// Governance configuration (user view).
 #[derive(Debug, ReadConfig, Clone)]
 pub struct Governance {
@@ -2514,6 +2548,9 @@ pub struct Governance {
     /// Consensus-critical timed-OVN phase and resource policy.
     #[config(nested)]
     pub parliament_timed_ovn: ParliamentTimedOvn,
+    /// Consensus-critical lifecycle policy for adaptive Parliament TLE keys.
+    #[config(nested)]
+    pub parliament_tle_key_lifecycle: ParliamentTleKeyLifecycle,
     /// Credential-free deployment handle for the Parliament TLE release-share signer.
     pub parliament_tle_partial_release_signer_provider_handle: Option<String>,
     /// Exact non-zero provider contract revision for the Parliament TLE release-share signer.
@@ -2640,6 +2677,7 @@ impl Default for Governance {
             parliament_public_finding_phase_blocks:
                 defaults::governance::PARLIAMENT_PUBLIC_FINDING_PHASE_BLOCKS,
             parliament_timed_ovn: ParliamentTimedOvn::default(),
+            parliament_tle_key_lifecycle: ParliamentTleKeyLifecycle::default(),
             parliament_tle_partial_release_signer_provider_handle: None,
             parliament_tle_partial_release_signer_provider_revision: None,
             parliament_tle_partial_release_signer_provider_policy_digest_hex: None,
@@ -2717,6 +2755,7 @@ impl Governance {
             );
         }
         let parliament_timed_ovn = self.parliament_timed_ovn.parse();
+        let parliament_tle_key_lifecycle = self.parliament_tle_key_lifecycle.parse();
         let maximum_hidden_body_size = self.policy_jury_size.max(self.confirmation_jury_size);
         assert!(
             usize::try_from(parliament_timed_ovn.max_corpus_entries)
@@ -2856,6 +2895,7 @@ impl Governance {
             parliament_invitation_phase_blocks: self.parliament_invitation_phase_blocks,
             parliament_public_finding_phase_blocks: self.parliament_public_finding_phase_blocks,
             parliament_timed_ovn,
+            parliament_tle_key_lifecycle,
             parliament_tle_partial_release_signer_provider_handle: self
                 .parliament_tle_partial_release_signer_provider_handle,
             parliament_tle_partial_release_signer_provider_revision: self
@@ -18747,6 +18787,14 @@ pub struct IsoBridge {
     /// Signing credentials used for bridge operations.
     pub signer: Option<IsoBridgeSigner>,
     #[config(default = "Vec::new()")]
+    #[norito(default)]
+    /// Mutually isolated institutions admitted to the ISO bridge.
+    pub participants: Vec<IsoBridgeParticipant>,
+    #[config(default = "Vec::new()")]
+    #[norito(default)]
+    /// Operator keys with global read-only access to ISO records.
+    pub audit_admin_keys: Vec<PublicKey>,
+    #[config(default = "Vec::new()")]
     /// Mapping of external identifiers (e.g., IBAN) to local accounts.
     pub account_aliases: Vec<IsoAccountAlias>,
     #[config(default = "Vec::new()")]
@@ -18755,6 +18803,24 @@ pub struct IsoBridge {
     #[config(default = "IsoReferenceData::default()")]
     /// Reference-data ingestion configuration.
     pub reference_data: IsoReferenceData,
+}
+/// User-level ISO bridge participant configuration.
+#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+pub struct IsoBridgeParticipant {
+    /// Stable, deployment-unique participant identifier.
+    pub id: String,
+    #[config(default = "Vec::new()")]
+    /// Operator request-signature keys owned by this participant.
+    pub operator_keys: Vec<PublicKey>,
+    #[config(default = "Vec::new()")]
+    /// BIC, LEI, or clearing-member identifiers owned by this participant.
+    pub financial_identifiers: Vec<String>,
+    #[config(default = "Vec::new()")]
+    /// Rail/profile identifiers this participant may use.
+    pub allowed_profiles: Vec<String>,
+    #[config(default = "Vec::new()")]
+    /// Assigned bridge roles (`originator` and/or `counterparty`).
+    pub roles: Vec<String>,
 }
 /// User-level ISO bridge rail profile override.
 #[derive(Debug, ReadConfig, Clone)]
@@ -32044,6 +32110,12 @@ impl IsoBridge {
             audit_export_dir: self.audit_export_dir,
             embedded_signature_policy: self.embedded_signature_policy,
             signer: self.signer.map(IsoBridgeSigner::parse),
+            participants: self
+                .participants
+                .into_iter()
+                .map(IsoBridgeParticipant::parse)
+                .collect(),
+            audit_admin_keys: self.audit_admin_keys,
             account_aliases: self
                 .account_aliases
                 .into_iter()
@@ -32055,6 +32127,17 @@ impl IsoBridge {
                 .map(IsoCurrencyAsset::parse)
                 .collect(),
             reference_data: self.reference_data.parse(),
+        }
+    }
+}
+impl IsoBridgeParticipant {
+    fn parse(self) -> actual::IsoBridgeParticipant {
+        actual::IsoBridgeParticipant {
+            id: self.id,
+            operator_keys: self.operator_keys,
+            financial_identifiers: self.financial_identifiers,
+            allowed_profiles: self.allowed_profiles,
+            roles: self.roles,
         }
     }
 }
@@ -32602,6 +32685,14 @@ mod offline_cfg_tests {
     }
     #[test]
     fn iso_bridge_parse_accepts_asset_alias_selector() {
+        let participant_key = KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
+            .expect("participant key")
+            .public_key()
+            .clone();
+        let audit_key = KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
+            .expect("audit key")
+            .public_key()
+            .clone();
         let cfg = IsoBridge {
             enabled: true,
             max_body_bytes: defaults::torii::ISO_BRIDGE_MAX_BODY_BYTES,
@@ -32614,6 +32705,14 @@ mod offline_cfg_tests {
             audit_export_dir: None,
             embedded_signature_policy: None,
             signer: None,
+            participants: vec![IsoBridgeParticipant {
+                id: "bank-a".to_owned(),
+                operator_keys: vec![participant_key.clone()],
+                financial_identifiers: vec!["BANKAUS1".to_owned()],
+                allowed_profiles: vec!["generic-iso20022".to_owned()],
+                roles: vec!["originator".to_owned()],
+            }],
+            audit_admin_keys: vec![audit_key.clone()],
             account_aliases: Vec::new(),
             currency_assets: vec![IsoCurrencyAsset {
                 currency: "USD".to_owned(),
@@ -32624,6 +32723,9 @@ mod offline_cfg_tests {
         };
         let parsed = cfg.parse();
         assert_eq!(parsed.currency_assets[0].asset_definition, "usd#fin");
+        assert_eq!(parsed.participants[0].id, "bank-a");
+        assert_eq!(parsed.participants[0].operator_keys, vec![participant_key]);
+        assert_eq!(parsed.audit_admin_keys, vec![audit_key]);
     }
     #[test]
     fn iso_bridge_parse_rejects_invalid_asset_selector() {
@@ -32639,6 +32741,8 @@ mod offline_cfg_tests {
             audit_export_dir: None,
             embedded_signature_policy: None,
             signer: None,
+            participants: Vec::new(),
+            audit_admin_keys: Vec::new(),
             account_aliases: Vec::new(),
             currency_assets: vec![IsoCurrencyAsset {
                 currency: "USD".to_owned(),
@@ -32813,6 +32917,10 @@ mod offline_cfg_tests {
             parliament_eligibility_asset_id: defaults::governance::parliament_eligibility_asset_id(
             ),
             parliament_alternate_size: Some(13),
+            parliament_tle_key_lifecycle: ParliamentTleKeyLifecycle {
+                session_lifetime_blocks: 77,
+                max_fresh_ballots_per_session: 2,
+            },
             ..Governance::default()
         };
         let parsed = cfg.parse();
@@ -32845,6 +32953,13 @@ mod offline_cfg_tests {
         );
         assert_eq!(parsed.min_bond_amount, Quantity::from(42_u64));
         assert_eq!(
+            parsed.parliament_tle_key_lifecycle,
+            actual::ParliamentTleKeyLifecycle {
+                session_lifetime_blocks: 77,
+                max_fresh_ballots_per_session: 2,
+            }
+        );
+        assert_eq!(
             parsed.bond_escrow_account,
             iroha_data_model::account::AccountId::parse_encoded(
                 &defaults::governance::bond_escrow_account()
@@ -32865,6 +32980,25 @@ mod offline_cfg_tests {
             )
         );
         assert_eq!(parsed.parliament_alternate_size, Some(13));
+    }
+
+    #[test]
+    fn parliament_tle_key_lifecycle_rejects_zero_bounds() {
+        for policy in [
+            ParliamentTleKeyLifecycle {
+                session_lifetime_blocks: 0,
+                max_fresh_ballots_per_session: 1,
+            },
+            ParliamentTleKeyLifecycle {
+                session_lifetime_blocks: 1,
+                max_fresh_ballots_per_session: 0,
+            },
+        ] {
+            assert!(
+                std::panic::catch_unwind(|| policy.parse()).is_err(),
+                "zero TLE lifecycle bounds must fail closed"
+            );
+        }
     }
     #[test]
     fn governance_default_account_literals_ignore_chain_override() {

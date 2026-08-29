@@ -125,7 +125,8 @@ mod preactivation_ingress;
 pub(in crate::sumeragi) use lifecycle_height_driver::{
     LifecycleApplyTerminalReadyBroadcastPermitV1, LifecycleBlockedOrdinaryLaneLocalIngressPermitV1,
     LifecycleDecidedLaneRecoveryPermitV1, LifecycleProducerClaimDispositionV1,
-    LifecycleReadyProposalSignPreemptionPermitV1, drain_lifecycle_v2_ingress,
+    LifecycleReadyProposalSignPreemptionPermitV1, LifecycleValidateSidecarPacemakerEscapePermitV1,
+    drain_lifecycle_v2_ingress,
 };
 #[cfg(test)]
 use lifecycle_pending_kura::{PendingTipRecoveryDeadline, pending_tip_recovery_deadline_error};

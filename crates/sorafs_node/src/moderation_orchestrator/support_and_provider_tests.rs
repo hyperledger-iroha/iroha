@@ -10,7 +10,9 @@ use iroha_data_model::{
             SORAFS_MODERATION_BALLOT_CONTEXT_VERSION_V1, SoraFsModerationBallotContextV1,
         },
         moderation_ledger::{
-            MODERATION_APPEAL_INTAKE_VERSION_V1, MODERATION_LEDGER_CASE_VERSION_V1,
+            MODERATION_APPEAL_INTAKE_VERSION_V1, MODERATION_CHALLENGE_BOND_AMOUNT_V1,
+            MODERATION_CHALLENGE_REJECTED_SLASH_BPS_V1,
+            MODERATION_CHALLENGE_RESOLUTION_GRACE_MS_V1, MODERATION_LEDGER_CASE_VERSION_V1,
             MODERATION_LEDGER_POLICY_VERSION_V1, ModerationAppealIntakeV1,
             ModerationAppealRecordV1, ModerationCaseRecordV1, ModerationCaseSpecV1,
             ModerationJurorEligibilityClassV1, ModerationJurorEligibilityRecordV1,
@@ -22,6 +24,7 @@ use iroha_data_model::{
     },
     transaction::{FeePaymentIntent, TransactionBuilder},
 };
+use iroha_primitives::numeric::Quantity;
 use std::{
     collections::{BTreeMap, BTreeSet},
     num::NonZeroU32,
@@ -1173,11 +1176,22 @@ fn policy(revision: u64) -> ModerationLedgerPolicyV1 {
         version: MODERATION_LEDGER_POLICY_VERSION_V1,
         revision,
         predecessor_policy_digest: (revision > 1).then_some([0xA5; 32]),
+        challenge_voting_asset_id:
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                iroha_data_model::domain::DomainId::try_new("sora", "universal")
+                    .expect("governance domain"),
+                "xor".parse().expect("governance asset name"),
+            ),
+        challenge_bond_amount: Quantity::from(MODERATION_CHALLENGE_BOND_AMOUNT_V1),
+        challenge_escrow_account: account(90),
+        challenge_slash_receiver_account: account(91),
+        challenge_rejected_slash_bps: MODERATION_CHALLENGE_REJECTED_SLASH_BPS_V1,
+        challenge_resolution_grace_ms: MODERATION_CHALLENGE_RESOLUTION_GRACE_MS_V1,
         max_panel_size: 5,
         max_candidate_pool_size: 32,
         max_waitlist_size: 5,
         max_exclusions_per_case: 16,
-        max_total_window_ms: 60_000,
+        max_total_window_ms: 90_000_000,
         max_challenges_per_case: 4,
         missing_commit_penalty_points: 10,
         unrevealed_commit_penalty_points: 20,
@@ -1285,8 +1299,9 @@ fn awaiting_acceptance_snapshot(
         registration_deadline_unix_ms: 20,
         acceptance_deadline_unix_ms: 30,
         commit_deadline_unix_ms: 40,
-        challenge_deadline_unix_ms: 50,
-        reveal_deadline_unix_ms: 60,
+        challenge_submission_deadline_unix_ms: 50,
+        challenge_resolution_deadline_unix_ms: 86_400_050,
+        reveal_deadline_unix_ms: 86_400_060,
         policy_digest,
     };
     let intake_digest = intake.digest().expect("intake digest");
@@ -1417,7 +1432,8 @@ fn activated_case_snapshot(
             jurors,
             quorum: intake.quorum,
             commit_deadline_unix_ms: intake.commit_deadline_unix_ms,
-            challenge_deadline_unix_ms: intake.challenge_deadline_unix_ms,
+            challenge_submission_deadline_unix_ms: intake.challenge_submission_deadline_unix_ms,
+            challenge_resolution_deadline_unix_ms: intake.challenge_resolution_deadline_unix_ms,
             reveal_deadline_unix_ms: intake.reveal_deadline_unix_ms,
             policy_digest: intake.policy_digest,
         },

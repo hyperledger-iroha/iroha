@@ -15644,6 +15644,7 @@ seiyaku PrivilegedBinding {
         .expect("contract address");
         let request = scode::ActivateContractInstance {
             contract_address,
+            expected_revision: 1,
             code_hash: IrohaHash::new(b"payments-code"),
         };
         let payload = norito::to_bytes(&request).expect("encode request");
@@ -15674,6 +15675,7 @@ seiyaku PrivilegedBinding {
         .expect("contract address");
         let request = scode::DeactivateContractInstance {
             contract_address,
+            expected_revision: 1,
             reason: Some("compromised deployment".to_owned()),
         };
         let payload = norito::to_bytes(&request).expect("encode request");
@@ -15700,10 +15702,12 @@ seiyaku PrivilegedBinding {
         .expect("contract address");
         let activate = scode::ActivateContractInstance {
             contract_address: contract_address.clone(),
+            expected_revision: 1,
             code_hash: IrohaHash::new(b"self-activation-code"),
         };
         let deactivate = scode::DeactivateContractInstance {
             contract_address: contract_address.clone(),
+            expected_revision: 1,
             reason: Some("self-deactivation attempt".to_owned()),
         };
         let requests = [
@@ -15759,6 +15763,7 @@ seiyaku PrivilegedBinding {
         .expect("contract address");
         let instruction = InstructionBox::from(scode::ActivateContractInstance {
             contract_address: contract_address.clone(),
+            expected_revision: 1,
             code_hash: IrohaHash::new(b"opaque-self-activation-code"),
         });
         let payload = norito::to_bytes(&instruction).expect("encode opaque instruction");

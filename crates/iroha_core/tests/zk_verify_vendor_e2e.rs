@@ -169,6 +169,7 @@ seiyaku VendorBridgeGate {
         .expect("grant ballot submission to the contract effect authority");
     ActivateContractInstance {
         contract_address: contract_address.clone(),
+        expected_revision: 1,
         code_hash: contract_code_hash,
     }
     .execute(&authority, &mut stx)

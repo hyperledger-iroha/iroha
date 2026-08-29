@@ -261,6 +261,7 @@ fn ivm_manifest_matching_abi_hash_accepted_at_admission() {
         .expect("register non-signable contract-subject account");
     iroha_data_model::isi::smart_contract_code::ActivateContractInstance {
         contract_address: contract_address.clone(),
+        expected_revision: 1,
         code_hash,
     }
     .execute(&account_id, &mut stx1)
@@ -415,6 +416,7 @@ fn ivm_manifest_matching_abi_hash_v1_accepted_at_admission() {
         .expect("register non-signable V1 contract-subject account");
     iroha_data_model::isi::smart_contract_code::ActivateContractInstance {
         contract_address: contract_address.clone(),
+        expected_revision: 1,
         code_hash,
     }
     .execute(&account_id, &mut stx1)

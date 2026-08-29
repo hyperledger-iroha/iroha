@@ -3975,6 +3975,13 @@ fn native_instruction_ds_effect_disposition(
         iroha_data_model::isi::staking::SlashPublicLaneValidator,
         iroha_data_model::isi::staking::RecordPublicLaneRewards,
         iroha_data_model::isi::staking::ClaimPublicLaneRewards,
+        // Moderation challenge custody is selected from governance state and
+        // finalization may sweep unresolved bonds. Those balance effects are
+        // not explicit signed transfer coordinates for validation-fee admission.
+        iroha_data_model::isi::sorafs::RaiseSorafsModerationChallenge,
+        iroha_data_model::isi::sorafs::ResolveSorafsModerationChallenge,
+        iroha_data_model::isi::sorafs::ExpireSorafsModerationChallenge,
+        iroha_data_model::isi::sorafs::FinalizeSorafsModerationCase,
         iroha_data_model::isi::privacy::SubmitPrivacyProofV1,
         iroha_data_model::isi::zk::RegisterZkAsset,
         iroha_data_model::isi::zk::ScheduleConfidentialPolicyTransition,
@@ -3999,6 +4006,8 @@ fn native_instruction_ds_effect_disposition(
         // authority and consensus proofs before applying those state changes.
         iroha_data_model::isi::governance::CreateParliamentGovernanceAttemptV1,
         iroha_data_model::isi::governance::SubmitParliamentLifecycleTransitionV1,
+        iroha_data_model::isi::governance::ProposeContractLifecycleGovernance,
+        iroha_data_model::isi::governance::ProposeContractEmergencyHold,
         // These lifecycle steps only register content-addressed artifacts or create an
         // initially absent address -> code-hash binding. The executor rejects activation
         // over an address already bound to a different hash. Deactivation/removal remain
@@ -4010,6 +4019,10 @@ fn native_instruction_ds_effect_disposition(
         iroha_data_model::isi::smart_contract_code::FinalizeSmartContractCodeUpload,
         iroha_data_model::isi::smart_contract_code::CancelSmartContractCodeUpload,
         iroha_data_model::isi::smart_contract_code::ActivateContractInstance,
+        iroha_data_model::isi::smart_contract_code::SetContractParliamentDelegation,
+        iroha_data_model::isi::smart_contract_code::OfferContractOwnership,
+        iroha_data_model::isi::smart_contract_code::AcceptContractOwnership,
+        iroha_data_model::isi::smart_contract_code::CancelContractOwnershipOffer,
         // Privacy governance and bootstrap instructions affect only typed
         // privacy state and rollback-safe privacy budgets. Proof admission is
         // classified above because ZK-ACE can authorize a transparent transfer.

@@ -215,7 +215,7 @@ class ParliamentApiV1Test {
     }
 
     @Test
-    fun attemptBuilderAdmitsExactlyTheSevenFirstReleaseProposalKinds() {
+    fun attemptBuilderAdmitsExactlyTheNineFirstReleaseProposalKinds() {
         ParliamentApiV1.PROPOSAL_KINDS.forEach { kind ->
             val request = objectValue(
                 ParliamentApiV1.attemptDraftRequestJson(
@@ -225,7 +225,7 @@ class ParliamentApiV1Test {
             )
             assertEquals(kind, (request["proposal"] as Map<*, *>)["kind"])
         }
-        assertEquals(7, ParliamentApiV1.PROPOSAL_KINDS.size)
+        assertEquals(9, ParliamentApiV1.PROPOSAL_KINDS.size)
 
         val fullU64Policy = validProposal("ValidationFeePolicy")
         @Suppress("UNCHECKED_CAST")
@@ -254,6 +254,23 @@ class ParliamentApiV1Test {
             ParliamentApiV1.Proposal.fromJson(
                 bytes("""{"proposal_kind":"RuntimeUpgrade","payload":{}}"""),
             )
+        }
+    }
+
+    @Test
+    fun contractLifecycleUnitActionsRequireExplicitNullPayload() {
+        listOf("CancelOwnershipOffer", "AcceptParliamentOwnership").forEach { action ->
+            val proposal = validProposal("ContractLifecycleGovernance")
+            @Suppress("UNCHECKED_CAST")
+            val payload = proposal["payload"] as MutableMap<String, Any?>
+            payload["action"] = linkedMapOf("action" to action, "payload" to null)
+            ParliamentApiV1.Proposal.fromJson(encode(proposal))
+
+            @Suppress("UNCHECKED_CAST")
+            (payload["action"] as MutableMap<String, Any?>).remove("payload")
+            assertFailsWith<IllegalArgumentException> {
+                ParliamentApiV1.Proposal.fromJson(encode(proposal))
+            }
         }
     }
 
@@ -309,6 +326,23 @@ class ParliamentApiV1Test {
         musubiValue["owners"] = listOf("alice@legacy")
         assertFailsWith<IllegalArgumentException> {
             ParliamentApiV1.Proposal.fromJson(encode(malformedAccount))
+        }
+
+        val zeroRetrospective = validProposal("ContractLifecycleGovernance")
+        @Suppress("UNCHECKED_CAST")
+        val retrospectivePayload =
+            (((zeroRetrospective["payload"] as MutableMap<String, Any?>)["action"] as MutableMap<String, Any?>)["payload"] as MutableMap<String, Any?>)
+        retrospectivePayload["retrospective_finding_root"] = List(32) { 0 }
+        assertFailsWith<IllegalArgumentException> {
+            ParliamentApiV1.Proposal.fromJson(encode(zeroRetrospective))
+        }
+
+        val excessiveHold = validProposal("ContractEmergencyHold")
+        @Suppress("UNCHECKED_CAST")
+        val holdPayload = excessiveHold["payload"] as MutableMap<String, Any?>
+        holdPayload["duration_blocks"] = 3_601
+        assertFailsWith<IllegalArgumentException> {
+            ParliamentApiV1.Proposal.fromJson(encode(excessiveHold))
         }
 
         val impreciseHeight = validProposal("RuntimeUpgrade")
@@ -1256,6 +1290,27 @@ class ParliamentApiV1Test {
                         "owner" to account(3),
                     ),
                 ),
+            )
+            "ContractLifecycleGovernance" -> linkedMapOf(
+                "contract_address" to CONTRACT_ADDRESS,
+                "expected_revision" to 3,
+                "action" to linkedMapOf(
+                    "action" to "CompleteEmergencyHoldRetrospective",
+                    "payload" to linkedMapOf(
+                        "hold_proposal_content_id" to List(32) { 0x51 },
+                        "hold_governance_attempt_id" to List(32) { 0x52 },
+                        "incident_digest" to List(32) { 0x53 },
+                        "retrospective_finding_root" to List(32) { 0x54 },
+                    ),
+                ),
+            )
+            "ContractEmergencyHold" -> linkedMapOf(
+                "contract_address" to CONTRACT_ADDRESS,
+                "expected_revision" to 2,
+                "expected_code_hash" to "33".repeat(32),
+                "incident_digest" to List(32) { 0x55 },
+                "reason" to "contain active exploit",
+                "duration_blocks" to 3_600,
             )
             else -> error("unsupported fixture kind $kind")
         }

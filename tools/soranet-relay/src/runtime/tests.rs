@@ -9,6 +9,7 @@ mod tests {
         },
         config::VpnConfig,
         constant_rate,
+        incentive_log::IncentiveLogConfig,
         privacy::{PrivacyAggregator, PrivacyConfig, ProxyPolicyEventBuffer},
         scheduler::CellClass,
         vpn::VpnSession,
@@ -33,7 +34,9 @@ mod tests {
         account::AccountId,
         metadata::Metadata,
         soranet::{
-            incentives::{BandwidthConfidenceV1, RelayBandwidthProofV1},
+            incentives::{
+                BandwidthConfidenceV1, RelayBandwidthProofPayloadV1, RelayBandwidthProofV1,
+            },
             privacy_metrics::{
                 SoranetPowFailureReasonV1, SoranetPrivacyModeV1, SoranetPrivacyThrottleScopeV1,
             },
@@ -2400,11 +2403,12 @@ mod tests {
             _replay_directory: replay_directory,
         }
     }
-    fn sample_account(seed: u8) -> AccountId {
-        let (public_key, _) = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+    fn sample_keypair(seed: u8) -> KeyPair {
+        KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive relay runtime fixture account key")
-            .into_parts();
-        AccountId::new(public_key)
+    }
+    fn sample_account(seed: u8) -> AccountId {
+        AccountId::new(sample_keypair(seed).public_key().clone())
     }
     #[test]
     fn fixture_key_helpers_use_checked_seed_derivation() {
@@ -2426,22 +2430,38 @@ mod tests {
     ) -> RelayBandwidthProofV1 {
         let mut measurement_id = [0u8; 32];
         measurement_id.fill(measurement_seed);
-        RelayBandwidthProofV1 {
+        let verifier = sample_keypair(measurement_seed);
+        RelayBandwidthProofV1::try_sign(
+            RelayBandwidthProofPayloadV1 {
             relay_id: TEST_RELAY_ID,
             measurement_id,
             epoch,
             verified_bytes,
-            verifier_id: sample_account(measurement_seed),
+            verifier_id: AccountId::new(verifier.public_key().clone()),
             issued_at_unix: 1,
             confidence: BandwidthConfidenceV1 {
                 sample_count: 16,
                 jitter_p95_ms: 4,
                 confidence_per_mille: 900,
             },
-            signature: Signature::try_from_bytes(&[0x55; 64])
-                .expect("relay bandwidth fixture signature is non-empty and nonzero"),
             metadata: Metadata::default(),
+            },
+            verifier.private_key(),
+        )
+        .expect("sign relay bandwidth fixture")
+    }
+    fn incentive_logger_for(verifier_id: AccountId) -> (TempDir, Arc<IncentiveLogger>) {
+        let spool = secure_test_tempdir();
+        let logger = IncentiveLogConfig {
+            enable: true,
+            spool_dir: Some(spool.path().to_path_buf()),
+            trusted_verifier_ids: std::collections::BTreeSet::from([verifier_id]),
+            ..IncentiveLogConfig::default()
         }
+        .as_logger(&hex::encode(TEST_RELAY_ID))
+        .expect("validate incentive logger")
+        .expect("enabled incentive logger");
+        (spool, Arc::new(logger))
     }
     struct CertificateTestFixture {
         identity_seed: [u8; 32],
@@ -3996,6 +4016,7 @@ mod tests {
     async fn bandwidth_proof_populates_accumulator() {
         let accumulator = Arc::new(Mutex::new(RelayPerformanceAccumulator::new(TEST_RELAY_ID)));
         let proof = sample_bandwidth_proof(7, 0x34, 1_024);
+        let (_spool, incentive_logger) = incentive_logger_for(proof.verifier_id.clone());
         let encoded = proof.encode();
         let config = PrivacyConfig {
             min_handshakes: 0,
@@ -4011,11 +4032,11 @@ mod tests {
             &encoded,
             &accumulator,
             TEST_RELAY_ID,
-            None,
+            Some(Arc::clone(&incentive_logger)),
             Arc::clone(&privacy),
             Arc::clone(&privacy_events),
             mode,
-            None,
+            Some(incentive_logger),
             remote,
         )
         .await
@@ -4055,6 +4076,55 @@ mod tests {
             rendered.contains("soranet_privacy_verified_bytes_total"),
             "privacy metrics missing bandwidth line: {rendered}"
         );
+    }
+    #[tokio::test]
+    async fn bandwidth_proof_rejects_tampering_and_untrusted_verifiers_without_mutation() {
+        let accumulator = Arc::new(Mutex::new(RelayPerformanceAccumulator::new(TEST_RELAY_ID)));
+        let trusted = sample_bandwidth_proof(7, 0x34, 1_024);
+        let (_spool, incentive_logger) = incentive_logger_for(trusted.verifier_id.clone());
+        let config = PrivacyConfig {
+            min_handshakes: 0,
+            flush_delay_buckets: 1,
+            force_flush_buckets: 1,
+            ..PrivacyConfig::default()
+        };
+        let privacy = Arc::new(PrivacyAggregator::new(config));
+        let privacy_events = Arc::new(PrivacyEventBuffer::new(64));
+        let remote: SocketAddr = "127.0.0.1:0".parse().expect("socket addr");
+
+        let mut tampered = trusted;
+        tampered.verified_bytes += 1;
+        let error = RelayRuntime::handle_bandwidth_proof(
+            &tampered.encode(),
+            &accumulator,
+            TEST_RELAY_ID,
+            Some(Arc::clone(&incentive_logger)),
+            Arc::clone(&privacy),
+            Arc::clone(&privacy_events),
+            RelayMode::Entry,
+            None,
+            remote,
+        )
+        .await
+        .expect_err("tampered proof must fail");
+        assert!(matches!(error, IncentiveStreamError::InvalidSignature(_)));
+
+        let untrusted = sample_bandwidth_proof(7, 0x35, 2_048);
+        let error = RelayRuntime::handle_bandwidth_proof(
+            &untrusted.encode(),
+            &accumulator,
+            TEST_RELAY_ID,
+            Some(incentive_logger),
+            privacy,
+            privacy_events,
+            RelayMode::Entry,
+            None,
+            remote,
+        )
+        .await
+        .expect_err("untrusted verifier must fail");
+        assert!(matches!(error, IncentiveStreamError::UntrustedVerifier(_)));
+        assert!(accumulator.lock().await.summaries().is_empty());
     }
     #[test]
     fn incentive_metrics_expose_relay_label() {

@@ -7750,6 +7750,7 @@ kotoage fn main() authorize("AssetAdmin") {{
         let activate = norito::to_bytes(
             &iroha_data_model::isi::smart_contract_code::ActivateContractInstance {
                 contract_address: contract_address.clone(),
+                expected_revision: 1,
                 code_hash,
             },
         )

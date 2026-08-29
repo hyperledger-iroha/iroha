@@ -223,7 +223,7 @@ async fn run_blocking_sns<T>(
 where
     T: Send + 'static,
 {
-    tokio::task::spawn_blocking(job)
+    crate::panic_recovery::join_recoverable(crate::panic_recovery::spawn_blocking_recoverable(job))
         .await
         .map_err(|err| SnsError::Internal(format!("SNS {op} worker failed to join: {err}")))?
 }

@@ -9,6 +9,7 @@ use crate::{
 };
 use iroha_data_model::{
     account::AccountId,
+    asset::AssetId,
     events::data::sorafs::{
         SorafsGatewayEvent, SorafsModerationLedgerEvent, SorafsModerationLedgerEventKind,
     },
@@ -16,10 +17,10 @@ use iroha_data_model::{
         error::{InstructionExecutionError, InvalidParameterError},
         sorafs::{
             AcceptSorafsModerationJurorAssignment, ActivateSorafsModerationCase,
-            FinalizeSorafsModerationCase, FinalizeSorafsModerationSortition,
-            RaiseSorafsModerationChallenge, RegisterSorafsModerationJurorEligibility,
-            ResolveSorafsModerationChallenge, SetSorafsModerationPolicy,
-            SubmitSorafsModerationAppeal, SubmitSorafsModerationCommit,
+            ExpireSorafsModerationChallenge, FinalizeSorafsModerationCase,
+            FinalizeSorafsModerationSortition, RaiseSorafsModerationChallenge,
+            RegisterSorafsModerationJurorEligibility, ResolveSorafsModerationChallenge,
+            SetSorafsModerationPolicy, SubmitSorafsModerationAppeal, SubmitSorafsModerationCommit,
             SubmitSorafsModerationReveal,
         },
     },
@@ -40,22 +41,23 @@ use iroha_data_model::{
             SoraFsModerationVoteChoice,
         },
         moderation_ledger::{
-            MODERATION_FINALIZED_SNAPSHOT_VERSION_V1, MODERATION_LEDGER_MAX_NONCE_BYTES_V1,
-            MODERATION_LEDGER_MAX_PANEL_SIZE_V1, MODERATION_LEDGER_MAX_REASON_BYTES_V1,
-            MODERATION_LEDGER_MAX_WAITLIST_SIZE_V1, MODERATION_QUERY_MAX_CASES_V1,
-            MODERATION_QUERY_MAX_EVENT_PAGE_BYTES_V1, MODERATION_QUERY_MAX_EVENTS_V1,
-            MODERATION_QUERY_MAX_SNAPSHOT_BYTES_V1, ModerationAppealRecordV1,
-            ModerationAppealStatusV1, ModerationCaseRecordV1, ModerationCaseSpecV1,
-            ModerationCaseStatusV1, ModerationChallengeDecisionV1, ModerationChallengeRecordV1,
-            ModerationCommitRecordV1, ModerationFinalizedAppealViewV1,
-            ModerationFinalizedCaseViewV1, ModerationFinalizedCursorV1,
-            ModerationFinalizedEventPageV1, ModerationFinalizedEventV1,
-            ModerationFinalizedLedgerSnapshotV1, ModerationJurorEligibilityClassV1,
-            ModerationJurorEligibilityRecordV1, ModerationJurorReplacementV1,
-            ModerationLedgerPolicyRecord, ModerationLedgerStatusV1, ModerationNoShowKindV1,
-            ModerationNoShowRecordV1, ModerationOutcomeKindV1, ModerationOutcomeRecordV1,
-            ModerationPanelSelectionV1, ModerationPoPRegistrySnapshotV1, ModerationRevealRecordV1,
-            ModerationSortitionError, ModerationVoteCountsV1,
+            MODERATION_CHALLENGE_BOND_AMOUNT_V1, MODERATION_CHALLENGE_REJECTED_SLASH_BPS_V1,
+            MODERATION_CHALLENGE_RESOLUTION_GRACE_MS_V1, MODERATION_FINALIZED_SNAPSHOT_VERSION_V1,
+            MODERATION_LEDGER_MAX_NONCE_BYTES_V1, MODERATION_LEDGER_MAX_PANEL_SIZE_V1,
+            MODERATION_LEDGER_MAX_REASON_BYTES_V1, MODERATION_LEDGER_MAX_WAITLIST_SIZE_V1,
+            MODERATION_QUERY_MAX_CASES_V1, MODERATION_QUERY_MAX_EVENT_PAGE_BYTES_V1,
+            MODERATION_QUERY_MAX_EVENTS_V1, MODERATION_QUERY_MAX_SNAPSHOT_BYTES_V1,
+            ModerationAppealRecordV1, ModerationAppealStatusV1, ModerationCaseRecordV1,
+            ModerationCaseSpecV1, ModerationCaseStatusV1, ModerationChallengeBondV1,
+            ModerationChallengeDecisionV1, ModerationChallengeRecordV1, ModerationCommitRecordV1,
+            ModerationFinalizedAppealViewV1, ModerationFinalizedCaseViewV1,
+            ModerationFinalizedCursorV1, ModerationFinalizedEventPageV1,
+            ModerationFinalizedEventV1, ModerationFinalizedLedgerSnapshotV1,
+            ModerationJurorEligibilityClassV1, ModerationJurorEligibilityRecordV1,
+            ModerationJurorReplacementV1, ModerationLedgerPolicyRecord, ModerationLedgerStatusV1,
+            ModerationNoShowKindV1, ModerationNoShowRecordV1, ModerationOutcomeKindV1,
+            ModerationOutcomeRecordV1, ModerationPanelSelectionV1, ModerationPoPRegistrySnapshotV1,
+            ModerationRevealRecordV1, ModerationSortitionError, ModerationVoteCountsV1,
             is_canonical_moderation_identifier_v1, sorafs_moderation_panel_roster_hash_v1,
             sorafs_moderation_pop_challenge_v1, sorafs_moderation_pop_verifier_context_v1,
             sorafs_moderation_select_panel_v1, sorafs_moderation_sortition_digest_v1,
@@ -64,6 +66,7 @@ use iroha_data_model::{
     },
     state_path::StatePath,
 };
+use iroha_primitives::numeric::{Numeric, NumericSpec, Quantity, RoundingMode};
 use mv::storage::StorageReadOnly;
 use norito::{DecodeLimits, decode_canonical_with_limits, decode_from_bytes_with_limits};
 use sorafs_manifest::pop_credentials::{
@@ -116,6 +119,112 @@ const PROOF_LIMITS: DecodeLimits = DecodeLimits::new(
 );
 const MANAGE_PERMISSION: &str = "CanManageSorafsModeration";
 const MODERATION_QUERY_MAX_SNAPSHOT_RECORDS_V1: usize = 65_536;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// One exact leg of a retained moderation challenge bond settlement.
+pub(in crate::smartcontracts::isi) enum ModerationChallengeBondSettlementLeg {
+    /// Return bond principal to its challenger.
+    Refund,
+    /// Retain the policy-fixed slash in governance custody.
+    Slash,
+}
+#[derive(Debug)]
+/// Closed purpose carried by a one-shot moderation challenge bond movement.
+pub(in crate::smartcontracts::isi) enum VerifiedModerationChallengeBondPurpose {
+    /// Voluntarily lock the submitting challenger's bond.
+    Funding {
+        /// Exact submitting challenger.
+        authority: AccountId,
+        /// Moderation case identifier.
+        case_id: String,
+        /// Ballot round identifier.
+        round_id: String,
+        /// Challenge identifier.
+        challenge_id: String,
+    },
+    /// Settle a retained challenge bond according to its decision.
+    Settlement {
+        /// Moderation case identifier.
+        case_id: String,
+        /// Ballot round identifier.
+        round_id: String,
+        /// Challenge identifier.
+        challenge_id: String,
+        /// Decision fixing the allowed settlement split.
+        decision: ModerationChallengeDecisionV1,
+        /// Exact settlement leg.
+        leg: ModerationChallengeBondSettlementLeg,
+    },
+}
+#[derive(Debug)]
+/// Non-reusable proof that moderation admission selected one exact balance movement.
+pub(in crate::smartcontracts::isi) struct VerifiedModerationChallengeBondMovement {
+    purpose: VerifiedModerationChallengeBondPurpose,
+    source_id: AssetId,
+    destination_id: AssetId,
+    amount: Quantity,
+}
+impl VerifiedModerationChallengeBondMovement {
+    fn funding(
+        authority: AccountId,
+        case_id: String,
+        round_id: String,
+        challenge_id: String,
+        source_id: AssetId,
+        destination_id: AssetId,
+        amount: Quantity,
+    ) -> Self {
+        Self {
+            purpose: VerifiedModerationChallengeBondPurpose::Funding {
+                authority,
+                case_id,
+                round_id,
+                challenge_id,
+            },
+            source_id,
+            destination_id,
+            amount,
+        }
+    }
+    fn settlement(
+        case_id: String,
+        round_id: String,
+        challenge_id: String,
+        decision: ModerationChallengeDecisionV1,
+        leg: ModerationChallengeBondSettlementLeg,
+        source_id: AssetId,
+        destination_id: AssetId,
+        amount: Quantity,
+    ) -> Self {
+        Self {
+            purpose: VerifiedModerationChallengeBondPurpose::Settlement {
+                case_id,
+                round_id,
+                challenge_id,
+                decision,
+                leg,
+            },
+            source_id,
+            destination_id,
+            amount,
+        }
+    }
+    /// Consume this proof into its checked movement components.
+    pub(in crate::smartcontracts::isi) fn into_parts(
+        self,
+    ) -> (
+        VerifiedModerationChallengeBondPurpose,
+        AssetId,
+        AssetId,
+        Quantity,
+    ) {
+        (
+            self.purpose,
+            self.source_id,
+            self.destination_id,
+            self.amount,
+        )
+    }
+}
 #[derive(Clone, Debug, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize)]
 struct AppealDepositBindingStateV1 {
     deposit_lock_digest: [u8; 32],
@@ -331,6 +440,152 @@ fn validate_challenge_reason(reason: &str) -> Result<(), InstructionExecutionErr
             "moderation challenge reason is empty, padded, contains control characters, or is too long",
         ));
     }
+    Ok(())
+}
+fn lock_moderation_challenge_bond(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    policy: &ModerationLedgerPolicyV1,
+    authority: &AccountId,
+    case_id: &str,
+    round_id: &str,
+    challenge_id: &str,
+) -> Result<ModerationChallengeBondV1, InstructionExecutionError> {
+    let asset_definition_id = policy.challenge_voting_asset_id.clone();
+    let escrow_account = policy.challenge_escrow_account.clone();
+    let slash_receiver_account = policy.challenge_slash_receiver_account.clone();
+    if authority == &escrow_account || authority == &slash_receiver_account {
+        return Err(invalid_parameter(
+            "moderation bond custody accounts cannot submit public challenges",
+        ));
+    }
+    state_transaction
+        .world
+        .account(&escrow_account)
+        .map_err(InstructionExecutionError::Find)?;
+    state_transaction
+        .world
+        .account(&slash_receiver_account)
+        .map_err(InstructionExecutionError::Find)?;
+    let numeric_spec = state_transaction
+        .numeric_spec_for(&asset_definition_id)
+        .map_err(InstructionExecutionError::Find)?;
+    let amount = policy.challenge_bond_amount.clone();
+    let slash_amount = moderation_challenge_rejected_slash_amount(
+        &amount,
+        numeric_spec,
+        policy.challenge_rejected_slash_bps,
+    )?;
+    let refund_amount = amount
+        .checked_sub(&slash_amount)
+        .map_err(|_| corrupt_state("moderation challenge bond refund underflow"))?;
+    for settlement_amount in [&amount, &slash_amount, &refund_amount] {
+        crate::smartcontracts::isi::asset::isi::assert_numeric_spec_with(
+            settlement_amount.as_numeric(),
+            numeric_spec,
+        )
+        .map_err(InstructionExecutionError::from)?;
+    }
+    let source_id = AssetId::new(asset_definition_id.clone(), authority.clone());
+    let destination_id = AssetId::new(asset_definition_id.clone(), escrow_account.clone());
+    let movement = VerifiedModerationChallengeBondMovement::funding(
+        authority.clone(),
+        case_id.to_owned(),
+        round_id.to_owned(),
+        challenge_id.to_owned(),
+        source_id,
+        destination_id,
+        amount.clone(),
+    );
+    crate::smartcontracts::isi::asset::isi::execute_verified_moderation_challenge_bond_movement(
+        state_transaction,
+        movement,
+    )?;
+    Ok(ModerationChallengeBondV1 {
+        asset_definition_id,
+        amount,
+        escrow_account,
+        slash_receiver_account,
+        refunded_amount: Quantity::zero(),
+        slashed_amount: Quantity::zero(),
+        settled_at_unix_ms: None,
+    })
+}
+fn settle_moderation_challenge_bond(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    policy: &ModerationLedgerPolicyV1,
+    record: &mut ModerationChallengeRecordV1,
+    decision: ModerationChallengeDecisionV1,
+    settled_at_unix_ms: u64,
+) -> Result<(), InstructionExecutionError> {
+    if record.bond.settled_at_unix_ms.is_some() {
+        return Err(corrupt_state(
+            "moderation challenge bond was settled before its decision",
+        ));
+    }
+    let slash_amount = if decision == ModerationChallengeDecisionV1::Rejected {
+        let numeric_spec = state_transaction
+            .numeric_spec_for(&record.bond.asset_definition_id)
+            .map_err(InstructionExecutionError::Find)?;
+        moderation_challenge_rejected_slash_amount(
+            &record.bond.amount,
+            numeric_spec,
+            policy.challenge_rejected_slash_bps,
+        )?
+    } else {
+        Quantity::zero()
+    };
+    let refund_amount = record
+        .bond
+        .amount
+        .checked_sub(&slash_amount)
+        .map_err(|_| corrupt_state("moderation challenge bond settlement underflow"))?;
+    let source_id = AssetId::new(
+        record.bond.asset_definition_id.clone(),
+        record.bond.escrow_account.clone(),
+    );
+    if !refund_amount.is_zero() {
+        let destination_id = AssetId::new(
+            record.bond.asset_definition_id.clone(),
+            record.challenger.clone(),
+        );
+        let movement = VerifiedModerationChallengeBondMovement::settlement(
+            record.case_id.clone(),
+            record.round_id.clone(),
+            record.challenge_id.clone(),
+            decision,
+            ModerationChallengeBondSettlementLeg::Refund,
+            source_id.clone(),
+            destination_id,
+            refund_amount.clone(),
+        );
+        crate::smartcontracts::isi::asset::isi::execute_verified_moderation_challenge_bond_movement(
+            state_transaction,
+            movement,
+        )?;
+    }
+    if !slash_amount.is_zero() {
+        let destination_id = AssetId::new(
+            record.bond.asset_definition_id.clone(),
+            record.bond.slash_receiver_account.clone(),
+        );
+        let movement = VerifiedModerationChallengeBondMovement::settlement(
+            record.case_id.clone(),
+            record.round_id.clone(),
+            record.challenge_id.clone(),
+            decision,
+            ModerationChallengeBondSettlementLeg::Slash,
+            source_id,
+            destination_id,
+            slash_amount.clone(),
+        );
+        crate::smartcontracts::isi::asset::isi::execute_verified_moderation_challenge_bond_movement(
+            state_transaction,
+            movement,
+        )?;
+    }
+    record.bond.refunded_amount = refund_amount;
+    record.bond.slashed_amount = slash_amount;
+    record.bond.settled_at_unix_ms = Some(settled_at_unix_ms);
     Ok(())
 }
 fn case_digest(case_id: &str, round_id: &str) -> [u8; 32] {
@@ -1381,8 +1636,7 @@ fn read_case_with_current(
         ));
     }
     match record.status {
-        ModerationCaseStatusV1::Open
-            if record.accepted_challenge_count == 0 && record.expired_challenge_count == 0 => {}
+        ModerationCaseStatusV1::Open if record.accepted_challenge_count == 0 => {}
         ModerationCaseStatusV1::Challenged if record.accepted_challenge_count > 0 => {}
         ModerationCaseStatusV1::Finalized => {}
         _ => {
@@ -1401,8 +1655,7 @@ fn read_case_with_current(
                 && outcome.votes_total == record.reveal_count
                 && record.pending_challenge_count == 0
                 && matches!(outcome.kind, ModerationOutcomeKindV1::Challenged)
-                    == (record.accepted_challenge_count > 0
-                        || record.expired_challenge_count > 0)
+                    == (record.accepted_challenge_count > 0)
                 && (matches!(outcome.kind, ModerationOutcomeKindV1::Challenged)
                     && outcome.no_show_count == 0
                     || !matches!(outcome.kind, ModerationOutcomeKindV1::Challenged)
@@ -1563,7 +1816,7 @@ fn read_reveal_with_current(
     .map_err(corrupt_stored_payload)?;
     if reveal.context != case.spec.context
         || !case.spec.jurors.iter().any(|candidate| candidate == juror)
-        || record.accepted_at_unix_ms <= case.spec.challenge_deadline_unix_ms
+        || record.accepted_at_unix_ms <= case.spec.challenge_resolution_deadline_unix_ms
         || record.accepted_at_unix_ms > case.spec.reveal_deadline_unix_ms
         || commit.verify_reveal(&reveal).is_err()
     {
@@ -1573,13 +1826,29 @@ fn read_reveal_with_current(
     }
     Ok(Some(record))
 }
-fn read_challenge(
+/// Read and validate one retained moderation challenge.
+pub(in crate::smartcontracts::isi) fn read_challenge(
     world: &impl WorldReadOnly,
     case_id: &str,
     round_id: &str,
     challenge_id: &str,
 ) -> Result<Option<ModerationChallengeRecordV1>, InstructionExecutionError> {
     read_challenge_with_current(world, case_id, round_id, challenge_id, None)
+}
+/// Compute the exact deterministic slash for a rejected challenge bond.
+pub(in crate::smartcontracts::isi) fn moderation_challenge_rejected_slash_amount(
+    amount: &Quantity,
+    numeric_spec: NumericSpec,
+    rejected_slash_bps: u16,
+) -> Result<Quantity, InstructionExecutionError> {
+    amount
+        .try_mul_div_decimal_round(
+            &Numeric::from(u64::from(rejected_slash_bps)),
+            &Numeric::from(10_000_u64),
+            numeric_spec.scale().unwrap_or(amount.scale()),
+            RoundingMode::TowardZero,
+        )
+        .map_err(|_| corrupt_state("moderation challenge bond slash amount overflow"))
 }
 fn read_challenge_for_current(
     world: &impl WorldReadOnly,
@@ -1626,7 +1895,11 @@ fn read_challenge_with_current(
     let case = read_case_with_current(world, case_id, round_id, transient_current.as_mut())?
         .ok_or_else(|| corrupt_state("stored moderation challenge has no authoritative case"))?;
     if record.raised_at_unix_ms <= case.spec.commit_deadline_unix_ms
-        || record.raised_at_unix_ms > case.spec.challenge_deadline_unix_ms
+        || record.raised_at_unix_ms > case.spec.challenge_submission_deadline_unix_ms
+        || record.bond.asset_definition_id != case.policy.challenge_voting_asset_id
+        || record.bond.amount != case.policy.challenge_bond_amount
+        || record.bond.escrow_account != case.policy.challenge_escrow_account
+        || record.bond.slash_receiver_account != case.policy.challenge_slash_receiver_account
         || case
             .challenge_ids
             .binary_search_by(|candidate| candidate.as_str().cmp(challenge_id))
@@ -1640,22 +1913,50 @@ fn read_challenge_with_current(
             "stored moderation challenge does not match authoritative case state",
         ));
     }
+    let zero = Quantity::zero();
+    let numeric_spec = world
+        .asset_definition(&record.bond.asset_definition_id)
+        .map_err(InstructionExecutionError::Find)?
+        .spec();
+    let rejected_slash = moderation_challenge_rejected_slash_amount(
+        &record.bond.amount,
+        numeric_spec,
+        case.policy.challenge_rejected_slash_bps,
+    )?;
+    let rejected_refund = record
+        .bond
+        .amount
+        .checked_sub(&rejected_slash)
+        .map_err(|_| corrupt_state("stored moderation challenge bond settlement underflow"))?;
     let resolution_valid = match (
         record.decision,
         record.resolved_by.as_ref(),
         record.resolved_at_unix_ms,
     ) {
-        (None, None, None) => true,
-        (
-            Some(ModerationChallengeDecisionV1::Rejected | ModerationChallengeDecisionV1::Accepted),
-            Some(_),
-            Some(resolved_at),
-        ) => {
+        (None, None, None) => {
+            record.bond.refunded_amount == zero
+                && record.bond.slashed_amount == zero
+                && record.bond.settled_at_unix_ms.is_none()
+        }
+        (Some(ModerationChallengeDecisionV1::Accepted), Some(_), Some(resolved_at)) => {
             resolved_at >= record.raised_at_unix_ms
-                && resolved_at <= case.spec.challenge_deadline_unix_ms
+                && resolved_at <= case.spec.challenge_resolution_deadline_unix_ms
+                && record.bond.refunded_amount == record.bond.amount
+                && record.bond.slashed_amount == zero
+                && record.bond.settled_at_unix_ms == Some(resolved_at)
+        }
+        (Some(ModerationChallengeDecisionV1::Rejected), Some(_), Some(resolved_at)) => {
+            resolved_at >= record.raised_at_unix_ms
+                && resolved_at <= case.spec.challenge_resolution_deadline_unix_ms
+                && record.bond.refunded_amount == rejected_refund
+                && record.bond.slashed_amount == rejected_slash
+                && record.bond.settled_at_unix_ms == Some(resolved_at)
         }
         (Some(ModerationChallengeDecisionV1::Expired), Some(_), Some(resolved_at)) => {
-            resolved_at > case.spec.reveal_deadline_unix_ms
+            resolved_at > case.spec.challenge_resolution_deadline_unix_ms
+                && record.bond.refunded_amount == record.bond.amount
+                && record.bond.slashed_amount == zero
+                && record.bond.settled_at_unix_ms == Some(resolved_at)
         }
         _ => false,
     };
@@ -1971,6 +2272,15 @@ impl Execute for SetSorafsModerationPolicy {
         self.policy.validate().map_err(|error| {
             invalid_parameter(format!("invalid SoraFS moderation policy: {error}"))
         })?;
+        if self.policy.challenge_voting_asset_id != state_transaction.gov.voting_asset_id
+            || self.policy.challenge_escrow_account != state_transaction.gov.bond_escrow_account
+            || self.policy.challenge_slash_receiver_account
+                != state_transaction.gov.slash_receiver_account
+        {
+            return Err(invalid_parameter(
+                "moderation challenge policy must match the consensus governance voting asset and custody accounts",
+            ));
+        }
         let now = block_time_ms(state_transaction)?;
         let digest = self.policy.digest().map_err(|error| {
             invalid_parameter(format!("failed to digest moderation policy: {error}"))
@@ -2698,7 +3008,12 @@ impl Execute for ActivateSorafsModerationCase {
             jurors,
             quorum: appeal.intake.quorum,
             commit_deadline_unix_ms: appeal.intake.commit_deadline_unix_ms,
-            challenge_deadline_unix_ms: appeal.intake.challenge_deadline_unix_ms,
+            challenge_submission_deadline_unix_ms: appeal
+                .intake
+                .challenge_submission_deadline_unix_ms,
+            challenge_resolution_deadline_unix_ms: appeal
+                .intake
+                .challenge_resolution_deadline_unix_ms,
             reveal_deadline_unix_ms: appeal.intake.reveal_deadline_unix_ms,
             policy_digest: appeal.intake.policy_digest,
         };
@@ -2898,7 +3213,7 @@ impl Execute for RaiseSorafsModerationChallenge {
                 "moderation challenge phase has not opened",
             ));
         }
-        if now > case.spec.challenge_deadline_unix_ms {
+        if now > case.spec.challenge_submission_deadline_unix_ms {
             return Err(invalid_parameter("moderation challenge phase is closed"));
         }
         if case.reveal_count != 0 {
@@ -2920,6 +3235,27 @@ impl Execute for RaiseSorafsModerationChallenge {
             return Err(invalid_parameter(
                 "duplicate moderation challenge id for this case and round",
             ));
+        }
+        for existing_id in &case.challenge_ids {
+            let existing = read_challenge(
+                state_transaction.world(),
+                &self.case_id,
+                &self.round_id,
+                existing_id,
+            )?
+            .ok_or_else(|| {
+                corrupt_state("moderation case challenge index references a missing record")
+            })?;
+            if existing.challenger == *authority {
+                return Err(invalid_parameter(
+                    "moderation challenger already submitted a challenge for this case and round",
+                ));
+            }
+            if existing.evidence_digest == self.evidence_digest {
+                return Err(invalid_parameter(
+                    "duplicate moderation challenge evidence for this case and round",
+                ));
+            }
         }
         if case.challenge_count >= u32::from(case.policy.max_challenges_per_case) {
             return Err(invalid_parameter(format!(
@@ -2944,6 +3280,14 @@ impl Execute for RaiseSorafsModerationChallenge {
             .pending_challenge_count
             .checked_add(1)
             .ok_or_else(|| corrupt_state("moderation pending-challenge counter overflow"))?;
+        let bond = lock_moderation_challenge_bond(
+            state_transaction,
+            &case.policy,
+            authority,
+            &self.case_id,
+            &self.round_id,
+            &self.challenge_id,
+        )?;
         let record = ModerationChallengeRecordV1 {
             case_id: self.case_id,
             round_id: self.round_id,
@@ -2954,6 +3298,7 @@ impl Execute for RaiseSorafsModerationChallenge {
             evidence_digest: self.evidence_digest,
             reason: self.reason,
             raised_at_unix_ms: now,
+            bond,
             decision: None,
             resolved_by: None,
             resolved_at_unix_ms: None,
@@ -3004,7 +3349,7 @@ impl Execute for ResolveSorafsModerationChallenge {
         }
         if self.decision == ModerationChallengeDecisionV1::Expired {
             return Err(invalid_parameter(
-                "expired moderation challenges are derived only by terminal finalization",
+                "expired moderation challenges are derived after the resolution grace",
             ));
         }
         let now = block_time_ms(state_transaction)?;
@@ -3020,7 +3365,7 @@ impl Execute for ResolveSorafsModerationChallenge {
                 "finalized moderation case cannot resolve challenges",
             ));
         }
-        if now > case.spec.challenge_deadline_unix_ms {
+        if now > case.spec.challenge_resolution_deadline_unix_ms {
             return Err(invalid_parameter(
                 "moderation challenge resolution window is closed",
             ));
@@ -3053,12 +3398,126 @@ impl Execute for ResolveSorafsModerationChallenge {
                 .ok_or_else(|| corrupt_state("moderation accepted-challenge counter overflow"))?;
             case.status = ModerationCaseStatusV1::Challenged;
         }
+        settle_moderation_challenge_bond(
+            state_transaction,
+            &case.policy,
+            &mut record,
+            self.decision,
+            now,
+        )?;
         record.decision = Some(self.decision);
         record.resolved_by = Some(authority.clone());
         record.resolved_at_unix_ms = Some(now);
         let mut status = status_for_mutation(state_transaction.world(), now)?;
         status.updated_at_unix_ms = now;
         let encoded_record = encode_state(&record, "moderation challenge")?;
+        let encoded_case = encode_state(&case, "moderation case")?;
+        let encoded_status = encode_status(&status)?;
+        state_transaction.world.smart_contract_state.insert(
+            challenge_key(&self.case_id, &self.round_id, &self.challenge_id),
+            encoded_record,
+        );
+        state_transaction
+            .world
+            .smart_contract_state
+            .insert(case_key(&self.case_id, &self.round_id), encoded_case);
+        state_transaction
+            .world
+            .smart_contract_state
+            .insert(status_key().clone(), encoded_status);
+        emit_moderation_ledger_event(
+            state_transaction,
+            SorafsModerationLedgerEventKind::ChallengeResolved,
+            Some(&self.case_id),
+            Some(&self.round_id),
+            authority,
+            now,
+        )?;
+        Ok(())
+    }
+}
+fn expire_pending_moderation_challenge(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    case: &mut ModerationCaseRecordV1,
+    mut record: ModerationChallengeRecordV1,
+    authority: &AccountId,
+    now: u64,
+) -> Result<ModerationChallengeRecordV1, InstructionExecutionError> {
+    if now <= case.spec.challenge_resolution_deadline_unix_ms {
+        return Err(invalid_parameter(
+            "moderation challenge resolution grace has not elapsed",
+        ));
+    }
+    if record.decision.is_some() {
+        return Err(invalid_parameter(
+            "only a pending moderation challenge may expire",
+        ));
+    }
+    case.pending_challenge_count = case
+        .pending_challenge_count
+        .checked_sub(1)
+        .ok_or_else(|| corrupt_state("moderation pending-challenge counter underflow"))?;
+    case.expired_challenge_count = case
+        .expired_challenge_count
+        .checked_add(1)
+        .ok_or_else(|| corrupt_state("moderation expired-challenge counter overflow"))?;
+    settle_moderation_challenge_bond(
+        state_transaction,
+        &case.policy,
+        &mut record,
+        ModerationChallengeDecisionV1::Expired,
+        now,
+    )?;
+    record.decision = Some(ModerationChallengeDecisionV1::Expired);
+    record.resolved_by = Some(authority.clone());
+    record.resolved_at_unix_ms = Some(now);
+    Ok(record)
+}
+impl Execute for ExpireSorafsModerationChallenge {
+    fn execute(
+        self,
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), InstructionExecutionError> {
+        validate_lookup_identifiers(&self.case_id, &self.round_id)?;
+        if !is_canonical_moderation_identifier_v1(&self.challenge_id) {
+            return Err(invalid_parameter(
+                "moderation challenge challenge_id is not bounded canonical ASCII",
+            ));
+        }
+        let now = block_time_ms(state_transaction)?;
+        let mut case = required_case(state_transaction.world(), &self.case_id, &self.round_id)?;
+        let record = read_challenge(
+            state_transaction.world(),
+            &self.case_id,
+            &self.round_id,
+            &self.challenge_id,
+        )?
+        .ok_or_else(|| invalid_parameter("moderation challenge does not exist"))?;
+        match record.decision {
+            Some(ModerationChallengeDecisionV1::Expired) => return Ok(()),
+            Some(_) => {
+                return Err(invalid_parameter(
+                    "resolved moderation challenge cannot be expired",
+                ));
+            }
+            None => {}
+        }
+        if case.status == ModerationCaseStatusV1::Finalized {
+            return Err(corrupt_state(
+                "finalized moderation case retains a pending challenge",
+            ));
+        }
+        let record = expire_pending_moderation_challenge(
+            state_transaction,
+            &mut case,
+            record,
+            authority,
+            now,
+        )?;
+        let mut status = status_for_mutation(state_transaction.world(), now)?;
+        status.updated_at_unix_ms = now;
+        let encoded_record = encode_state(&record, "expired moderation challenge")?;
         let encoded_case = encode_state(&case, "moderation case")?;
         let encoded_status = encode_status(&status)?;
         state_transaction.world.smart_contract_state.insert(
@@ -3120,15 +3579,15 @@ impl Execute for SubmitSorafsModerationReveal {
                 "moderation reveal context does not match the authoritative case",
             ));
         }
-        if now <= case.spec.challenge_deadline_unix_ms {
+        if now <= case.spec.challenge_resolution_deadline_unix_ms {
             return Err(invalid_parameter("moderation reveal phase has not opened"));
         }
         if now > case.spec.reveal_deadline_unix_ms {
             return Err(invalid_parameter("moderation reveal phase is closed"));
         }
-        if case.pending_challenge_count != 0 || case.accepted_challenge_count != 0 {
+        if case.accepted_challenge_count != 0 {
             return Err(invalid_parameter(
-                "pending or accepted moderation challenge blocks reveals",
+                "accepted moderation challenge blocks reveals",
             ));
         }
         let commit_record = read_commit(
@@ -3252,12 +3711,12 @@ impl Execute for FinalizeSorafsModerationCase {
         }
         let mut expired_challenge_writes = Vec::new();
         if case.pending_challenge_count != 0 {
-            for challenge_id in &case.challenge_ids {
-                let mut challenge = read_challenge(
+            for challenge_id in case.challenge_ids.clone() {
+                let challenge = read_challenge(
                     state_transaction.world(),
                     &self.case_id,
                     &self.round_id,
-                    challenge_id,
+                    &challenge_id,
                 )?
                 .ok_or_else(|| {
                     corrupt_state("moderation case challenge index references a missing record")
@@ -3265,29 +3724,25 @@ impl Execute for FinalizeSorafsModerationCase {
                 if challenge.decision.is_some() {
                     continue;
                 }
-                challenge.decision = Some(ModerationChallengeDecisionV1::Expired);
-                challenge.resolved_by = Some(authority.clone());
-                challenge.resolved_at_unix_ms = Some(now);
+                let challenge = expire_pending_moderation_challenge(
+                    state_transaction,
+                    &mut case,
+                    challenge,
+                    authority,
+                    now,
+                )?;
                 expired_challenge_writes.push((
-                    challenge_key(&self.case_id, &self.round_id, challenge_id),
+                    challenge_key(&self.case_id, &self.round_id, &challenge_id),
                     encode_state(&challenge, "expired moderation challenge")?,
                 ));
             }
-            let expired_count = u32::try_from(expired_challenge_writes.len()).map_err(|_| {
-                corrupt_state("expired moderation challenge count does not fit u32")
-            })?;
-            if expired_count != case.pending_challenge_count {
+            if case.pending_challenge_count != 0 {
                 return Err(corrupt_state(
                     "moderation pending-challenge counter disagrees with indexed records",
                 ));
             }
-            case.expired_challenge_count = case
-                .expired_challenge_count
-                .checked_add(expired_count)
-                .ok_or_else(|| corrupt_state("moderation expired-challenge counter overflow"))?;
-            case.pending_challenge_count = 0;
         }
-        let challenged = case.accepted_challenge_count != 0 || case.expired_challenge_count != 0;
+        let challenged = case.accepted_challenge_count != 0;
         let mut counts = ModerationVoteCountsV1::default();
         let mut no_shows = Vec::new();
         if !challenged {
@@ -4997,6 +5452,7 @@ mod tests {
     use iroha_data_model::{
         IntoKeyValue, Registrable,
         account::{Account, AccountId},
+        asset::{Asset, AssetBalancePolicy, AssetDefinition, AssetId},
         block::BlockHeader,
         isi::sorafs::{
             CommitSorafsPopCredentialBatch, PublishSorafsPopRevocationList,
@@ -5040,8 +5496,12 @@ mod tests {
     };
     const OPENED_AT: u64 = 1_000;
     const COMMIT_DEADLINE: u64 = 2_000;
-    const CHALLENGE_DEADLINE: u64 = 3_000;
-    const REVEAL_DEADLINE: u64 = 4_000;
+    const CHALLENGE_SUBMISSION_DEADLINE: u64 = 3_000;
+    const CHALLENGE_RESOLUTION_DEADLINE: u64 =
+        CHALLENGE_SUBMISSION_DEADLINE + MODERATION_CHALLENGE_RESOLUTION_GRACE_MS_V1;
+    const REVEAL_DEADLINE: u64 = CHALLENGE_RESOLUTION_DEADLINE + 1_000;
+    const REVEAL_AT: u64 = CHALLENGE_RESOLUTION_DEADLINE + 500;
+    const FINALIZE_AT: u64 = REVEAL_DEADLINE + 1;
     fn keypair(seed: u8) -> KeyPair {
         let private = PrivateKey::from_bytes(Algorithm::Ed25519, &[seed; 32])
             .expect("valid deterministic Ed25519 seed");
@@ -5055,11 +5515,22 @@ mod tests {
             version: MODERATION_LEDGER_POLICY_VERSION_V1,
             revision: 1,
             predecessor_policy_digest: None,
+            challenge_voting_asset_id:
+                iroha_config::parameters::defaults::governance::voting_asset_id()
+                    .parse()
+                    .expect("default governance voting asset"),
+            challenge_bond_amount: Quantity::from(MODERATION_CHALLENGE_BOND_AMOUNT_V1),
+            challenge_escrow_account:
+                iroha_config::parameters::defaults::governance::bond_escrow_account_id(),
+            challenge_slash_receiver_account:
+                iroha_config::parameters::defaults::governance::slash_receiver_account_id(),
+            challenge_rejected_slash_bps: MODERATION_CHALLENGE_REJECTED_SLASH_BPS_V1,
+            challenge_resolution_grace_ms: MODERATION_CHALLENGE_RESOLUTION_GRACE_MS_V1,
             max_panel_size: 8,
             max_candidate_pool_size: 32,
             max_waitlist_size: 8,
             max_exclusions_per_case: 16,
-            max_total_window_ms: 10_000,
+            max_total_window_ms: 90_000_000,
             max_challenges_per_case: 2,
             missing_commit_penalty_points: 11,
             unrevealed_commit_penalty_points: 23,
@@ -5084,7 +5555,8 @@ mod tests {
             jurors,
             quorum,
             commit_deadline_unix_ms: COMMIT_DEADLINE,
-            challenge_deadline_unix_ms: CHALLENGE_DEADLINE,
+            challenge_submission_deadline_unix_ms: CHALLENGE_SUBMISSION_DEADLINE,
+            challenge_resolution_deadline_unix_ms: CHALLENGE_RESOLUTION_DEADLINE,
             reveal_deadline_unix_ms: REVEAL_DEADLINE,
             policy_digest: policy().digest().expect("policy digest"),
         }
@@ -5142,11 +5614,76 @@ mod tests {
         world
             .account_permissions
             .insert(manager.clone(), permissions);
-        State::new_for_testing(
+        let mut state = State::new_for_testing(
             world,
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
-        )
+        );
+        let voting_asset_id = state.gov.voting_asset_id.clone();
+        for custody in [
+            state.gov.bond_escrow_account.clone(),
+            state.gov.slash_receiver_account.clone(),
+        ] {
+            if state.world.accounts.get(&custody).is_none() {
+                let (id, value) = Account::new(custody.clone())
+                    .build(manager)
+                    .into_key_value();
+                state.world.accounts.insert(id, value);
+            }
+        }
+        state.world.asset_definitions.insert(
+            voting_asset_id.clone(),
+            AssetDefinition::numeric(
+                voting_asset_id.clone(),
+                "moderation challenge bond",
+                AssetBalancePolicy::Global,
+                None,
+            )
+            .build(manager),
+        );
+        for keypair in accounts {
+            let asset_id = AssetId::new(voting_asset_id.clone(), account(keypair));
+            let balance = Quantity::from(1_000_u32);
+            let (id, value) = Asset::new(asset_id.clone(), balance.clone()).into_key_value();
+            state.world.assets.insert(id, value);
+            state.world.track_asset_holder(&asset_id);
+            state
+                .world
+                .increase_asset_total_amount(&voting_asset_id, &balance)
+                .expect("moderation fixture voting-asset total remains valid");
+        }
+        state
+    }
+    fn voting_asset_balance(state: &State, account: &AccountId) -> Quantity {
+        let id = AssetId::new(state.gov.voting_asset_id.clone(), account.clone());
+        state
+            .world
+            .assets
+            .get(&id)
+            .map(|value| value.as_ref().clone())
+            .unwrap_or_else(Quantity::zero)
+    }
+    #[test]
+    fn rejected_challenge_slash_floors_to_voting_asset_precision() {
+        let amount = Quantity::from(MODERATION_CHALLENGE_BOND_AMOUNT_V1);
+        assert_eq!(
+            moderation_challenge_rejected_slash_amount(
+                &amount,
+                NumericSpec::integer(),
+                MODERATION_CHALLENGE_REJECTED_SLASH_BPS_V1,
+            )
+            .unwrap(),
+            Quantity::from(37_u32)
+        );
+        assert_eq!(
+            moderation_challenge_rejected_slash_amount(
+                &amount,
+                NumericSpec::fractional(1),
+                MODERATION_CHALLENGE_REJECTED_SLASH_BPS_V1,
+            )
+            .unwrap(),
+            "37.5".parse::<Quantity>().expect("fractional slash")
+        );
     }
     fn header(height: u64, now: u64) -> BlockHeader {
         BlockHeader::new(
@@ -5434,8 +5971,10 @@ mod tests {
             registration_deadline_unix_ms: 1_003_000,
             acceptance_deadline_unix_ms: 1_005_000,
             commit_deadline_unix_ms: 1_007_000,
-            challenge_deadline_unix_ms: 1_009_000,
-            reveal_deadline_unix_ms: 1_011_000,
+            challenge_submission_deadline_unix_ms: 1_009_000,
+            challenge_resolution_deadline_unix_ms: 1_009_000
+                + MODERATION_CHALLENGE_RESOLUTION_GRACE_MS_V1,
+            reveal_deadline_unix_ms: 1_011_000 + MODERATION_CHALLENGE_RESOLUTION_GRACE_MS_V1,
             policy_digest: policy().digest().expect("moderation policy digest"),
         }
     }
@@ -5671,7 +6210,8 @@ mod tests {
             registration_deadline_unix_ms: 800,
             acceptance_deadline_unix_ms: 900,
             commit_deadline_unix_ms: spec.commit_deadline_unix_ms,
-            challenge_deadline_unix_ms: spec.challenge_deadline_unix_ms,
+            challenge_submission_deadline_unix_ms: spec.challenge_submission_deadline_unix_ms,
+            challenge_resolution_deadline_unix_ms: spec.challenge_resolution_deadline_unix_ms,
             reveal_deadline_unix_ms: spec.reveal_deadline_unix_ms,
             policy_digest: spec.policy_digest,
         };
@@ -5841,7 +6381,7 @@ mod tests {
             })
             .unwrap();
         fixture
-            .run(3_500, |transaction| {
+            .run(REVEAL_AT, |transaction| {
                 SubmitSorafsModerationReveal::new(encode(&reveal0))
                     .execute(&juror0, transaction)?;
                 SubmitSorafsModerationReveal::new(encode(&reveal1)).execute(&juror1, transaction)
@@ -5849,7 +6389,7 @@ mod tests {
             .unwrap();
         let manager = fixture.manager_id();
         fixture
-            .run(4_001, |transaction| {
+            .run(FINALIZE_AT, |transaction| {
                 FinalizeSorafsModerationCase::new("case-1".to_owned(), "round-1".to_owned())
                     .execute(&manager, transaction)
             })
@@ -5947,21 +6487,21 @@ mod tests {
         mismatched.choice = SoraFsModerationVoteChoice::Modify;
         assert!(
             fixture
-                .run(3_500, |transaction| {
+                .run(REVEAL_AT, |transaction| {
                     SubmitSorafsModerationReveal::new(encode(&mismatched))
                         .execute(&juror, transaction)
                 })
                 .is_err()
         );
         fixture
-            .run(3_500, |transaction| {
+            .run(REVEAL_AT, |transaction| {
                 SubmitSorafsModerationReveal::new(encode(&juror_reveal))
                     .execute(&juror, transaction)
             })
             .unwrap();
         assert!(
             fixture
-                .run(3_501, |transaction| {
+                .run(REVEAL_AT + 1, |transaction| {
                     SubmitSorafsModerationReveal::new(encode(&juror_reveal))
                         .execute(&juror, transaction)
                 })
@@ -5979,7 +6519,7 @@ mod tests {
         assert_eq!(status.reveals, 1);
     }
     #[test]
-    fn pending_and_accepted_challenges_block_reveal_and_close_without_penalties() {
+    fn accepted_challenge_blocks_reveal_and_closes_without_penalties() {
         let mut fixture = Fixture::new(1);
         let juror = fixture.juror_id(0);
         let challenger = account(&fixture.outsider);
@@ -6082,6 +6622,10 @@ mod tests {
                 .execute(&challenger, transaction)
             })
             .unwrap();
+        assert_eq!(
+            voting_asset_balance(&fixture.state, &challenger),
+            Quantity::from(850_u32)
+        );
         assert!(
             fixture
                 .run(2_501, |transaction| {
@@ -6095,6 +6639,38 @@ mod tests {
                         "duplicate".to_owned(),
                     )
                     .execute(&challenger, transaction)
+                })
+                .is_err()
+        );
+        assert!(
+            fixture
+                .run(2_502, |transaction| {
+                    RaiseSorafsModerationChallenge::new(
+                        "case-1".to_owned(),
+                        "round-1".to_owned(),
+                        "challenge-second".to_owned(),
+                        ModerationChallengeKindV1::EvidenceMismatch,
+                        None,
+                        [0x53; 32],
+                        "same challenger".to_owned(),
+                    )
+                    .execute(&challenger, transaction)
+                })
+                .is_err()
+        );
+        assert!(
+            fixture
+                .run(2_502, |transaction| {
+                    RaiseSorafsModerationChallenge::new(
+                        "case-1".to_owned(),
+                        "round-1".to_owned(),
+                        "challenge-same-evidence".to_owned(),
+                        ModerationChallengeKindV1::EvidenceMismatch,
+                        None,
+                        [0x51; 32],
+                        "same evidence".to_owned(),
+                    )
+                    .execute(&juror, transaction)
                 })
                 .is_err()
         );
@@ -6132,13 +6708,13 @@ mod tests {
             .unwrap();
         assert!(
             fixture
-                .run(3_501, |transaction| {
+                .run(REVEAL_AT, |transaction| {
                     SubmitSorafsModerationReveal::new(encode(&reveal)).execute(&juror, transaction)
                 })
                 .is_err()
         );
         fixture
-            .run(4_001, |transaction| {
+            .run(FINALIZE_AT, |transaction| {
                 FinalizeSorafsModerationCase::new("case-1".to_owned(), "round-1".to_owned())
                     .execute(&manager, transaction)
             })
@@ -6148,6 +6724,22 @@ mod tests {
             .unwrap();
         assert_eq!(outcome.kind, ModerationOutcomeKindV1::Challenged);
         assert_eq!(outcome.no_show_count, 0);
+        let challenge = FindSorafsModerationChallenge::new(
+            "case-1".to_owned(),
+            "round-1".to_owned(),
+            "challenge-1".to_owned(),
+        )
+        .execute(&fixture.state.view())
+        .unwrap();
+        assert_eq!(
+            challenge.bond.refunded_amount,
+            Quantity::from(MODERATION_CHALLENGE_BOND_AMOUNT_V1)
+        );
+        assert_eq!(challenge.bond.slashed_amount, Quantity::zero());
+        assert_eq!(
+            voting_asset_balance(&fixture.state, &challenger),
+            Quantity::from(1_000_u32)
+        );
         assert_eq!(
             FindSorafsModerationStatus
                 .execute(&fixture.state.view())
@@ -6157,7 +6749,7 @@ mod tests {
         );
     }
     #[test]
-    fn unresolved_challenge_expires_fail_safe_without_deadlock_or_no_show_penalties() {
+    fn unresolved_challenge_expires_permissionlessly_and_fails_open() {
         let mut fixture = Fixture::new(1);
         let juror = fixture.juror_id(0);
         let challenger = account(&fixture.outsider);
@@ -6188,6 +6780,20 @@ mod tests {
             })
             .unwrap();
         let manager = fixture.manager_id();
+        fixture
+            .run(2_501, |transaction| {
+                RaiseSorafsModerationChallenge::new(
+                    "case-1".to_owned(),
+                    "round-1".to_owned(),
+                    "challenge-swept".to_owned(),
+                    ModerationChallengeKindV1::Other,
+                    None,
+                    [0x73; 32],
+                    "awaiting final sweep".to_owned(),
+                )
+                .execute(&manager, transaction)
+            })
+            .unwrap();
         assert!(
             fixture
                 .run(2_600, |transaction| {
@@ -6203,7 +6809,7 @@ mod tests {
         );
         assert!(
             fixture
-                .run(3_500, |transaction| {
+                .run(CHALLENGE_RESOLUTION_DEADLINE + 1, |transaction| {
                     ResolveSorafsModerationChallenge::new(
                         "case-1".to_owned(),
                         "round-1".to_owned(),
@@ -6214,24 +6820,52 @@ mod tests {
                 })
                 .is_err()
         );
-        assert!(
-            fixture
-                .run(3_500, |transaction| {
-                    SubmitSorafsModerationReveal::new(encode(&reveal)).execute(&juror, transaction)
-                })
-                .is_err()
-        );
         fixture
-            .run(4_001, |transaction| {
+            .run(REVEAL_AT, |transaction| {
+                SubmitSorafsModerationReveal::new(encode(&reveal)).execute(&juror, transaction)
+            })
+            .unwrap();
+        fixture
+            .run(REVEAL_AT + 1, |transaction| {
+                ExpireSorafsModerationChallenge::new(
+                    "case-1".to_owned(),
+                    "round-1".to_owned(),
+                    "challenge-unresolved".to_owned(),
+                )
+                .execute(&juror, transaction)
+            })
+            .unwrap();
+        fixture
+            .run(REVEAL_AT + 2, |transaction| {
+                ExpireSorafsModerationChallenge::new(
+                    "case-1".to_owned(),
+                    "round-1".to_owned(),
+                    "challenge-unresolved".to_owned(),
+                )
+                .execute(&juror, transaction)
+            })
+            .unwrap();
+        fixture
+            .run(FINALIZE_AT, |transaction| {
                 FinalizeSorafsModerationCase::new("case-1".to_owned(), "round-1".to_owned())
                     .execute(&manager, transaction)
+            })
+            .unwrap();
+        fixture
+            .run(FINALIZE_AT + 1, |transaction| {
+                ExpireSorafsModerationChallenge::new(
+                    "case-1".to_owned(),
+                    "round-1".to_owned(),
+                    "challenge-swept".to_owned(),
+                )
+                .execute(&juror, transaction)
             })
             .unwrap();
         let case = FindSorafsModerationCase::new("case-1".to_owned(), "round-1".to_owned())
             .execute(&fixture.state.view())
             .unwrap();
         assert_eq!(case.pending_challenge_count, 0);
-        assert_eq!(case.expired_challenge_count, 1);
+        assert_eq!(case.expired_challenge_count, 2);
         let challenge = FindSorafsModerationChallenge::new(
             "case-1".to_owned(),
             "round-1".to_owned(),
@@ -6243,11 +6877,24 @@ mod tests {
             challenge.decision,
             Some(ModerationChallengeDecisionV1::Expired)
         );
-        assert_eq!(challenge.resolved_by, Some(manager));
+        assert_eq!(challenge.resolved_by, Some(juror));
+        assert_eq!(
+            challenge.bond.refunded_amount,
+            Quantity::from(MODERATION_CHALLENGE_BOND_AMOUNT_V1)
+        );
+        assert_eq!(challenge.bond.slashed_amount, Quantity::zero());
+        assert_eq!(
+            voting_asset_balance(&fixture.state, &challenger),
+            Quantity::from(1_000_u32)
+        );
         let outcome = FindSorafsModerationOutcome::new("case-1".to_owned(), "round-1".to_owned())
             .execute(&fixture.state.view())
             .unwrap();
-        assert_eq!(outcome.kind, ModerationOutcomeKindV1::Challenged);
+        assert_eq!(
+            outcome.kind,
+            ModerationOutcomeKindV1::Decided(SoraFsModerationVoteChoice::Uphold)
+        );
+        assert_eq!(outcome.votes_total, 1);
         assert_eq!(outcome.no_show_count, 0);
         assert_eq!(
             FindSorafsModerationStatus
@@ -6310,14 +6957,14 @@ mod tests {
             })
             .unwrap();
         fixture
-            .run(3_500, |transaction| {
+            .run(REVEAL_AT, |transaction| {
                 SubmitSorafsModerationReveal::new(encode(&reveal0))
                     .execute(&juror0, transaction)?;
                 SubmitSorafsModerationReveal::new(encode(&reveal1)).execute(&juror1, transaction)
             })
             .unwrap();
         fixture
-            .run(4_001, |transaction| {
+            .run(FINALIZE_AT, |transaction| {
                 FinalizeSorafsModerationCase::new("case-1".to_owned(), "round-1".to_owned())
                     .execute(&manager, transaction)
             })
@@ -6332,6 +6979,12 @@ mod tests {
         assert_eq!(
             challenge.decision,
             Some(ModerationChallengeDecisionV1::Rejected)
+        );
+        assert_eq!(challenge.bond.refunded_amount, Quantity::from(113_u32));
+        assert_eq!(challenge.bond.slashed_amount, Quantity::from(37_u32));
+        assert_eq!(
+            voting_asset_balance(&fixture.state, &challenger),
+            Quantity::from(963_u32)
         );
         let outcome = FindSorafsModerationOutcome::new("case-1".to_owned(), "round-1".to_owned())
             .execute(&fixture.state.view())
@@ -6430,6 +7083,19 @@ mod tests {
             SetSorafsModerationPolicy::new(policy()).execute(&manager, transaction)
         })
         .unwrap();
+        let active = FindSorafsModerationPolicy.execute(&state.view()).unwrap();
+        let mut substituted_custody = policy();
+        substituted_custody.revision = 2;
+        substituted_custody.predecessor_policy_digest = Some(active.policy_digest);
+        substituted_custody.challenge_escrow_account = outsider.clone();
+        assert!(
+            transact(&mut state, 2, OPENED_AT + 1, |transaction| {
+                SetSorafsModerationPolicy::new(substituted_custody)
+                    .execute(&manager, transaction)
+            })
+            .is_err(),
+            "policy activation must bind challenge custody to consensus governance"
+        );
         let mut bad_revision = policy();
         bad_revision.revision = 2;
         bad_revision.predecessor_policy_digest = Some([0xFF; 32]);

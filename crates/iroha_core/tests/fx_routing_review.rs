@@ -388,6 +388,7 @@ fn fx_deployment_preserves_intrinsic_and_private_policy_participants() {
             }),
             InstructionBox::from(ActivateContractInstance {
                 contract_address,
+                expected_revision: 1,
                 code_hash: Hash::new(b"contract-code"),
             }),
             settlement_instruction(&fixture.corridor, "fx_deploy_boundary"),

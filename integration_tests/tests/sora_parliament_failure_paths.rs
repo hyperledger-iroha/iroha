@@ -130,6 +130,10 @@ fn capacity_failure_builder(
         .with_config_layer(move |layer| {
             layer
                 .write(
+                    ["concurrency", "rayon_global_threads"],
+                    PARLIAMENT_NETWORK_RAYON_THREADS_PER_PEER,
+                )
+                .write(
                     [
                         "network",
                         "soranet_handshake",
@@ -231,6 +235,10 @@ fn confirmation_capacity_builder(
         .with_block_cadence(EXACT_HEIGHT_SUBMISSION_CADENCE)
         .with_config_layer(|layer| {
             layer
+                .write(
+                    ["concurrency", "rayon_global_threads"],
+                    PARLIAMENT_NETWORK_RAYON_THREADS_PER_PEER,
+                )
                 .write(
                     [
                         "network",
@@ -347,6 +355,10 @@ fn certified_terminal_builder(
         .with_block_cadence(EXACT_HEIGHT_SUBMISSION_CADENCE)
         .with_config_layer(|layer| {
             layer
+                .write(
+                    ["concurrency", "rayon_global_threads"],
+                    PARLIAMENT_NETWORK_RAYON_THREADS_PER_PEER,
+                )
                 .write(
                     [
                         "network",
@@ -1147,6 +1159,7 @@ async fn four_validator_certified_effects_record_supersession_and_execution_fail
     client.submit_blocking(
         ActivateContractInstance {
             contract_address: contract_address.clone(),
+            expected_revision: 1,
             code_hash: competing_code_hash,
         },
         fee(),

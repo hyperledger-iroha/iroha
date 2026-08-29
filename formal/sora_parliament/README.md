@@ -17,7 +17,16 @@ The model covers these consensus bindings:
   singleton live electorate instead records typed `NoRoster` capacity evidence
   at the request height without revealing or consuming a pulse. A capacity
   retry must use the exact next generation in a later block, and exhaustion of
-  that same bounded sequence rejects the attempt;
+  that same bounded sequence rejects the attempt. Independently of each nested
+  retry counter, one proposal-wide redraw budget covers every fresh randomness
+  choice: a successor governance attempt's first sortition, every later
+  sortition generation (including Confirmation), and every timed-OVN ballot
+  retry. The first proposal attempt's simultaneous initial draw and each
+  body's sequence-zero ballot are baselines. Exact request/session transport
+  replays are state-idempotent and consume no redraw unit. Reaching the shared
+  ceiling makes the next objective no-roster or ballot failure terminal, and a
+  required Confirmation draw at an already exhausted ceiling fails closed as
+  terminal `NoResult` without committing a partial Policy binding;
 - active timed-OVN ballots reserve both heavy-work windows in one global
   checked set. Admission rejects a duplicate, an intersecting reservation, or
   the first entry beyond the exact capacity without changing the committed
@@ -62,16 +71,19 @@ The model covers these consensus bindings:
   no plaintext, manual-opening, or fallback transition exists;
 - a retry uses the exact next sequence, remains within the frozen retry bound,
   and consumes a fresh TLE session no earlier than its predecessor failure;
-  failure of the final permitted ballot sequence rejects the governance
-  attempt instead of leaving an unretryable active attempt;
+  failure of either the final permitted ballot sequence or the final shared
+  proposal redraw rejects the governance attempt instead of leaving an
+  unretryable active attempt;
 - a narrow approved Policy tally with zero or one fresh candidate outside the
   sealed Policy Jury becomes terminal `NoResult` in the same transition: the
   Policy binding, Confirmation requirement, and Confirmation request all
   remain uncommitted. With at least two fresh candidates, the same transition
   commits the Policy binding and Confirmation requirement together with the
   sequence-zero Confirmation request, whose request height equals the Policy
-  result height and whose pulse is strictly future. The finite model uses the
-  value `2` as the equivalence class for “two or more” candidates;
+  result height and whose pulse is strictly future, but only while one shared
+  redraw unit remains. Exhaustion instead atomically records terminal
+  `NoResult` and leaves all three bindings uncommitted. The finite model uses
+  the value `2` as the equivalence class for “two or more” candidates;
 - Core automatically constructs a certificate only from an approved aggregate
   result and fixes `enact_at_height = certified_at_height +
   min_enactment_delay` in the native execution boundary; and
@@ -112,7 +124,10 @@ sessions (two with an authoritative release pulse and one with an objectively
 absent pulse), a two-block commitment window, a two-block opening window, and
 two permitted sortition retries plus two permitted ballot retries. Its three
 abstract resource reservations include one symmetric conflict pair and an exact
-capacity of two. It is
+capacity of two. A shared redraw ceiling of two is explored from both the first
+attempt's zero prefix and abstract successor-attempt prefixes; the latter model
+whether the inherited proposal history has consumed zero or one unit before
+the successor's initial draw. It is
 intentionally large enough to explore self-absence, early impossible-root
 rejection, conflicting and quorum-matching endorsements, post-deadline
 non-response rejection, successful and unavailable sortition pulses, fresh
@@ -154,7 +169,12 @@ authority-bound registration/dropout and reducer-derived registration/survivor
 boundaries, authority-bound absence and public-finding endorsements. The model
 contract also fails if empty/singleton hidden-electorate evidence starts
 consuming a pulse, or if a narrow Policy result can commit only part of its
-Confirmation handoff. It also
+Confirmation handoff. It pins the proposal-wide redraw ceiling, exact successor
+prefix lineage, the derived sortition/ballot accounting, and the separate
+guards for fresh sortition, Confirmation, and timed-OVN retries. It requires
+exact committed transport replay to remain state-idempotent and binds
+shared-budget exhaustion to terminal rejection without adding a plaintext
+fallback. It also
 structurally pins the opaque Core release authorization, independently verified
 runtime partial, canonical combiner, authenticated bodyless local-partial route,
 non-enumerable multi-session software custody seam, and bounded public broker

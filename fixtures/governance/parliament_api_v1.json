@@ -21,7 +21,9 @@
     "ValidationFeePolicy",
     "ValidationFeePayoutLifecycle",
     "MusubiRegistryGovernance",
-    "SorafsProviderGovernance"
+    "SorafsProviderGovernance",
+    "ContractLifecycleGovernance",
+    "ContractEmergencyHold"
   ],
   "limits": {
     "attempt_state_bytes": 16777216,
@@ -99,7 +101,8 @@
     {"norito_index": 5, "json_tag": "BallotReleasePulseUnavailable"},
     {"norito_index": 6, "json_tag": "BallotOpeningDeadlineExpired"},
     {"norito_index": 7, "json_tag": "SortitionRetriesExhausted"},
-    {"norito_index": 8, "json_tag": "ConfirmationJuryCapacityUnavailable"}
+    {"norito_index": 8, "json_tag": "ConfirmationJuryCapacityUnavailable"},
+    {"norito_index": 9, "json_tag": "RandomnessRedrawBudgetExhausted"}
   ],
   "canonical_body_order": [
     "rules-committee",

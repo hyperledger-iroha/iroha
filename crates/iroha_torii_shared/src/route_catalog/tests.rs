@@ -14,6 +14,7 @@ mod tests {
         for policy in [
             AuthenticationPolicy::OnboardingToken,
             AuthenticationPolicy::CanonicalAccountSignature,
+            AuthenticationPolicy::OptionalCanonicalAccountSignature,
             AuthenticationPolicy::OperatorSignature,
             AuthenticationPolicy::OperatorCredentialExchange,
         ] {
@@ -36,6 +37,53 @@ mod tests {
                 "unexpected private no-store policy for {policy:?}"
             );
         }
+    }
+
+    #[test]
+    fn dataspace_reads_advertise_their_real_authentication_boundary() {
+        for route in [
+            streaming::EVENTS_SSE,
+            streaming::CONTRACT_EVENTS_SSE,
+            streaming::SUBSCRIPTION_WS,
+            telemetry::ASSET_HOLDERS,
+            application_api::EXPLORER_BLOCKS_GET,
+            application_api::EXPLORER_TRANSACTIONS_GET,
+            application_api::EXPLORER_INSTRUCTIONS_GET,
+        ] {
+            assert_eq!(route.admission(), AdmissionPolicy::DataspaceVisible);
+            assert_eq!(
+                route.authentication(),
+                AuthenticationPolicy::OptionalCanonicalAccountSignature
+            );
+            assert!(route.requires_private_no_store());
+            assert_eq!(validate_catalog(&[route]), Ok(()));
+        }
+        assert_eq!(
+            streaming::BLOCKS_WS.authentication(),
+            AuthenticationPolicy::CanonicalAccountSignature
+        );
+        assert_eq!(
+            streaming::BLOCKS_WS.admission(),
+            AdmissionPolicy::AuthenticatedAccount
+        );
+        assert_eq!(validate_catalog(&[streaming::BLOCKS_WS]), Ok(()));
+    }
+
+    #[test]
+    fn dataspace_admission_rejects_a_hollow_authentication_witness() {
+        let route = RouteDescriptor::new(
+            "test.dataspace_without_optional_auth",
+            HttpMethod::Get,
+            "/v1/tests/dataspace-without-optional-auth",
+            ApiSurface::Public,
+            Listener::Torii,
+            RouteEffect::ReadOnly,
+            AdmissionPolicy::DataspaceVisible,
+        );
+        let errors = validate_catalog(&[route]).expect_err("missing optional auth must fail");
+        assert!(errors.iter().any(|error| {
+            error.kind == CatalogValidationErrorKind::DataspaceVisibleRequiresOptionalAuthentication
+        }));
     }
     #[test]
     fn mcp_json_rpc_is_a_sealed_nested_route_gateway() {
@@ -356,6 +404,30 @@ mod tests {
                 .all(|route| route.stable_route_id() != "sorafs.storage.pin"),
             "the retired direct storage-ingest route id must not be reusable"
         );
+    }
+    #[test]
+    fn public_sorafs_gateways_are_anonymous_and_feature_independent() {
+        let routes = [
+            sorafs::CID_LOOKUP,
+            sorafs::SITE_MANIFEST,
+            sorafs::CID_ROOT,
+            sorafs::CID_PATH,
+        ];
+        let mounted =
+            RouteCatalog::new(&routes).project(CatalogProjection::Mounted, EnabledFeatures::none());
+        assert_eq!(mounted.len(), routes.len());
+        for route in routes {
+            assert_eq!(route.feature_gate(), FeatureGate::Always);
+            assert_eq!(route.admission(), AdmissionPolicy::Public);
+            assert_eq!(
+                route.authentication(),
+                AuthenticationPolicy::Unauthenticated
+            );
+            assert!(route.implicit_head());
+            assert!(route.cors_options());
+            assert!(!route.requires_private_no_store());
+        }
+        assert_eq!(validate_catalog(&routes), Ok(()));
     }
     #[test]
     fn internal_torii_proxy_is_the_only_identity_bound_operator_route() {
@@ -1413,6 +1485,15 @@ mod tests {
         );
         assert!(!sumeragi::SCCP_CAPABILITIES.projections().mcp());
         assert!(!telemetry::DEBUG_WITNESS.projections().openapi());
+        assert_eq!(
+            telemetry::DEBUG_WITNESS.authentication(),
+            AuthenticationPolicy::OperatorSignature,
+            "the cleartext witness diagnostic must require a trusted operator signature"
+        );
+        assert_eq!(
+            telemetry::DEBUG_WITNESS.admission(),
+            AdmissionPolicy::Operator
+        );
         for route in [
             telemetry::SORANET_PRIVACY_EVENT,
             telemetry::SORANET_PRIVACY_SHARE,

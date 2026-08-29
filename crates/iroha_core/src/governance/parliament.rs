@@ -9,6 +9,9 @@
 //! There is deliberately no plaintext ballot or manual-opening transition.  A
 //! missed phase deadline or objectively absent finalized release pulse produces
 //! `NoResult`; retry requires a fresh ballot attempt and a fresh TLE session.
+//! Every fresh roster/pulse generation and every replacement timed-OVN session
+//! spends one proposal-wide redraw unit. Exact transport retransmission retains
+//! its committed randomness and therefore cannot spend another unit.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -49,6 +52,13 @@ use super::{
     draw::{body_committee_size, derive_attempt_body_plan_v1},
     timed_ovn::TimedOvnParliamentReducerBindingV1,
 };
+
+/// Proposal-wide ceiling for adversarially selectable fresh randomness.
+///
+/// V1 deliberately reuses the outer governance retry ceiling instead of
+/// exposing an independently tunable consensus parameter.
+pub(crate) const MAX_PARLIAMENT_RANDOMNESS_REDRAWS_V1: u32 =
+    MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1;
 
 /// A reducible entity named by [`ParliamentReducerErrorV1`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -105,6 +115,10 @@ pub enum ParliamentReducerErrorV1 {
     RetrySequenceMismatch,
     /// An end-to-end governance attempt exceeded the hard V1 retry ceiling.
     GovernanceAttemptRetryLimitExceeded,
+    /// Fresh sortition or timed-OVN retries exhausted the proposal-wide V1 redraw budget.
+    RandomnessRedrawLimitExceeded,
+    /// A successor attempt did not inherit the exact cumulative redraw count.
+    RandomnessRedrawLineageMismatch,
     /// A body election attempted to exceed the hard V1 retry ceiling.
     SortitionRetryLimitExceeded,
     /// A timed-OVN ballot's reserved heavy-work windows overlap another active ballot.
@@ -229,6 +243,12 @@ impl fmt::Display for ParliamentReducerErrorV1 {
             Self::RetrySequenceMismatch => f.write_str("retry sequence mismatch"),
             Self::GovernanceAttemptRetryLimitExceeded => {
                 f.write_str("Parliament governance-attempt retry limit exceeded")
+            }
+            Self::RandomnessRedrawLimitExceeded => {
+                f.write_str("Parliament proposal randomness-redraw budget exhausted")
+            }
+            Self::RandomnessRedrawLineageMismatch => {
+                f.write_str("Parliament proposal randomness-redraw lineage mismatch")
             }
             Self::SortitionRetryLimitExceeded => {
                 f.write_str("Parliament sortition retry limit exceeded")
@@ -413,11 +433,16 @@ pub(crate) fn parliament_attempt_policy_v1(
     proposal: &ProposalKind,
 ) -> (RiskTierV1, Vec<RequiredParliamentBodyV1>) {
     let bodies: &[ParliamentBody] = match proposal {
-        ProposalKind::DeployContract(_) => &[
+        ProposalKind::DeployContract(_) | ProposalKind::ContractLifecycleGovernance(_) => &[
             ParliamentBody::RulesCommittee,
             ParliamentBody::AgendaCouncil,
             ParliamentBody::InterestPanel,
             ParliamentBody::ReviewPanel,
+            ParliamentBody::OversightCommittee,
+            ParliamentBody::PolicyJury,
+        ],
+        ProposalKind::ContractEmergencyHold(_) => &[
+            ParliamentBody::RulesCommittee,
             ParliamentBody::OversightCommittee,
             ParliamentBody::PolicyJury,
         ],
@@ -437,10 +462,12 @@ pub(crate) fn parliament_attempt_policy_v1(
             ParliamentBody::PolicyJury,
         ],
     };
-    let risk_tier = if matches!(proposal, ProposalKind::DeployContract(_)) {
-        RiskTierV1::Standard
-    } else {
-        RiskTierV1::Constitutional
+    let risk_tier = match proposal {
+        ProposalKind::DeployContract(_) | ProposalKind::ContractLifecycleGovernance(_) => {
+            RiskTierV1::Standard
+        }
+        ProposalKind::ContractEmergencyHold(_) => RiskTierV1::Emergency,
+        _ => RiskTierV1::Constitutional,
     };
     let requirements = bodies
         .iter()
@@ -940,6 +967,13 @@ impl ParliamentBallotStateV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, JsonSerialize, JsonDeserialize)]
 pub struct ParliamentAttemptStateV1 {
     attempt: GovernanceAttemptV1,
+    /// Proposal-wide redraw units consumed before this attempt was created.
+    ///
+    /// This cumulative prefix prevents a terminal attempt from resetting the
+    /// grinding budget. The attempt's own usage is derived from its immutable
+    /// sortition generations and ballot-attempt sequence, so transport retries
+    /// over an existing request/session never increment it.
+    randomness_redraws_before_attempt: u32,
     policy_version: u64,
     sortition_pulse_delay_blocks: u64,
     effect_preimage_hash: [u8; 32],
@@ -1138,11 +1172,14 @@ fn ballot_failure_matches_state(
     {
         return false;
     }
-    if failure_kind != ParliamentBallotFailureKindV1::ConfirmationJuryCapacityUnavailable
-        && (ballot.opening_root.is_some()
-            || ballot.tally.is_some()
-            || ballot.outcome.is_some()
-            || ballot.eligible_confirmation_candidates.is_some())
+    if !matches!(
+        failure_kind,
+        ParliamentBallotFailureKindV1::ConfirmationJuryCapacityUnavailable
+            | ParliamentBallotFailureKindV1::RandomnessRedrawBudgetExhausted
+    ) && (ballot.opening_root.is_some()
+        || ballot.tally.is_some()
+        || ballot.outcome.is_some()
+        || ballot.eligible_confirmation_candidates.is_some())
     {
         return false;
     }
@@ -1228,7 +1265,8 @@ fn ballot_failure_matches_state(
                     _ => false,
                 }
         }
-        ParliamentBallotFailureKindV1::ConfirmationJuryCapacityUnavailable => {
+        ParliamentBallotFailureKindV1::ConfirmationJuryCapacityUnavailable
+        | ParliamentBallotFailureKindV1::RandomnessRedrawBudgetExhausted => {
             let Some(opening_height) = ballot.opening_height else {
                 return false;
             };
@@ -1247,7 +1285,15 @@ fn ballot_failure_matches_state(
                 && failure_height <= ballot.opening_deadline_height
                 && ballot
                     .eligible_confirmation_candidates
-                    .is_some_and(|count| count < 2)
+                    .is_some_and(|count| match failure_kind {
+                        ParliamentBallotFailureKindV1::ConfirmationJuryCapacityUnavailable => {
+                            count < 2
+                        }
+                        ParliamentBallotFailureKindV1::RandomnessRedrawBudgetExhausted => {
+                            count >= 2
+                        }
+                        _ => unreachable!("matched post-opening failure kind"),
+                    })
                 && tally.original_seats == ballot.attempt.original_seats
                 && Some(tally.accepted_ballots) == ballot.accepted_ballots
                 && Some(tally.accepted_ballots) == ballot.survivors
@@ -1381,6 +1427,41 @@ impl ParliamentAttemptStateV1 {
         expected_head: GovernanceExpectedHeadV1,
         required_bodies: Vec<RequiredParliamentBodyV1>,
     ) -> Result<Self, ParliamentReducerErrorV1> {
+        Self::try_new_with_randomness_redraws_before_attempt(
+            attempt,
+            0,
+            policy_version,
+            sortition_pulse_delay_blocks,
+            effect_preimage_hash,
+            expected_head,
+            required_bodies,
+        )
+    }
+
+    /// Construct an attempt with the exact proposal-wide redraw prefix inherited
+    /// from its terminal predecessor.
+    ///
+    /// Production attempt creation uses this constructor. Keeping the prefix in
+    /// the persisted reducer state makes nested retry exhaustion deterministic
+    /// across restart and prevents a successor governance attempt from resetting
+    /// its proposal's randomness budget.
+    ///
+    /// # Errors
+    /// Returns the same errors as [`Self::try_new`], plus a redraw-limit error
+    /// when the inherited prefix is already outside the V1 protocol bound.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the proposal retry prefix is an independent persisted binding"
+    )]
+    pub(crate) fn try_new_with_randomness_redraws_before_attempt(
+        attempt: GovernanceAttemptV1,
+        randomness_redraws_before_attempt: u32,
+        policy_version: u64,
+        sortition_pulse_delay_blocks: u64,
+        effect_preimage_hash: [u8; 32],
+        expected_head: GovernanceExpectedHeadV1,
+        required_bodies: Vec<RequiredParliamentBodyV1>,
+    ) -> Result<Self, ParliamentReducerErrorV1> {
         if attempt.id.as_bytes().iter().all(|byte| *byte == 0) {
             return Err(ParliamentReducerErrorV1::DuplicateOrZeroIdentifier(
                 ParliamentReducerEntityV1::GovernanceAttempt,
@@ -1391,6 +1472,12 @@ impl ParliamentAttemptStateV1 {
         }
         if attempt.sequence > MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1 {
             return Err(ParliamentReducerErrorV1::GovernanceAttemptRetryLimitExceeded);
+        }
+        if randomness_redraws_before_attempt > MAX_PARLIAMENT_RANDOMNESS_REDRAWS_V1
+            || (attempt.sequence > 0
+                && randomness_redraws_before_attempt >= MAX_PARLIAMENT_RANDOMNESS_REDRAWS_V1)
+        {
+            return Err(ParliamentReducerErrorV1::RandomnessRedrawLimitExceeded);
         }
         if attempt
             .proposal_content_id
@@ -1416,6 +1503,7 @@ impl ParliamentAttemptStateV1 {
         }
         Ok(Self {
             attempt,
+            randomness_redraws_before_attempt,
             policy_version,
             sortition_pulse_delay_blocks,
             effect_preimage_hash,
@@ -1446,6 +1534,93 @@ impl ParliamentAttemptStateV1 {
     #[must_use]
     pub const fn attempt(&self) -> &GovernanceAttemptV1 {
         &self.attempt
+    }
+
+    /// Return the proposal-wide redraw prefix frozen when this attempt began.
+    #[must_use]
+    pub(crate) const fn randomness_redraws_before_attempt(&self) -> u32 {
+        self.randomness_redraws_before_attempt
+    }
+
+    fn sortition_generation_slots_v1(&self) -> BTreeSet<ParliamentPulseSlotV1> {
+        self.elections
+            .values()
+            .map(|election| {
+                ParliamentPulseSlotV1::new(
+                    election.attempt.request.beacon_session_id,
+                    election.attempt.request.pulse_height,
+                )
+            })
+            .chain(self.sortition_capacity_failures.values().map(|failure| {
+                ParliamentPulseSlotV1::new(failure.beacon_session_id, failure.pulse_height)
+            }))
+            .collect()
+    }
+
+    /// Return the cumulative proposal-wide count of adversarially selectable
+    /// randomness redraws after this attempt's current transcript.
+    ///
+    /// The first attempt's first simultaneous sortition slot is the baseline,
+    /// not a redraw. Every later fresh sortition slot (including a successor
+    /// attempt's first slot and a Confirmation Jury slot) and every ballot
+    /// attempt after sequence zero consumes one unit. Reducer continuations and
+    /// exact transport retransmissions create neither object and consume none.
+    ///
+    /// # Errors
+    /// Returns an error if counting overflows or exceeds the V1 proposal-wide
+    /// ceiling.
+    pub(crate) fn randomness_redraws_used_v1(&self) -> Result<u32, ParliamentReducerErrorV1> {
+        let sortition_generations = u32::try_from(self.sortition_generation_slots_v1().len())
+            .map_err(|_| ParliamentReducerErrorV1::RandomnessRedrawLimitExceeded)?;
+        let baseline_generations =
+            u32::from(self.attempt.sequence == 0 && sortition_generations > 0);
+        let sortition_redraws = sortition_generations
+            .checked_sub(baseline_generations)
+            .ok_or(ParliamentReducerErrorV1::RandomnessRedrawLineageMismatch)?;
+        let ballot_redraws = u32::try_from(
+            self.ballots
+                .values()
+                .filter(|ballot| ballot.attempt.sequence > 0)
+                .count(),
+        )
+        .map_err(|_| ParliamentReducerErrorV1::RandomnessRedrawLimitExceeded)?;
+        let used = self
+            .randomness_redraws_before_attempt
+            .checked_add(sortition_redraws)
+            .and_then(|used| used.checked_add(ballot_redraws))
+            .ok_or(ParliamentReducerErrorV1::RandomnessRedrawLimitExceeded)?;
+        if used > MAX_PARLIAMENT_RANDOMNESS_REDRAWS_V1 {
+            return Err(ParliamentReducerErrorV1::RandomnessRedrawLimitExceeded);
+        }
+        Ok(used)
+    }
+
+    fn ensure_sortition_generation_redraw_available_v1(
+        &self,
+        beacon_session_id: BeaconSessionId,
+        pulse_height: u64,
+    ) -> Result<(), ParliamentReducerErrorV1> {
+        let slot = ParliamentPulseSlotV1::new(beacon_session_id, pulse_height);
+        let generations = self.sortition_generation_slots_v1();
+        if generations.contains(&slot)
+            || (self.attempt.sequence == 0 && generations.is_empty())
+            || self.randomness_redraws_used_v1()? < MAX_PARLIAMENT_RANDOMNESS_REDRAWS_V1
+        {
+            return Ok(());
+        }
+        Err(ParliamentReducerErrorV1::RandomnessRedrawLimitExceeded)
+    }
+
+    fn ensure_ballot_redraw_available_v1(
+        &self,
+        sequence: u32,
+    ) -> Result<(), ParliamentReducerErrorV1> {
+        if sequence == 0
+            || self.randomness_redraws_used_v1()? < MAX_PARLIAMENT_RANDOMNESS_REDRAWS_V1
+        {
+            return Ok(());
+        }
+        Err(ParliamentReducerErrorV1::RandomnessRedrawLimitExceeded)
     }
 
     /// Return whether this immutable attempt currently retains `member` in a
@@ -2104,6 +2279,39 @@ impl ParliamentAttemptStateV1 {
     }
 }
 
+/// Validate the cumulative randomness-redraw prefix across one proposal's
+/// complete, sequence-ordered attempt history.
+///
+/// # Errors
+/// Returns an error when the first attempt does not start at zero, a successor
+/// does not inherit its predecessor's exact terminal count, proposals are
+/// mixed, or any attempt exceeds the V1 cumulative ceiling.
+pub(crate) fn validate_parliament_randomness_redraw_lineage_v1<'a>(
+    attempts: impl IntoIterator<Item = &'a ParliamentAttemptStateV1>,
+) -> Result<(), ParliamentReducerErrorV1> {
+    let mut attempts = attempts.into_iter().collect::<Vec<_>>();
+    attempts.sort_unstable_by_key(|attempt| attempt.attempt.sequence);
+    let Some(first) = attempts.first().copied() else {
+        return Ok(());
+    };
+    let proposal_content_id = first.proposal_content_id();
+    let mut expected_prefix = 0;
+    for attempt in attempts {
+        if attempt.proposal_content_id() != proposal_content_id
+            || attempt.randomness_redraws_before_attempt != expected_prefix
+        {
+            return Err(ParliamentReducerErrorV1::RandomnessRedrawLineageMismatch);
+        }
+        if attempt.attempt.sequence > 0
+            && attempt.randomness_redraws_before_attempt >= MAX_PARLIAMENT_RANDOMNESS_REDRAWS_V1
+        {
+            return Err(ParliamentReducerErrorV1::RandomnessRedrawLimitExceeded);
+        }
+        expected_prefix = attempt.randomness_redraws_used_v1()?;
+    }
+    Ok(())
+}
+
 include!("parliament/reducer_sortition.rs");
 include!("parliament/reducer_deliberation.rs");
 include!("parliament/reducer_ballot.rs");
@@ -2151,7 +2359,7 @@ pub(crate) mod tests {
         state::{State, World},
         tle_release::{
             ParliamentTimedOvnCastingPhaseV1, TimedOvnCastingAuthorizationErrorV1,
-            TleKeySessionPublicStateV1, ValidatedTleKeySessionV1,
+            TleKeySessionLifecycleV1, TleKeySessionPublicStateV1, ValidatedTleKeySessionV1,
             authorize_parliament_timed_ovn_casting_context_v1,
             derive_parliament_timed_ovn_casting_snapshot_v1,
         },

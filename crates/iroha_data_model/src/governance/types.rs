@@ -500,6 +500,12 @@ pub enum ProposalKind {
     /// Establish, replace, or remove one `SoraFS` provider owner through governance.
     #[codec(index = 6)]
     SorafsProviderGovernance(SorafsProviderGovernanceProposal),
+    /// Apply one owner-consented contract lifecycle transition.
+    #[codec(index = 7)]
+    ContractLifecycleGovernance(ContractLifecycleGovernanceProposalV1),
+    /// Impose one narrow, time-bounded emergency execution hold.
+    #[codec(index = 8)]
+    ContractEmergencyHold(ContractEmergencyHoldProposalV1),
 }
 /// Proposal payload for deploying an IVM contract via governance.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -520,6 +526,137 @@ pub struct DeployContractProposal {
     /// Optional manifest provenance used to attest the manifest when absent on-chain.
     #[norito(required)]
     pub manifest_provenance: Option<ManifestProvenance>,
+}
+/// Owner-consented lifecycle action available to Parliament.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct ActivateContractGovernanceActionV1 {
+    /// Exact compiled artifact hash.
+    pub code_hash: ContractCodeHash,
+    /// Exact ABI surface hash.
+    pub abi_hash: ContractAbiHash,
+    /// ABI version (currently `1`).
+    pub abi_version: AbiVersion,
+    /// Optional provenance used when the manifest is absent on-chain.
+    #[norito(required)]
+    pub manifest_provenance: Option<ManifestProvenance>,
+}
+/// Payload for a governed contract deactivation.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct DeactivateContractGovernanceActionV1 {
+    /// Exact active code hash expected by the proposal.
+    pub expected_code_hash: ContractCodeHash,
+    /// Optional audit reason.
+    pub reason: Option<String>,
+}
+/// Payload for a Parliament-owned contract's ownership offer.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct OfferContractOwnershipGovernanceActionV1 {
+    /// Proposed account owner.
+    pub new_owner: AccountId,
+}
+/// Payload completing the mandatory retrospective for one expired emergency hold.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct CompleteContractEmergencyHoldRetrospectiveGovernanceActionV1 {
+    /// Exact proposal content identifier retained by the hold being reviewed.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    pub hold_proposal_content_id: [u8; 32],
+    /// Exact governance-attempt identifier retained by the hold being reviewed.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    pub hold_governance_attempt_id: [u8; 32],
+    /// Exact incident digest retained by the hold being reviewed.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    pub incident_digest: [u8; 32],
+    /// Non-zero root of Parliament's certified retrospective finding.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    pub retrospective_finding_root: [u8; 32],
+}
+/// Certificate-enacted lifecycle action available to Parliament.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[norito(tag = "action", content = "payload", deny_unknown_fields)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub enum ContractLifecycleGovernanceActionV1 {
+    /// Activate or replace the contract's code.
+    #[codec(index = 0)]
+    Activate(ActivateContractGovernanceActionV1),
+    /// Deactivate the currently active code.
+    #[codec(index = 1)]
+    Deactivate(DeactivateContractGovernanceActionV1),
+    /// Offer Parliament-owned lifecycle authority to an account.
+    #[codec(index = 2)]
+    OfferOwnership(OfferContractOwnershipGovernanceActionV1),
+    /// Cancel Parliament's outstanding ownership offer.
+    #[codec(index = 3)]
+    CancelOwnershipOffer,
+    /// Accept an account owner's outstanding offer to Parliament.
+    #[codec(index = 4)]
+    AcceptParliamentOwnership,
+    /// Complete the certified retrospective for one expired emergency hold.
+    #[codec(index = 5)]
+    CompleteEmergencyHoldRetrospective(
+        CompleteContractEmergencyHoldRetrospectiveGovernanceActionV1,
+    ),
+}
+
+/// Complete compare-and-swap proposal for a certificate-enacted lifecycle transition.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct ContractLifecycleGovernanceProposalV1 {
+    /// Contract whose lifecycle changes.
+    pub contract_address: ContractAddress,
+    /// Exact lifecycle revision required at enactment.
+    pub expected_revision: u64,
+    /// Closed lifecycle action; any variant is applied only by exact-due certificate execution.
+    pub action: ContractLifecycleGovernanceActionV1,
+}
+
+/// Complete emergency-containment proposal for one active contract.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct ContractEmergencyHoldProposalV1 {
+    /// Contract whose execution is contained.
+    pub contract_address: ContractAddress,
+    /// Exact lifecycle revision required at enactment.
+    pub expected_revision: u64,
+    /// Exact active code hash required at enactment.
+    pub expected_code_hash: ContractCodeHash,
+    /// Non-zero digest of the incident evidence.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    pub incident_digest: [u8; 32],
+    /// Human-readable containment reason.
+    pub reason: String,
+    /// Hold duration, bounded by `MAX_CONTRACT_EMERGENCY_HOLD_BLOCKS_V1`.
+    pub duration_blocks: u64,
 }
 /// Proposal payload for scheduling a runtime upgrade through governance.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -1706,7 +1843,8 @@ pub enum BallotAttemptStatusV1 {
 /// Invalid caller-supplied proofs are rejected and never become lifecycle
 /// state. These reasons are reserved for objective terminal conditions derived
 /// from persisted state: phase expiry, an unavailable finalized release pulse,
-/// or insufficient fresh Confirmation Jury capacity after a narrow opening.
+/// insufficient fresh Confirmation Jury capacity after a narrow opening, or
+/// exhaustion of the proposal-wide randomness-redraw budget needed to draw it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -1732,6 +1870,10 @@ pub enum ParliamentBallotFailureKindV1 {
     /// Fewer than two eligible citizens remained outside the sealed Policy Jury.
     #[codec(index = 5)]
     ConfirmationJuryCapacityUnavailable,
+    /// A narrow Policy approval required a fresh Confirmation Jury after the
+    /// proposal-wide randomness-redraw budget was exhausted.
+    #[codec(index = 6)]
+    RandomnessRedrawBudgetExhausted,
 }
 
 /// Closed audit classification for every Parliament body that ends without a result.
@@ -1773,6 +1915,9 @@ pub enum ParliamentNoResultKindV1 {
     /// A narrow Policy Jury result had fewer than two eligible fresh confirmers.
     #[codec(index = 8)]
     ConfirmationJuryCapacityUnavailable,
+    /// A required fresh Confirmation draw exceeded the proposal-wide redraw budget.
+    #[codec(index = 9)]
+    RandomnessRedrawBudgetExhausted,
 }
 
 impl From<ParliamentBallotFailureKindV1> for ParliamentNoResultKindV1 {
@@ -1795,6 +1940,9 @@ impl From<ParliamentBallotFailureKindV1> for ParliamentNoResultKindV1 {
             }
             ParliamentBallotFailureKindV1::ConfirmationJuryCapacityUnavailable => {
                 Self::ConfirmationJuryCapacityUnavailable
+            }
+            ParliamentBallotFailureKindV1::RandomnessRedrawBudgetExhausted => {
+                Self::RandomnessRedrawBudgetExhausted
             }
         }
     }
@@ -2385,6 +2533,8 @@ pub enum GovernanceCertificateErrorV1 {
     InvalidPublicFinding,
     /// A successful certificate carried a rejected, no-quorum, or no-result ballot.
     NonApprovingBallot,
+    /// An emergency Policy Jury lacked affirmative votes from two thirds of original seats.
+    EmergencyPolicyJuryThreshold,
     /// The stored tally was malformed.
     InvalidTally(ParliamentTallyErrorV1),
     /// The stored outcome disagreed with the deterministic tally decision.
@@ -2433,6 +2583,9 @@ impl fmt::Display for GovernanceCertificateErrorV1 {
             Self::NonApprovingBallot => {
                 f.write_str("successful governance certificate contains a non-approving ballot")
             }
+            Self::EmergencyPolicyJuryThreshold => f.write_str(
+                "emergency Policy Jury requires affirmative votes from two thirds of original seats",
+            ),
             Self::InvalidTally(error) => write!(f, "invalid governance tally: {error}"),
             Self::TallyOutcomeMismatch => {
                 f.write_str("governance ballot outcome does not match its aggregate tally")
@@ -2702,6 +2855,12 @@ impl GovernanceCertificateV1 {
                 if decision != ParliamentAggregateOutcomeV1::Approved {
                     return Err(GovernanceCertificateErrorV1::NonApprovingBallot);
                 }
+                if self.risk_tier == RiskTierV1::Emergency
+                    && binding.body == ParliamentBody::PolicyJury
+                    && ballot.tally.aye < parliament_quorum_seats_v1(binding.original_seats)
+                {
+                    return Err(GovernanceCertificateErrorV1::EmergencyPolicyJuryThreshold);
+                }
             }
 
             match binding.body {
@@ -2813,6 +2972,21 @@ impl ProposalKind {
             Self::DeployContract(_)
             | Self::ValidationFeePolicy(_)
             | Self::ValidationFeePayoutLifecycle(_) => None,
+            Self::ContractLifecycleGovernance(proposal) => (proposal.expected_revision > maximum)
+                .then_some(
+                    "contract lifecycle expected revision exceeds the exact JSON integer maximum",
+                ),
+            Self::ContractEmergencyHold(proposal) => {
+                if proposal.expected_revision > maximum {
+                    Some(
+                        "contract emergency-hold expected revision exceeds the exact JSON integer maximum",
+                    )
+                } else if proposal.duration_blocks > maximum {
+                    Some("contract emergency-hold duration exceeds the exact JSON integer maximum")
+                } else {
+                    None
+                }
+            }
             Self::RuntimeUpgrade(proposal) => {
                 if proposal.manifest.start_height > maximum {
                     Some(
@@ -2854,6 +3028,12 @@ impl ProposalKind {
             Self::SorafsProviderGovernance(_) => {
                 crate::governance_fingerprint::SORAFS_PROVIDER_GOVERNANCE_V1
             }
+            Self::ContractLifecycleGovernance(_) => {
+                crate::governance_fingerprint::CONTRACT_LIFECYCLE_GOVERNANCE_V1
+            }
+            Self::ContractEmergencyHold(_) => {
+                crate::governance_fingerprint::CONTRACT_EMERGENCY_HOLD_V1
+            }
         };
         crate::governance_fingerprint::fingerprint(domain, self)
     }
@@ -2885,6 +3065,12 @@ impl ProposalKind {
     pub fn governed_subject_id_v1(&self) -> Result<[u8; 32], norito::Error> {
         let subject = match self {
             Self::DeployContract(proposal) => {
+                GovernanceSubjectPreimageV1::Contract(proposal.contract_address.clone())
+            }
+            Self::ContractLifecycleGovernance(proposal) => {
+                GovernanceSubjectPreimageV1::Contract(proposal.contract_address.clone())
+            }
+            Self::ContractEmergencyHold(proposal) => {
                 GovernanceSubjectPreimageV1::Contract(proposal.contract_address.clone())
             }
             Self::RuntimeUpgrade(proposal) => {
@@ -2988,6 +3174,59 @@ mod tests {
         assert_eq!(parsed, hash);
     }
     #[test]
+    fn contract_lifecycle_and_emergency_fingerprints_are_kind_separated() {
+        let owner = checked_account_id();
+        let network: NetworkId =
+            "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("network id");
+        let address =
+            ContractAddress::derive(&network, &owner, 9, crate::nexus::DataSpaceId::UNIVERSAL)
+                .expect("contract address");
+        let lifecycle =
+            ProposalKind::ContractLifecycleGovernance(ContractLifecycleGovernanceProposalV1 {
+                contract_address: address.clone(),
+                expected_revision: 1,
+                action: ContractLifecycleGovernanceActionV1::CancelOwnershipOffer,
+            });
+        let emergency = ProposalKind::ContractEmergencyHold(ContractEmergencyHoldProposalV1 {
+            contract_address: address,
+            expected_revision: 1,
+            expected_code_hash: ContractCodeHash::new([7; 32]),
+            incident_digest: [8; 32],
+            reason: "containment".to_owned(),
+            duration_blocks: 10,
+        });
+        assert_ne!(lifecycle.fingerprint(), emergency.fingerprint());
+        assert_eq!(
+            lifecycle.governed_subject_id_v1().expect("subject"),
+            emergency.governed_subject_id_v1().expect("subject")
+        );
+    }
+    #[test]
+    fn emergency_hold_retrospective_action_is_append_only_and_binding_complete() {
+        let action = ContractLifecycleGovernanceActionV1::CompleteEmergencyHoldRetrospective(
+            CompleteContractEmergencyHoldRetrospectiveGovernanceActionV1 {
+                hold_proposal_content_id: [0x11; 32],
+                hold_governance_attempt_id: [0x22; 32],
+                incident_digest: [0x33; 32],
+                retrospective_finding_root: [0x44; 32],
+            },
+        );
+        let encoded = action.encode();
+        assert_eq!(
+            encoded.get(..4),
+            Some(5_u32.to_le_bytes().as_slice()),
+            "the retrospective action must retain its append-only Norito index"
+        );
+        let framed = norito::to_bytes(&action).expect("encode retrospective action");
+        assert_eq!(
+            norito::decode_from_bytes::<ContractLifecycleGovernanceActionV1>(&framed)
+                .expect("decode retrospective action"),
+            action
+        );
+    }
+    #[test]
     fn hash_parse_rejects_wrong_length() {
         let err =
             ContractAbiHash::from_hex_str("deadbeef").expect_err("length mismatch should error");
@@ -3089,6 +3328,10 @@ mod tests {
                 ParliamentBallotFailureKindV1::ConfirmationJuryCapacityUnavailable,
                 ParliamentNoResultKindV1::ConfirmationJuryCapacityUnavailable,
             ),
+            (
+                ParliamentBallotFailureKindV1::RandomnessRedrawBudgetExhausted,
+                ParliamentNoResultKindV1::RandomnessRedrawBudgetExhausted,
+            ),
         ];
         for (index, (ballot, audit)) in cases.into_iter().enumerate() {
             assert_eq!(ParliamentNoResultKindV1::from(ballot), audit);
@@ -3098,7 +3341,7 @@ mod tests {
                     .expect("ballot failure index fits u32")
                     .to_le_bytes()
             );
-            let expected_audit_index = if index == 5 { 8 } else { index + 2 };
+            let expected_audit_index = if index >= 5 { index + 3 } else { index + 2 };
             assert_eq!(
                 audit.encode(),
                 u32::try_from(expected_audit_index)
@@ -3151,6 +3394,12 @@ mod tests {
             }
             ProposalKind::SorafsProviderGovernance(_) => {
                 panic!("unexpected SoraFS provider-governance proposal")
+            }
+            ProposalKind::ContractLifecycleGovernance(_) => {
+                panic!("unexpected contract-lifecycle proposal")
+            }
+            ProposalKind::ContractEmergencyHold(_) => {
+                panic!("unexpected contract emergency-hold proposal")
             }
         }
     }
@@ -3290,6 +3539,12 @@ mod tests {
             }
             ProposalKind::SorafsProviderGovernance(_) => {
                 panic!("unexpected SoraFS provider-governance proposal")
+            }
+            ProposalKind::ContractLifecycleGovernance(_) => {
+                panic!("unexpected contract-lifecycle proposal")
+            }
+            ProposalKind::ContractEmergencyHold(_) => {
+                panic!("unexpected contract emergency-hold proposal")
             }
         }
     }
@@ -3969,6 +4224,38 @@ mod tests {
         certificate
             .validate()
             .expect("wide Policy Jury approval is a complete structural certificate");
+
+        let mut emergency = certificate.clone();
+        emergency.risk_tier = RiskTierV1::Emergency;
+        assert_eq!(
+            emergency.validate(),
+            Err(GovernanceCertificateErrorV1::EmergencyPolicyJuryThreshold)
+        );
+        let emergency_tally = ParliamentAggregateTallyV1 {
+            original_seats: 500,
+            accepted_ballots: 334,
+            aye: 334,
+            nay: 0,
+            abstain: 0,
+        };
+        let emergency_root = parliament_ballot_result_root_v1(
+            governance_attempt_id,
+            body_instance_id,
+            ballot_attempt_id,
+            opening_root,
+            emergency_tally,
+            outcome,
+            result_height,
+        );
+        emergency.body_bindings[0].result_root = emergency_root;
+        emergency.body_bindings[0]
+            .ballot
+            .as_mut()
+            .expect("fixture ballot")
+            .tally = emergency_tally;
+        emergency
+            .validate()
+            .expect("exact two-thirds original-seat aye threshold must approve emergency hold");
 
         let mut underprovisioned_commitment_window = certificate.clone();
         underprovisioned_commitment_window.body_bindings[0]

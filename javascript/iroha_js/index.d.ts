@@ -5160,6 +5160,52 @@ export interface ToriiGovernanceSorafsProviderProposal {
   action: ToriiGovernanceSorafsProviderAction;
 }
 
+export type ToriiGovernanceContractLifecycleAction = Readonly<
+  | {
+      action: "Activate";
+      payload: {
+        code_hash: string;
+        abi_hash: string;
+        abi_version: 1;
+        manifest_provenance: ToriiGovernanceManifestProvenance | null;
+      };
+    }
+  | {
+      action: "Deactivate";
+      payload: { expected_code_hash: string; reason: string | null };
+    }
+  | {
+      action: "OfferOwnership";
+      payload: { new_owner: string };
+    }
+  | { action: "CancelOwnershipOffer"; payload: null }
+  | { action: "AcceptParliamentOwnership"; payload: null }
+  | {
+      action: "CompleteEmergencyHoldRetrospective";
+      payload: {
+        hold_proposal_content_id: ReadonlyArray<number>;
+        hold_governance_attempt_id: ReadonlyArray<number>;
+        incident_digest: ReadonlyArray<number>;
+        retrospective_finding_root: ReadonlyArray<number>;
+      };
+    }
+>;
+
+export interface ToriiGovernanceContractLifecycleProposal {
+  contract_address: string;
+  expected_revision: number;
+  action: ToriiGovernanceContractLifecycleAction;
+}
+
+export interface ToriiGovernanceContractEmergencyHoldProposal {
+  contract_address: string;
+  expected_revision: number;
+  expected_code_hash: string;
+  incident_digest: ReadonlyArray<number>;
+  reason: string;
+  duration_blocks: number;
+}
+
 export interface ToriiGovernanceContractResponse {
   found: boolean;
   contract_address: string;
@@ -5195,6 +5241,14 @@ export type ToriiGovernanceProposalKind =
   | Readonly<{
       variant: "SorafsProviderGovernance";
       sorafs_provider_governance: ToriiGovernanceSorafsProviderProposal;
+    }>
+  | Readonly<{
+      variant: "ContractLifecycleGovernance";
+      contract_lifecycle_governance: ToriiGovernanceContractLifecycleProposal;
+    }>
+  | Readonly<{
+      variant: "ContractEmergencyHold";
+      contract_emergency_hold: ToriiGovernanceContractEmergencyHoldProposal;
     }>;
 
 export interface ToriiGovernanceProposalRecord {
@@ -5338,7 +5392,9 @@ export type ParliamentProposalTagV1 =
   | "ValidationFeePolicy"
   | "ValidationFeePayoutLifecycle"
   | "MusubiRegistryGovernance"
-  | "SorafsProviderGovernance";
+  | "SorafsProviderGovernance"
+  | "ContractLifecycleGovernance"
+  | "ContractEmergencyHold";
 
 export type ParliamentPublicTransitionTagV1 =
   | "EscalateRisk"
@@ -5386,7 +5442,9 @@ export type ParliamentNoResultKindTagV1 =
   | "BallotCommitmentDeadlineExpired"
   | "BallotReleasePulseUnavailable"
   | "BallotOpeningDeadlineExpired"
-  | "SortitionRetriesExhausted";
+  | "SortitionRetriesExhausted"
+  | "ConfirmationJuryCapacityUnavailable"
+  | "RandomnessRedrawBudgetExhausted";
 
 export interface ParliamentNoResultKindLayoutV1 {
   readonly noritoIndex: number;
@@ -5529,6 +5587,14 @@ export type ParliamentProposalV1 =
   | Readonly<{
       kind: "SorafsProviderGovernance";
       payload: { action: ParliamentSorafsProviderActionV1 };
+    }>
+  | Readonly<{
+      kind: "ContractLifecycleGovernance";
+      payload: ToriiGovernanceContractLifecycleProposal;
+    }>
+  | Readonly<{
+      kind: "ContractEmergencyHold";
+      payload: ToriiGovernanceContractEmergencyHoldProposal;
     }>;
 
 export type ParliamentLifecycleTransitionV1 =
@@ -8324,6 +8390,12 @@ export interface IsoMessageSubmissionResponseBase {
   payload_hash: string | null;
   reference_snapshot_id: string | null;
   embedded_signature_detected: boolean;
+  originator_participant_id: string | null;
+  counterparty_participant_id: string | null;
+  admitting_participant_id: string | null;
+  admitting_operator_key: string | null;
+  pinned_profile_id: string | null;
+  pinned_signature_policy: string | null;
   status_history: ReadonlyArray<IsoStatusHistoryEntry>;
   hold_reason_code: string | null;
   change_reason_codes: ReadonlyArray<string>;

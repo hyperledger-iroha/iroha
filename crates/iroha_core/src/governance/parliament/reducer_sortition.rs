@@ -154,7 +154,9 @@ impl ParliamentAttemptStateV1 {
                 candidate_snapshot.clone(),
             )?;
         }
-        if retry_budget_exhausted {
+        if retry_budget_exhausted
+            || next.randomness_redraws_used_v1()? == MAX_PARLIAMENT_RANDOMNESS_REDRAWS_V1
+        {
             next.attempt.status = GovernanceAttemptStatusV1::Rejected;
         }
         *self = next;
@@ -289,6 +291,10 @@ impl ParliamentAttemptStateV1 {
                 ParliamentReducerEntityV1::BodyElection,
             ));
         }
+        self.ensure_sortition_generation_redraw_available_v1(
+            request_intent.beacon_session_id,
+            request_intent.pulse_height,
+        )?;
 
         let election_predecessor = self.active_elections.get(&request_intent.body).copied();
         let capacity_predecessor = self
@@ -464,6 +470,10 @@ impl ParliamentAttemptStateV1 {
                 ParliamentReducerEntityV1::BodyElection,
             ));
         }
+        self.ensure_sortition_generation_redraw_available_v1(
+            request.beacon_session_id,
+            request.pulse_height,
+        )?;
         let last_consumed = self
             .used_pulse_slots
             .keys()
@@ -994,6 +1004,8 @@ impl ParliamentAttemptStateV1 {
         current_height: u64,
     ) -> Result<(), ParliamentReducerErrorV1> {
         self.ensure_active(governance_attempt_id)?;
+        let proposal_redraw_budget_exhausted =
+            self.randomness_redraws_used_v1()? == MAX_PARLIAMENT_RANDOMNESS_REDRAWS_V1;
         let election = self.elections.get(&election_attempt_id).ok_or(
             ParliamentReducerErrorV1::UnknownEntity(ParliamentReducerEntityV1::BodyElection),
         )?;
@@ -1018,7 +1030,7 @@ impl ParliamentAttemptStateV1 {
                 pending.failure_kind = Some(ParliamentElectionFailureKindV1::PulseUnavailable);
                 pending.failure_height = Some(current_height);
             }
-            if retry_budget_exhausted {
+            if retry_budget_exhausted || proposal_redraw_budget_exhausted {
                 self.attempt.status = GovernanceAttemptStatusV1::Rejected;
             }
             return Ok(());
@@ -1051,7 +1063,9 @@ impl ParliamentAttemptStateV1 {
         election.attempt.status = BodyElectionAttemptStatusV1::NoRoster;
         election.failure_kind = Some(failure_kind);
         election.failure_height = Some(current_height);
-        if election.attempt.sequence == MAX_PARLIAMENT_SORTITION_RETRIES_V1 {
+        if election.attempt.sequence == MAX_PARLIAMENT_SORTITION_RETRIES_V1
+            || proposal_redraw_budget_exhausted
+        {
             self.attempt.status = GovernanceAttemptStatusV1::Rejected;
         }
         Ok(())

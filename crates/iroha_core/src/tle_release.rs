@@ -67,10 +67,174 @@ pub use runtime::{TleReleaseCoordinatorErrorV1, TleReleaseCoordinatorV1};
 
 /// Fixed version of the public TLE key-session adapter.
 pub const TLE_KEY_SESSION_ADAPTER_VERSION_V1: u16 = 1;
+/// Fixed version of the consensus-enforced TLE key-session lifecycle record.
+pub const TLE_KEY_SESSION_LIFECYCLE_VERSION_V1: u16 = 1;
 /// Fixed version of the authenticated-broker public release projection.
 pub const TLE_AUTHORIZED_RELEASE_PROJECTION_VERSION_V1: u16 = 1;
 /// Exact byte length of the V1 application identity payload.
 pub const TLE_AUTHORIZED_RELEASE_IDENTITY_PAYLOAD_BYTES_V1: usize = 243;
+
+/// Closed failures for one persisted TLE key-session lifecycle record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum TleKeySessionLifecycleValidationErrorV1 {
+    /// The record does not use the sole first-release version.
+    #[error("unsupported TLE key-session lifecycle version")]
+    UnsupportedVersion,
+    /// The session identifier is the all-zero sentinel.
+    #[error("TLE key-session lifecycle uses the zero session identifier")]
+    ZeroKeySessionId,
+    /// Activation, expiry, or rotation bounds are empty or inverted.
+    #[error("TLE key-session lifecycle height bounds are invalid")]
+    InvalidHeightBounds,
+    /// The configured fresh-ballot budget is zero.
+    #[error("TLE key-session lifecycle fresh-ballot budget is zero")]
+    ZeroFreshBallotBudget,
+    /// The persisted use counter exceeds the immutable session ceiling.
+    #[error("TLE key-session lifecycle fresh-ballot counter exceeds its ceiling")]
+    FreshBallotBudgetExceeded,
+}
+
+/// Consensus-enforced lifecycle metadata for one adaptive TLE public key.
+///
+/// This record is deliberately separate from [`TleKeySessionPublicStateV1`]:
+/// rotation policy and use accounting therefore do not alter the public DKG
+/// transcript or the key-session identifier. Heights are inclusive. A
+/// rotation committed at height `H` shortens its predecessor through `H` and
+/// makes the successor selectable beginning at `H + 1`.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    NoritoSerialize,
+    NoritoDeserialize,
+    JsonSerialize,
+    JsonDeserialize,
+)]
+pub struct TleKeySessionLifecycleV1 {
+    /// Fixed lifecycle-record version.
+    pub version: u16,
+    /// Exact public key session governed by this record.
+    pub key_session_id: TleKeySessionId,
+    /// First finalized height at which a new ballot may select this session.
+    pub activation_height: u64,
+    /// Last finalized height allowed by the immutable lifetime policy.
+    pub expiry_height: u64,
+    /// Last finalized height before expiry or a certified rotation cutover.
+    pub selectable_through_height: u64,
+    /// Number of committed fresh ballot attempts that selected this session.
+    pub fresh_ballot_uses: u32,
+    /// Immutable ceiling on committed fresh ballot attempts for this session.
+    pub max_fresh_ballot_uses: u32,
+}
+
+impl TleKeySessionLifecycleV1 {
+    /// Construct the initial lifecycle record for a newly installed session.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed for a zero identifier, empty policy bound, or height
+    /// overflow.
+    pub fn new(
+        key_session_id: TleKeySessionId,
+        activation_height: u64,
+        lifetime_blocks: u64,
+        max_fresh_ballot_uses: u32,
+    ) -> Result<Self, TleKeySessionLifecycleValidationErrorV1> {
+        if key_session_id.as_bytes() == &[0; 32] {
+            return Err(TleKeySessionLifecycleValidationErrorV1::ZeroKeySessionId);
+        }
+        if activation_height == 0 || lifetime_blocks == 0 {
+            return Err(TleKeySessionLifecycleValidationErrorV1::InvalidHeightBounds);
+        }
+        if max_fresh_ballot_uses == 0 {
+            return Err(TleKeySessionLifecycleValidationErrorV1::ZeroFreshBallotBudget);
+        }
+        let expiry_height = activation_height
+            .checked_add(lifetime_blocks - 1)
+            .ok_or(TleKeySessionLifecycleValidationErrorV1::InvalidHeightBounds)?;
+        Ok(Self {
+            version: TLE_KEY_SESSION_LIFECYCLE_VERSION_V1,
+            key_session_id,
+            activation_height,
+            expiry_height,
+            selectable_through_height: expiry_height,
+            fresh_ballot_uses: 0,
+            max_fresh_ballot_uses,
+        })
+    }
+
+    /// Validate all persisted identity, height, and use-counter invariants.
+    ///
+    /// # Errors
+    ///
+    /// Returns a closed error for an unsupported version, zero identity,
+    /// inverted height interval, zero budget, or over-ceiling counter.
+    pub fn validate(self) -> Result<Self, TleKeySessionLifecycleValidationErrorV1> {
+        if self.version != TLE_KEY_SESSION_LIFECYCLE_VERSION_V1 {
+            return Err(TleKeySessionLifecycleValidationErrorV1::UnsupportedVersion);
+        }
+        if self.key_session_id.as_bytes() == &[0; 32] {
+            return Err(TleKeySessionLifecycleValidationErrorV1::ZeroKeySessionId);
+        }
+        if self.activation_height == 0
+            || self.expiry_height < self.activation_height
+            || self.selectable_through_height < self.activation_height
+            || self.selectable_through_height > self.expiry_height
+        {
+            return Err(TleKeySessionLifecycleValidationErrorV1::InvalidHeightBounds);
+        }
+        if self.max_fresh_ballot_uses == 0 {
+            return Err(TleKeySessionLifecycleValidationErrorV1::ZeroFreshBallotBudget);
+        }
+        if self.fresh_ballot_uses > self.max_fresh_ballot_uses {
+            return Err(TleKeySessionLifecycleValidationErrorV1::FreshBallotBudgetExceeded);
+        }
+        Ok(self)
+    }
+
+    /// Return whether a fresh ballot may select this session at `height`.
+    #[must_use]
+    pub fn permits_fresh_ballot_at(self, height: u64) -> bool {
+        self.validate().is_ok()
+            && (self.activation_height..=self.selectable_through_height).contains(&height)
+            && self.fresh_ballot_uses < self.max_fresh_ballot_uses
+    }
+
+    /// Shorten new-ballot selection through the certified rotation height.
+    ///
+    /// Already committed ballots retain the separate public session and
+    /// roster records; this method only closes future selection.
+    pub fn cut_over_after(
+        &mut self,
+        height: u64,
+    ) -> Result<(), TleKeySessionLifecycleValidationErrorV1> {
+        self.validate()?;
+        if height < self.activation_height {
+            return Err(TleKeySessionLifecycleValidationErrorV1::InvalidHeightBounds);
+        }
+        self.selectable_through_height = self.selectable_through_height.min(height);
+        self.validate()?;
+        Ok(())
+    }
+
+    /// Consume exactly one fresh-ballot use at an eligible finalized height.
+    pub fn consume_fresh_ballot(
+        &mut self,
+        height: u64,
+    ) -> Result<(), TleKeySessionLifecycleValidationErrorV1> {
+        if !self.permits_fresh_ballot_at(height) {
+            return Err(TleKeySessionLifecycleValidationErrorV1::FreshBallotBudgetExceeded);
+        }
+        self.fresh_ballot_uses = self
+            .fresh_ballot_uses
+            .checked_add(1)
+            .ok_or(TleKeySessionLifecycleValidationErrorV1::FreshBallotBudgetExceeded)?;
+        self.validate()?;
+        Ok(())
+    }
+}
 
 /// Public coefficient commitments and constant-term proof for one qualified dealer.
 #[derive(
@@ -1292,12 +1456,24 @@ fn is_zero(bytes: &[u8]) -> bool {
 #[cfg(test)]
 pub(crate) mod tests {
     use crate::{
+        governance::{
+            parliament::ParliamentAttemptStateV1,
+            timed_ovn::{TimedOvnSessionPublicV1, timed_ovn_parameter_hash_v1},
+        },
         kura::Kura,
         query::store::LiveQueryStore,
         state::{State, TLE_KEY_SESSION_SINGLETON_KEY, World},
     };
-    use iroha_crypto::threshold_bls::{
-        AdaptiveThresholdBlsSecretShare, DasRenDealerSecret, TleReleasePurpose,
+    use iroha_crypto::{
+        Hash, HashOf,
+        threshold_bls::{AdaptiveThresholdBlsSecretShare, DasRenDealerSecret, TleReleasePurpose},
+        timed_ovn::{TimedOvnChoiceV1, TimedOvnRegistrationSecretV1},
+    };
+    use iroha_data_model::{
+        block::BlockHeader,
+        governance::types::{
+            BeaconPulseId, ParliamentAggregateTallyV1, parliament_ballot_participant_hash_v1,
+        },
     };
     use norito::codec::{DecodeAll as _, Encode as _};
     use rand::{SeedableRng as _, rngs::StdRng};
@@ -1307,6 +1483,50 @@ pub(crate) mod tests {
 
     fn binding(byte: u8) -> [u8; 32] {
         [byte; 32]
+    }
+
+    #[test]
+    fn key_session_lifecycle_roundtrips_and_enforces_inclusive_bounds() {
+        let key_session_id = TleKeySessionId::new(binding(0xA7));
+        let mut lifecycle = TleKeySessionLifecycleV1::new(key_session_id, 10, 3, 2)
+            .expect("construct bounded lifecycle");
+        assert!(!lifecycle.permits_fresh_ballot_at(9));
+        assert!(lifecycle.permits_fresh_ballot_at(10));
+        assert!(lifecycle.permits_fresh_ballot_at(12));
+        assert!(!lifecycle.permits_fresh_ballot_at(13));
+
+        lifecycle
+            .consume_fresh_ballot(12)
+            .expect("inclusive expiry height remains selectable");
+        lifecycle
+            .consume_fresh_ballot(10)
+            .expect("second configured use remains selectable");
+        assert!(!lifecycle.permits_fresh_ballot_at(10));
+        assert_eq!(
+            lifecycle.consume_fresh_ballot(10),
+            Err(TleKeySessionLifecycleValidationErrorV1::FreshBallotBudgetExceeded)
+        );
+
+        let encoded = norito::encode_canonical(&lifecycle).expect("encode lifecycle");
+        let decoded = norito::decode_canonical::<TleKeySessionLifecycleV1>(&encoded)
+            .expect("decode lifecycle");
+        assert_eq!(decoded, lifecycle);
+    }
+
+    #[test]
+    fn key_session_lifecycle_cutover_is_inclusive_and_cannot_precede_activation() {
+        let key_session_id = TleKeySessionId::new(binding(0xA8));
+        let mut lifecycle = TleKeySessionLifecycleV1::new(key_session_id, 20, 10, 1)
+            .expect("construct bounded lifecycle");
+        assert_eq!(
+            lifecycle.cut_over_after(19),
+            Err(TleKeySessionLifecycleValidationErrorV1::InvalidHeightBounds)
+        );
+        lifecycle
+            .cut_over_after(24)
+            .expect("cut over after an active height");
+        assert!(lifecycle.permits_fresh_ballot_at(24));
+        assert!(!lifecycle.permits_fresh_ballot_at(25));
     }
 
     struct Fixture {
@@ -1407,6 +1627,258 @@ pub(crate) mod tests {
             identity,
             session,
         }
+    }
+
+    struct ReleaseAuthorizationFixture {
+        tle_key: ValidatedTleKeySessionV1,
+        registration_attempt: ParliamentAttemptStateV1,
+        opening_attempt: ParliamentAttemptStateV1,
+        lifecycle: TimedOvnLifecycleStateV1,
+        ballot_attempt_id: BallotAttemptId,
+        registration_opened_at_height: u64,
+        release_height: u64,
+        opening_deadline_height: u64,
+    }
+
+    fn release_authorization_fixture() -> ReleaseAuthorizationFixture {
+        release_authorization_fixture_with_proposal_binding(None)
+    }
+
+    fn release_authorization_fixture_with_proposal_binding(
+        proposal_content_id: Option<[u8; 32]>,
+    ) -> ReleaseAuthorizationFixture {
+        const PROPOSAL_TAG: u8 = 0x71;
+        const KEY_SESSION_TAG: u8 = 0x72;
+        const REGISTRATION_OPENED_AT_HEIGHT: u64 = 27;
+
+        let tle_fixture = fixture_for_binding(
+            binding(1),
+            KEY_SESSION_TAG,
+            binding(KEY_SESSION_TAG.wrapping_add(1)),
+        );
+        let tle_key = tle_fixture.validated;
+        let mut opening_attempt =
+            crate::governance::parliament::tests::active_timed_ovn_reservation_attempt_fixture_v1(
+                PROPOSAL_TAG,
+                KEY_SESSION_TAG,
+                REGISTRATION_OPENED_AT_HEIGHT,
+            );
+        let (
+            ballot_attempt_id,
+            body_instance_id,
+            release_beacon_session_id,
+            registration_close_height,
+            survivor_freeze_height,
+            commitment_close_height,
+            release_height,
+            opening_deadline_height,
+        ) = {
+            let (_, ballot) = opening_attempt
+                .ballot_attempts()
+                .next()
+                .expect("reservation fixture has one ballot");
+            (
+                ballot.attempt().id,
+                ballot.attempt().body_instance_id,
+                ballot
+                    .release_beacon_session_id()
+                    .expect("fixture release beacon session"),
+                ballot.registration_close_height(),
+                ballot.survivor_freeze_height(),
+                ballot.commitment_close_height(),
+                ballot.release_height().expect("fixture release height"),
+                ballot.opening_deadline_height(),
+            )
+        };
+        let registration_attempt = opening_attempt.clone();
+        assert_eq!(
+            tle_key.public_state().key_session_id,
+            opening_attempt
+                .ballot(&ballot_attempt_id)
+                .and_then(|ballot| ballot.tle_key_session_id())
+                .expect("fixture ballot TLE key session")
+        );
+
+        let governance_attempt_id = opening_attempt.attempt().id;
+        let session = TimedOvnSessionPublicV1 {
+            network_id: tle_key.public_state().network_id,
+            proposal_content_id: proposal_content_id
+                .unwrap_or_else(|| *opening_attempt.proposal_content_id().as_bytes()),
+            governance_attempt_id: *governance_attempt_id.as_bytes(),
+            body_instance_id: *body_instance_id.as_bytes(),
+            ballot_attempt_id: *ballot_attempt_id.as_bytes(),
+            parameter_hash: timed_ovn_parameter_hash_v1(),
+            tle_key_session_id: tle_key.public_state().key_session_id,
+            tle_key_transcript_hash: tle_key.public_state().transcript_hash,
+            tle_master_public_key: *tle_key.master_public_key().as_bytes(),
+        };
+        let crypto_session = session.rebuild(&tle_key).expect("timed-OVN session");
+        let mut rng = StdRng::from_seed([0x74; 32]);
+        let participant_hashes = opening_attempt
+            .body(&body_instance_id)
+            .expect("fixture ballot body")
+            .assignments()
+            .iter()
+            .map(|assignment| {
+                parliament_ballot_participant_hash_v1(ballot_attempt_id, &assignment.member)
+            })
+            .collect::<Vec<_>>();
+        let mut registrations = participant_hashes
+            .into_iter()
+            .map(|participant_hash| {
+                let (secret, registration) = TimedOvnRegistrationSecretV1::generate_with_rng(
+                    &crypto_session,
+                    participant_hash,
+                    &mut rng,
+                )
+                .expect("timed-OVN registration");
+                (participant_hash, secret, registration.to_bytes())
+            })
+            .collect::<Vec<_>>();
+        registrations.sort_unstable_by_key(|(participant_hash, _, _)| *participant_hash);
+
+        let mut lifecycle = TimedOvnLifecycleStateV1::open_registration(
+            session,
+            REGISTRATION_OPENED_AT_HEIGHT,
+            release_height,
+            &tle_key,
+        )
+        .expect("open timed-OVN registration");
+        for (participant_hash, _, registration) in &registrations {
+            lifecycle = lifecycle
+                .register_participant(*participant_hash, registration.clone(), &tle_key)
+                .expect("register timed-OVN participant");
+        }
+        lifecycle = lifecycle
+            .close_registration(&tle_key)
+            .expect("close timed-OVN registration");
+        lifecycle = lifecycle
+            .freeze_survivors(&tle_key)
+            .expect("freeze timed-OVN survivors");
+        let TimedOvnLifecycleStateV1::SurvivorsFrozen(frozen) = &lifecycle else {
+            unreachable!("survivor freeze returns the frozen phase");
+        };
+        let prepared = frozen
+            .validate(&tle_key)
+            .expect("validate frozen timed-OVN survivors");
+        let ballots = registrations
+            .iter()
+            .map(|(_, secret, _)| {
+                secret
+                    .cast_ballot_with_rng(
+                        prepared.survivor_roster(),
+                        TimedOvnChoiceV1::Aye,
+                        &mut rng,
+                    )
+                    .expect("cast timed-OVN ballot")
+                    .to_bytes()
+            })
+            .collect();
+        lifecycle = lifecycle
+            .seal_ballots(ballots, &tle_key)
+            .expect("seal timed-OVN corpus");
+        lifecycle
+            .validate(&tle_key)
+            .expect("sealed timed-OVN evidence replays");
+        let (reducer_binding, _) = lifecycle
+            .validated_parliament_reducer_binding(&tle_key)
+            .expect("derive Parliament reducer binding");
+
+        opening_attempt
+            .close_ballot_registration(
+                governance_attempt_id,
+                ballot_attempt_id,
+                reducer_binding
+                    .registration_root
+                    .expect("registration root"),
+                reducer_binding
+                    .registered_voters
+                    .expect("registered voter count"),
+                registration_close_height,
+            )
+            .expect("close Parliament registration");
+        opening_attempt
+            .freeze_ballot_survivors(
+                governance_attempt_id,
+                ballot_attempt_id,
+                reducer_binding.dropout_root.expect("dropout root"),
+                reducer_binding.survivor_root.expect("survivor root"),
+                reducer_binding.survivors.expect("survivor count"),
+                reducer_binding.no_recovery_root.expect("no-recovery root"),
+                survivor_freeze_height,
+            )
+            .expect("freeze Parliament survivors");
+        opening_attempt
+            .freeze_timed_ovn_corpus(
+                governance_attempt_id,
+                ballot_attempt_id,
+                reducer_binding.corpus_root.expect("corpus root"),
+                reducer_binding.survivor_root.expect("survivor root"),
+                reducer_binding
+                    .accepted_ballots
+                    .expect("accepted ballot count"),
+                reducer_binding
+                    .timed_commitment_root
+                    .expect("timed commitment root"),
+                commitment_close_height,
+            )
+            .expect("freeze Parliament timed-OVN corpus");
+        opening_attempt
+            .begin_ballot_opening_batch(
+                governance_attempt_id,
+                vec![ballot_attempt_id],
+                release_beacon_session_id,
+                release_height,
+                release_height,
+                BeaconPulseId::new(binding(0xF1)),
+            )
+            .expect("open Parliament ballot");
+        opening_attempt
+            .validate()
+            .expect("opening Parliament attempt is canonical");
+
+        ReleaseAuthorizationFixture {
+            tle_key,
+            registration_attempt,
+            opening_attempt,
+            lifecycle,
+            ballot_attempt_id,
+            registration_opened_at_height: REGISTRATION_OPENED_AT_HEIGHT,
+            release_height,
+            opening_deadline_height,
+        }
+    }
+
+    fn release_authorization_state(
+        attempt: ParliamentAttemptStateV1,
+        ballot_attempt_id: BallotAttemptId,
+        lifecycle: TimedOvnLifecycleStateV1,
+        key_session: Option<TleKeySessionPublicStateV1>,
+        finalized_height: u64,
+    ) -> State {
+        let mut world = World::new();
+        world
+            .parliament_attempts
+            .insert(attempt.attempt().id, attempt);
+        world
+            .timed_ovn_evidence
+            .insert(ballot_attempt_id, lifecycle);
+        if let Some(key_session) = key_session {
+            world
+                .tle_key_sessions
+                .insert(key_session.key_session_id, key_session);
+        }
+        let mut state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        for height in 0..finalized_height {
+            state.push_block_hash_for_testing(HashOf::<BlockHeader>::from_untyped_unchecked(
+                Hash::new(height.to_be_bytes()),
+            ));
+        }
+        state
     }
 
     fn runtime_signer(
@@ -1757,6 +2229,11 @@ pub(crate) mod tests {
             second_key_session_id,
             second.validated.public_state().clone(),
         );
+        world.tle_key_session_lifecycles.insert(
+            second_key_session_id,
+            TleKeySessionLifecycleV1::new(second_key_session_id, 1, 100, 1)
+                .expect("active custody fixture lifecycle"),
+        );
         world
             .tle_active_key_session
             .insert(TLE_KEY_SESSION_SINGLETON_KEY, second_key_session_id);
@@ -1965,6 +2442,254 @@ pub(crate) mod tests {
         assert_eq!(
             invalid.request_authorized_partial_release(&context),
             Err(TleReleaseCoordinatorErrorV1::InvalidSignerOutput)
+        );
+    }
+
+    #[test]
+    fn release_authorization_accepts_exact_committed_opening_state() {
+        let fixture = release_authorization_fixture();
+        let state = release_authorization_state(
+            fixture.opening_attempt.clone(),
+            fixture.ballot_attempt_id,
+            fixture.lifecycle.clone(),
+            Some(fixture.tle_key.public_state().clone()),
+            fixture.release_height,
+        );
+        let context =
+            authorize_parliament_tle_release_v1(&state.query_view(), fixture.ballot_attempt_id)
+                .expect("exact sealed opening state authorizes one release context");
+        assert_eq!(context.ballot_attempt_id(), fixture.ballot_attempt_id);
+        assert_eq!(context.finalized_height(), fixture.release_height);
+        assert_eq!(
+            context.opening_deadline_height(),
+            fixture.opening_deadline_height
+        );
+        assert_eq!(
+            context.session().public_state(),
+            fixture.tle_key.public_state()
+        );
+    }
+
+    #[test]
+    fn release_authorization_rejects_unsealed_and_invalid_key_state() {
+        let fixture = release_authorization_fixture();
+        let TimedOvnLifecycleStateV1::Sealed(sealed) = &fixture.lifecycle else {
+            unreachable!("authorization fixture retains sealed evidence");
+        };
+        let unsealed = TimedOvnLifecycleStateV1::open_registration(
+            sealed.session,
+            fixture.registration_opened_at_height,
+            fixture.release_height,
+            &fixture.tle_key,
+        )
+        .expect("reconstruct registration-open state");
+        let unsealed_state = release_authorization_state(
+            fixture.opening_attempt.clone(),
+            fixture.ballot_attempt_id,
+            unsealed,
+            Some(fixture.tle_key.public_state().clone()),
+            fixture.release_height,
+        );
+        assert_eq!(
+            authorize_parliament_tle_release_v1(
+                &unsealed_state.query_view(),
+                fixture.ballot_attempt_id,
+            )
+            .expect_err("unsealed evidence must not authorize a release share"),
+            TleReleaseAuthorizationErrorV1::TimedOvnNotSealed
+        );
+
+        let missing_state = release_authorization_state(
+            fixture.opening_attempt.clone(),
+            fixture.ballot_attempt_id,
+            fixture.lifecycle.clone(),
+            None,
+            fixture.release_height,
+        );
+        assert_eq!(
+            authorize_parliament_tle_release_v1(
+                &missing_state.query_view(),
+                fixture.ballot_attempt_id,
+            )
+            .expect_err("missing public key session must fail closed"),
+            TleReleaseAuthorizationErrorV1::MissingKeySession
+        );
+
+        let mut malformed_key_session = fixture.tle_key.public_state().clone();
+        malformed_key_session.version = malformed_key_session.version.wrapping_add(1);
+        let malformed_state = release_authorization_state(
+            fixture.opening_attempt,
+            fixture.ballot_attempt_id,
+            fixture.lifecycle,
+            Some(malformed_key_session),
+            fixture.release_height,
+        );
+        assert_eq!(
+            authorize_parliament_tle_release_v1(
+                &malformed_state.query_view(),
+                fixture.ballot_attempt_id,
+            )
+            .expect_err("malformed public key session must fail closed"),
+            TleReleaseAuthorizationErrorV1::KeySession(TleReleaseAdapterError::UnsupportedVersion)
+        );
+    }
+
+    #[test]
+    fn release_authorization_rejects_inactive_or_non_opening_attempts() {
+        let fixture = release_authorization_fixture();
+        let non_opening_state = release_authorization_state(
+            fixture.registration_attempt,
+            fixture.ballot_attempt_id,
+            fixture.lifecycle.clone(),
+            Some(fixture.tle_key.public_state().clone()),
+            fixture.release_height,
+        );
+        assert_eq!(
+            authorize_parliament_tle_release_v1(
+                &non_opening_state.query_view(),
+                fixture.ballot_attempt_id,
+            )
+            .expect_err("a registered ballot must not authorize release"),
+            TleReleaseAuthorizationErrorV1::BallotNotOpening
+        );
+
+        let mut inactive_attempt = fixture.opening_attempt;
+        let governance_attempt_id = inactive_attempt.attempt().id;
+        let ballot = inactive_attempt
+            .ballot(&fixture.ballot_attempt_id)
+            .expect("opening ballot");
+        let tle_session_id = ballot.tle_session_id().expect("sealed TLE session");
+        let original_seats = ballot.attempt().original_seats;
+        let (reducer_binding, _) = fixture
+            .lifecycle
+            .validated_parliament_reducer_binding(&fixture.tle_key)
+            .expect("sealed reducer binding");
+        let accepted_ballots = reducer_binding
+            .accepted_ballots
+            .expect("sealed accepted-ballot count");
+        inactive_attempt
+            .finalize_opened_ballot(
+                governance_attempt_id,
+                fixture.ballot_attempt_id,
+                reducer_binding.corpus_root.expect("sealed corpus root"),
+                reducer_binding
+                    .no_recovery_root
+                    .expect("sealed no-recovery root"),
+                tle_session_id,
+                binding(0xF2),
+                reducer_binding.survivors.expect("sealed survivor count"),
+                ParliamentAggregateTallyV1 {
+                    original_seats,
+                    accepted_ballots,
+                    aye: accepted_ballots,
+                    nay: 0,
+                    abstain: 0,
+                },
+                original_seats,
+                fixture.release_height,
+            )
+            .expect("finalize unanimous fixture ballot");
+        inactive_attempt
+            .construct_certificate(
+                governance_attempt_id,
+                fixture.release_height + 1,
+                fixture.release_height + 2,
+            )
+            .expect("certify completed fixture attempt");
+        inactive_attempt
+            .validate()
+            .expect("certified fixture attempt remains canonical");
+        let inactive_state = release_authorization_state(
+            inactive_attempt,
+            fixture.ballot_attempt_id,
+            fixture.lifecycle,
+            Some(fixture.tle_key.public_state().clone()),
+            fixture.release_height,
+        );
+        assert_eq!(
+            authorize_parliament_tle_release_v1(
+                &inactive_state.query_view(),
+                fixture.ballot_attempt_id,
+            )
+            .expect_err("a certified governance attempt must not authorize release"),
+            TleReleaseAuthorizationErrorV1::GovernanceAttemptNotActive
+        );
+    }
+
+    #[test]
+    fn release_authorization_rejects_cross_binding_and_outside_opening_window() {
+        let cross_bound = release_authorization_fixture_with_proposal_binding(Some(binding(0xFE)));
+        let TimedOvnLifecycleStateV1::Sealed(cross_bound_evidence) = &cross_bound.lifecycle else {
+            unreachable!("authorization fixture retains sealed evidence");
+        };
+        assert_ne!(
+            cross_bound.opening_attempt.proposal_content_id().as_bytes(),
+            &cross_bound_evidence.session.proposal_content_id
+        );
+        let cross_bound_state = release_authorization_state(
+            cross_bound.opening_attempt,
+            cross_bound.ballot_attempt_id,
+            cross_bound.lifecycle,
+            Some(cross_bound.tle_key.public_state().clone()),
+            cross_bound.release_height,
+        );
+        assert_eq!(
+            authorize_parliament_tle_release_v1(
+                &cross_bound_state.query_view(),
+                cross_bound.ballot_attempt_id,
+            )
+            .expect_err("cross-bound proposal state must fail closed"),
+            TleReleaseAuthorizationErrorV1::BindingMismatch
+        );
+
+        let fixture = release_authorization_fixture();
+        let early_state = release_authorization_state(
+            fixture.opening_attempt.clone(),
+            fixture.ballot_attempt_id,
+            fixture.lifecycle.clone(),
+            Some(fixture.tle_key.public_state().clone()),
+            fixture.release_height - 1,
+        );
+        assert_eq!(
+            authorize_parliament_tle_release_v1(
+                &early_state.query_view(),
+                fixture.ballot_attempt_id,
+            )
+            .expect_err("pre-target state must fail closed"),
+            TleReleaseAuthorizationErrorV1::ReleaseHeightNotReached
+        );
+
+        let deadline_state = release_authorization_state(
+            fixture.opening_attempt.clone(),
+            fixture.ballot_attempt_id,
+            fixture.lifecycle.clone(),
+            Some(fixture.tle_key.public_state().clone()),
+            fixture.opening_deadline_height,
+        );
+        let at_deadline = authorize_parliament_tle_release_v1(
+            &deadline_state.query_view(),
+            fixture.ballot_attempt_id,
+        )
+        .expect("opening deadline is inclusive");
+        assert_eq!(
+            at_deadline.finalized_height(),
+            fixture.opening_deadline_height
+        );
+
+        let expired_state = release_authorization_state(
+            fixture.opening_attempt,
+            fixture.ballot_attempt_id,
+            fixture.lifecycle,
+            Some(fixture.tle_key.public_state().clone()),
+            fixture.opening_deadline_height + 1,
+        );
+        assert_eq!(
+            authorize_parliament_tle_release_v1(
+                &expired_state.query_view(),
+                fixture.ballot_attempt_id,
+            )
+            .expect_err("post-deadline state must fail closed"),
+            TleReleaseAuthorizationErrorV1::OpeningDeadlinePassed
         );
     }
 

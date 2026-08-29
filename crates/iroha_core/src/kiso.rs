@@ -1159,6 +1159,8 @@ mod tests {
                     audit_export_dir: None,
                     embedded_signature_policy: None,
                     signer: None,
+                    participants: Vec::new(),
+                    audit_admin_keys: Vec::new(),
                     account_aliases: Vec::new(),
                     currency_assets: Vec::new(),
                     reference_data: iroha_config::parameters::actual::IsoReferenceData::default(),
@@ -1780,6 +1782,8 @@ mod tests {
                     iroha_config::parameters::defaults::governance::PARLIAMENT_PUBLIC_FINDING_PHASE_BLOCKS,
                 parliament_timed_ovn:
                     iroha_config::parameters::actual::ParliamentTimedOvn::default(),
+                parliament_tle_key_lifecycle:
+                    iroha_config::parameters::actual::ParliamentTleKeyLifecycle::default(),
                 parliament_tle_partial_release_signer_provider_handle: None,
                 parliament_tle_partial_release_signer_provider_revision: None,
                 parliament_tle_partial_release_signer_provider_policy_digest: None,

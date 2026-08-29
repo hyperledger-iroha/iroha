@@ -2114,6 +2114,37 @@ impl_default!(ParliamentTimedOvn => {
     policy.assert_valid();
     policy
 });
+/// Consensus-critical lifecycle bounds for adaptive Parliament TLE keys.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ParliamentTleKeyLifecycle {
+    /// Inclusive number of blocks during which the session may admit fresh ballots.
+    pub session_lifetime_blocks: u64,
+    /// Maximum committed fresh ballot attempts that may select one session.
+    pub max_fresh_ballots_per_session: u32,
+}
+impl ParliamentTleKeyLifecycle {
+    /// Fail closed unless both adaptive-corruption bounds are non-zero.
+    pub fn assert_valid(self) {
+        assert!(
+            self.session_lifetime_blocks > 0,
+            "governance.parliament_tle_key_lifecycle.session_lifetime_blocks must be non-zero"
+        );
+        assert!(
+            self.max_fresh_ballots_per_session > 0,
+            "governance.parliament_tle_key_lifecycle.max_fresh_ballots_per_session must be non-zero"
+        );
+    }
+}
+impl_default!(ParliamentTleKeyLifecycle => {
+    let policy = Self {
+        session_lifetime_blocks:
+            defaults::governance::parliament_tle_key_lifecycle::SESSION_LIFETIME_BLOCKS,
+        max_fresh_ballots_per_session:
+            defaults::governance::parliament_tle_key_lifecycle::MAX_FRESH_BALLOTS_PER_SESSION,
+    };
+    policy.assert_valid();
+    policy
+});
 /// Governance configuration (actual layer).
 #[derive(Debug, Clone)]
 pub struct Governance {
@@ -2205,6 +2236,8 @@ pub struct Governance {
     pub parliament_public_finding_phase_blocks: u64,
     /// Consensus-critical timed-OVN phase and resource policy.
     pub parliament_timed_ovn: ParliamentTimedOvn,
+    /// Consensus-critical activation, expiry, and fresh-use policy for TLE keys.
+    pub parliament_tle_key_lifecycle: ParliamentTleKeyLifecycle,
     /// Public deployment binding for the runtime-only Parliament TLE release-share signer.
     pub parliament_tle_partial_release_signer_provider_handle: Option<String>,
     /// Exact non-zero provider contract revision paired with the TLE signer handle.
@@ -2308,6 +2341,7 @@ impl_default!(Governance => {
             parliament_public_finding_phase_blocks:
                 defaults::governance::PARLIAMENT_PUBLIC_FINDING_PHASE_BLOCKS,
             parliament_timed_ovn: ParliamentTimedOvn::default(),
+            parliament_tle_key_lifecycle: ParliamentTleKeyLifecycle::default(),
             parliament_tle_partial_release_signer_provider_handle: None,
             parliament_tle_partial_release_signer_provider_revision: None,
             parliament_tle_partial_release_signer_provider_policy_digest: None,
@@ -11182,12 +11216,30 @@ pub struct IsoBridge {
     pub embedded_signature_policy: Option<String>,
     /// Optional signer configuration when enabled.
     pub signer: Option<IsoBridgeSigner>,
+    /// Mutually isolated institutions admitted to the ISO bridge.
+    pub participants: Vec<IsoBridgeParticipant>,
+    /// Operator request keys that may read every ISO record but may not mutate bridge state.
+    pub audit_admin_keys: Vec<PublicKey>,
     /// Mapping of IBANs to on-ledger account identifiers.
     pub account_aliases: Vec<IsoAccountAlias>,
     /// Mapping of currency codes to asset definitions.
     pub currency_assets: Vec<IsoCurrencyAsset>,
     /// Reference-data ingestion and refresh settings.
     pub reference_data: IsoReferenceData,
+}
+/// One institution admitted to the ISO 20022 bridge.
+#[derive(Debug, Clone)]
+pub struct IsoBridgeParticipant {
+    /// Stable, deployment-unique participant identifier.
+    pub id: String,
+    /// Operator request-signature keys owned by this participant.
+    pub operator_keys: Vec<PublicKey>,
+    /// BIC, LEI, or clearing-member identifiers owned by this participant.
+    pub financial_identifiers: Vec<String>,
+    /// Rail/profile identifiers this participant may use.
+    pub allowed_profiles: Vec<String>,
+    /// Bridge roles assigned to the participant (`originator` and/or `counterparty`).
+    pub roles: Vec<String>,
 }
 /// Operator-defined ISO bridge rail profile.
 #[derive(Debug, Clone)]

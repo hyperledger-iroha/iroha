@@ -846,8 +846,8 @@ def test_casting_proof_request_matches_shared_rust_golden() -> None:
         PARLIAMENT_GOVERNANCE_ATTEMPT_SEQUENCE_MAX_V1
     )
     assert fixture["no_result_kinds"][-1] == {
-        "norito_index": 8,
-        "json_tag": "ConfirmationJuryCapacityUnavailable",
+        "norito_index": 9,
+        "json_tag": "RandomnessRedrawBudgetExhausted",
     }
 
 
@@ -882,6 +882,23 @@ def test_attempt_read_accepts_confirmation_capacity_no_result() -> None:
     ).get_parliament_attempt_v1(ATTEMPT_ID, canonical_auth=_auth())
     assert parsed.raw["body_states"][0]["no_result_kind"] == {
         "reason": "ConfirmationJuryCapacityUnavailable"
+    }
+
+
+def test_attempt_read_accepts_randomness_redraw_budget_no_result() -> None:
+    payload = _attempt_read()
+    state = payload["body_states"][0]
+    state["body_instance_id"] = BODY_ID
+    state["status"] = {"status": "NoResult"}
+    state["no_result_kind"] = {"reason": "RandomnessRedrawBudgetExhausted"}
+    state["no_result_height"] = 20
+    session = RecordingSession()
+    session.queue(_json_response(payload))
+    parsed = ToriiClient(
+        "https://node.test", session=session
+    ).get_parliament_attempt_v1(ATTEMPT_ID, canonical_auth=_auth())
+    assert parsed.raw["body_states"][0]["no_result_kind"] == {
+        "reason": "RandomnessRedrawBudgetExhausted"
     }
 
 

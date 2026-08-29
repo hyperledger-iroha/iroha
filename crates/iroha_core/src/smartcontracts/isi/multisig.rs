@@ -445,6 +445,17 @@ fn rekey_account_id(
     new_account: &AccountId,
     home_domain: Option<&iroha_data_model::domain::DomainId>,
 ) -> Result<(), InstructionExecutionError> {
+    if let Some(contract) = crate::smartcontracts::code::contract_owned_or_pending_for_account(
+        &state_transaction.world,
+        old_account,
+    ) {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "cannot rekey account {old_account}: transfer or cancel its lifecycle ownership of contract `{contract}` first"
+            )
+            .into(),
+        ));
+    }
     if crate::smartcontracts::isi::escrow::is_protocol_escrow_custody_account(
         state_transaction,
         old_account,

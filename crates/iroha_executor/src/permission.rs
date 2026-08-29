@@ -172,6 +172,7 @@ declare_permissions! {
     iroha_executor_data_model::permission::offline::{CanManageOfflineDeviceAttestationPolicy},
     iroha_executor_data_model::permission::role::{CanManageRoles},
     iroha_executor_data_model::permission::trigger::{CanRegisterTrigger},
+    iroha_executor_data_model::permission::trigger::{CanRegisterGlobalDataTrigger},
     iroha_executor_data_model::permission::trigger::{CanUnregisterTrigger},
     iroha_executor_data_model::permission::trigger::{CanModifyTrigger},
     iroha_executor_data_model::permission::trigger::{CanExecuteTrigger},
@@ -242,6 +243,7 @@ impl AnyPermission {
                 | Self::CanRegisterDomain(_)
                 | Self::CanReadAllLedgerData(_)
                 | Self::CanReadRestrictedDataspace(_)
+                | Self::CanRegisterGlobalDataTrigger(_)
                 | Self::CanManageOfflineEscrow(_)
                 | Self::CanActivateKagemushaRecursiveReleaseV4(_)
                 | Self::CanManageOfflineDeviceAttestationPolicy(_)
@@ -1677,8 +1679,8 @@ pub mod trigger {
         query::{error::FindError, trigger::FindTriggers},
     };
     use iroha_executor_data_model::permission::trigger::{
-        CanExecuteTrigger, CanModifyTrigger, CanModifyTriggerMetadata, CanRegisterTrigger,
-        CanUnregisterTrigger,
+        CanExecuteTrigger, CanModifyTrigger, CanModifyTriggerMetadata,
+        CanRegisterGlobalDataTrigger, CanRegisterTrigger, CanUnregisterTrigger,
     };
     /// Check if `authority` is the owner of trigger.
     ///
@@ -1730,6 +1732,7 @@ pub mod trigger {
         }
     }
     impl_validate_grant_revoke_via!(super::account::Owner::from => CanRegisterTrigger);
+    impl_validate_grant_revoke_via!(OnlyGenesis::from => CanRegisterGlobalDataTrigger);
     impl_validate_grant_revoke_via!(Owner::from =>
         CanExecuteTrigger,
         CanUnregisterTrigger,

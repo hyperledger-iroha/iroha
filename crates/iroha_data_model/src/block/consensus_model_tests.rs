@@ -774,6 +774,49 @@ fn grouped_native_amx_commitment_fixture() -> LaneBlockCommitment {
     norito::json::from_value(commitment)
         .expect("decode Rust-owned grouped Native AMX lane commitment")
 }
+
+#[test]
+fn canonical_decode_limits_reject_recursive_native_amx_commitment_frames() {
+    let fixture = grouped_native_amx_commitment_fixture();
+    let mut empty = fixture.clone();
+    empty.native_amx_receipts.clear();
+    let receipt_template = fixture
+        .native_amx_receipts
+        .first()
+        .expect("grouped fixture contains a receipt")
+        .clone();
+    let leg_template = receipt_template
+        .legs
+        .first()
+        .expect("grouped fixture contains a participant leg")
+        .clone();
+
+    let mut nested = empty.clone();
+    for _ in 0..=norito::core::MAX_OWNED_VALUE_DECODE_DEPTH {
+        let mut leg = leg_template.clone();
+        leg.participant_settlement = nested;
+        let mut receipt = receipt_template.clone();
+        receipt.legs = vec![leg];
+        let mut outer = empty.clone();
+        outer.native_amx_receipts = vec![receipt];
+        nested = outer;
+    }
+
+    let encoded = norito::to_bytes(&nested).expect("encode recursive Native AMX fixture");
+    let error = norito::decode_from_bytes::<LaneBlockCommitment>(&encoded)
+        .expect_err("canonical decode must reject a recursive consensus value before exhaustion");
+    assert!(
+        matches!(
+            error,
+            norito::core::Error::NestingDepthExceeded {
+                limit: norito::core::MAX_OWNED_VALUE_DECODE_DEPTH,
+                context: "owned Norito value",
+                ..
+            }
+        ),
+        "unexpected canonical decode rejection: {error:?}"
+    );
+}
 #[expect(
     clippy::too_many_lines,
     reason = "this ordered fail-closed fixture validator follows the complete Native AMX evidence pipeline and preserves first-error intent across its canonical anchors"

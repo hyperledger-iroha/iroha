@@ -1441,9 +1441,9 @@ pub fn prove_halo2_ipa_ivm_execution_envelope(
         )?;
         preflight_halo2_ipa_processed_proving_key(&proving_key_raw, &parsed_vk, &params)?;
         let mut cursor = Cursor::new(proving_key_raw.as_slice());
-        let pk = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let pk = crate::panic_hook::catch_unwind_suppressed(|| {
             read_proving_key::<pasta_tiny::IvmExecutionBindV1, _>(&mut cursor)
-        }))
+        })
         .map_err(|_| "failed to decode proving key: Halo2 reader panicked".to_owned())?
         .map_err(|err| format!("failed to decode proving key: {err}"))?;
         let consumed = usize::try_from(cursor.position()).unwrap_or(usize::MAX);

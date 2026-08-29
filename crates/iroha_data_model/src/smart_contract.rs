@@ -136,6 +136,8 @@ pub const CONTRACT_HAJIMARI_PERMISSION_NAME: &str = "CanInvokeContractEntrypoint
 /// ABI V1 uses the same address-and-selector scoped invocation permission for
 /// lifecycle operations as it does for permissioned public entrypoints.
 pub const CONTRACT_KAIZEN_PERMISSION_NAME: &str = "CanInvokeContractEntrypoint";
+/// Maximum duration of a non-consensual Parliament emergency hold, in blocks.
+pub const MAX_CONTRACT_EMERGENCY_HOLD_BLOCKS_V1: u64 = 3_600;
 /// Canonical human-readable prefix for every Bech32m contract address.
 ///
 /// Exact genesis-derived network identity is committed inside the address digest. The presentation
@@ -171,6 +173,207 @@ mod model {
         pub contract_alias: Option<ContractAlias>,
         /// Code hash currently activated for this address.
         pub code_hash: iroha_crypto::Hash,
+    }
+    /// Authority that controls the mutable lifecycle of a deployed contract.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    #[norito(tag = "owner", content = "value", deny_unknown_fields)]
+    pub enum ContractLifecycleOwnerV1 {
+        /// Lifecycle changes are authorized by this account.
+        #[codec(index = 0)]
+        Account(AccountId),
+        /// Lifecycle changes are authorized only by a certified Parliament effect.
+        #[codec(index = 1)]
+        Parliament,
+    }
+    /// Immutable provenance payload for a direct contract deployment.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+    pub struct DirectContractDeploymentOriginV1 {
+        /// Account whose nonce derived the address.
+        pub deployer: AccountId,
+    }
+    /// Immutable provenance payload for a Parliament contract deployment.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+    pub struct ParliamentContractDeploymentOriginV1 {
+        /// Account that submitted the proposal.
+        pub proposer: AccountId,
+        /// Immutable proposal content identifier.
+        pub proposal_content_id: [u8; 32],
+        /// Successful governance-attempt identifier.
+        pub governance_attempt_id: [u8; 32],
+    }
+    /// Immutable provenance of a contract address's first deployment.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    #[norito(tag = "origin", content = "value", deny_unknown_fields)]
+    pub enum ContractDeploymentOriginV1 {
+        /// Direct deployment by an account.
+        #[codec(index = 0)]
+        Direct(DirectContractDeploymentOriginV1),
+        /// Deployment enacted by a certified Parliament proposal.
+        #[codec(index = 1)]
+        Parliament(ParliamentContractDeploymentOriginV1),
+    }
+    /// Revocable authority delegated by an account owner to Parliament.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    #[norito(tag = "delegation", content = "value", deny_unknown_fields)]
+    pub enum ContractParliamentDelegationV1 {
+        /// Parliament has no consensual lifecycle authority.
+        #[codec(index = 0)]
+        None,
+        /// Parliament may activate or deactivate the contract, but may not transfer ownership.
+        #[codec(index = 1)]
+        Lifecycle,
+    }
+    /// Time-bounded containment imposed by the Parliament emergency corridor.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct ContractEmergencyHoldV1 {
+        /// Non-zero digest of the incident evidence.
+        pub incident_digest: [u8; 32],
+        /// Certified proposal content identifier.
+        pub proposal_content_id: [u8; 32],
+        /// Certified governance-attempt identifier.
+        pub governance_attempt_id: [u8; 32],
+        /// Human-readable containment reason.
+        pub reason: String,
+        /// Block at which containment was imposed.
+        pub imposed_at_height: u64,
+        /// First block at which execution is allowed again.
+        pub expires_at_height: u64,
+    }
+    /// Consensus-persisted ownership and lifecycle-control record for one contract address.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct ContractLifecycleControlV1 {
+        /// Immutable first-deployment provenance.
+        pub origin: ContractDeploymentOriginV1,
+        /// Current lifecycle owner.
+        pub owner: ContractLifecycleOwnerV1,
+        /// Offered owner awaiting explicit acceptance.
+        pub pending_owner: Option<ContractLifecycleOwnerV1>,
+        /// Revocable consensual Parliament delegation.
+        pub parliament_delegation: ContractParliamentDelegationV1,
+        /// Code hash currently active at this address, or `None` while suspended.
+        pub active_code_hash: Option<iroha_crypto::Hash>,
+        /// Non-zero compare-and-swap revision.
+        pub revision: u64,
+        /// Optional time-bounded emergency containment.
+        pub emergency_hold: Option<ContractEmergencyHoldV1>,
+    }
+}
+
+impl ContractLifecycleControlV1 {
+    /// Construct a first-revision direct-deployment lifecycle record.
+    #[must_use]
+    pub fn direct(deployer: AccountId) -> Self {
+        Self {
+            origin: ContractDeploymentOriginV1::Direct(DirectContractDeploymentOriginV1 {
+                deployer: deployer.clone(),
+            }),
+            owner: ContractLifecycleOwnerV1::Account(deployer),
+            pending_owner: None,
+            parliament_delegation: ContractParliamentDelegationV1::None,
+            active_code_hash: None,
+            revision: 1,
+            emergency_hold: None,
+        }
+    }
+
+    /// Construct a first-revision Parliament-deployment lifecycle record.
+    #[must_use]
+    pub fn parliament(
+        proposer: AccountId,
+        proposal_content_id: [u8; 32],
+        governance_attempt_id: [u8; 32],
+    ) -> Self {
+        Self {
+            origin: ContractDeploymentOriginV1::Parliament(ParliamentContractDeploymentOriginV1 {
+                proposer,
+                proposal_content_id,
+                governance_attempt_id,
+            }),
+            owner: ContractLifecycleOwnerV1::Parliament,
+            pending_owner: None,
+            parliament_delegation: ContractParliamentDelegationV1::None,
+            active_code_hash: None,
+            revision: 1,
+            emergency_hold: None,
+        }
+    }
+
+    /// Validate context-free lifecycle invariants.
+    ///
+    /// # Errors
+    /// Returns a stable explanation when the record cannot be consensus-authoritative.
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.revision == 0 {
+            return Err("contract lifecycle revision must be non-zero");
+        }
+        if self.pending_owner.as_ref() == Some(&self.owner) {
+            return Err("pending contract owner must differ from current owner");
+        }
+        if self.owner == ContractLifecycleOwnerV1::Parliament
+            && self.parliament_delegation != ContractParliamentDelegationV1::None
+        {
+            return Err("Parliament-owned contract cannot carry delegated Parliament authority");
+        }
+        if matches!(
+            &self.origin,
+            ContractDeploymentOriginV1::Parliament(origin)
+                if origin.proposal_content_id == [0; 32]
+                    || origin.governance_attempt_id == [0; 32]
+        ) {
+            return Err("Parliament contract origin identifiers must be non-zero");
+        }
+        if let Some(hold) = &self.emergency_hold {
+            if hold.incident_digest == [0; 32]
+                || hold.proposal_content_id == [0; 32]
+                || hold.governance_attempt_id == [0; 32]
+                || hold.reason.trim().is_empty()
+                || hold.imposed_at_height == 0
+                || hold.expires_at_height <= hold.imposed_at_height
+                || hold.expires_at_height - hold.imposed_at_height
+                    > MAX_CONTRACT_EMERGENCY_HOLD_BLOCKS_V1
+            {
+                return Err("invalid contract emergency hold");
+            }
+        }
+        Ok(())
+    }
+
+    /// Return whether execution is contained at `height`.
+    #[must_use]
+    pub fn is_held_at(&self, height: u64) -> bool {
+        self.emergency_hold
+            .as_ref()
+            .is_some_and(|hold| height >= hold.imposed_at_height && height < hold.expires_at_height)
     }
 }
 struct ContractAliasSegments<'a> {
@@ -940,6 +1143,67 @@ mod contract_address_tests {
 /// Exact recursive schemas for public Kotodama entrypoint boundaries.
 pub mod entrypoint;
 // Smart contract manifest types and helpers.
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::*;
+    use iroha_crypto::KeyPair;
+
+    fn account() -> AccountId {
+        AccountId::new(
+            KeyPair::try_random()
+                .expect("generate lifecycle test key")
+                .public_key()
+                .clone(),
+        )
+    }
+
+    #[test]
+    fn lifecycle_control_enforces_revision_and_bounded_hold() {
+        let mut lifecycle = ContractLifecycleControlV1::direct(account());
+        assert!(lifecycle.validate().is_ok());
+        assert!(lifecycle.active_code_hash.is_none());
+        lifecycle.revision = 0;
+        assert_eq!(
+            lifecycle.validate(),
+            Err("contract lifecycle revision must be non-zero")
+        );
+        lifecycle.revision = 1;
+        lifecycle.active_code_hash = Some(iroha_crypto::Hash::new(b"active lifecycle code"));
+        lifecycle.emergency_hold = Some(ContractEmergencyHoldV1 {
+            incident_digest: [1; 32],
+            proposal_content_id: [2; 32],
+            governance_attempt_id: [3; 32],
+            reason: "containment".to_owned(),
+            imposed_at_height: 10,
+            expires_at_height: 10 + MAX_CONTRACT_EMERGENCY_HOLD_BLOCKS_V1,
+        });
+        assert!(lifecycle.validate().is_ok());
+        assert!(lifecycle.is_held_at(10));
+        assert!(lifecycle.is_held_at(3_609));
+        assert!(!lifecycle.is_held_at(3_610));
+        lifecycle
+            .emergency_hold
+            .as_mut()
+            .expect("hold")
+            .expires_at_height += 1;
+        assert_eq!(lifecycle.validate(), Err("invalid contract emergency hold"));
+    }
+
+    #[test]
+    fn lifecycle_control_norito_roundtrip_preserves_active_code_and_authority() {
+        let mut lifecycle = ContractLifecycleControlV1::direct(account());
+        lifecycle.active_code_hash = Some(iroha_crypto::Hash::new(b"lifecycle roundtrip"));
+        lifecycle.pending_owner = Some(ContractLifecycleOwnerV1::Parliament);
+        lifecycle.parliament_delegation = ContractParliamentDelegationV1::Lifecycle;
+        lifecycle.revision = 9;
+        let encoded = norito::to_bytes(&lifecycle).expect("encode lifecycle record");
+        let decoded: ContractLifecycleControlV1 =
+            norito::decode_from_bytes(&encoded).expect("decode lifecycle record");
+        assert_eq!(decoded, lifecycle);
+        assert!(decoded.validate().is_ok());
+    }
+}
+
 pub mod manifest {
     //! Manifest metadata for IVM smart contracts. It can be attached to a transaction's `metadata`
     //! under a well-known key for admission-time checks. When attached or registered, a V1 manifest

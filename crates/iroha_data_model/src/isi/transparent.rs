@@ -1481,6 +1481,26 @@ impl From<super::smart_contract_code::ActivateContractInstance> for super::Instr
         super::Instruction::into_instruction_box(Box::new(instruction))
     }
 }
+impl From<super::smart_contract_code::SetContractParliamentDelegation> for super::InstructionBox {
+    fn from(instruction: super::smart_contract_code::SetContractParliamentDelegation) -> Self {
+        super::Instruction::into_instruction_box(Box::new(instruction))
+    }
+}
+impl From<super::smart_contract_code::OfferContractOwnership> for super::InstructionBox {
+    fn from(instruction: super::smart_contract_code::OfferContractOwnership) -> Self {
+        super::Instruction::into_instruction_box(Box::new(instruction))
+    }
+}
+impl From<super::smart_contract_code::AcceptContractOwnership> for super::InstructionBox {
+    fn from(instruction: super::smart_contract_code::AcceptContractOwnership) -> Self {
+        super::Instruction::into_instruction_box(Box::new(instruction))
+    }
+}
+impl From<super::smart_contract_code::CancelContractOwnershipOffer> for super::InstructionBox {
+    fn from(instruction: super::smart_contract_code::CancelContractOwnershipOffer) -> Self {
+        super::Instruction::into_instruction_box(Box::new(instruction))
+    }
+}
 // Allow direct conversion for atomic contract deployment instruction
 impl From<super::smart_contract_code::CommitContractDeployment> for super::InstructionBox {
     fn from(instruction: super::smart_contract_code::CommitContractDeployment) -> Self {

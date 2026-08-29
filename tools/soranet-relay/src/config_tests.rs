@@ -10,6 +10,8 @@ use crate::{
 };
 use hex::FromHex;
 use iroha_crypto::KeyPair;
+use iroha_data_model::account::AccountId;
+use std::collections::BTreeSet;
 use tempfile::{NamedTempFile, TempDir};
 macro_rules! config_fixture {
     ($name:literal) => {
@@ -1186,6 +1188,8 @@ fn constant_rate_capability_returns_none_when_disabled() {
 }
 #[test]
 fn incentive_log_defaults_when_enabled() {
+    let verifier = KeyPair::try_from_seed(vec![0x91; 32], Algorithm::Ed25519)
+        .expect("derive trusted incentive verifier");
     let mut cfg = RelayConfig {
         mode: RelayMode::Entry,
         listen: "127.0.0.1:0".to_owned(),
@@ -1202,6 +1206,9 @@ fn incentive_log_defaults_when_enabled() {
             spool_dir: None,
             max_active_epochs: 0,
             max_measurements_per_epoch: 0,
+            trusted_verifier_ids: BTreeSet::from([AccountId::new(
+                verifier.public_key().clone(),
+            )]),
         }),
         exit_routing: ExitRoutingConfig::default(),
         vpn: None,
@@ -1231,6 +1238,7 @@ fn incentive_memory_geometry_accepts_exact_aggregate_and_rejects_max_plus_one() 
         max_active_epochs: INCENTIVE_MAX_ACTIVE_EPOCHS_V1,
         max_measurements_per_epoch: INCENTIVE_MAX_RETAINED_MEASUREMENTS_V1
             / INCENTIVE_MAX_ACTIVE_EPOCHS_V1,
+        trusted_verifier_ids: BTreeSet::new(),
     };
     exact.validate().expect("exact aggregate limit");
     let mut overflow = IncentiveLogConfig {
@@ -1240,6 +1248,21 @@ fn incentive_memory_geometry_accepts_exact_aggregate_and_rejects_max_plus_one() 
     assert!(matches!(
         overflow.validate(),
         Err(IncentiveLogError::Config(message)) if message.contains("aggregate")
+    ));
+}
+#[test]
+fn enabled_incentive_ingestion_rejects_an_empty_verifier_roster() {
+    let mut incentives = IncentiveLogConfig {
+        enable: true,
+        spool_dir: None,
+        max_active_epochs: 1,
+        max_measurements_per_epoch: 1,
+        trusted_verifier_ids: BTreeSet::new(),
+    };
+    assert!(matches!(
+        incentives.validate(),
+        Err(IncentiveLogError::Config(message))
+            if message.contains("trusted_verifier_ids") && message.contains("at least one")
     ));
 }
 #[test]

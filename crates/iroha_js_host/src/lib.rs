@@ -9018,6 +9018,7 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     parse_hash_value(code_hash_value, "ActivateContractInstance.code_hash")?;
                 let instruction = ActivateContractInstance {
                     contract_address,
+                    expected_revision: 1,
                     code_hash,
                 };
                 return Ok(Box::new(instruction).into_instruction_box());
@@ -9048,6 +9049,7 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                 )?;
                 let instruction = DeactivateContractInstance {
                     contract_address,
+                    expected_revision: 1,
                     reason,
                 };
                 return Ok(Box::new(instruction).into_instruction_box());
@@ -17280,6 +17282,7 @@ seiyaku Privacy {
         .expect("contract address");
         let instruction: InstructionBox = Box::new(ActivateContractInstance {
             contract_address,
+            expected_revision: 1,
             code_hash: Hash::prehashed(sample_hash(0x44)),
         })
         .into_instruction_box();

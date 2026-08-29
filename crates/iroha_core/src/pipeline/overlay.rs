@@ -5810,6 +5810,7 @@ seiyaku GuardedOverlayRebound {
         let error = build_single_effect_overlay(
             iroha_data_model::isi::smart_contract_code::DeactivateContractInstance {
                 contract_address: child_address.clone(),
+                expected_revision: 1,
                 reason: Some("nested authorization regression".to_owned()),
             }
             .into(),
@@ -9471,6 +9472,7 @@ seiyaku AliasBoundArguments {
             .into(),
             ActivateContractInstance {
                 contract_address,
+                expected_revision: 1,
                 code_hash,
             }
             .into(),

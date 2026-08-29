@@ -4299,6 +4299,17 @@ pub mod governance {
         /// Hard first-release corpus ceiling, matching the bounded timed-OVN decoder.
         pub const MAX_CORPUS_ENTRIES_LIMIT: u32 = 1_000;
     }
+    /// Adaptive-corruption bounds for one finalized Parliament TLE key session.
+    pub mod parliament_tle_key_lifecycle {
+        /// Inclusive new-ballot lifetime after the mandatory `H + 1` activation.
+        ///
+        /// This matches the default maximum four-attempt timed-OVN lifecycle.
+        /// Ballots committed before expiry retain their session through their
+        /// independently committed inclusive opening deadline.
+        pub const SESSION_LIFETIME_BLOCKS: u64 = 37_600;
+        /// Conservative V1 ceiling: every fresh ballot requires a fresh DKG key.
+        pub const MAX_FRESH_BALLOTS_PER_SESSION: u32 = 1;
+    }
     /// Default citizen service cooldown in blocks after accepting a seat.
     pub const CITIZEN_SEAT_COOLDOWN_BLOCKS: u64 = 0;
     /// Default maximum seats a single citizen may hold per epoch.

@@ -661,6 +661,18 @@ pub mod nft {
 pub mod trigger {
     use super::*;
     permission! {
+        /// Permission to register a data trigger outside the trigger authority's
+        /// exact, owned subject scope.
+        ///
+        /// Core checks this capability directly on the submitting account so a
+        /// role assignment cannot silently turn an ordinary trigger into a
+        /// ledger-wide policy hook.
+        pub struct CanRegisterGlobalDataTrigger {
+            /// Exact trigger authority for which global data-event scope is allowed.
+            pub authority: AccountId,
+        }
+    }
+    permission! {
         /// Permission to register triggers on behalf of the provided authority.
         pub struct CanRegisterTrigger {
             /// Authority on whose behalf the trigger may be registered.
@@ -1164,6 +1176,7 @@ mod tests {
         CanManageTwitterBindings, CanRegisterOracleFeed, CanVoteOracleChangeStage,
     };
     use super::query::{CanReadAccountData, CanReadAllLedgerData, CanReadRestrictedDataspace};
+    use super::trigger::CanRegisterGlobalDataTrigger;
     use crate::permission::Permission as _;
     use iroha_crypto::KeyPair;
     use iroha_data_model::oracle::OracleChangeStage;
@@ -1379,6 +1392,29 @@ mod tests {
                 .is_err(),
             "restricted read grants must carry a numeric DataSpaceId"
         );
+    }
+    #[test]
+    fn global_data_trigger_permission_binds_one_exact_authority() {
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let other = AccountId::new(KeyPair::random().public_key().clone());
+        let exact = CanRegisterGlobalDataTrigger {
+            authority: authority.clone(),
+        };
+        let canonical: iroha_data_model::permission::Permission = exact.clone().into();
+        assert_eq!(canonical.name(), "CanRegisterGlobalDataTrigger");
+        assert_eq!(
+            CanRegisterGlobalDataTrigger::try_from(&canonical)
+                .expect("decode exact global-trigger scope"),
+            exact
+        );
+        let other_scope: iroha_data_model::permission::Permission =
+            CanRegisterGlobalDataTrigger { authority: other }.into();
+        assert_ne!(canonical, other_scope);
+        let malformed = iroha_data_model::permission::Permission::new(
+            "CanRegisterGlobalDataTrigger".into(),
+            norito::json!({}),
+        );
+        assert!(CanRegisterGlobalDataTrigger::try_from(&malformed).is_err());
     }
     #[test]
     fn ledger_read_permissions_are_exact_and_typed() {

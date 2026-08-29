@@ -23049,6 +23049,7 @@ pub mod tests {
         let code_hash = iroha_crypto::Hash::new(b"demo");
         let activate = InstructionBox::from(ActivateContractInstance {
             contract_address: contract_address.clone(),
+            expected_revision: 1,
             code_hash,
         });
         // Without additional approvals the quorum rule must reject the transaction.
@@ -23207,6 +23208,7 @@ pub mod tests {
         let code_hash = iroha_crypto::Hash::new(b"demo");
         let activate = InstructionBox::from(ActivateContractInstance {
             contract_address: contract_address.clone(),
+            expected_revision: 1,
             code_hash,
         });
         let mut metadata = Metadata::default();
@@ -23286,6 +23288,7 @@ pub mod tests {
         let code_hash = iroha_crypto::Hash::new(b"demo");
         let activate = InstructionBox::from(ActivateContractInstance {
             contract_address: contract_address.clone(),
+            expected_revision: 1,
             code_hash,
         });
         let mut metadata = Metadata::default();
@@ -23383,6 +23386,7 @@ pub mod tests {
         let code_hash = iroha_crypto::Hash::new(b"demo");
         let activate = InstructionBox::from(ActivateContractInstance {
             contract_address: contract_address.clone(),
+            expected_revision: 1,
             code_hash,
         });
         // Metadata with a governed contract address is accepted for protected contract ops.
@@ -23546,6 +23550,7 @@ pub mod tests {
         let code_hash = iroha_crypto::Hash::new(b"demo");
         let activate = InstructionBox::from(ActivateContractInstance {
             contract_address: contract_address.clone(),
+            expected_revision: 1,
             code_hash,
         });
         // Missing metadata must reject when touching a protected namespace.
@@ -23749,6 +23754,7 @@ pub mod tests {
             .expect("contract address");
         let activate = InstructionBox::from(ActivateContractInstance {
             contract_address: instruction_contract_address,
+            expected_revision: 1,
             code_hash,
         });
         let mut metadata = Metadata::default();

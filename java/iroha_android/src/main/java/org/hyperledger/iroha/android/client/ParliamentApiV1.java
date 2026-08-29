@@ -88,7 +88,9 @@ public final class ParliamentApiV1 {
           "ValidationFeePolicy",
           "ValidationFeePayoutLifecycle",
           "MusubiRegistryGovernance",
-          "SorafsProviderGovernance");
+          "SorafsProviderGovernance",
+          "ContractLifecycleGovernance",
+          "ContractEmergencyHold");
 
   public static final List<TransitionLayout> PUBLIC_TRANSITIONS =
       listOf(
@@ -131,7 +133,8 @@ public final class ParliamentApiV1 {
           new NoResultKindLayout(5, "BallotReleasePulseUnavailable"),
           new NoResultKindLayout(6, "BallotOpeningDeadlineExpired"),
           new NoResultKindLayout(7, "SortitionRetriesExhausted"),
-          new NoResultKindLayout(8, "ConfirmationJuryCapacityUnavailable"));
+          new NoResultKindLayout(8, "ConfirmationJuryCapacityUnavailable"),
+          new NoResultKindLayout(9, "RandomnessRedrawBudgetExhausted"));
 
   public static final Map<String, String> CERTIFICATE_RESULT_ROOT_DOMAINS =
       certificateResultRootDomains();

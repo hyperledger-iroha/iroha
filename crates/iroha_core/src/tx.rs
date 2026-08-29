@@ -957,6 +957,8 @@ fn is_time_sensitive_instruction_type(type_id: TypeId) -> bool {
         ActivateRuntimeUpgrade,
         CancelRuntimeUpgrade,
         iroha_data_model::isi::governance::ProposeDeployContract,
+        iroha_data_model::isi::governance::ProposeContractLifecycleGovernance,
+        iroha_data_model::isi::governance::ProposeContractEmergencyHold,
         iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal,
         iroha_data_model::isi::governance::ProposeSccpRouteGovernance,
         iroha_data_model::isi::governance::ProposeSorafsProviderGovernance,
@@ -3194,6 +3196,14 @@ impl StateBlock<'_> {
                         ),
                     ));
                 }
+                code::ensure_contract_execution_allowed(
+                    &state_transaction.world,
+                    &call.contract_address,
+                    state_transaction.block_height(),
+                )
+                .map_err(|reason| {
+                    TransactionRejectionReason::Validation(ValidationFail::NotPermitted(reason))
+                })?;
                 let record =
                     code::fetch_bound_contract_record(state_transaction, &call.contract_address)
                         .ok_or_else(|| {
@@ -6097,6 +6107,7 @@ pub mod tests {
         let mut state_tx = block.transaction();
         DeactivateContractInstance {
             contract_address: contract_address.clone(),
+            expected_revision: 1,
             reason: Some("retired for signer-history regression".to_owned()),
         }
         .execute(&deployer, &mut state_tx)
@@ -6605,6 +6616,7 @@ pub mod tests {
         )
         .with_instructions([ActivateContractInstance {
             contract_address,
+            expected_revision: 1,
             code_hash: Hash::prehashed([0_u8; 32]),
         }])
         .sign(keypair.private_key());
@@ -11097,6 +11109,7 @@ pub mod tests {
         .expect("contract address");
         let instruction = iroha_data_model::isi::smart_contract_code::ActivateContractInstance {
             contract_address,
+            expected_revision: 1,
             code_hash: Hash::prehashed([0_u8; 32]),
         };
         let tx = TransactionBuilder::new(
@@ -11174,10 +11187,12 @@ pub mod tests {
         let legacy = vec![
             InstructionBox::from(DeactivateContractInstance {
                 contract_address: old_address,
+                expected_revision: 1,
                 reason: Some("legacy rotation".to_owned()),
             }),
             InstructionBox::from(ActivateContractInstance {
                 contract_address: new_address,
+                expected_revision: 1,
                 code_hash,
             }),
         ];
