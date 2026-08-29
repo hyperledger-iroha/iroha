@@ -1264,6 +1264,13 @@ pub mod genesis_instructions_json {
         let lease_expiry_ms = match fields.remove("lease_expiry_ms") {
             None | Some(Value::Null) => None,
             Some(Value::Number(Number::U64(value))) => Some(value),
+            Some(Value::Number(Number::U128(value))) => {
+                Some(u64::try_from(value).map_err(|_| {
+                    json::Error::Message(format!(
+                        "invalid SetAssetDefinitionAlias.lease_expiry_ms: {value}"
+                    ))
+                })?)
+            }
             Some(Value::Number(Number::I64(value))) if value >= 0 => Some(value.cast_unsigned()),
             Some(other) => {
                 return Err(json::Error::Message(format!(
@@ -1555,6 +1562,9 @@ pub mod genesis_instructions_json {
             Value::Number(Number::U64(v)) => {
                 u32::try_from(v).map_err(|_| json::Error::Message(format!("invalid {label}: {v}")))
             }
+            Value::Number(Number::U128(v)) => {
+                u32::try_from(v).map_err(|_| json::Error::Message(format!("invalid {label}: {v}")))
+            }
             Value::Number(Number::I64(v)) => {
                 u32::try_from(v).map_err(|_| json::Error::Message(format!("invalid {label}: {v}")))
             }
@@ -1569,6 +1579,8 @@ pub mod genesis_instructions_json {
                 .parse::<u64>()
                 .map_err(|err| json::Error::Message(format!("invalid {label}: {err}"))),
             Value::Number(Number::U64(value)) => Ok(value),
+            Value::Number(Number::U128(value)) => u64::try_from(value)
+                .map_err(|_| json::Error::Message(format!("invalid {label}: {value}"))),
             Value::Number(Number::I64(value)) => u64::try_from(value)
                 .map_err(|_| json::Error::Message(format!("invalid {label}: {value}"))),
             other => Err(json::Error::Message(format!(
@@ -1633,6 +1645,7 @@ pub mod genesis_instructions_json {
                 let repr = match number {
                     Number::I64(v) => v.to_string(),
                     Number::U64(v) => v.to_string(),
+                    Number::U128(v) => v.to_string(),
                     Number::F64(v) => v.to_string(),
                 };
                 repr.parse::<Numeric>()
@@ -2036,6 +2049,59 @@ pub mod genesis_instructions_json {
             assert_eq!(arr.len(), 1);
             let outer = arr[0].as_object().expect("outer object");
             assert!(outer.contains_key("Register"));
+        }
+        #[test]
+        fn structured_numeric_fields_handle_u128_exactly() {
+            assert_eq!(
+                parse_u32(Value::Number(Number::U128(u128::from(u32::MAX))), "lane_id")
+                    .expect("u32 maximum"),
+                u32::MAX
+            );
+            assert!(
+                parse_u32(
+                    Value::Number(Number::U128(u128::from(u32::MAX) + 1)),
+                    "lane_id"
+                )
+                .is_err()
+            );
+            assert_eq!(
+                parse_u64(
+                    Value::Number(Number::U128(u128::from(u64::MAX))),
+                    "revision"
+                )
+                .expect("u64 maximum"),
+                u64::MAX
+            );
+            assert!(
+                parse_u64(
+                    Value::Number(Number::U128(u128::from(u64::MAX) + 1)),
+                    "revision"
+                )
+                .is_err()
+            );
+            assert_eq!(
+                parse_numeric(Value::Number(Number::U128(u128::MAX)))
+                    .expect("u128 must fit the exact Numeric domain")
+                    .to_string(),
+                u128::MAX.to_string()
+            );
+
+            let asset_definition_id = AssetDefinitionId::derive_from_components(
+                DomainId::try_new("u128", "universal").expect("domain"),
+                "coin".parse().expect("asset name"),
+            );
+            let mut fields = Map::new();
+            fields.insert(
+                "asset_definition_id".to_owned(),
+                Value::String(asset_definition_id.to_string()),
+            );
+            fields.insert(
+                "lease_expiry_ms".to_owned(),
+                Value::Number(Number::U128(u128::from(u64::MAX) + 1)),
+            );
+            let error = try_decode_set_asset_definition_alias(Value::Object(fields))
+                .expect_err("lease expiry above u64 must be rejected");
+            assert!(error.to_string().contains("lease_expiry_ms"));
         }
         #[test]
         fn serialize_register_uses_structured_json() {

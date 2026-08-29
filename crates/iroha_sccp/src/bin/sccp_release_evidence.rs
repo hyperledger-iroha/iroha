@@ -79,7 +79,7 @@ const RELEASE_PROFILES: [&str; 4] = [
     "tron-mainnet",
     "ton-mainnet",
 ];
-const RELEASE_DOMAINS: [u32; 4] = [1, 2, 5, 4];
+const RELEASE_DOMAINS: [u32; 4] = [1, 2, 3, 4];
 const RELEASE_PROOF_CURVES: [&str; 4] = ["bn254", "bn254", "bn254", "bls12-381"];
 const RELEASE_ROLES: [&str; 2] = ["release-engineering", "release-security"];
 const VALIDATOR_BUILD_HASH_ROLES: [&str; 15] = [

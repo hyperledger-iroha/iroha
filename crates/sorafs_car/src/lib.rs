@@ -15,8 +15,8 @@ pub use sorafs_chunker;
 use sorafs_chunker::{ChunkDigest, ChunkProfile};
 #[cfg(feature = "manifest")]
 use sorafs_manifest::{
-    ManifestV1 as SorafsManifestV1, PdpMerkleReadError, PdpMerkleTreeBuilderV1, PdpMerkleTreeError,
-    PdpMerkleTreeV1, PdpProofLeafV1, PdpSampleV1, estimated_heap_bytes as estimated_pdp_heap_bytes,
+    PdpMerkleReadError, PdpMerkleTreeBuilderV1, PdpMerkleTreeError, PdpMerkleTreeV1,
+    PdpProofLeafV1, PdpSampleV1, estimated_heap_bytes as estimated_pdp_heap_bytes,
 };
 #[cfg(any(unix, test))]
 use std::fs;

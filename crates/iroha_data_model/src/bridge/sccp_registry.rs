@@ -74,8 +74,8 @@ pub const SCCP_V1_TAIRA_XOR_ASSET_DEFINITION_ID: &str = "6TEAJqbb8oEPmLncoNiMRbL
 const SCCP_DOMAIN_SORA: u32 = 0;
 const SCCP_DOMAIN_ETH: u32 = 1;
 const SCCP_DOMAIN_BSC: u32 = 2;
+const SCCP_DOMAIN_TRON: u32 = 3;
 const SCCP_DOMAIN_TON: u32 = 4;
-const SCCP_DOMAIN_TRON: u32 = 5;
 const EVM_BINDING_DOMAIN_V1: &[u8] = b"iroha:sccp:evm-destination-binding:v1";
 const TRON_BINDING_DOMAIN_V1: &[u8] = b"iroha:sccp:tron-destination-binding:v1";
 const TON_BINDING_DOMAIN_V1: &[u8] = b"iroha:sccp:ton-destination-binding:v1";
@@ -4146,7 +4146,7 @@ mod tests {
         let source_bytes =
             canonical_sccp_source_emitter_bytes_v1(&source).expect("TON source canonical bytes");
         assert_eq!(source_bytes.len(), 102);
-        assert_eq!(&source_bytes[..2], &[1, 3]);
+        assert_eq!(&source_bytes[..2], &[1, 2]);
         assert_eq!(&source_bytes[2..6], &0_i32.to_le_bytes());
         assert_eq!(&source_bytes[6..38], &[0x82; 32]);
         let source_encoded = source.encode();

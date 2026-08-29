@@ -68,16 +68,16 @@ public sealed class SccpReplayPrincipalV1
 
     /// <summary>Construct from exact canonical Norito <c>AccountId</c> bytes.</summary>
     public static SccpReplayPrincipalV1 SoraAccount(ReadOnlySpan<byte> canonicalAccountId) =>
-        new(1, canonicalAccountId.ToArray());
+        new(0, canonicalAccountId.ToArray());
 
     public static SccpReplayPrincipalV1 Evm(ReadOnlySpan<byte> address) =>
-        new(2, SccpReplayV1.Exact(address, 20, "EVM replay principal"));
+        new(1, SccpReplayV1.Exact(address, 20, "EVM replay principal"));
 
     public static SccpReplayPrincipalV1 Tron(ReadOnlySpan<byte> address) =>
-        new(3, SccpReplayV1.Exact(address, 20, "TRON replay principal"));
+        new(2, SccpReplayV1.Exact(address, 20, "TRON replay principal"));
 
     public static SccpReplayPrincipalV1 Ton(int workchain, ReadOnlySpan<byte> account) =>
-        new(4, SccpReplayV1.Concat(SccpReplayV1.SignedI32BigEndian(workchain),
+        new(3, SccpReplayV1.Concat(SccpReplayV1.SignedI32BigEndian(workchain),
             SccpReplayV1.Exact(account, 32, "TON replay principal")));
 }
 

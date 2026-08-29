@@ -1769,7 +1769,7 @@ mod tests {
             }
             assert!(!backend.supports_source_network(SccpNetworkV1::SoraTaira));
         }
-        for unknown_tag in [3_u32, 5, u32::MAX] {
+        for unknown_tag in [4_u32, 5, u32::MAX] {
             let encoded = unknown_tag.encode();
             assert!(
                 BridgeNativeProofBackendV1::decode_all(&mut encoded.as_slice()).is_err(),
@@ -1888,7 +1888,7 @@ mod tests {
                 assert_eq!(backend.supports_destination_network(network), expected);
             }
         }
-        for unknown_tag in [2_u32, 4, u32::MAX] {
+        for unknown_tag in [3_u32, 4, u32::MAX] {
             let unknown_backend = unknown_tag.encode();
             assert!(
                 BridgeSccpDestinationProofBackendV1::decode_all(&mut unknown_backend.as_slice())

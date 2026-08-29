@@ -39215,7 +39215,7 @@ mod advert_tests {
     }
     #[tokio::test]
     async fn pin_manifest_readback_is_finalized_native_state_without_local_storage() {
-        let mut app = mk_app_state_for_tests();
+        let app = mk_app_state_for_tests();
         let header = BlockHeader::new(
             NonZeroU64::new(1).expect("non-zero fixture block height"),
             None,

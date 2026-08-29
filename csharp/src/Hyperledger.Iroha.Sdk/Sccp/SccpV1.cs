@@ -33,8 +33,8 @@ public static class SccpNetworkV1Extensions
         SccpNetworkV1.SoraTaira => 0,
         SccpNetworkV1.EthereumMainnet => 1,
         SccpNetworkV1.BscMainnet => 2,
+        SccpNetworkV1.TronMainnet => 3,
         SccpNetworkV1.TonMainnet => 4,
-        SccpNetworkV1.TronMainnet => 5,
         _ => throw new ArgumentOutOfRangeException(nameof(network)),
     };
 
@@ -84,10 +84,10 @@ public sealed record SccpLaneIdV1
 /// <summary>Closed first-release SCCP binary codec inventory.</summary>
 public enum SccpCodecV1 : byte
 {
-    CanonicalText = 1,
-    EvmAddress20 = 2,
-    TronAddress21 = 5,
-    TonAccount36 = 7,
+    CanonicalText = 0,
+    EvmAddress20 = 1,
+    TronAddress21 = 2,
+    TonAccount36 = 3,
 }
 
 /// <summary>Canonical binary codec validation.</summary>
@@ -219,7 +219,7 @@ public static class SccpNativeBackendV1Extensions
 /// <summary>Stable fixed-width kind tags used by canonical SCCP commitments.</summary>
 public enum SccpHubMessageKindV1 : byte
 {
-    Transfer = 5,
+    Transfer = 0,
 }
 
 /// <summary>Closed canonical SCCP payload. V1 admits only transfer.</summary>
@@ -241,7 +241,7 @@ public abstract class SccpPayloadV1
     public byte[] CanonicalBytes()
     {
         using var output = new MemoryStream();
-        output.WriteByte(2);
+        output.WriteByte(0);
         WriteCanonicalBody(output);
         return output.ToArray();
     }
@@ -386,7 +386,7 @@ public sealed class SccpTransferPayloadV1 : SccpPayloadV1
 
     private static void RequireDomain(uint value, string field)
     {
-        if (value is not (0 or 1 or 2 or 4 or 5))
+        if (value > 4)
         {
             throw new ArgumentOutOfRangeException(field, "SCCP domain is unsupported or retired.");
         }
@@ -396,8 +396,8 @@ public sealed class SccpTransferPayloadV1 : SccpPayloadV1
     {
         0 => SccpCodecV1.CanonicalText,
         1 or 2 => SccpCodecV1.EvmAddress20,
+        3 => SccpCodecV1.TronAddress21,
         4 => SccpCodecV1.TonAccount36,
-        5 => SccpCodecV1.TronAddress21,
         _ => throw new ArgumentOutOfRangeException(nameof(domain)),
     };
 }
@@ -747,7 +747,7 @@ public static class SccpV1
     public static SccpTransferPayloadV1 DecodeCanonicalPayload(ReadOnlySpan<byte> bytes)
     {
         var cursor = new PayloadCursor(bytes);
-        if (cursor.TakeByte() != 2)
+        if (cursor.TakeByte() != 0)
         {
             throw new ArgumentException("Unsupported or retired SCCP payload discriminant.", nameof(bytes));
         }

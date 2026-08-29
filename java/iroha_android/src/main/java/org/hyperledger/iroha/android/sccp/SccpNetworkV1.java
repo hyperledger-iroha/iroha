@@ -9,7 +9,7 @@ public enum SccpNetworkV1 {
   SORA_TAIRA("sora-taira", 0x40, 0, true),
   ETHEREUM_MAINNET("ethereum-mainnet", 0x41, 1, true),
   BSC_MAINNET("bsc-mainnet", 0x42, 2, true),
-  TRON_MAINNET("tron-mainnet", 0x43, 5, true),
+  TRON_MAINNET("tron-mainnet", 0x43, 3, true),
   TON_MAINNET("ton-mainnet", 0x44, 4, true);
 
   private static final Map<String, SccpNetworkV1> BY_PROFILE;

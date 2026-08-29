@@ -36099,6 +36099,14 @@ fn tx_metadata_json_value(
     }?;
     norito::json::from_str(&raw).ok()
 }
+fn exact_json_number_text(number: &norito::json::native::Number) -> String {
+    match number {
+        norito::json::native::Number::I64(value) => value.to_string(),
+        norito::json::native::Number::U64(value) => value.to_string(),
+        norito::json::native::Number::U128(value) => value.to_string(),
+        norito::json::native::Number::F64(value) => value.to_string(),
+    }
+}
 fn tx_metadata_string(
     tx: &iroha_data_model::query::CommittedTransaction,
     key: &str,
@@ -36107,11 +36115,7 @@ fn tx_metadata_string(
         norito::json::Value::Null => None,
         norito::json::Value::String(value) => Some(value),
         norito::json::Value::Bool(value) => Some(value.to_string()),
-        norito::json::Value::Number(value) => Some(match value {
-            norito::json::native::Number::I64(value) => value.to_string(),
-            norito::json::native::Number::U64(value) => value.to_string(),
-            norito::json::native::Number::F64(value) => value.to_string(),
-        }),
+        norito::json::Value::Number(value) => Some(exact_json_number_text(&value)),
         value => norito::json::to_json(&value).ok(),
     }
 }
@@ -51058,17 +51062,9 @@ fn trader_activity_item_from_projection(
                     .iter()
                     .filter_map(|(key, value)| match value {
                         Value::String(text) if !text.is_empty() => Some(format!("{key}={text}")),
-                        Value::Number(number) => Some(match number {
-                            norito::json::native::Number::I64(value) => {
-                                format!("{key}={value}")
-                            }
-                            norito::json::native::Number::U64(value) => {
-                                format!("{key}={value}")
-                            }
-                            norito::json::native::Number::F64(value) => {
-                                format!("{key}={value}")
-                            }
-                        }),
+                        Value::Number(number) => {
+                            Some(format!("{key}={}", exact_json_number_text(number)))
+                        }
                         _ => None,
                     })
                     .take(3)
@@ -51704,6 +51700,12 @@ mod tx_projection_display_tests {
     use super::*;
     use iroha_data_model::account::AccountId;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
+    routing_test! { sync exact_json_number_text_preserves_u128
+        assert_eq!(
+            exact_json_number_text(&norito::json::native::Number::U128(u128::MAX)),
+            u128::MAX.to_string()
+        );
+    }
     routing_test! { sync projections_emit_i105_authority_when_requested
         let account: AccountId = ALICE_ID.clone();
         let i105 = account

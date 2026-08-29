@@ -12,14 +12,14 @@ import { parseStrictLosslessIntegerJson } from "./strictLosslessJson.js";
 export const SCCP_DOMAIN_SORA = 0;
 export const SCCP_DOMAIN_ETH = 1;
 export const SCCP_DOMAIN_BSC = 2;
+export const SCCP_DOMAIN_TRON = 3;
 export const SCCP_DOMAIN_TON = 4;
-export const SCCP_DOMAIN_TRON = 5;
 
 /** Closed first-release SCCP payload codec inventory. */
-export const SCCP_CODEC_CANONICAL_TEXT = 1;
-export const SCCP_CODEC_EVM_ADDRESS20 = 2;
-export const SCCP_CODEC_TRON_ADDRESS21 = 5;
-export const SCCP_CODEC_TON_ACCOUNT36 = 7;
+export const SCCP_CODEC_CANONICAL_TEXT = 0;
+export const SCCP_CODEC_EVM_ADDRESS20 = 1;
+export const SCCP_CODEC_TRON_ADDRESS21 = 2;
+export const SCCP_CODEC_TON_ACCOUNT36 = 3;
 
 export const SCCP_CODEC_KEYS = Object.freeze({
   [SCCP_CODEC_CANONICAL_TEXT]: "canonical_text",
@@ -297,7 +297,7 @@ function integer(value, label, minimum, maximum = Number.MAX_SAFE_INTEGER) {
 }
 
 function protocolDomain(value, label) {
-  const domain = integer(value, label, SCCP_DOMAIN_SORA, SCCP_DOMAIN_TRON);
+  const domain = integer(value, label, SCCP_DOMAIN_SORA, SCCP_DOMAIN_TON);
   if (!CLOSED_DOMAINS.has(domain)) {
     throw new TypeError(`${label} is an unsupported or reserved SCCP domain`);
   }
@@ -531,16 +531,16 @@ function replayPrincipalV1(value, label) {
   let kind;
   let bytes;
   if (principal.kind === "sora_account" && Object.keys(principal).length === 2) {
-    kind = 1;
+    kind = 0;
     bytes = binary(principal.canonicalBytes, `${label}.canonicalBytes`);
   } else if (
     (principal.kind === "evm" || principal.kind === "tron") &&
     Object.keys(principal).length === 2
   ) {
-    kind = principal.kind === "evm" ? 2 : 3;
+    kind = principal.kind === "evm" ? 1 : 2;
     bytes = replayFixedBytesV1(principal.address, 20, `${label}.address`);
   } else if (principal.kind === "ton" && Object.keys(principal).length === 3) {
-    kind = 4;
+    kind = 3;
     bytes = concatenateBytes(
       replaySignedI32BigEndianV1(principal.workchain, `${label}.workchain`),
       replayFixedBytesV1(principal.account, 32, `${label}.account`),
@@ -3000,7 +3000,7 @@ function parsePayloadProjection(value, expectedDomain, label) {
   );
   integer(transfer.version, `${label}.Transfer.version`, 1, 1);
   integer(transfer.source_domain, `${label}.Transfer.source_domain`, SCCP_DOMAIN_SORA, SCCP_DOMAIN_SORA);
-  const domain = integer(transfer.dest_domain, `${label}.Transfer.dest_domain`, 1, 5);
+  const domain = integer(transfer.dest_domain, `${label}.Transfer.dest_domain`, 1, 4);
   if (
     domain !== expectedDomain ||
     ![
@@ -3110,7 +3110,7 @@ export function normalizeSccpRecentMessages(value) {
     ) {
       throw new TypeError(`${label}.links do not identify this exact message`);
     }
-    if (integer(record.target_domain, `${label}.target_domain`, 1, 5) !== target.domain) {
+    if (integer(record.target_domain, `${label}.target_domain`, 1, 4) !== target.domain) {
       throw new TypeError(`${label} profile and domain fields disagree`);
     }
     const optionalText = (field) =>
@@ -3251,7 +3251,7 @@ function validateCanonicalTextBytes(bytes, label) {
 }
 
 function validateCodecValue(record, codecField, valueField, domain = null, label = "SCCP transfer") {
-  const codec = integer(record[codecField], `${label}.${codecField}`, 1, 7);
+  const codec = integer(record[codecField], `${label}.${codecField}`, 0, 3);
   if (!Object.prototype.hasOwnProperty.call(SCCP_CODEC_KEYS, codec)) {
     throw new TypeError(`${label}.${codecField} is unsupported or retired`);
   }
@@ -3380,7 +3380,7 @@ function parsePayload(value, lane = null, label = "SCCP payload") {
   const envelope = exactFields(value, new Set(["Transfer"]), label);
   const transfer = parseTransfer(envelope.Transfer, lane, `${label}.Transfer`);
   const bytes = concatenateBytes(
-    Uint8Array.of(2),
+    Uint8Array.of(0),
     canonicalSccpTransferPayloadBytes(envelope.Transfer),
   );
   return Object.freeze({ envelope, transfer, bytes, kind: "Transfer" });
@@ -3510,7 +3510,7 @@ export function sccpHubCommitmentFromPayload(contextValue, payload) {
 export function canonicalSccpHubCommitmentBytes(commitment) {
   const parsed = parseHubCommitment(commitment);
   return concatenateBytes(
-    Uint8Array.of(1, 5, parsed.context.lane.source.tag, parsed.context.lane.target.tag),
+    Uint8Array.of(1, 0, parsed.context.lane.source.tag, parsed.context.lane.target.tag),
     parsed.context.destinationBindingHash,
     parsed.context.routeConfigurationHash,
     parsed.messageId,

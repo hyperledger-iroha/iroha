@@ -171,7 +171,7 @@ pub(super) fn run_inrou_internal_launcher_v1(arguments: Vec<OsString>) -> eyre::
         fs::File::from_raw_fd(request.acknowledgement_fd)
     };
     let mut token = Vec::with_capacity(INROU_CGROUP_BARRIER_TOKEN.len() + 1);
-    gate.by_ref()
+    std::io::Read::by_ref(&mut gate)
         .take(u64::try_from(INROU_CGROUP_BARRIER_TOKEN.len() + 1).expect("small token bound"))
         .read_to_end(&mut token)
         .wrap_err("read the anonymous Inrou cgroup gate")?;
@@ -1531,7 +1531,7 @@ mod tests {
                 + iroha_data_model::soracloud::SORA_INROU_CPU_MILLIS_ALIGNMENT_V1,
         )
         .expect("nonzero CPU above V1");
-        project_inrou_cgroup_limits(&boundary)
+        let _projection_error = project_inrou_cgroup_limits(&boundary)
             .expect_err("cgroup projection must reject resources above the qualified V1 ceiling");
         Ok(())
     }
@@ -1786,8 +1786,9 @@ mod tests {
         let overflow_binding_fds = (100..)
             .take(INROU_INTERNAL_LAUNCHER_MAX_BINDINGS + 1)
             .collect::<Vec<RawFd>>();
-        parse_inrou_internal_launcher_v1(internal_launcher_arguments(&overflow_binding_fds))
-            .expect_err("one binding above the V1 parser bound must fail closed");
+        let _binding_overflow_error =
+            parse_inrou_internal_launcher_v1(internal_launcher_arguments(&overflow_binding_fds))
+                .expect_err("one binding above the V1 parser bound must fail closed");
 
         let mut maximum_arguments = internal_launcher_arguments(&[]);
         maximum_arguments.resize(
@@ -1796,7 +1797,7 @@ mod tests {
         );
         parse_inrou_internal_launcher_v1(maximum_arguments.clone())?;
         maximum_arguments.push("qemu-argument-overflow".into());
-        parse_inrou_internal_launcher_v1(maximum_arguments)
+        let _argument_overflow_error = parse_inrou_internal_launcher_v1(maximum_arguments)
             .expect_err("one argument above the V1 parser bound must fail closed");
 
         let mut maximum_argument_bytes = internal_launcher_arguments(&[]);
@@ -1810,8 +1811,9 @@ mod tests {
             .expect("padded launcher argument") = "x"
             .repeat(INROU_INTERNAL_LAUNCHER_MAX_ARGUMENT_BYTES + 1)
             .into();
-        parse_inrou_internal_launcher_v1(maximum_argument_bytes)
-            .expect_err("one byte above the V1 per-argument bound must fail closed");
+        let _argument_bytes_overflow_error =
+            parse_inrou_internal_launcher_v1(maximum_argument_bytes)
+                .expect_err("one byte above the V1 per-argument bound must fail closed");
         Ok(())
     }
 
@@ -1916,32 +1918,32 @@ mod tests {
     fn internal_launcher_parser_rejects_ambiguous_or_drifted_requests() {
         let mut stdio = internal_launcher_arguments(&[41]);
         stdio[0] = "2".into();
-        parse_inrou_internal_launcher_v1(stdio)
+        let _stdio_descriptor_error = parse_inrou_internal_launcher_v1(stdio)
             .expect_err("stdio descriptors must never be launcher inputs");
 
         let mut duplicate = internal_launcher_arguments(&[17]);
         duplicate[0] = "17".into();
-        parse_inrou_internal_launcher_v1(duplicate)
+        let _duplicate_descriptor_error = parse_inrou_internal_launcher_v1(duplicate)
             .expect_err("gate, acknowledgement, and binding descriptors must be unique");
 
         let mut noncanonical = internal_launcher_arguments(&[41]);
         noncanonical[0] = "017".into();
-        parse_inrou_internal_launcher_v1(noncanonical)
+        let _noncanonical_descriptor_error = parse_inrou_internal_launcher_v1(noncanonical)
             .expect_err("descriptor spellings must be canonical decimal");
 
         let mut cgroup_drift = internal_launcher_arguments(&[41]);
         cgroup_drift[2] = "/iroha-inrou-v1/../outside".into();
-        parse_inrou_internal_launcher_v1(cgroup_drift)
+        let _cgroup_path_error = parse_inrou_internal_launcher_v1(cgroup_drift)
             .expect_err("the expected cgroup path must be canonical");
 
         let mut truncated = internal_launcher_arguments(&[41]);
         truncated[3] = "2".into();
-        parse_inrou_internal_launcher_v1(truncated)
+        let _truncated_binding_list_error = parse_inrou_internal_launcher_v1(truncated)
             .expect_err("the binding count must exactly frame the binding list");
 
         let mut alternate_program = internal_launcher_arguments(&[41]);
         alternate_program[7] = "/bin/sh".into();
-        parse_inrou_internal_launcher_v1(alternate_program)
+        let _alternate_program_error = parse_inrou_internal_launcher_v1(alternate_program)
             .expect_err("only the pinned bubblewrap path may be executed");
 
         let mut mismatched_map = internal_launcher_arguments(&[41]);
@@ -1954,7 +1956,7 @@ mod tests {
             .find(|argument| argument.as_os_str() == OsStr::new("41"))
             .map(|argument| *argument = "42".into())
             .expect("bubblewrap binding descriptor");
-        parse_inrou_internal_launcher_v1(mismatched_map)
+        let _mismatched_binding_map_error = parse_inrou_internal_launcher_v1(mismatched_map)
             .expect_err("bubblewrap bindings must match the typed retained map");
 
         let mut widened_mode = internal_launcher_arguments(&[41]);
@@ -1964,7 +1966,7 @@ mod tests {
         assert!(modes.next().is_some(), "typed binding mode");
         *modes.next().expect("bubblewrap binding mode") = "--bind-fd".into();
         assert!(modes.next().is_none(), "only two binding mode records");
-        parse_inrou_internal_launcher_v1(widened_mode)
+        let _widened_binding_mode_error = parse_inrou_internal_launcher_v1(widened_mode)
             .expect_err("bubblewrap cannot widen a typed read-only binding");
 
         let mut changed_destination = internal_launcher_arguments(&[41]);
@@ -1977,7 +1979,7 @@ mod tests {
             destinations.next().is_none(),
             "only two binding destination records"
         );
-        parse_inrou_internal_launcher_v1(changed_destination)
+        let _changed_destination_error = parse_inrou_internal_launcher_v1(changed_destination)
             .expect_err("bubblewrap cannot retarget a typed binding");
 
         let mut duplicate_namespace_flag = internal_launcher_arguments(&[]);
@@ -1986,14 +1988,15 @@ mod tests {
             .position(|argument| argument == "--")
             .expect("bubblewrap command separator");
         duplicate_namespace_flag.insert(separator, "--clearenv".into());
-        parse_inrou_internal_launcher_v1(duplicate_namespace_flag)
-            .expect_err("mandatory namespace flags must occur exactly once");
+        let _duplicate_namespace_flag_error =
+            parse_inrou_internal_launcher_v1(duplicate_namespace_flag)
+                .expect_err("mandatory namespace flags must occur exactly once");
     }
 
     #[test]
     fn launch_barrier_refuses_release_before_child_spawn() -> eyre::Result<()> {
         let mut barrier = InrouLaunchBarrier::create()?;
-        barrier
+        let _premature_release_error = barrier
             .release()
             .expect_err("a supervisor must retire its child pipe ends after spawn");
         Ok(())

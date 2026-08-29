@@ -49,7 +49,9 @@ public final class SorafsGatewayClientTests {
     final RecordingExecutor executor =
         new RecordingExecutor(
             new TransportResponse(
-                200, "{\"status\":\"ok\"}".getBytes(StandardCharsets.UTF_8), "OK", Map.of()));
+                200, "{\"status\":\"ok\"}".getBytes(StandardCharsets.UTF_8), "OK", Map.of(),
+                null,
+                false));
     final CountingObserver observer = new CountingObserver();
     final SorafsGatewayClient client =
         SorafsGatewayClient.builder()
@@ -95,7 +97,9 @@ public final class SorafsGatewayClientTests {
                 502,
                 "{\"error\":\"bad_gateway\"}".getBytes(StandardCharsets.UTF_8),
                 "Bad Gateway",
-                Map.of()));
+                Map.of(),
+                null,
+                false));
     final CountingObserver observer = new CountingObserver();
     final SorafsGatewayClient client =
         SorafsGatewayClient.builder()
@@ -185,7 +189,9 @@ public final class SorafsGatewayClientTests {
     final RecordingExecutor executor =
         new RecordingExecutor(
             new TransportResponse(
-                200, json.getBytes(StandardCharsets.UTF_8), "OK", Map.of()));
+                200, json.getBytes(StandardCharsets.UTF_8), "OK", Map.of(),
+                null,
+                false));
     final SorafsGatewayClient client =
         SorafsGatewayClient.builder()
             .setExecutor(executor)
@@ -224,7 +230,13 @@ public final class SorafsGatewayClientTests {
     final GatewayFetchRequest request = sampleRequest();
     final RecordingExecutor executor =
         new RecordingExecutor(
-            new TransportResponse(200, "[]".getBytes(StandardCharsets.UTF_8), "OK", Map.of()));
+            new TransportResponse(
+                200,
+                "[]".getBytes(StandardCharsets.UTF_8),
+                "OK",
+                Map.of(),
+                null,
+                false));
     final SorafsGatewayClient client =
         SorafsGatewayClient.builder()
             .setExecutor(executor)
@@ -277,7 +289,9 @@ public final class SorafsGatewayClientTests {
     final RecordingExecutor executor =
         new RecordingExecutor(
             new TransportResponse(
-                200, json.getBytes(StandardCharsets.UTF_8), "OK", Map.of()));
+                200, json.getBytes(StandardCharsets.UTF_8), "OK", Map.of(),
+                null,
+                false));
     final SorafsGatewayClient client =
         SorafsGatewayClient.builder()
             .setExecutor(executor)
@@ -329,7 +343,9 @@ public final class SorafsGatewayClientTests {
     final RecordingExecutor executor =
         new RecordingExecutor(
             new TransportResponse(
-                200, json.getBytes(StandardCharsets.UTF_8), "OK", Map.of()));
+                200, json.getBytes(StandardCharsets.UTF_8), "OK", Map.of(),
+                null,
+                false));
     final SorafsGatewayClient client =
         SorafsGatewayClient.builder()
             .setExecutor(executor)
@@ -417,7 +433,9 @@ public final class SorafsGatewayClientTests {
       final RecordingExecutor executor =
           new RecordingExecutor(
               new TransportResponse(
-                  200, "{\"status\":\"ok\"}".getBytes(StandardCharsets.UTF_8), "OK", Map.of()));
+                  200, "{\"status\":\"ok\"}".getBytes(StandardCharsets.UTF_8), "OK", Map.of(),
+                  null,
+                  false));
       final SorafsGatewayClient client =
           SorafsGatewayClient.builder()
               .setExecutor(executor)
@@ -478,7 +496,9 @@ public final class SorafsGatewayClientTests {
                 200,
                 "{}".getBytes(StandardCharsets.UTF_8),
                 "OK",
-                java.util.Collections.emptyMap()));
+                java.util.Collections.emptyMap(),
+                null,
+                false));
     final SorafsGatewayClient client =
         SorafsGatewayClient.builder()
             .setExecutor(executor)

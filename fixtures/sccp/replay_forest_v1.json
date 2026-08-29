@@ -39,10 +39,10 @@
     "domain_hash_hex": "de11cbd183f55063fe715fcf120773d799dfb1185e057f758c126306832fdc3d",
     "replay_key_hex": "139f57881d055a13ecf390d7441dadfc065ded40181c42a7aa3ab0a27469f17b",
     "shard": 19,
-    "record_digest_hex": "35ab8613a0be06397609861d3cb3383770948b24b1cf098f4006c232240a2c07",
+    "record_digest_hex": "31e4f2267d63d21101ab070e04aefe660df9681d3e12b263b61676e07c6f4aa5",
     "empty_leaf_hash_hex": "6841d062186b649a505eb694ebce936fe978c5530596882a70c6e04303c88d43",
     "empty_shard_root_hex": "cefd4f39c0d2ba5c33835008c6c3e7bca47d6ea1c4da5bfc8a63f09dbc66651f",
-    "occupied_shard_root_hex": "7b47c79900f052fd4b73691e2fe2230fdf170225d54e9a248e176f30495ac918",
+    "occupied_shard_root_hex": "d9c75ee102ec40076d903d6d5a0c3b0f9a9fa006ea9a2638274be11712ffb849",
     "leaf_count": 1,
     "update_sequence": 1
   }

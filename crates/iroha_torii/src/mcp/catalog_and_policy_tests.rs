@@ -1266,14 +1266,14 @@ fn cancellation_keys_preserve_lossless_json_id_representation() {
 
     let fractional: Value = json::from_str("7.5").expect("fractional JSON id");
     assert!(ExactJsonRpcId::from_value(&fractional).is_none());
-    let rounded_a: Value = json::from_str("18446744073709551616").expect("oversized JSON id A");
-    let rounded_b: Value = json::from_str("18446744073709551617").expect("oversized JSON id B");
-    assert_eq!(
-        rounded_a, rounded_b,
-        "fixture must exercise Norito's lossy f64 fallback"
+    let oversized_a: Value = json::from_str("18446744073709551616").expect("oversized JSON id A");
+    let oversized_b: Value = json::from_str("18446744073709551617").expect("oversized JSON id B");
+    assert_ne!(
+        oversized_a, oversized_b,
+        "wide integer JSON values must remain exact"
     );
-    assert!(ExactJsonRpcId::from_value(&rounded_a).is_none());
-    assert!(ExactJsonRpcId::from_value(&rounded_b).is_none());
+    assert!(ExactJsonRpcId::from_value(&oversized_a).is_none());
+    assert!(ExactJsonRpcId::from_value(&oversized_b).is_none());
 
     let valid_nonce = cancellation_test_nonce(0x5a);
     let params = norito::json!({
@@ -1347,16 +1347,20 @@ fn authenticated_call_without_nonce_remains_non_cancellable() {
 }
 
 #[tokio::test]
-async fn lossy_numeric_ids_cannot_enter_or_target_cancellation_registry() {
+async fn oversized_numeric_ids_cannot_enter_or_target_cancellation_registry() {
     let started = std::sync::Arc::new(tokio::sync::Notify::new());
     let release = std::sync::Arc::new(tokio::sync::Notify::new());
+    let dispatches = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let route_started = std::sync::Arc::clone(&started);
     let route_release = std::sync::Arc::clone(&release);
+    let route_dispatches = std::sync::Arc::clone(&dispatches);
     let router =
         axum::Router::new().fallback_service(tower::service_fn(move |_request: Request<Body>| {
             let started = std::sync::Arc::clone(&route_started);
             let release = std::sync::Arc::clone(&route_release);
+            let dispatches = std::sync::Arc::clone(&route_dispatches);
             async move {
+                dispatches.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 started.notify_one();
                 release.notified().await;
                 Ok::<_, std::convert::Infallible>(
@@ -1382,34 +1386,45 @@ async fn lossy_numeric_ids_cannot_enter_or_target_cancellation_registry() {
     let request_json = r#"{"jsonrpc":"2.0","id":18446744073709551616,"method":"tools/call","params":{"name":"iroha.health","arguments":{},"_meta":{"iroha/cancellationNonce":"__NONCE__"}}}"#
         .replace("__NONCE__", &cancellation_nonce);
     let request: Value = json::from_str(&request_json).expect("oversized-id request");
-    let call_app = std::sync::Arc::clone(&app);
     let headers = cancellation_test_headers("client");
-    let call =
-        tokio::spawn(async move { handle_jsonrpc_request(call_app, &headers, request).await });
+    let JsonRpcRequestOutcome::Response(response) =
+        handle_jsonrpc_request(std::sync::Arc::clone(&app), &headers, request).await
+    else {
+        panic!("an oversized numeric request id cannot become cancellable")
+    };
+    assert_eq!(
+        response.pointer("/error/code").and_then(Value::as_i64),
+        Some(i64::from(JSONRPC_INVALID_REQUEST))
+    );
+    assert_eq!(
+        dispatches.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "an out-of-range JSON-RPC id must be rejected before tool dispatch"
+    );
+
+    let call_app = std::sync::Arc::clone(&app);
+    let call_headers = cancellation_test_headers("client");
+    let call = tokio::spawn(async move {
+        handle_jsonrpc_request(
+            call_app,
+            &call_headers,
+            cancellable_health_request(Value::Number(json::native::Number::U64(u64::MAX))),
+        )
+        .await
+    });
     tokio::time::timeout(Duration::from_secs(2), started.notified())
         .await
-        .expect("lossy-id request reaches dispatch");
-    assert!(
-        app.mcp_inflight_requests
-            .entries
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .is_empty(),
-        "an inexact numeric request id must not enter the cancellation registry"
-    );
+        .expect("largest supported numeric id reaches dispatch");
 
     let notification_json = r#"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":18446744073709551617,"_meta":{"iroha/cancellationNonce":"__NONCE__"}}}"#
         .replace("__NONCE__", &cancellation_nonce);
     let notification: Value =
-        json::from_str(&notification_json).expect("colliding cancellation notification");
+        json::from_str(&notification_json).expect("oversized cancellation notification");
     handle_cancelled_notification(&app, &cancellation_test_headers("client"), &notification);
+    tokio::task::yield_now().await;
     assert!(
-        app.mcp_inflight_requests
-            .entries
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .is_empty(),
-        "a colliding inexact notification must not create or target a registry entry"
+        !call.is_finished(),
+        "an out-of-range numeric cancellation must not target a valid live request"
     );
     release.notify_one();
     assert!(matches!(
@@ -1419,6 +1434,11 @@ async fn lossy_numeric_ids_cannot_enter_or_target_cancellation_registry() {
             .expect("request task joins"),
         JsonRpcRequestOutcome::Response(_)
     ));
+    assert_eq!(
+        dispatches.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "only the valid numeric-id request may reach tool dispatch"
+    );
 }
 
 #[tokio::test]

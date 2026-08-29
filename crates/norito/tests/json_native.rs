@@ -1,5 +1,7 @@
 #![cfg(feature = "json")]
-use norito::json::{self, CoerceKey, JsonDeserialize, MapVisitor, RawValue, SeqVisitor};
+use norito::json::{
+    self, CoerceKey, JsonDeserialize, MapVisitor, Number, RawValue, SeqVisitor, Value,
+};
 #[derive(Debug, PartialEq, norito::JsonSerialize, norito::JsonDeserialize)]
 struct DerivedExample {
     id: u64,
@@ -121,6 +123,9 @@ impl JsonDeserialize for ManualConfig {
                             Err(json::Error::Message("expected bool".into()))
                         }
                         fn visit_u64(self, _: u64) -> Result<Self::Value, json::Error> {
+                            Err(json::Error::Message("expected bool".into()))
+                        }
+                        fn visit_u128(self, _: u128) -> Result<Self::Value, json::Error> {
                             Err(json::Error::Message("expected bool".into()))
                         }
                         fn visit_f64(self, _: f64) -> Result<Self::Value, json::Error> {
@@ -390,6 +395,9 @@ impl<'a> json::Visitor<'a> for KindVisitor {
     fn visit_u64(self, _: u64) -> Result<Self::Value, json::Error> {
         Ok("u64")
     }
+    fn visit_u128(self, _: u128) -> Result<Self::Value, json::Error> {
+        Ok("u128")
+    }
     fn visit_f64(self, _: f64) -> Result<Self::Value, json::Error> {
         Ok("f64")
     }
@@ -411,6 +419,10 @@ impl<'a> json::Visitor<'a> for KindVisitor {
 }
 #[test]
 fn visit_value_classifies_scalars() {
+    assert!(matches!(
+        json::parse_value("42").expect("owned unsigned integer"),
+        Value::Number(Number::U64(42))
+    ));
     let mut num_parser = json::Parser::new("42");
     assert_eq!(
         json::visit_value(&mut num_parser, KindVisitor).expect("num"),
@@ -426,4 +438,158 @@ fn visit_value_classifies_scalars() {
         json::visit_value(&mut arr_parser, KindVisitor).expect("seq"),
         "seq"
     );
+}
+
+struct ExactUnsignedVisitor;
+
+impl<'a> json::Visitor<'a> for ExactUnsignedVisitor {
+    type Value = u128;
+
+    fn visit_null(self) -> Result<Self::Value, json::Error> {
+        Err(json::Error::Message("expected unsigned integer".into()))
+    }
+
+    fn visit_bool(self, _: bool) -> Result<Self::Value, json::Error> {
+        Err(json::Error::Message("expected unsigned integer".into()))
+    }
+
+    fn visit_i64(self, value: i64) -> Result<Self::Value, json::Error> {
+        u128::try_from(value).map_err(|_| json::Error::Message("expected unsigned integer".into()))
+    }
+
+    fn visit_u64(self, value: u64) -> Result<Self::Value, json::Error> {
+        Ok(u128::from(value))
+    }
+
+    fn visit_u128(self, value: u128) -> Result<Self::Value, json::Error> {
+        Ok(value)
+    }
+
+    fn visit_f64(self, _: f64) -> Result<Self::Value, json::Error> {
+        Err(json::Error::Message("expected unsigned integer".into()))
+    }
+
+    fn visit_string(self, _: String) -> Result<Self::Value, json::Error> {
+        Err(json::Error::Message("expected unsigned integer".into()))
+    }
+
+    fn visit_map(self, _: MapVisitor<'a, '_>) -> Result<Self::Value, json::Error> {
+        Err(json::Error::Message("expected unsigned integer".into()))
+    }
+
+    fn visit_seq(self, _: SeqVisitor<'a, '_>) -> Result<Self::Value, json::Error> {
+        Err(json::Error::Message("expected unsigned integer".into()))
+    }
+}
+
+fn assert_exact_u128_value(value: &Value, expected: u128) {
+    assert_eq!(value, &Value::Number(Number::U128(expected)));
+    assert_eq!(value.as_u128(), Some(expected));
+    assert_eq!(value.as_u64(), u64::try_from(expected).ok());
+
+    let Value::Number(number) = value else {
+        panic!("u128 JSON value must remain a number");
+    };
+    assert_eq!(number.as_u128(), Some(expected));
+}
+
+#[test]
+fn u128_owned_value_paths_preserve_exact_integer_text() {
+    for expected in [u128::from(u64::MAX) + 1, u128::MAX] {
+        let expected_json = expected.to_string();
+
+        let direct = Value::from(expected);
+        assert_exact_u128_value(&direct, expected);
+
+        let macro_value = norito::json!(expected);
+        assert_exact_u128_value(&macro_value, expected);
+
+        let converted = json::to_value(&expected).expect("serialize u128 into owned value");
+        assert_exact_u128_value(&converted, expected);
+
+        let parsed = json::parse_value(&expected_json).expect("parse exact u128 JSON value");
+        assert_exact_u128_value(&parsed, expected);
+        assert_eq!(
+            json::to_json(&parsed).expect("render exact u128 JSON value"),
+            expected_json
+        );
+        assert_eq!(
+            json::value::from_value::<u128>(parsed).expect("decode owned u128 JSON value"),
+            expected
+        );
+    }
+}
+
+#[test]
+fn u128_streaming_visitor_preserves_values_above_u64() {
+    for expected in [u128::from(u64::MAX) + 1, u128::MAX] {
+        let input = expected.to_string();
+        let mut parser = json::Parser::new(&input);
+        assert_eq!(
+            json::visit_value(&mut parser, ExactUnsignedVisitor)
+                .expect("stream exact u128 JSON value"),
+            expected
+        );
+        assert_eq!(parser.position(), input.len());
+
+        let mut kind_parser = json::Parser::new(&input);
+        assert_eq!(
+            json::visit_value(&mut kind_parser, KindVisitor).expect("classify exact u128"),
+            "u128"
+        );
+    }
+}
+
+#[test]
+fn integer_larger_than_u128_is_rejected_without_float_fallback() {
+    const OVERFLOW: &str = "340282366920938463463374607431768211456";
+    const NEGATIVE_OVERFLOW: &str = "-9223372036854775809";
+
+    let typed_error =
+        json::from_json::<u128>(OVERFLOW).expect_err("typed u128 overflow must reject");
+    assert!(typed_error.to_string().contains("u128 overflow"));
+
+    let dom_error = json::parse_value(OVERFLOW)
+        .expect_err("owned integer overflow must not fall back to an inexact float");
+    assert!(dom_error.to_string().contains("integer out of range"));
+
+    let mut parser = json::Parser::new(OVERFLOW);
+    let visitor_error = json::visit_value(&mut parser, KindVisitor)
+        .expect_err("streaming integer overflow must reject before visiting an f64");
+    assert!(visitor_error.to_string().contains("integer out of range"));
+
+    assert!(json::parse_value(NEGATIVE_OVERFLOW).is_err());
+    let mut parser = json::Parser::new(NEGATIVE_OVERFLOW);
+    assert!(json::visit_value(&mut parser, KindVisitor).is_err());
+}
+
+#[test]
+fn u128_and_f64_equality_requires_the_same_exact_integer() {
+    const FIRST_INEXACT_F64_INTEGER: u128 = (1_u128 << 53) + 1;
+    const NEXT_EXACT_F64_INTEGER: u128 = (1_u128 << 53) + 2;
+
+    assert_eq!(
+        Number::U128(1_u128 << 53),
+        Number::F64((1_u128 << 53) as f64)
+    );
+    assert_ne!(
+        Number::U128(FIRST_INEXACT_F64_INTEGER),
+        Number::F64(FIRST_INEXACT_F64_INTEGER as f64)
+    );
+    assert_ne!(
+        Number::U64(FIRST_INEXACT_F64_INTEGER as u64),
+        Number::F64(FIRST_INEXACT_F64_INTEGER as f64)
+    );
+    assert_ne!(
+        Number::I64(FIRST_INEXACT_F64_INTEGER as i64),
+        Number::F64(FIRST_INEXACT_F64_INTEGER as f64)
+    );
+    assert_eq!(
+        Number::U128(NEXT_EXACT_F64_INTEGER),
+        Number::F64(NEXT_EXACT_F64_INTEGER as f64)
+    );
+    assert_ne!(Number::U128(u128::MAX), Number::F64(u128::MAX as f64));
+
+    assert_eq!(Number::U128(i64::MAX as u128).as_i64(), Some(i64::MAX));
+    assert_eq!(Number::U128(i64::MAX as u128 + 1).as_i64(), None);
 }

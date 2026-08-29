@@ -80,8 +80,8 @@ impl SccpNetworkV1 {
             Self::SoraTaira => 0,
             Self::EthereumMainnet => 1,
             Self::BscMainnet => 2,
+            Self::TronMainnet => 3,
             Self::TonMainnet => 4,
-            Self::TronMainnet => 5,
         }
     }
     /// Return the canonical, stable textual key for this exact profile.
@@ -874,7 +874,7 @@ mod tests {
         assert_eq!(SccpNetworkV1::SoraTaira.domain_id(), 0);
         assert_eq!(SccpNetworkV1::EthereumMainnet.domain_id(), 1);
         assert_eq!(SccpNetworkV1::BscMainnet.domain_id(), 2);
-        assert_eq!(SccpNetworkV1::TronMainnet.domain_id(), 5);
+        assert_eq!(SccpNetworkV1::TronMainnet.domain_id(), 3);
         assert_eq!(SccpNetworkV1::TonMainnet.domain_id(), 4);
     }
     #[test]

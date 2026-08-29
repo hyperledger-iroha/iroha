@@ -126,7 +126,7 @@ struct PendingReplySourceAuthority {
     topology: Option<UpdateTopology>,
     validator_dial_roster: Option<message::UpdateValidatorDialRoster>,
     trusted: Option<UpdateTrustedPeers>,
-    acl: Option<message::UpdateAcl>,
+    acl: Option<ValidatedAclUpdate>,
     consensus_caps: Option<ConsensusCapsSnapshot>,
 }
 impl PendingReplySourceAuthority {
@@ -351,6 +351,34 @@ mod admission;
 #[path = "network/tcp_listener_bind_tests.rs"]
 mod tcp_listener_bind_tests;
 use admission::*;
+#[derive(Clone, Debug)]
+struct ValidatedAclUpdate {
+    allowlist_only: bool,
+    allow_keys: Vec<iroha_crypto::PublicKey>,
+    deny_keys: Vec<iroha_crypto::PublicKey>,
+    allow_nets: Vec<IpNet>,
+    deny_nets: Vec<IpNet>,
+}
+impl ValidatedAclUpdate {
+    fn parse(
+        message::UpdateAcl {
+            allowlist_only,
+            allow_keys,
+            deny_keys,
+            allow_cidrs,
+            deny_cidrs,
+        }: message::UpdateAcl,
+    ) -> Result<Self, String> {
+        let (allow_nets, deny_nets) = parse_acl_cidrs(&allow_cidrs, &deny_cidrs)?;
+        Ok(Self {
+            allowlist_only,
+            allow_keys,
+            deny_keys,
+            allow_nets,
+            deny_nets,
+        })
+    }
+}
 fn relay_role_from_mode(mode: iroha_config::parameters::actual::RelayMode) -> RelayRole {
     match mode {
         iroha_config::parameters::actual::RelayMode::Hub => RelayRole::Hub,
@@ -12710,17 +12738,17 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
             "committed source projection must remain representable"
         );
     }
-    fn set_reply_source_acl(&mut self, acl: message::UpdateAcl) {
-        if let Err(error) = parse_acl_cidrs(&acl.allow_cidrs, &acl.deny_cidrs) {
-            iroha_logger::error!(
-                reason = %error,
-                "Rejected malformed runtime ACL update; retaining applied policy"
-            );
-            return;
-        }
+    fn set_reply_source_acl(&mut self, acl: message::UpdateAcl) -> bool {
+        let acl = match ValidatedAclUpdate::parse(acl) {
+            Ok(acl) => acl,
+            Err(error) => {
+                iroha_logger::error!(%error, "Rejected invalid runtime network ACL");
+                return false;
+            }
+        };
         let prior = self.pending_reply_source_authority.clone();
         self.pending_reply_source_authority.acl = Some(acl);
-        self.accept_staged_reply_source_authority(prior, "ACL update");
+        self.accept_staged_reply_source_authority(prior, "ACL update")
     }
     fn set_reply_source_consensus_caps(&mut self, consensus_caps: ConsensusCapsSnapshot) {
         let prior = self.pending_reply_source_authority.clone();
@@ -12772,20 +12800,17 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
         }
         self.accept_staged_reply_source_authority(prior, transition);
     }
-    fn apply_reply_source_acl(&mut self, acl: message::UpdateAcl) {
-        let (allow_nets, deny_nets) = match parse_acl_cidrs(&acl.allow_cidrs, &acl.deny_cidrs) {
-            Ok(parsed) => parsed,
-            Err(error) => {
-                iroha_logger::error!(
-                    reason = %error,
-                    "Refused to apply malformed staged runtime ACL; retaining applied policy"
-                );
-                return;
-            }
-        };
-        self.allowlist_only = acl.allowlist_only;
-        self.allow_keys = acl.allow_keys.into_iter().collect();
-        self.deny_keys = acl.deny_keys.into_iter().collect();
+    fn apply_reply_source_acl(&mut self, acl: ValidatedAclUpdate) {
+        let ValidatedAclUpdate {
+            allowlist_only,
+            allow_keys,
+            deny_keys,
+            allow_nets,
+            deny_nets,
+        } = acl;
+        self.allowlist_only = allowlist_only;
+        self.allow_keys = allow_keys.into_iter().collect();
+        self.deny_keys = deny_keys.into_iter().collect();
         self.allow_nets = allow_nets;
         self.deny_nets = deny_nets;
         self.requested_topology.retain(|peer_id| {
@@ -23283,10 +23308,13 @@ mod tests {
             acl_revoked.clone(),
             random_peer_id(),
         ])));
-        network.pending_reply_source_authority.acl = Some(message::UpdateAcl {
-            deny_keys: vec![acl_revoked.public_key().clone()],
-            ..message::UpdateAcl::default()
-        });
+        network.pending_reply_source_authority.acl = Some(
+            ValidatedAclUpdate::parse(message::UpdateAcl {
+                deny_keys: vec![acl_revoked.public_key().clone()],
+                ..message::UpdateAcl::default()
+            })
+            .expect("test ACL is valid"),
+        );
 
         let _ = network.reconcile_reliable_progress_topologies();
         let state = network
@@ -24889,15 +24917,48 @@ mod tests {
         );
     }
     #[test]
+    fn malformed_runtime_acl_is_rejected_before_staging() {
+        let_test_network!(network);
+        let allowed_peer = random_peer_id();
+        assert!(network.set_reply_source_acl(message::UpdateAcl {
+            allowlist_only: true,
+            allow_keys: vec![allowed_peer.public_key().clone()],
+            allow_cidrs: vec!["10.0.0.0/8".to_owned()],
+            ..message::UpdateAcl::default()
+        }));
+        assert!(network.pending_reply_source_authority.is_empty());
+        assert!(network.projected_reply_source_acl_allows(&allowed_peer));
+        assert_eq!(network.allow_nets.len(), 1);
+
+        assert!(!network.set_reply_source_acl(message::UpdateAcl {
+            deny_keys: vec![allowed_peer.public_key().clone()],
+            allow_cidrs: vec!["10.0.0.0/33".to_owned()],
+            ..message::UpdateAcl::default()
+        }));
+
+        assert!(
+            network.pending_reply_source_authority.is_empty(),
+            "a malformed update must not enter the pending authority state"
+        );
+        assert!(network.allowlist_only);
+        assert!(network.allow_keys.contains(allowed_peer.public_key()));
+        assert!(network.deny_keys.is_empty());
+        assert_eq!(network.allow_nets.len(), 1);
+        assert!(network.projected_reply_source_acl_allows(&allowed_peer));
+    }
+    #[test]
     fn acl_revoked_hub_address_cannot_recreate_a_dial_candidate() {
         let_test_network!(network);
         network.relay_mode = iroha_config::parameters::actual::RelayMode::Assist;
         let hub = test_peer(socket_addr!(127.0.0.1:45710));
         network.relay_hub_addresses.push(hub.address().clone());
-        network.apply_reply_source_acl(message::UpdateAcl {
-            deny_keys: vec![hub.id().public_key().clone()],
-            ..message::UpdateAcl::default()
-        });
+        network.apply_reply_source_acl(
+            ValidatedAclUpdate::parse(message::UpdateAcl {
+                deny_keys: vec![hub.id().public_key().clone()],
+                ..message::UpdateAcl::default()
+            })
+            .expect("test ACL is valid"),
+        );
 
         network.set_current_peers_addresses(UpdatePeers(vec![(
             hub.id().clone(),
@@ -24913,7 +24974,9 @@ mod tests {
                 .all(|(_, candidate)| candidate.id() != hub.id())
         );
 
-        network.apply_reply_source_acl(message::UpdateAcl::default());
+        network.apply_reply_source_acl(
+            ValidatedAclUpdate::parse(message::UpdateAcl::default()).expect("default ACL is valid"),
+        );
 
         assert!(
             network.relay_hub_candidates.contains(hub.id()),
@@ -25199,10 +25262,13 @@ mod tests {
     #[test]
     fn malformed_runtime_acl_update_preserves_the_installed_policy() {
         let_test_network!(network);
-        network.apply_reply_source_acl(message::UpdateAcl {
-            deny_cidrs: vec!["10.0.0.0/8".to_owned()],
-            ..message::UpdateAcl::default()
-        });
+        network.apply_reply_source_acl(
+            ValidatedAclUpdate::parse(message::UpdateAcl {
+                deny_cidrs: vec!["10.0.0.0/8".to_owned()],
+                ..message::UpdateAcl::default()
+            })
+            .expect("test ACL is valid"),
+        );
         assert!(!network.allow_ip(IpAddr::from([10, 4, 3, 2])));
         assert!(network.allow_ip(IpAddr::from([192, 0, 2, 1])));
 

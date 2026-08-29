@@ -542,9 +542,19 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
             mut ready,
             store,
             coordinator,
-            successor: _,
-            retry_owner: _,
+            successor,
+            retry_owner,
         } = owned;
+        assert_eq!(
+            successor.lifecycle_ordinal(),
+            ready.lease.ordinal(),
+            "{row:?}: the publication successor must retain the Ready Validate row",
+        );
+        assert_eq!(
+            retry_owner.lifecycle_ordinal(),
+            ready.lease.ordinal(),
+            "{row:?}: the retry owner must retain the Ready Validate row",
+        );
         let context = ready.fixture.verified.context().clone();
         let committee = crate::sumeragi::v2_core::Committee::project_indices(
             context.height,
@@ -983,17 +993,23 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
                 assert!(!settled_status.fail_closed, "{row:?}");
                 assert!(!output_guard.restart_required(), "{row:?}");
             }
-            let expected_retry_ordinal = matches!(
-                row,
+            let expected_retry_owner = match row {
                 ProductionReadyValidateDispatchRow::ValidatedBusy
-                    | ProductionReadyValidateDispatchRow::RejectedBusy
-            )
-            .then_some(lease.ordinal());
+                | ProductionReadyValidateDispatchRow::RejectedBusy => Some(Some(lease.ordinal())),
+                ProductionReadyValidateDispatchRow::LocalValidatedBusy
+                | ProductionReadyValidateDispatchRow::ValidatedInactive
+                | ProductionReadyValidateDispatchRow::ValidatedNoEffect
+                | ProductionReadyValidateDispatchRow::RejectedInactive
+                | ProductionReadyValidateDispatchRow::RejectedNoEffect => Some(None),
+                ProductionReadyValidateDispatchRow::ValidatedApply
+                | ProductionReadyValidateDispatchRow::ValidatedPersist
+                | ProductionReadyValidateDispatchRow::RejectedReport => None,
+            };
             assert_eq!(
                 executor
                     .validate_retry_lifecycle_ordinal_for_test((validate_round, validate_subject,)),
-                Some(expected_retry_ordinal),
-                "{row:?}: only an unresolved Busy parent may retain its retry ordinal"
+                expected_retry_owner,
+                "{row:?}: retry state must distinguish an active owner, a released tombstone, and successor-consumed absence"
             );
             let mut expected_apply_successor_broadcast_ordinal = None;
             if let Some(child_ordinal) = expected_successor_ordinal {

@@ -188,10 +188,10 @@ pub enum SccpReplayPrincipalV1 {
 impl SccpReplayPrincipalV1 {
     fn canonical_parts(&self) -> Result<(u8, Vec<u8>), SccpReplayAccumulatorError> {
         let (kind, bytes) = match self {
-            Self::SoraAccount(account) => (1, account.encode()),
-            Self::Evm(address) => (2, address.to_vec()),
-            Self::Tron(address) => (3, address.to_vec()),
-            Self::Ton(account) => (4, account.canonical_bytes().to_vec()),
+            Self::SoraAccount(account) => (0, account.encode()),
+            Self::Evm(address) => (1, address.to_vec()),
+            Self::Tron(address) => (2, address.to_vec()),
+            Self::Ton(account) => (3, account.canonical_bytes().to_vec()),
         };
         if bytes.is_empty() || u16::try_from(bytes.len()).is_err() {
             return Err(SccpReplayAccumulatorError::InvalidPrincipal);
@@ -840,7 +840,7 @@ mod tests {
         );
         assert_eq!(
             sccp_replay_record_digest_v1(&record).expect("golden record is valid"),
-            hex32("35ab8613a0be06397609861d3cb3383770948b24b1cf098f4006c232240a2c07")
+            hex32("31e4f2267d63d21101ab070e04aefe660df9681d3e12b263b61676e07c6f4aa5")
         );
         assert_eq!(
             empty_witness().expected_shard_root,
@@ -853,7 +853,7 @@ mod tests {
         assert_eq!(delta.shard, 19);
         assert_eq!(
             delta.new_root,
-            hex32("7b47c79900f052fd4b73691e2fe2230fdf170225d54e9a248e176f30495ac918")
+            hex32("d9c75ee102ec40076d903d6d5a0c3b0f9a9fa006ea9a2638274be11712ffb849")
         );
     }
 

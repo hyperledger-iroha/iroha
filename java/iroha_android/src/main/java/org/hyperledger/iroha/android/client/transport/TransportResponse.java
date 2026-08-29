@@ -12,9 +12,9 @@ import java.util.TreeMap;
  * SDK-owned transport response wrapper to decouple callers from {@code java.net.http.HttpResponse}.
  *
  * <p>{@link #finalUri()} and {@link #redirected()} carry network provenance for response paths that
- * must remain bound to an exact signed URI. The four-argument constructor remains available for
- * response paths that do not require that provenance; exact signed-response consumers fail closed
- * when {@link #finalUri()} is absent.
+ * must remain bound to an exact signed URI. Callers must provide both fields explicitly; {@link
+ * #finalUri()} is {@code null} only when the response source genuinely cannot establish network
+ * provenance.
  */
 public final class TransportResponse {
 
@@ -24,14 +24,6 @@ public final class TransportResponse {
   private final Map<String, List<String>> headers;
   private final URI finalUri;
   private final boolean redirected;
-
-  public TransportResponse(
-      final int statusCode,
-      final byte[] body,
-      final String message,
-      final Map<String, List<String>> headers) {
-    this(statusCode, body, message, headers, null, false);
-  }
 
   /** Creates a response with explicit final-URI and redirect provenance. */
   public TransportResponse(

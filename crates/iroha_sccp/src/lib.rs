@@ -183,7 +183,7 @@ pub const SCCP_DOMAIN_BSC: u32 = 2;
 /// SCCP protocol domain assigned to TON networks.
 pub const SCCP_DOMAIN_TON: u32 = 4;
 /// SCCP protocol domain assigned to TRON networks.
-pub const SCCP_DOMAIN_TRON: u32 = 5;
+pub const SCCP_DOMAIN_TRON: u32 = 3;
 /// Public TAIRA chain label retained as SCCP deployment metadata.
 pub const SCCP_TAIRA_CHAIN_ID_V1: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
 /// Canonical checked TAIRA network identity bound into TAIRA-origin SCCP finality proofs.
@@ -214,33 +214,33 @@ pub const SCCP_FINALIZE_FROM_TAIRA_ABI_V1: &str =
 /// Keccak-256 selector for [`SCCP_FINALIZE_FROM_TAIRA_ABI_V1`].
 pub const SCCP_FINALIZE_FROM_TAIRA_SELECTOR_V1: [u8; 4] = [0x7f, 0x4f, 0x9e, 0x5d];
 /// Printable ASCII or an exact canonical I105 account identifier.
-pub const SCCP_CODEC_CANONICAL_TEXT: u8 = 1;
+pub const SCCP_CODEC_CANONICAL_TEXT: u8 = 0;
 /// Raw nonzero 20-byte EVM account address.
-pub const SCCP_CODEC_EVM_ADDRESS20: u8 = 2;
+pub const SCCP_CODEC_EVM_ADDRESS20: u8 = 1;
 /// Raw nonzero TRON account including its mandatory `0x41` network prefix.
-pub const SCCP_CODEC_TRON_ADDRESS21: u8 = 5;
+pub const SCCP_CODEC_TRON_ADDRESS21: u8 = 2;
 /// Raw TON account: signed big-endian `i32` workchain followed by a nonzero
 /// 32-byte account id.
 ///
 /// V1 value-moving routes require workchain `0`; friendly/base64 flags and
 /// checksums are presentation-only and are never admitted as alternate wire
 /// encodings.
-pub const SCCP_CODEC_TON_ACCOUNT36: u8 = 7;
+pub const SCCP_CODEC_TON_ACCOUNT36: u8 = 3;
 /// Maximum byte length of one canonical textual SCCP wire value.
 pub const SCCP_MAX_CANONICAL_TEXT_BYTES_V1: usize = 256;
 /// Closed list of external protocol domains implemented by SCCP V1.
 pub const SCCP_CORE_REMOTE_DOMAINS: [u32; 4] = [
     SCCP_DOMAIN_ETH,
     SCCP_DOMAIN_BSC,
-    SCCP_DOMAIN_TON,
     SCCP_DOMAIN_TRON,
+    SCCP_DOMAIN_TON,
 ];
 /// Remote SCCP domains in the current supported production launch scope.
 pub const SCCP_SUPPORTED_LAUNCH_REMOTE_DOMAINS_V1: [u32; 4] = [
     SCCP_DOMAIN_ETH,
     SCCP_DOMAIN_BSC,
-    SCCP_DOMAIN_TON,
     SCCP_DOMAIN_TRON,
+    SCCP_DOMAIN_TON,
 ];
 /// Return whether every key in an account controller is executable by the V1
 /// EVM/TVM destination contracts.
@@ -719,7 +719,7 @@ pub enum SccpPayloadV1 {
     Transfer(TransferPayloadV1),
 }
 impl SccpPayloadV1 {
-    const TRANSFER_DISCRIMINANT: u8 = 2;
+    const TRANSFER_DISCRIMINANT: u8 = 0;
 }
 /// Failure to encode a value in the canonical SCCP V1 payload layout.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -5938,7 +5938,7 @@ pub fn canonical_commitment_bytes(commitment: &SccpHubCommitmentV1) -> Vec<u8> {
     push_u8(
         &mut out,
         match commitment.kind {
-            SccpHubMessageKind::Transfer => 5,
+            SccpHubMessageKind::Transfer => 0,
         },
     );
     push_u8(
@@ -5960,7 +5960,7 @@ pub fn decode_canonical_commitment_bytes(bytes: &[u8]) -> Option<SccpHubCommitme
     let mut cursor = PayloadCursor::new(bytes);
     let version = cursor.take_u8()?;
     let kind = match cursor.take_u8()? {
-        5 => SccpHubMessageKind::Transfer,
+        0 => SccpHubMessageKind::Transfer,
         _ => return None,
     };
     let source = sccp_network_from_tag_v1(cursor.take_u8()?)?;
@@ -6386,6 +6386,11 @@ mod tests {
     };
     use std::{cell::Cell, sync::OnceLock};
     const TEST_MAX_OUTSTANDING_LIABILITY: u128 = 1_000_000_000_000;
+
+    const fn test_max_wrapped_supply(multiplier: u64) -> u128 {
+        TEST_MAX_OUTSTANDING_LIABILITY * multiplier as u128
+    }
+
     struct OutboundFixture {
         route: SccpGovernedRouteV1,
         bundle: TairaSccpMessageProofV1,
@@ -6393,10 +6398,6 @@ mod tests {
         artifact: SccpGroth16Bn254ProofArtifactV1,
         bridge_proof: BridgeSccpDestinationProofV1,
     }
-    const fn test_max_wrapped_supply(multiplier: u64) -> u128 {
-        TEST_MAX_OUTSTANDING_LIABILITY * multiplier as u128
-    }
-
     #[test]
     fn taira_finality_network_id_matches_the_governed_genesis_vector() {
         assert_eq!(

@@ -26,10 +26,10 @@ const ROUTE_REVISION = 7;
 const DOMAIN_SORA = 0;
 const DOMAIN_ETHEREUM = 1;
 const DOMAIN_BSC = 2;
-const DOMAIN_TRON = 5;
-const CODEC_TEXT = 1;
-const CODEC_EVM20 = 2;
-const CODEC_TRON21 = 5;
+const DOMAIN_TRON = 3;
+const CODEC_TEXT = 0;
+const CODEC_EVM20 = 1;
+const CODEC_TRON21 = 2;
 const SCALE = 1_000_000_000n;
 const MAX_U128 = (1n << 128n) - 1n;
 const TEST_MAX_WRAPPED_SUPPLY = 1_000_000n * SCALE;
@@ -1239,7 +1239,7 @@ function transferPayload({
   route = "taira_bsc_xor",
 }) {
   return Buffer.concat([
-    Buffer.from([2, 1]),
+    Buffer.from([0, 1]),
     le(sourceDomain, 4),
     le(destinationDomain, 4),
     le(nonce, 8),

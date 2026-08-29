@@ -25644,8 +25644,8 @@ signed ancestor-linked solid-block header proof,
   unknown fields, forcing future java-tron call extensions to fail closed until
   they are explicitly profiled and bound. The signed `raw_data` parser now also
   requires non-zero ref-block bytes/hash, non-zero expiration/timestamp/fee limit,
-  and `expiration > timestamp`, while keeping deprecated `ref_block_num`
-  optional. The Rust source-call calldata helper
+  and `expiration > timestamp`, and rejects deprecated `ref_block_num` field 3.
+  The Rust source-call calldata helper
   and source-adapter deployment builder are now
   locked to the same production TRON -> SORA lane as the SDK helpers and reject
   non-TRON sources, non-SORA targets, and zero source-event digests before

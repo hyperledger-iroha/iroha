@@ -46,17 +46,17 @@ public struct SccpReplayPrincipalV1: Sendable {
         else {
             throw SccpV1Error.invalid("SORA replay principal is not a canonical AccountId")
         }
-        return Self(kind: 1, bytes: canonicalAccountId)
+        return Self(kind: 0, bytes: canonicalAccountId)
     }
 
     /// Construct an EVM principal from one nonzero 20-byte address.
     public static func evm(_ address: Data) throws -> Self {
-        Self(kind: 2, bytes: try SccpReplayV1.exact(address, count: 20, label: "EVM replay principal"))
+        Self(kind: 1, bytes: try SccpReplayV1.exact(address, count: 20, label: "EVM replay principal"))
     }
 
     /// Construct a TRON principal from one nonzero 20-byte account payload.
     public static func tron(_ address: Data) throws -> Self {
-        Self(kind: 3, bytes: try SccpReplayV1.exact(address, count: 20, label: "TRON replay principal"))
+        Self(kind: 2, bytes: try SccpReplayV1.exact(address, count: 20, label: "TRON replay principal"))
     }
 
     /// Construct a TON principal from its signed workchain and account bytes.
@@ -69,7 +69,7 @@ public struct SccpReplayPrincipalV1: Sendable {
             UInt8(truncatingIfNeeded: value),
         ])
         return Self(
-            kind: 4,
+            kind: 3,
             bytes: prefix + (try SccpReplayV1.exact(account, count: 32, label: "TON replay principal"))
         )
     }

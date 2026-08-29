@@ -1366,7 +1366,12 @@ class TairaDevnetTests(unittest.TestCase):
     """Exercise the small orchestration contract without real peers."""
 
     def setUp(self) -> None:
-        self.temporary = tempfile.TemporaryDirectory()
+        # Linux's shared /tmp is intentionally rejected by the production
+        # custody check. GitHub Actions provides a runner-owned temporary
+        # root; elsewhere retain the configured tempfile root so hostile
+        # ancestry tests still exercise the production validation.
+        test_temp_parent = os.environ.get("RUNNER_TEMP")
+        self.temporary = tempfile.TemporaryDirectory(dir=test_temp_parent)
         self.root = Path(self.temporary.name).resolve()
         self.process_ops = FakeProcessOps()
         self.process_ops_patch = mock.patch.object(

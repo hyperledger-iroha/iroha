@@ -48,7 +48,7 @@ class SccpV1Test {
             hash(0x55),
         )
         assertEquals(
-            "35ab8613a0be06397609861d3cb3383770948b24b1cf098f4006c232240a2c07",
+            "31e4f2267d63d21101ab070e04aefe660df9681d3e12b263b61676e07c6f4aa5",
             SccpV1.encodeLowerHex(record),
         )
         val empty = SccpReplayV1.emptyHashes()
@@ -66,7 +66,7 @@ class SccpV1Test {
         assertTrue(nonMembership.matchesExpectedRoot)
         assertEquals(19, nonMembership.shard)
         val occupiedRoot = SccpV1.decodeLowerHex(
-            "7b47c79900f052fd4b73691e2fe2230fdf170225d54e9a248e176f30495ac918",
+            "d9c75ee102ec40076d903d6d5a0c3b0f9a9fa006ea9a2638274be11712ffb849",
         )
         val membership = SccpReplayV1.rootFromWitness(
             key,
@@ -175,6 +175,9 @@ class SccpV1Test {
         )) {
             assertNull(SccpNetworkV1.fromProfileKey(alias), alias)
         }
+        assertEquals(0, SccpHubMessageKindV1.TRANSFER.tag)
+        assertSame(SccpHubMessageKindV1.TRANSFER, SccpHubMessageKindV1.fromTag(0))
+        assertNull(SccpHubMessageKindV1.fromTag(5))
     }
 
     @Test
@@ -260,7 +263,7 @@ class SccpV1Test {
     @Test
     fun payloadDecoderRejectsRetiredVariantsTruncationTrailingAndNoncanonicalFields() {
         val canonical = outboundPayload().canonicalBytes()
-        for (discriminant in listOf(0, 1, 3, 4, 5, 255)) {
+        for (discriminant in listOf(1, 2, 3, 4, 5, 255)) {
             val hostile = canonical.copyOf().also { it[0] = discriminant.toByte() }
             assertFailsWith<IllegalArgumentException> { SccpV1.decodeCanonicalPayload(hostile) }
         }
@@ -283,12 +286,12 @@ class SccpV1Test {
 
     @Test
     fun transferRejectsRetiredDomainsCodecsAndInvalidWidths() {
-        for (domain in listOf(3, 6, -1)) {
+        for (domain in listOf(5, 6, -1)) {
             assertFailsWith<IllegalArgumentException> {
-                transfer(source = domain, destination = 0, senderCodec = 1, recipientCodec = 1)
+                transfer(source = domain, destination = 0, senderCodec = 0, recipientCodec = 0)
             }
         }
-        for (codec in listOf(3, 4, 6, 0, 255)) {
+        for (codec in listOf(4, 5, 6, 7, 255)) {
             assertFailsWith<IllegalArgumentException> {
                 transfer(assetCodec = codec, asset = ByteArray(32) { 1 })
             }
@@ -301,12 +304,12 @@ class SccpV1Test {
         assertFailsWith<IllegalArgumentException> { transfer(asset = "contains space".toByteArray()) }
         assertFailsWith<IllegalArgumentException> { transfer(asset = ByteArray(257) { 'a'.code.toByte() }) }
         assertFailsWith<IllegalArgumentException> {
-            transfer(destination = 5, recipientCodec = 5, recipient = byteArrayOf(0x42) + ByteArray(20) { 1 })
+            transfer(destination = 3, recipientCodec = 2, recipient = byteArrayOf(0x42) + ByteArray(20) { 1 })
         }
         val tonRecipient = ByteArray(36).also { it.fill(0x31.toByte(), 4) }
         val ton = transfer(
             destination = 4,
-            recipientCodec = 7,
+            recipientCodec = 3,
             recipient = tonRecipient,
             route = "taira_ton_xor".toByteArray(),
         )
@@ -314,7 +317,7 @@ class SccpV1Test {
         assertFailsWith<IllegalArgumentException> {
             transfer(
                 destination = 4,
-                recipientCodec = 7,
+                recipientCodec = 3,
                 recipient = tonRecipient.copyOf().also { it[3] = 1 },
             )
         }
@@ -339,9 +342,9 @@ class SccpV1Test {
         val accepted = transfer(
             source = 1,
             destination = 0,
-            senderCodec = 2,
+            senderCodec = 1,
             sender = ByteArray(20) { 1 },
-            recipientCodec = 1,
+            recipientCodec = 0,
             recipient = canonical.toByteArray(Charsets.UTF_8),
         )
         assertContentEquals(canonical.toByteArray(Charsets.UTF_8), accepted.recipient())
@@ -359,9 +362,9 @@ class SccpV1Test {
                 transfer(
                     source = 1,
                     destination = 0,
-                    senderCodec = 2,
+                    senderCodec = 1,
                     sender = ByteArray(20) { 1 },
-                    recipientCodec = 1,
+                    recipientCodec = 0,
                     recipient = invalid,
                 )
             }
@@ -403,8 +406,8 @@ class SccpV1Test {
     fun commitmentDecoderRejectsTagTamperingCollisionsAndTrailingBytes() {
         val lane = SccpLaneIdV1(SccpNetworkV1.SORA_TAIRA, SccpNetworkV1.TRON_MAINNET)
         val payload = transfer(
-            destination = 5,
-            recipientCodec = 5,
+            destination = 3,
+            recipientCodec = 2,
             recipient = byteArrayOf(0x41) + ByteArray(20) { 4 },
             route = "taira_tron_xor".toByteArray(),
         )
@@ -457,12 +460,12 @@ class SccpV1Test {
         source: Int = 0,
         destination: Int = 2,
         routeRevision: Long = 1,
-        assetCodec: Int = 1,
+        assetCodec: Int = 0,
         asset: ByteArray = "xor".toByteArray(),
         amount: BigInteger = BigInteger.ONE,
-        senderCodec: Int = 1,
+        senderCodec: Int = 0,
         sender: ByteArray = "alice@taira".toByteArray(),
-        recipientCodec: Int = 2,
+        recipientCodec: Int = 1,
         recipient: ByteArray = ByteArray(20) { 1 },
         route: ByteArray = "taira_bsc_xor".toByteArray(),
     ) = SccpTransferPayloadV1(
@@ -478,7 +481,7 @@ class SccpV1Test {
         sender,
         recipientCodec,
         recipient,
-        1,
+        0,
         route,
     )
 

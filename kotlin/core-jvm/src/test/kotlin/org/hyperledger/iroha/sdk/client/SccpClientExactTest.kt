@@ -1711,13 +1711,13 @@ class SccpClientExactTest {
 
         val tronProjection = recent(9, MESSAGE_ID).also {
             it["target_profile"] = "tron-mainnet"
-            it["target_domain"] = 5
+            it["target_domain"] = 3
             it["route_id"] = "taira_tron_xor"
         }
         @Suppress("UNCHECKED_CAST")
         val tronTransfer = (tronProjection["payload_projection"] as MutableMap<String, Any?>)["Transfer"]
             as MutableMap<String, Any?>
-        tronTransfer["dest_domain"] = 5
+        tronTransfer["dest_domain"] = 3
         tronTransfer["recipient"] = linkedMapOf(
             "TronAddress21" to linkedMapOf("bytes" to "0x41${"11".repeat(20)}"),
         )
@@ -2525,14 +2525,14 @@ class SccpClientExactTest {
         "nonce" to "7",
         "route_revision" to 1,
         "asset_home_domain" to 0,
-        "asset_id_codec" to 1,
+        "asset_id_codec" to 0,
         "asset_id" to "0x786f72",
         "amount" to "1000",
-        "sender_codec" to 1,
+        "sender_codec" to 0,
         "sender" to "0x616c696365407461697261",
-        "recipient_codec" to 2,
+        "recipient_codec" to 1,
         "recipient" to "0x${hash(0x11).take(40)}",
-        "route_id_codec" to 1,
+        "route_id_codec" to 0,
         "route_id" to "0x74616972615f6273635f786f72",
     )
 

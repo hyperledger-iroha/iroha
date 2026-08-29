@@ -166,8 +166,8 @@ public struct SccpBridgeResponseExpectation: Equatable, Sendable {
         self.messageIdHex = try messageIdHex.map {
             try SccpSubmitValidation.responseHash($0, field: "expected message_id_hex")
         }
-        if let counterpartyDomain, !(1...5).contains(counterpartyDomain) {
-            throw SccpV1Error.invalid("expected counterparty_domain must be in 1...5")
+        if let counterpartyDomain, !(1...4).contains(counterpartyDomain) {
+            throw SccpV1Error.invalid("expected counterparty_domain must be in 1...4")
         }
         if let counterpartyChain, !counterpartyChain.isExternal {
             throw SccpV1Error.invalid("expected counterparty_chain must be external")
@@ -232,7 +232,7 @@ public struct SccpBridgeSubmitResponse: Equatable, Sendable {
         guard exactBackends.contains(backend) else {
             throw SccpV1Error.invalid("backend must be one closed SCCP V1 backend label")
         }
-        let domain = try SccpStrictJSON.uint32(object, "counterparty_domain", minimum: 1, maximum: 5)
+        let domain = try SccpStrictJSON.uint32(object, "counterparty_domain", minimum: 1, maximum: 4)
         let chainKey = try SccpStrictJSON.text(object, "counterparty_chain")
         guard let chain = SccpNetworkV1(rawValue: chainKey), chain.isExternal, chain.domainId == domain else {
             throw SccpV1Error.invalid("counterparty_chain and counterparty_domain must identify one exact external network")

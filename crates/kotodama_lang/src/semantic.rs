@@ -5941,6 +5941,7 @@ fn json_from_expr(expr: &Expr) -> Result<Json, SemanticError> {
                 .try_to_i64()
                 .map(JsonNumber::I64)
                 .or_else(|| value.try_to_u64().map(JsonNumber::U64))
+                .or_else(|| value.try_to_u128().map(JsonNumber::U128))
                 .ok_or_else(|| SemanticError {
                 code: "E_TRIGGER_METADATA_VALUE",
                 message: "trigger metadata JSON cannot represent this int exactly; use an explicit string or typed state value"
@@ -15273,6 +15274,26 @@ fn enforce_permission_requirements(
 mod tests {
     use super::*;
     use crate::parser::parse_test_fragment as parse;
+
+    #[test]
+    fn trigger_metadata_integer_domain_is_exact_through_u128() {
+        for raw in [
+            "18446744073709551616",
+            "340282366920938463463374607431768211455",
+        ] {
+            let value = raw.parse().expect("integer fits the Kotodama int domain");
+            let json = json_from_expr(&Expr::IntLiteral(value))
+                .expect("unsigned 128-bit metadata integer must lower exactly");
+            assert_eq!(json.to_string(), raw);
+        }
+
+        let above_max = "340282366920938463463374607431768211456"
+            .parse()
+            .expect("u128::MAX + 1 fits the Kotodama int domain");
+        let error = json_from_expr(&Expr::IntLiteral(above_max))
+            .expect_err("metadata integers above u128 must be rejected");
+        assert_eq!(error.code, "E_TRIGGER_METADATA_VALUE");
+    }
 
     #[test]
     fn typed_aggregate_traits_are_spawn_free_for_flat_width() {

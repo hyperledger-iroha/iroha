@@ -88,7 +88,7 @@ public final class SccpV1 {
   /** Decode exactly one canonical transfer payload and reject retired or trailing forms. */
   public static SccpTransferPayloadV1 decodeCanonicalPayload(final byte[] bytes) {
     final Cursor cursor = new Cursor(bytes);
-    if (cursor.u8() != 2) {
+    if (cursor.u8() != 0) {
       throw new IllegalArgumentException("unsupported or retired SCCP payload discriminant");
     }
     if (cursor.u8() != 1) {
@@ -251,7 +251,7 @@ public final class SccpV1 {
   }
 
   static void requireDomain(final int value, final String field) {
-    if (value != 0 && value != 1 && value != 2 && value != 4 && value != 5) {
+    if (value < 0 || value > 4) {
       throw new IllegalArgumentException(field + " must be a supported SCCP domain");
     }
   }
@@ -265,10 +265,10 @@ public final class SccpV1 {
 
   static int accountCodec(final int domain) {
     return switch (domain) {
-      case 0 -> 1;
-      case 1, 2 -> 2;
-      case 4 -> 7;
-      case 5 -> 5;
+      case 0 -> 0;
+      case 1, 2 -> 1;
+      case 3 -> 2;
+      case 4 -> 3;
       default -> throw new IllegalArgumentException("unsupported SCCP domain");
     };
   }
@@ -319,16 +319,16 @@ public final class SccpV1 {
     }
     boolean valid;
     switch (codec) {
-      case 1 -> {
+      case 0 -> {
         valid = isCanonicalText(value, field);
       }
-      case 2 -> valid = value.length == 20 && !allZero(value);
-      case 5 ->
+      case 1 -> valid = value.length == 20 && !allZero(value);
+      case 2 ->
           valid =
               value.length == 21
                   && (value[0] & 0xff) == 0x41
                   && !allZero(Arrays.copyOfRange(value, 1, value.length));
-      case 7 ->
+      case 3 ->
           valid =
               value.length == 36
                   && allZero(Arrays.copyOfRange(value, 0, 4))

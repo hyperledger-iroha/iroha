@@ -128,7 +128,7 @@ contract SccpSha256ReplayForest {
         returns (bytes32)
     {
         require(_validOperation(record.operation), "SR04");
-        require(record.principalKind == 2 || record.principalKind == 3,
+        require(record.principalKind == 1 || record.principalKind == 2,
             "SR05");
         require(
             record.replayId != bytes32(0)

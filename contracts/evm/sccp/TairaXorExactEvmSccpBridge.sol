@@ -101,13 +101,13 @@ abstract contract TairaXorExactEvmSccpBridge {
     uint32 internal constant DOMAIN_SORA = 0;
     uint32 internal constant DOMAIN_ETHEREUM = 1;
     uint32 internal constant DOMAIN_BSC = 2;
-    uint8 internal constant CODEC_TEXT = 1;
-    uint8 internal constant CODEC_EVM20 = 2;
+    uint8 internal constant CODEC_TEXT = 0;
+    uint8 internal constant CODEC_EVM20 = 1;
     uint32 private constant REPLAY_NETWORK_SORA = 0x40;
     uint32 private constant REPLAY_NETWORK_ETHEREUM = 0x41;
     uint32 private constant REPLAY_NETWORK_BSC = 0x42;
     uint8 private constant REPLAY_ACTOR_EVM = 1;
-    uint8 private constant REPLAY_PRINCIPAL_EVM = 2;
+    uint8 private constant REPLAY_PRINCIPAL_EVM = 1;
     uint8 private constant REPLAY_EVM_SOURCE_BURN = 0x10;
     uint8 private constant REPLAY_EVM_DESTINATION_MINT = 0x11;
     uint256 internal constant TAIRA_TO_TOKEN_SCALE = 1000000000;
@@ -671,7 +671,7 @@ abstract contract TairaXorExactEvmSccpBridge {
         private view returns (address recipient, uint256 amount)
     {
         uint256 offset = 0;
-        require(_readU8(payload, offset++) == 2, "SC_PAYLOAD");
+        require(_readU8(payload, offset++) == 0, "SC_PAYLOAD");
         require(_readU8(payload, offset++) == 1, "SC_PAYLOAD");
         require(_readU32Le(payload, offset) == DOMAIN_SORA, "SC_PAYLOAD"); offset += 4;
         require(_readU32Le(payload, offset) == externalDomain, "SC_PAYLOAD"); offset += 4;

@@ -6,17 +6,16 @@ const SCCP_DOMAIN_TON = 4
 /// SORA SCCP protocol-domain identifier.
 const SCCP_DOMAIN_SORA = 0
 /// Canonical TON account codec identifier.
-// Codec ids 3 and 4 belonged to retired presentation codecs and must never be reused.
-const SCCP_CODEC_TON_ADDRESS36 = 7
+const SCCP_CODEC_TON_ADDRESS36 = 3
 /// Canonical text codec identifier.
-const SCCP_CODEC_CANONICAL_TEXT = 1
+const SCCP_CODEC_CANONICAL_TEXT = 0
 /// Taira XOR uses nine decimal places; the TON Jetton uses the same base unit.
 const SCCP_TAIRA_TO_TON_MULTIPLIER = 1
 /// Maximum TEP-74 `VarUInteger 16` value (15 value bytes).
 const SCCP_MAX_JETTON_AMOUNT = 0xffffffffffffffffffffffffffffff
 
 const SCCP_PAYLOAD_VERSION = 1
-const SCCP_PAYLOAD_DISCRIMINATOR = 2
+const SCCP_PAYLOAD_DISCRIMINATOR = 0
 const SCCP_MESSAGE_SCHEMA_VERSION = 1
 const SCCP_STORAGE_VERSION = 1
 const SCCP_TON_MAINNET_GLOBAL_ID = -239

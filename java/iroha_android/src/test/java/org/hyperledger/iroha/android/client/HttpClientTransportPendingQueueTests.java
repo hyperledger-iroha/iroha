@@ -83,7 +83,8 @@ public final class HttpClientTransportPendingQueueTests {
               .build();
       final HttpTransportExecutor failingExecutor =
           request ->
-              CompletableFuture.completedFuture(new TransportResponse(503, new byte[0], "", Map.of()));
+              CompletableFuture.completedFuture(
+                  new TransportResponse(503, new byte[0], "", Map.of(), null, false));
       final HttpClientTransport transport = new HttpClientTransport(failingExecutor, config);
       try {
         transport.submitTransaction(fakeTransaction("telemetry-failure")).join();

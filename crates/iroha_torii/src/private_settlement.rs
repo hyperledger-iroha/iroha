@@ -191,24 +191,26 @@ async fn reconcile_private_settlement_finality_tick_v1(
         if page.next_cursor.is_some() && page.next_cursor == cursor {
             return Err(PrivateSettlementReconciliationFailureV1::CursorDidNotAdvance);
         }
-        let view = state.view();
-        let authoritative_height = u64::try_from(view.height())
-            .map_err(|_| PrivateSettlementReconciliationFailureV1::HeightUnavailable)?;
-        let world = view.world();
-        let work = page
-            .candidates
-            .into_iter()
-            .map(|candidate| PrivateSettlementReconciliationWorkV1 {
-                payload_digest: candidate.payload_digest,
-                receipt: world
-                    .private_settlement_receipt_v1(&candidate.bundle_id)
-                    .cloned(),
-                abort: world
-                    .private_settlement_abort_v1(&candidate.bundle_id)
-                    .copied(),
-            })
-            .collect::<Vec<_>>();
-        drop(view);
+        let (authoritative_height, work) = {
+            let view = state.view();
+            let authoritative_height = u64::try_from(view.height())
+                .map_err(|_| PrivateSettlementReconciliationFailureV1::HeightUnavailable)?;
+            let world = view.world();
+            let work = page
+                .candidates
+                .into_iter()
+                .map(|candidate| PrivateSettlementReconciliationWorkV1 {
+                    payload_digest: candidate.payload_digest,
+                    receipt: world
+                        .private_settlement_receipt_v1(&candidate.bundle_id)
+                        .cloned(),
+                    abort: world
+                        .private_settlement_abort_v1(&candidate.bundle_id)
+                        .copied(),
+                })
+                .collect::<Vec<_>>();
+            (authoritative_height, work)
+        };
         if !work.is_empty() {
             let blocking_store = Arc::clone(&store);
             tokio::task::spawn_blocking(move || {

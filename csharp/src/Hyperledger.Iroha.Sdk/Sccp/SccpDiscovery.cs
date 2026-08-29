@@ -992,7 +992,7 @@ internal static class SccpExactParser
             ["version", "message_id", "payload_hash", "target_domain", "commitment_root", "finality_height", "finality_block_hash"],
             "SCCP proof public inputs");
         RequireVersion(inputs, "SCCP proof public inputs");
-        var targetDomain = SccpJson.UInt32(inputs, "target_domain", 1, 5);
+        var targetDomain = SccpJson.UInt32(inputs, "target_domain", 1, 4);
         if (targetDomain != target.DomainId())
         {
             throw new ArgumentException("SCCP target profile/domain mismatch.");
@@ -1192,7 +1192,7 @@ internal static class SccpExactParser
             var source = SccpNetworkV1Extensions.ParseProfileKey(SccpJson.Text(item, "source_profile"));
             var target = SccpNetworkV1Extensions.ParseProfileKey(SccpJson.Text(item, "target_profile"));
             var lane = new SccpLaneIdV1(source, target);
-            var targetDomain = SccpJson.UInt32(item, "target_domain", 1, 5);
+            var targetDomain = SccpJson.UInt32(item, "target_domain", 1, 4);
             if (!lane.IsOutbound || source != SccpNetworkV1.SoraTaira
                 || targetDomain != target.DomainId())
             {
@@ -2176,8 +2176,8 @@ internal static class SccpExactParser
             "route_id",
         ], "SCCP transfer payload");
         RequireVersion(item, "SCCP transfer payload");
-        if (SccpJson.UInt32(item, "source_domain", 0, 5) != lane.Source.DomainId()
-            || SccpJson.UInt32(item, "dest_domain", 0, 5) != lane.Target.DomainId())
+        if (SccpJson.UInt32(item, "source_domain", 0, 4) != lane.Source.DomainId()
+            || SccpJson.UInt32(item, "dest_domain", 0, 4) != lane.Target.DomainId())
         {
             throw new ArgumentException("SCCP transfer payload does not match its exact lane.");
         }
@@ -2284,7 +2284,7 @@ internal static class SccpExactParser
             $"{label}.Transfer");
         if (SccpJson.UInt64(transfer, "version", 1) != 1
             || SccpJson.UInt32(transfer, "source_domain", 0, 0) != 0
-            || SccpJson.UInt32(transfer, "dest_domain", 1, 5) != expectedDestinationDomain
+            || SccpJson.UInt32(transfer, "dest_domain", 1, 4) != expectedDestinationDomain
             || SccpJson.UInt32(transfer, "asset_home_domain", 0, 0) != 0)
         {
             throw new ArgumentException($"{label}.Transfer domains or version do not match the recent message.");

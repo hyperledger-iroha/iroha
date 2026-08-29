@@ -32,7 +32,7 @@ public sealed class SccpReplayV1Tests
             SccpReplayPrincipalV1.Evm(Repeated(0x33, 20)),
             Repeated(0x55, 32));
         Assert.Equal(
-            "35ab8613a0be06397609861d3cb3383770948b24b1cf098f4006c232240a2c07",
+            "31e4f2267d63d21101ab070e04aefe660df9681d3e12b263b61676e07c6f4aa5",
             SccpV1.LowerHex(recordDigest));
 
         var empty = SccpReplayV1.EmptyHashes();
@@ -51,7 +51,7 @@ public sealed class SccpReplayV1Tests
         Assert.True(SccpReplayV1.RootFromWitness(key, null, emptyWitness).MatchesExpectedRoot);
 
         var occupiedRoot = SccpV1.DecodeLowerHex(
-            "7b47c79900f052fd4b73691e2fe2230fdf170225d54e9a248e176f30495ac918");
+            "d9c75ee102ec40076d903d6d5a0c3b0f9a9fa006ea9a2638274be11712ffb849");
         var occupiedWitness = new SccpSparseMerkleWitnessV1(
             occupiedRoot,
             recordDigest,

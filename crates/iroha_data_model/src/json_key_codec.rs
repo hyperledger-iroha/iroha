@@ -918,18 +918,56 @@ mod tests {
             replay_key
         );
     }
+
+    #[test]
+    fn sccp_ethereum_route_json_key_codec_is_canonical() {
+        let key = SccpRouteKeyV1::new(
+            SccpLaneIdV1 {
+                source: SccpNetworkV1::EthereumMainnet,
+                target: SccpNetworkV1::SoraTaira,
+            },
+            "taira_eth_xor".to_owned(),
+            "xor".to_owned(),
+            12,
+        )
+        .expect("valid Ethereum route key");
+        let mut encoded = String::new();
+        key.encode_json_key(&mut encoded);
+        assert_eq!(
+            encoded,
+            "\"sccp-route-v1:ethereum-mainnet:sora-taira:taira_eth_xor:xor:12\""
+        );
+        let mut parser = Parser::new(&encoded);
+        let raw_key = parser.parse_string().expect("parse encoded JSON key");
+        assert_eq!(
+            SccpRouteKeyV1::decode_json_key(&raw_key).expect("decode canonical SCCP route key"),
+            key
+        );
+    }
+
     #[test]
     fn sccp_route_and_replay_accumulator_json_keys_reject_malleability() {
         for encoded in [
+            "ethereum-mainnet:sora-taira:taira_eth_xor:xor:12",
             "SCCP-ROUTE-V1:ton-mainnet:sora-taira:taira_ton_xor:xor:7",
             "sccp-route-v1:ton_mainnet:sora-taira:taira_ton_xor:xor:7",
+            "sccp-route-v1:eth-mainnet:sora-taira:taira_eth_xor:xor:12",
+            "sccp-route-v1:ethereum-mainnet:sora_taira:taira_eth_xor:xor:12",
             "sccp-route-v1:sora-taira:ton-mainnet:taira_ton_xor:xor:7",
+            "sccp-route-v1:ethereum-mainnet:bsc-mainnet:taira_eth_xor:xor:12",
+            "sccp-route-v1:ethereum-mainnet:sora-taira::xor:12",
             "sccp-route-v1:ton-mainnet:sora-taira:TAIRA_TON_XOR:xor:7",
+            "sccp-route-v1:ethereum-mainnet:sora-taira:-taira_eth_xor:xor:12",
             "sccp-route-v1:ton-mainnet:sora-taira:taira_ton_xor::7",
+            "sccp-route-v1:ethereum-mainnet:sora-taira:taira_eth_xor:XOR:12",
             "sccp-route-v1:ton-mainnet:sora-taira:taira_ton_xor:xor:07",
+            "sccp-route-v1:ethereum-mainnet:sora-taira:taira_eth_xor:xor:+12",
+            "sccp-route-v1:ethereum-mainnet:sora-taira:taira_eth_xor:xor: 12",
             "sccp-route-v1:ton-mainnet:sora-taira:taira_ton_xor:xor:0",
             "sccp-route-v1:ton-mainnet:sora-taira:taira_ton_xor:xor:4294967296",
             "sccp-route-v1:ton-mainnet:sora-taira:taira_ton_xor:xor:7:tail",
+            r#"{"lane_id":{"source":"ethereum_mainnet","target":"sora_taira"},"route_id":"taira_eth_xor","asset_key":"xor","revision":12}"#,
+            "",
         ] {
             assert!(
                 SccpRouteKeyV1::decode_json_key(encoded).is_err(),

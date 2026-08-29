@@ -34,8 +34,8 @@ public enum SccpNetworkV1: String, CaseIterable, Sendable {
         case .soraTaira: 0
         case .ethereumMainnet: 1
         case .bscMainnet: 2
+        case .tronMainnet: 3
         case .tonMainnet: 4
-        case .tronMainnet: 5
         }
     }
 
@@ -66,10 +66,10 @@ public struct SccpLaneIdV1: Equatable, Hashable, Sendable {
 
 /// Closed first-release SCCP binary codec inventory.
 public enum SccpCodecV1: UInt8, CaseIterable, Sendable {
-    case canonicalText = 1
-    case evmAddress20 = 2
-    case tronAddress21 = 5
-    case tonAccount36 = 7
+    case canonicalText = 0
+    case evmAddress20 = 1
+    case tronAddress21 = 2
+    case tonAccount36 = 3
 
     public var wireKey: String {
         switch self {
@@ -155,7 +155,7 @@ public struct SccpTonAddressV1: Equatable, Hashable, Sendable {
 
     public var isSccpBasechainContract: Bool { workchain == 0 }
 
-    /// Signed big-endian workchain followed by the raw account id, as used by codec 7.
+    /// Signed big-endian workchain followed by the raw account id, as used by codec 3.
     public func canonicalAccount36() throws -> Data {
         guard isSccpBasechainContract else {
             throw SccpV1Error.invalid("SCCP TON contracts must use basechain workchain 0")

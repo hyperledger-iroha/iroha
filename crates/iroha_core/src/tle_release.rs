@@ -1355,11 +1355,6 @@ pub(crate) mod tests {
         fixture_for_binding(binding(1), key_byte, binding(3))
     }
 
-    /// Build one deterministic, proof-valid public TLE key session for cross-module tests.
-    pub(crate) fn public_key_session_fixture_v1(key_byte: u8) -> TleKeySessionPublicStateV1 {
-        fixture_for_key(key_byte).validated.public_state().clone()
-    }
-
     /// Build a deterministic public TLE session bound to an exact consensus context.
     pub(crate) fn public_key_session_fixture_for_context_v1(
         network_id: [u8; 32],

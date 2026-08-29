@@ -13,9 +13,9 @@ library SccpExactTransferCodec {
     bytes internal constant MESSAGE_ID_PREFIX = "sccp:lane-message-id:v1";
     bytes internal constant SOURCE_EVENT_PREFIX = "sccp:source:event:v1";
 
-    uint8 internal constant CODEC_CANONICAL_TEXT = 1;
-    uint8 internal constant CODEC_EVM_ADDRESS20 = 2;
-    uint8 internal constant CODEC_TRON_ADDRESS21 = 5;
+    uint8 internal constant CODEC_CANONICAL_TEXT = 0;
+    uint8 internal constant CODEC_EVM_ADDRESS20 = 1;
+    uint8 internal constant CODEC_TRON_ADDRESS21 = 2;
 
     uint256 internal constant MAX_TEXT_BYTES = 256;
     uint256 internal constant MAX_U128 = (uint256(1) << 128) - 1;
@@ -82,7 +82,7 @@ library SccpExactTransferCodec {
 
     function tronNetwork(uint8 profile) internal pure returns (bytes memory) {
         require(profile == 0x43, "Unsupported TRON profile");
-        return abi.encodePacked(bytes1(0x01), bytes1(profile), u32le(5), u32le(0x2b6653dc));
+        return abi.encodePacked(bytes1(0x01), bytes1(profile), u32le(3), u32le(0x2b6653dc));
     }
 
     function tairaNetwork() internal pure returns (bytes memory) {
@@ -141,7 +141,7 @@ library SccpExactTransferCodec {
         require(_isPrintableAsciiText(fields.assetId) && _isPrintableAsciiText(fields.routeId),
             "Noncanonical route text");
         bytes memory header = abi.encodePacked(
-            bytes1(0x02), // SccpPayloadV1::Transfer
+            bytes1(0x00), // SccpPayloadV1::Transfer
             bytes1(0x01),
             u32le(fields.sourceDomain),
             u32le(fields.destinationDomain),

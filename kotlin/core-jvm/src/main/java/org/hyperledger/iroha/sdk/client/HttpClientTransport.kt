@@ -1182,33 +1182,6 @@ class HttpClientTransport(
     }
 
     /**
-     * Retained source-compatible overload that fails closed without a trusted draft intent.
-     *
-     * Use the overload accepting [ContractCallDraftIntent]; response echoes cannot establish the
-     * exact contract invocation or final metadata that a caller intends to sign.
-     */
-    fun prepareContractCall(
-        authority: String,
-        feePayment: FeePaymentIntent,
-        contractAddress: String? = null,
-        contractAlias: String? = null,
-        entrypoint: String,
-        payload: Any? = null,
-    ): CompletableFuture<ContractCallResponse> {
-        buildContractCallDraftPayload(
-            authority,
-            feePayment,
-            contractAddress,
-            contractAlias,
-            entrypoint,
-            payload,
-        )
-        throw IllegalStateException(
-            "prepareContractCall requires a caller-trusted ContractCallDraftIntent",
-        )
-    }
-
-    /**
      * Prepares and verifies an unsigned contract call against an off-wire caller-trusted intent.
      *
      * The intent must contain the exact resolved invocation and complete final transaction

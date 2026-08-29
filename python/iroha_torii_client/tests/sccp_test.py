@@ -582,14 +582,14 @@ def _bundle() -> Dict[str, Any]:
                 "nonce": "7",
                 "route_revision": 1,
                 "asset_home_domain": 0,
-                "asset_id_codec": 1,
+                "asset_id_codec": 0,
                 "asset_id": "0x786f72",
                 "amount": "1",
-                "sender_codec": 1,
+                "sender_codec": 0,
                 "sender": "0x616c696365",
-                "recipient_codec": 2,
+                "recipient_codec": 1,
                 "recipient": "0x" + HASH(0x21)[:40],
-                "route_id_codec": 1,
+                "route_id_codec": 0,
                 "route_id": "0x74616972615f6273635f786f72",
             }
         },
@@ -817,7 +817,7 @@ def test_closed_inventory_exposes_only_four_external_mainnets_and_taira() -> Non
         0x43,
         0x44,
     )
-    assert tuple(SCCP_CODEC_KEYS) == (1, 2, 5, 7)
+    assert tuple(SCCP_CODEC_KEYS) == (0, 1, 2, 3)
     assert SCCP_NETWORK_PROFILES["ton-mainnet"] == {
         "profile": "ton-mainnet",
         "tag": 0x44,
@@ -845,22 +845,23 @@ def test_closed_codecs_accept_exact_bytes_and_reject_retired_or_textual_aliases(
     assert normalize_sccp_codec_value(SCCP_CODEC_TRON_ADDRESS21, b"\x41" + b"\x02" * 20)
     assert normalize_sccp_codec_value(SCCP_CODEC_TON_ACCOUNT36, bytes(4) + b"\x03" * 32)
     for codec, value in (
-        (3, b"\x01" * 32),
-        (4, b"\x01" * 36),
+        (4, b"\x01" * 32),
+        (5, b"\x01" * 36),
         (6, b"\x01"),
-        (7, bytes(36)),
-        (7, b"\x00\x00\x00\x01" + b"\x01" * 32),
-        (7, b"\x01" * 35),
-        (2, "0x" + "11" * 20),
-        (2, b"\x00" * 20),
-        (5, b"\x42" + b"\x01" * 20),
-        (1, " padded"),
-        (1, "contains space"),
-        (1, "line\nbreak"),
-        (1, "merchant🙂"),
-        (1, AUTHORITY[:-1] + ("2" if AUTHORITY.endswith("1") else "1")),
-        (1, "n753" + AUTHORITY.removeprefix("sora")),
-        (1, AUTHORITY + "ｲ" * 100),
+        (7, b"\x01"),
+        (3, bytes(36)),
+        (3, b"\x00\x00\x00\x01" + b"\x01" * 32),
+        (3, b"\x01" * 35),
+        (1, "0x" + "11" * 20),
+        (1, b"\x00" * 20),
+        (2, b"\x42" + b"\x01" * 20),
+        (0, " padded"),
+        (0, "contains space"),
+        (0, "line\nbreak"),
+        (0, "merchant🙂"),
+        (0, AUTHORITY[:-1] + ("2" if AUTHORITY.endswith("1") else "1")),
+        (0, "n753" + AUTHORITY.removeprefix("sora")),
+        (0, AUTHORITY + "ｲ" * 100),
     ):
         with pytest.raises((TypeError, ValueError)):
             normalize_sccp_codec_value(codec, value)
@@ -1226,9 +1227,9 @@ def test_registry_rejects_legacy_or_ambiguous_v2_finality_anchor(
         ),
         (
             "tron-mainnet",
-            "92e97991624f1aa91809b0dc719fb1994869abddec2569406d2b041255e9ff12",
-            "9c3377fdc27d491c769623fb62980c96d0a16ff5fb4cc3a755b122835aa40de4",
-            "1c142b2b00e42ae4b6f95deda13939e8683016fb4c2f49ad91c8595c373b3cc4",
+            "83b2bb7f5497e89d613df3c6cfb745d84c4976dd4b447ddae65d8b485ee9a408",
+            "f95ad7752cf34aa4bf813e23cf517591372dbb7fef6e344c37ed16be63ff3414",
+            "060705f1fb6c32bde115dd29b6885cade7f734df4768772f1da857c914018fd9",
         ),
     ),
 )
@@ -1746,7 +1747,7 @@ def test_bundle_and_proof_request_are_closed_and_query_free() -> None:
     with pytest.raises(ValueError, match="role-separated"):
         normalize_sccp_message_bundle(aliased_commitment)
     reserved_domain = _bundle()
-    reserved_domain["payload"]["Transfer"]["dest_domain"] = 3
+    reserved_domain["payload"]["Transfer"]["dest_domain"] = 5
     with pytest.raises(ValueError, match="reserved"):
         normalize_sccp_message_bundle(reserved_domain)
     oversized_nonce = _bundle()
@@ -1754,7 +1755,7 @@ def test_bundle_and_proof_request_are_closed_and_query_free() -> None:
     with pytest.raises(ValueError, match="u64"):
         normalize_sccp_message_bundle(oversized_nonce)
     wrong_recipient_codec = _bundle()
-    wrong_recipient_codec["payload"]["Transfer"]["recipient_codec"] = 5
+    wrong_recipient_codec["payload"]["Transfer"]["recipient_codec"] = 2
     with pytest.raises(ValueError, match="protocol domain"):
         normalize_sccp_message_bundle(wrong_recipient_codec)
     long_merkle_path = _bundle()

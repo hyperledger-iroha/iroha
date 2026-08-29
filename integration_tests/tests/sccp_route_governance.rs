@@ -144,7 +144,7 @@ fn integration_route() -> SccpGovernedRouteV1 {
         mint_breaker_code_hash: [0x82; 32],
         taira_to_token_multiplier: SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER,
         max_wrapped_supply: TEST_MAX_OUTSTANDING_LIABILITY
-            * SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER as u128,
+            * u128::from(SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER),
     };
     let destination = SccpDestinationDeploymentV1::Evm(deployment);
     let route_configuration_hash = destination

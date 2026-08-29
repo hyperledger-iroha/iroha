@@ -14,7 +14,7 @@ use iroha_primitives::soradns::{
 };
 use norito::{
     decode_from_bytes,
-    json::{self, Value as NoritoJsonValue, native::Number as NoritoNumber},
+    json::{self, Value as NoritoJsonValue},
     to_bytes,
 };
 use serde::{Deserialize, Serialize};
@@ -2532,8 +2532,8 @@ fn load_rad_entries(rad_dir: &Path) -> Result<Vec<RadEntry>, DirectoryReleaseErr
             });
         }
         let rad_value = json::to_value(&rad)?;
-        let serde_value = norito_value_to_serde(&rad_value);
-        let canonical_json = canonical_json_bytes(&serde_value)?;
+        let mut canonical_json = json::to_json(&rad_value)?.into_bytes();
+        canonical_json.push(b'\n');
         let rad_digest = hash_rad(&canonical_json);
         let leaf_hash = hash_leaf(&rad_digest);
         entries.push(RadEntry {
@@ -2609,35 +2609,6 @@ fn canonicalize_value(value: &SerdeJsonValue) -> SerdeJsonValue {
             let mut obj = serde_json::Map::new();
             for (key, value) in entries {
                 obj.insert(key.clone(), canonicalize_value(value));
-            }
-            SerdeJsonValue::Object(obj)
-        }
-    }
-}
-fn norito_value_to_serde(value: &NoritoJsonValue) -> SerdeJsonValue {
-    match value {
-        NoritoJsonValue::Null => SerdeJsonValue::Null,
-        NoritoJsonValue::Bool(b) => SerdeJsonValue::Bool(*b),
-        NoritoJsonValue::Number(num) => {
-            let parsed = match num {
-                NoritoNumber::I64(v) => serde_json::Number::from(*v),
-                NoritoNumber::U64(v) => serde_json::Number::from(*v),
-                NoritoNumber::F64(v) => serde_json::Number::from_f64(*v)
-                    .expect("Norito emitted NaN/inf, which JSON forbids"),
-            };
-            SerdeJsonValue::Number(parsed)
-        }
-        NoritoJsonValue::String(s) => SerdeJsonValue::String(s.clone()),
-        NoritoJsonValue::Array(items) => SerdeJsonValue::Array(
-            items
-                .iter()
-                .map(norito_value_to_serde)
-                .collect::<Vec<SerdeJsonValue>>(),
-        ),
-        NoritoJsonValue::Object(map) => {
-            let mut obj = serde_json::Map::new();
-            for (key, value) in map.iter() {
-                obj.insert(key.clone(), norito_value_to_serde(value));
             }
             SerdeJsonValue::Object(obj)
         }

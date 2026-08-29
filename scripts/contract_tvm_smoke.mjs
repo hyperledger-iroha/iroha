@@ -28,14 +28,14 @@ const REPLAY_NETWORK_TRON = 0x43;
 const REPLAY_ACTOR_TRON = 2;
 const REPLAY_TRON_SOURCE_BURN = 0x20;
 const REPLAY_TRON_DESTINATION_MINT = 0x21;
-const REPLAY_PRINCIPAL_TRON = 3;
+const REPLAY_PRINCIPAL_TRON = 2;
 const REPLAY_DEPTH = 248;
 const REPLAY_MAGIC = Buffer.from("SCCP-REPLAY-SMT-V1", "utf8");
 const ZERO_WORD = `0x${"00".repeat(32)}`;
 const DOMAIN_TAIRA = 0;
-const DOMAIN_TRON = 5;
-const CODEC_TEXT = 1;
-const CODEC_TRON21 = 5;
+const DOMAIN_TRON = 3;
+const CODEC_TEXT = 0;
+const CODEC_TRON21 = 2;
 const ROUTE_REVISION = 7;
 const SCALE = 1_000_000_000n;
 const MAX_U128 = (1n << 128n) - 1n;
@@ -325,7 +325,7 @@ function vec(value) {
 
 function inboundTransferPayload(recipient, amount = 3n, nonce = 23n) {
   return Buffer.concat([
-    Buffer.from([2, 1]),
+    Buffer.from([0, 1]),
     le(DOMAIN_TAIRA, 4),
     le(DOMAIN_TRON, 4),
     le(nonce, 8),
@@ -345,7 +345,7 @@ function inboundTransferPayload(recipient, amount = 3n, nonce = 23n) {
 
 function outboundTransferPayload(sender, recipient, nonce, amount) {
   return Buffer.concat([
-    Buffer.from([2, 1]),
+    Buffer.from([0, 1]),
     le(DOMAIN_TRON, 4),
     le(DOMAIN_TAIRA, 4),
     le(nonce, 8),

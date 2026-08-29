@@ -51,17 +51,17 @@ class SccpReplayPrincipalV1 private constructor(internal val kind: Int, bytes: B
     companion object {
         /** Construct from the exact canonical Norito `AccountId` bytes. */
         @JvmStatic fun soraAccount(canonicalAccountId: ByteArray): SccpReplayPrincipalV1 =
-            SccpReplayPrincipalV1(1, canonicalSoraAccountId(canonicalAccountId))
+            SccpReplayPrincipalV1(0, canonicalSoraAccountId(canonicalAccountId))
 
         @JvmStatic fun evm(address: ByteArray): SccpReplayPrincipalV1 =
-            SccpReplayPrincipalV1(2, requireExact(address, 20, "EVM replay principal"))
+            SccpReplayPrincipalV1(1, requireExact(address, 20, "EVM replay principal"))
 
         @JvmStatic fun tron(address: ByteArray): SccpReplayPrincipalV1 =
-            SccpReplayPrincipalV1(3, requireExact(address, 20, "TRON replay principal"))
+            SccpReplayPrincipalV1(2, requireExact(address, 20, "TRON replay principal"))
 
         @JvmStatic fun ton(workchain: Int, account: ByteArray): SccpReplayPrincipalV1 =
             SccpReplayPrincipalV1(
-                4,
+                3,
                 signedI32Be(workchain) + requireExact(account, 32, "TON replay principal"),
             )
     }

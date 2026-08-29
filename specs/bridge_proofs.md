@@ -41,7 +41,7 @@ corridor profiles are:
 | `sora-taira` | `0x40` | 0 | canonical Taira Sumeragi-v2 chain id |
 | `ethereum-mainnet` | `0x41` | 1 | EIP-155 chain id 1 |
 | `bsc-mainnet` | `0x42` | 2 | EIP-155 chain id 56 |
-| `tron-mainnet` | `0x43` | 5 | mainnet network magic `0x2b6653dc` |
+| `tron-mainnet` | `0x43` | 3 | mainnet network magic `0x2b6653dc` |
 | `ton-mainnet` | `0x44` | 4 | global id `-239` and the canonical mainnet zero state |
 
 These five profiles are the complete final-V1 network inventory. Every former

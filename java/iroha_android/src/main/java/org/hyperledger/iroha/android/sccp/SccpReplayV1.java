@@ -88,20 +88,20 @@ public final class SccpReplayV1 {
 
     /** Construct from the exact canonical Norito AccountId bytes. */
     public static Principal soraAccount(final byte[] canonicalAccountId) {
-      return new Principal(1, canonicalSoraAccountId(canonicalAccountId));
+      return new Principal(0, canonicalSoraAccountId(canonicalAccountId));
     }
 
     public static Principal evm(final byte[] address) {
-      return new Principal(2, exact(address, 20, "EVM replay principal", true));
+      return new Principal(1, exact(address, 20, "EVM replay principal", true));
     }
 
     public static Principal tron(final byte[] address) {
-      return new Principal(3, exact(address, 20, "TRON replay principal", true));
+      return new Principal(2, exact(address, 20, "TRON replay principal", true));
     }
 
     public static Principal ton(final int workchain, final byte[] account) {
       return new Principal(
-          4, concat(i32be(workchain), exact(account, 32, "TON replay principal", true)));
+          3, concat(i32be(workchain), exact(account, 32, "TON replay principal", true)));
     }
   }
 

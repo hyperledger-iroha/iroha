@@ -68,7 +68,9 @@ public final class AndroidTransportTelemetryTests {
                               200,
                               "{}".getBytes(StandardCharsets.UTF_8),
                               "OK",
-                              java.util.Collections.emptyMap())))
+                              java.util.Collections.emptyMap(),
+                              null,
+                              false)))
               .addObserver(observer)
               .build();
 

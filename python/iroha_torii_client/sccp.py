@@ -15,13 +15,13 @@ from .norito_frame import validate_norito_frame
 SCCP_DOMAIN_SORA = 0
 SCCP_DOMAIN_ETH = 1
 SCCP_DOMAIN_BSC = 2
+SCCP_DOMAIN_TRON = 3
 SCCP_DOMAIN_TON = 4
-SCCP_DOMAIN_TRON = 5
 
-SCCP_CODEC_CANONICAL_TEXT = 1
-SCCP_CODEC_EVM_ADDRESS20 = 2
-SCCP_CODEC_TRON_ADDRESS21 = 5
-SCCP_CODEC_TON_ACCOUNT36 = 7
+SCCP_CODEC_CANONICAL_TEXT = 0
+SCCP_CODEC_EVM_ADDRESS20 = 1
+SCCP_CODEC_TRON_ADDRESS21 = 2
+SCCP_CODEC_TON_ACCOUNT36 = 3
 _SCCP_JSON_SAFE_INTEGER_MAX = (1 << 53) - 1
 SCCP_SORA_OUTBOUND_EXECUTION_SEMANTICS_V1 = "ivm_proved_record_sccp_message_v1"
 SCCP_MAX_SORA_OUTBOUND_GAS_LIMIT_V1 = 1_000_000_000
@@ -84,8 +84,8 @@ _CLOSED_DOMAINS = frozenset(
         SCCP_DOMAIN_SORA,
         SCCP_DOMAIN_ETH,
         SCCP_DOMAIN_BSC,
-        SCCP_DOMAIN_TON,
         SCCP_DOMAIN_TRON,
+        SCCP_DOMAIN_TON,
     }
 )
 _BN254_BASE_FIELD_MODULUS = int(
@@ -449,10 +449,9 @@ def _integer(value: Any, label: str, minimum: int, maximum: int = (1 << 63) - 1)
 
 
 def _protocol_domain(value: Any, label: str) -> int:
-    domain = _integer(value, label, SCCP_DOMAIN_SORA, SCCP_DOMAIN_TRON)
-    if domain not in _CLOSED_DOMAINS:
+    if isinstance(value, bool) or not isinstance(value, int) or value not in _CLOSED_DOMAINS:
         raise ValueError(f"{label} is an unsupported or reserved SCCP domain")
-    return domain
+    return value
 
 
 def _unsigned_decimal(
@@ -2302,8 +2301,8 @@ def _payload_projection(value: Any, expected_domain: int, label: str) -> Any:
     expected_route = {
         SCCP_DOMAIN_ETH: "taira_eth_xor",
         SCCP_DOMAIN_BSC: "taira_bsc_xor",
-        SCCP_DOMAIN_TON: "taira_ton_xor",
         SCCP_DOMAIN_TRON: "taira_tron_xor",
+        SCCP_DOMAIN_TON: "taira_ton_xor",
     }[domain]
     if route_id != expected_route:
         raise ValueError(f"{label}.Transfer.route_id does not match its destination domain")
@@ -2381,7 +2380,7 @@ def normalize_sccp_recent_messages(value: Any) -> SccpRecentMessages:
             != expected_request
         ):
             raise ValueError(f"{label}.links do not identify this exact message")
-        if _integer(record["target_domain"], f"{label}.target_domain", 1, 5) != target[2]:
+        if _protocol_domain(record["target_domain"], f"{label}.target_domain") != target[2]:
             raise ValueError(f"{label} profile and domain fields disagree")
 
         amount = _unsigned_decimal(record["amount"], f"{label}.amount", _MAX_U128, positive=True)
@@ -2488,7 +2487,7 @@ def normalize_sccp_recent_messages(value: Any) -> SccpRecentMessages:
 def _validate_codec_value(
     record: Mapping[str, Any], codec_field: str, value_field: str, domain: Optional[int] = None
 ) -> None:
-    codec = _integer(record[codec_field], f"SCCP transfer.{codec_field}", 1, 7)
+    codec = _integer(record[codec_field], f"SCCP transfer.{codec_field}", 0, 3)
     if codec not in SCCP_CODEC_KEYS:
         raise ValueError(f"SCCP transfer.{codec_field} is unsupported or retired")
     if domain is not None:
@@ -2660,7 +2659,7 @@ def _public_inputs(value: Any, label: str) -> Mapping[str, Any]:
     _integer(record["version"], f"{label}.version", 1, 1)
     for field in ("message_id", "payload_hash", "commitment_root", "finality_block_hash"):
         _lower_hex(record[field], f"{label}.{field}", 32, prefix=True)
-    _integer(record["target_domain"], f"{label}.target_domain", 1, 5)
+    _protocol_domain(record["target_domain"], f"{label}.target_domain")
     height = record["finality_height"]
     if not isinstance(height, str) or re.fullmatch(r"[1-9][0-9]*", height) is None:
         raise ValueError(f"{label}.finality_height must be a positive canonical u64 string")
@@ -2998,7 +2997,7 @@ def normalize_sccp_bridge_submit_response(
     if record["payload_kind"] != "transfer":
         raise ValueError("bridge submit response.payload_kind must be transfer")
     counterparty = _profile(record["counterparty_chain"], "counterparty_chain")
-    domain = _integer(record["counterparty_domain"], "counterparty_domain", 1, 5)
+    domain = _protocol_domain(record["counterparty_domain"], "counterparty_domain")
     if counterparty[3] or counterparty[2] != domain:
         raise ValueError("bridge submit response counterparty profile/domain disagree")
     backend = _text(record["backend"], "backend", 128)
@@ -3130,8 +3129,8 @@ __all__ = [
     "SCCP_DOMAIN_SORA",
     "SCCP_DOMAIN_ETH",
     "SCCP_DOMAIN_BSC",
-    "SCCP_DOMAIN_TON",
     "SCCP_DOMAIN_TRON",
+    "SCCP_DOMAIN_TON",
     "SCCP_CODEC_CANONICAL_TEXT",
     "SCCP_CODEC_EVM_ADDRESS20",
     "SCCP_CODEC_TRON_ADDRESS21",

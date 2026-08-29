@@ -57,7 +57,7 @@ public final class SccpV1Tests {
             SccpReplayV1.Principal.evm(repeated(0x33, 20)),
             hash(0x55));
     assert SccpV1.encodeLowerHex(record)
-        .equals("35ab8613a0be06397609861d3cb3383770948b24b1cf098f4006c232240a2c07");
+        .equals("31e4f2267d63d21101ab070e04aefe660df9681d3e12b263b61676e07c6f4aa5");
     final List<byte[]> empty = SccpReplayV1.emptyHashes();
     assert empty.size() == 249;
     assert SccpV1.encodeLowerHex(empty.get(248))
@@ -70,7 +70,7 @@ public final class SccpV1Tests {
     assert nonMembership.shard() == 19;
     final byte[] occupied =
         SccpV1.decodeLowerHex(
-            "7b47c79900f052fd4b73691e2fe2230fdf170225d54e9a248e176f30495ac918");
+            "d9c75ee102ec40076d903d6d5a0c3b0f9a9fa006ea9a2638274be11712ffb849");
     final SccpReplayV1.WitnessRoot membership =
         SccpReplayV1.rootFromWitness(
             key,
@@ -160,6 +160,9 @@ public final class SccpV1Tests {
             "tron")) {
       assert SccpNetworkV1.fromProfileKey(alias) == null : alias;
     }
+    assert SccpHubMessageKindV1.TRANSFER.tag() == 0;
+    assert SccpHubMessageKindV1.fromTag(0) == SccpHubMessageKindV1.TRANSFER;
+    assert SccpHubMessageKindV1.fromTag(5) == null;
   }
 
   private static void tonMainnetBindsCanonicalZeroState() {
@@ -237,7 +240,7 @@ public final class SccpV1Tests {
 
   private static void payloadDecoderRejectsRetiredAndNoncanonicalForms() {
     final byte[] canonical = outboundPayload().canonicalBytes();
-    for (final int discriminant : List.of(0, 1, 3, 4, 5, 255)) {
+    for (final int discriminant : List.of(1, 2, 3, 4, 5, 255)) {
       final byte[] hostile = canonical.clone();
       hostile[0] = (byte) discriminant;
       expectFailure(() -> SccpV1.decodeCanonicalPayload(hostile));
@@ -255,35 +258,35 @@ public final class SccpV1Tests {
   }
 
   private static void transferRejectsRetiredDomainsCodecsAndInvalidWidths() {
-    for (final int domain : List.of(3, 6, -1)) {
+    for (final int domain : List.of(5, 6, -1)) {
       expectFailure(
           () ->
               transfer(
                   domain,
                   0,
-                  1,
-                  1,
+                  0,
+                  0,
                   text("xor"),
                   BigInteger.ONE,
-                  1,
+                  0,
                   text("alice"),
                   1,
                   text("bob"),
                   text("route")));
     }
-    for (final int codec : List.of(3, 4, 6, 0, 255)) {
+    for (final int codec : List.of(4, 5, 6, 7, 255)) {
       expectFailure(
           () ->
               transfer(
                   0,
                   2,
-                  1,
+                  0,
                   codec,
                   repeated(1, 32),
                   BigInteger.ONE,
                   1,
                   text("alice"),
-                  2,
+                  1,
                   repeated(1, 20),
                   text("route")));
     }

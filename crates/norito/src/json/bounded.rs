@@ -838,6 +838,9 @@ pub(super) fn write_value_to<S: JsonWriteSink + ?Sized>(
                     Value::Number(native::Number::U64(value)) => {
                         write_u128_to(u128::from(*value), output)?;
                     }
+                    Value::Number(native::Number::U128(value)) => {
+                        write_u128_to(*value, output)?;
+                    }
                     Value::Number(native::Number::F64(value)) => write_f64_to(*value, output)?,
                     Value::String(value) => write_json_string_to(value, output)?,
                     Value::Array(values) => {
@@ -967,6 +970,20 @@ mod tests {
         assert_eq!(
             ordinary,
             r#"{"kind":"named","payload":{"note":"ok","enabled":true}}"#
+        );
+    }
+    #[test]
+    fn u128_value_respects_the_exact_output_budget() {
+        let value = Value::from(u128::MAX);
+        let expected = u128::MAX.to_string();
+
+        assert_eq!(
+            to_json_bounded(&value, expected.len()).expect("exact u128 budget"),
+            expected
+        );
+        assert_eq!(
+            to_json_bounded(&value, expected.len() - 1),
+            Err(BoundedJsonError::BodyTooLarge)
         );
     }
     #[test]

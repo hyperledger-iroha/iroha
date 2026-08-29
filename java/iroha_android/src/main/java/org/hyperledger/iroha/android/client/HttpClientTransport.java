@@ -1131,25 +1131,6 @@ public final class HttpClientTransport implements IrohaClient {
   }
 
   /**
-   * Retained source-compatible overload that fails closed without trusted draft intent.
-   *
-   * <p>Use the overload accepting {@link ContractCallDraftIntent}; response echoes cannot prove
-   * the exact invocation and final metadata a caller intends to sign.
-   */
-  public CompletableFuture<ContractCallResponse> prepareContractCall(
-      final String authority,
-      final FeePaymentIntent feePayment,
-      final String contractAddress,
-      final String contractAlias,
-      final String entrypoint,
-      final Object payload) {
-    buildContractCallDraftPayload(
-        authority, feePayment, contractAddress, contractAlias, entrypoint, payload);
-    throw new IllegalStateException(
-        "ContractCallDraftIntent is required before requesting an unsigned contract-call draft");
-  }
-
-  /**
    * Prepares an unsigned contract-call transaction and binds it to caller-trusted local intent.
    *
    * <p>The intent is deliberately local-only. It is used after the response is decoded to prove

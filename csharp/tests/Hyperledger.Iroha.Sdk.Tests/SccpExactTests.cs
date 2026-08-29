@@ -319,6 +319,42 @@ public sealed partial class SccpExactTests
         Assert.Equal(
             ReplayWitnessArtifact(),
             BridgeMessageRequest(authority, nativeArtifact).ReplayWitnessBase64);
+        var membershipWitness = Convert.ToBase64String(NoritoCodec.Encode(
+            SccpSubmitValidation.ReplayWitnessSchemaName,
+            Concat(
+                CompactField(SccpReplayV1.EmptyHashes()[SccpReplayV1.Depth]),
+                CompactField(Enumerable.Repeat((byte)0x5a, 32).ToArray()),
+                CompactField(new byte[32]),
+                CompactField(UInt64(0))),
+            flags: 0x02));
+        Assert.Throws<ArgumentException>(() => new SccpBridgeMessageSubmitRequest(
+            authority,
+            nativeArtifact,
+            membershipWitness,
+            BridgeFeePayment));
+        foreach (var (nativeBackendTag, accepted) in new[] { (3U, true), (4U, false) })
+        {
+            var taggedPayload = CanonicalTransactionPayload(
+                7,
+                nativeBackendTag: nativeBackendTag);
+            var taggedSignature = Convert.ToBase64String(Ed25519Signer.Sign(
+                IrohaHash.Hash(taggedPayload),
+                pair.PrivateKeySeed));
+            var create = () => BridgeMessageRequest(
+                authority,
+                nativeArtifact,
+                taggedSignature,
+                Convert.ToBase64String(taggedPayload),
+                creationTimeMs: 7);
+            if (accepted)
+            {
+                _ = create();
+            }
+            else
+            {
+                Assert.Throws<ArgumentException>(create);
+            }
+        }
         using var json = JsonDocument.Parse(JsonSerializer.SerializeToUtf8Bytes(request));
         var fields = json.RootElement.EnumerateObject()
             .Select(static property => property.Name)
@@ -3722,7 +3758,8 @@ public sealed partial class SccpExactTests
         uint? payloadKindOverride = null,
         string chainId = "fc56984b-2be7-431d-840e-21514d1883f0",
         FeePaymentIntent? feePayment = null,
-        ulong? timeToLiveMilliseconds = DefaultTransactionTimeToLiveMilliseconds)
+        ulong? timeToLiveMilliseconds = DefaultTransactionTimeToLiveMilliseconds,
+        uint nativeBackendTag = 1)
     {
         const string submitBridgeProofWireId =
             "iroha.instruction.v1::bridge::SubmitBridgeProof";
@@ -3739,7 +3776,7 @@ public sealed partial class SccpExactTests
             : SccpSubmitValidation.NativeInboundProofSchemaName;
         var embeddedProof = NoritoCodec.Encode(proofSchema, [1], flags: 0x02);
         var typedContainer = Concat(
-            CompactField(UInt32(destinationProof ? 0U : 1U)),
+            CompactField(UInt32(destinationProof ? 0U : nativeBackendTag)),
             destinationProof || !legacyOuterBinding
                 ? CompactField(FixedByteArray(routeConfigurationHash))
                 : [],
