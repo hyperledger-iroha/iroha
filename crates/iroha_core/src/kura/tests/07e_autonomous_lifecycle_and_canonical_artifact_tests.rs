@@ -73,8 +73,8 @@ fn unfinalized_merge_carrier_tip_rebuilds_post_wsv_reservation_on_restart() {
 fn autonomous_startup_rejects_a_view_removed_after_pointer_publication() {
     let temp_dir = TempDir::new().expect("temp dir");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let lane_config = two_lane_runtime_config();
-    let lane = lane_config.entry(LaneId::new(1)).expect("lane one");
+    let lane_config = RuntimeLaneConfig::default();
+    let lane = lane_config.primary();
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let (network_id, epoch, payload) =
         autonomous_lane_payload_for_kura(lane.lane_id, lane.dataspace_id, 1, &signer);
@@ -251,6 +251,257 @@ fn finalized_release_allows_a_later_proposal_attempt_at_the_same_lane_height() {
             .0,
         successor,
     );
+}
+#[test]
+fn autonomous_payload_rejects_canonical_ordinary_overlap_before_persistence() {
+    let temp_dir = TempDir::new().expect("role-disjoint overlap temp dir");
+    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+    let lane_config = RuntimeLaneConfig::default();
+    let lane = lane_config.primary();
+    let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+    let local_peer = PeerId::new(signer.public_key().clone());
+
+    let mut block = dummy_block_with_lane_payload_ownership(lane.lane_id, lane.dataspace_id, 1)
+        .as_ref()
+        .clone();
+    let mut ownership = block
+        .execution_context()
+        .expect("ordinary carrier execution context")
+        .lane_payload_ownerships[0]
+        .clone();
+    ownership.lane_block_descriptor_validator_set = vec![local_peer.clone()];
+    ownership.lane_block_descriptor_validator_count = 1;
+    ownership.lane_block_descriptor_min_quorum = 1;
+    let replay = ownership
+        .compute_replay_hashes()
+        .expect("recompute signer-bound ordinary ownership");
+    ownership.subject_hash = replay.subject_hash;
+    ownership.payload_ownership_hash = replay.payload_ownership_hash;
+    ownership.rbc_instance_hash = replay.rbc_instance_hash;
+    ownership.lane_block_descriptor_hash = Some(replay.lane_block_descriptor_hash);
+    let external = block
+        .execution_context()
+        .expect("ordinary carrier execution context")
+        .external
+        .clone();
+    block.set_execution_context(Some(
+        BlockExecutionContextBundle::new(external)
+            .with_lane_payload_ownerships(vec![ownership.clone()]),
+    ));
+    let block = Arc::new(block);
+
+    let hint_free_proposal = lane_block_proposal_from_ownership(&ownership);
+    assert!(hint_free_proposal.payload_block_hint.is_none());
+    let entrypoint = block
+        .external_entrypoints_cloned()
+        .next()
+        .expect("ordinary carrier entrypoint");
+    assert_eq!(
+        Hash::from(entrypoint.hash()),
+        ownership.accepted_transaction_hashes[0],
+    );
+
+    let network_id = test_network_id(b"kura-role-disjoint-ordinary-overlap");
+    let epoch = 7;
+    let height_context_id = HeightContextId(HashOf::<HeightContext>::from_untyped_unchecked(
+        Hash::new(b"kura-role-disjoint-ordinary-overlap-context"),
+    ));
+    let routing_plan = RoutingPlan::single(crate::queue::RoutingDecision::new(
+        lane.lane_id,
+        lane.dataspace_id,
+    ));
+    let (reservation_owner_hash, proposal_identity_hash) =
+        autonomous_lane_reservation_identity_hashes_for_proposal(
+            network_id,
+            height_context_id,
+            epoch,
+            &hint_free_proposal,
+            &local_peer,
+        )
+        .expect("derive exact autonomous reservation identities");
+    let reservation = LaneQueueReservationKeyV1 {
+        version: LaneQueueReservationKeyV1::VERSION,
+        entrypoint_hash: entrypoint.hash(),
+        queue_plan_admission_binding_hash: Hash::new(b"kura-role-disjoint-ordinary-overlap-plan"),
+        routing_plan_digest: routing_plan.digest(),
+        coordinator_leg: routing_plan.coordinator_leg(),
+        lane_id: lane.lane_id,
+        dataspace_id: lane.dataspace_id,
+        lane_incarnation: hint_free_proposal.descriptor.lane_incarnation,
+        proposal_height: hint_free_proposal.descriptor.proposal_height,
+        lane_block_height: hint_free_proposal.descriptor.lane_block_height,
+        lane_block_view: hint_free_proposal.descriptor.lane_block_view,
+        reservation_owner_hash,
+        proposal_identity_hash,
+    };
+    let payload = match LaneExecutablePayloadV1::new_signed_with_reservations(
+        network_id,
+        epoch,
+        hint_free_proposal.clone(),
+        vec![entrypoint],
+        vec![reservation],
+        vec![routing_plan],
+        vec![None],
+        local_peer.clone(),
+        signer.private_key(),
+    ) {
+        Err(crate::lane_consensus::LaneAutonomousArtifactError::InvalidAdmissionIntent) => return,
+        Err(error) => panic!("ordinary autonomous payload returned an unexpected error: {error}"),
+        Ok(payload) => payload,
+    };
+    assert_eq!(
+        payload.entrypoints[0].admission_intent(),
+        iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
+        "an Ordinary global entrypoint must never be accepted as autonomous content",
+    );
+
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).expect("Kura");
+    install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
+    let configured_catalog_hash = kura
+        .configured_lane_catalog_baseline()
+        .expect("read configured catalog baseline")
+        .expect("configured catalog baseline");
+    kura.establish_or_verify_configured_primary_geometry_anchor(
+        lane,
+        payload.origin_proposal.descriptor.lane_incarnation,
+        configured_catalog_hash,
+    )
+    .expect("bind role-disjoint primary geometry");
+    kura.store_block(Arc::clone(&block))
+        .expect("persist exact canonical ordinary carrier");
+    kura.bind_local_peer_id(local_peer.clone())
+        .expect("bind lifecycle producer");
+    let generation = kura
+        .claim_autonomous_lifecycle_process_generation(network_id, &local_peer)
+        .expect("claim lifecycle generation");
+    kura.persist_lane_executable_payload(&payload, network_id, epoch)
+        .expect("persist hint-free autonomous payload");
+    let (_, lifecycle_group) = install_live_lifecycle_cursor_for_terminal_test(
+        &kura,
+        &generation,
+        &payload,
+        height_context_id,
+        &signer,
+    );
+
+    let retirement = AutonomousLaneSlotRetirementV1::from_payload(&payload);
+    kura.persist_autonomous_lane_slot_retirement(&retirement, network_id, epoch)
+        .expect("retire autonomous execution role");
+    let barrier = retirement
+        .queue_release_barrier()
+        .expect("derive exact Queue release barrier");
+    kura.finalize_autonomous_lane_slot_release(&retirement, &barrier, network_id, epoch)
+        .expect("release exact Queue claims");
+
+    let ordinary_proposal = hint_free_proposal.clone().with_payload_block_hint(
+        iroha_data_model::block::consensus::LaneBlockProposalPayloadHintV1 {
+            proposal_height: block.header().height().get(),
+            proposal_view: block.header().view_change_index(),
+            proposal_block_hash: block.hash(),
+        },
+    );
+    assert!(hint_free_proposal.same_consensus_identity(&ordinary_proposal));
+    let (session, signer_pops) =
+        committed_lane_block_session_for_kura_proposal(&ordinary_proposal, &signer);
+    let authority = crate::state::CertifiedLaneBlockPersistenceAuthority::for_test(
+        lane.lane_id,
+        lane.dataspace_id,
+        ordinary_proposal.descriptor.lane_incarnation,
+        None,
+    );
+
+    let incomplete_error = kura
+        .persist_committed_lane_block_session_with_authority(&session, &signer_pops, &authority)
+        .expect_err("Released claims without a Complete outcome must fail closed");
+    assert!(
+        incomplete_error
+            .to_string()
+            .contains("lifecycle terminal outcome")
+    );
+    assert!(
+        kura.read_certified_lane_block_artifact(lane.lane_id, 1)
+            .is_none()
+    );
+
+    let pending_hash = kura
+        .persist_autonomous_lifecycle_release_terminal_outcome_pending(
+            &retirement,
+            network_id,
+            epoch,
+        )
+        .expect("persist release Pending")
+        .consume_for_queue(&barrier)
+        .expect("Pending authorizes the exact Queue barrier");
+    kura.complete_autonomous_lifecycle_terminal_outcome(
+        lifecycle_group,
+        release_terminal_projection_for_test(&kura, &payload, &retirement, &barrier),
+        false,
+        pending_hash,
+    )
+    .expect("persist release Complete");
+
+    assert!(
+        kura.persist_committed_lane_block_session(&session, &signer_pops)
+            .is_err(),
+        "role-disjoint coexistence still requires State authority",
+    );
+    kura.persist_committed_lane_block_session_with_authority(&session, &signer_pops, &authority)
+        .expect("Complete release admits the canonical ordinary certificate");
+
+    assert_eq!(
+        kura.read_autonomous_lane_slot_retirement(lane.lane_id, 1, network_id, epoch)
+            .expect("read retained retirement"),
+        Some(retirement.clone()),
+    );
+    assert_eq!(
+        kura.read_certified_lane_block_artifact(lane.lane_id, 1)
+            .expect("read ordinary certificate")
+            .proposal,
+        ordinary_proposal,
+    );
+
+    drop(kura);
+    let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("restart with role-disjoint overlap");
+    let retired = reopened
+        .read_autonomous_lane_retired_attempt(
+            lane.lane_id,
+            1,
+            hint_free_proposal.descriptor.proposal_height,
+            network_id,
+            epoch,
+        )
+        .expect("revalidate retired namespace")
+        .expect("retired namespace remains durable");
+    assert_eq!(retired.artifact.executable_payload, payload);
+    assert_eq!(retired.retirement, retirement);
+    assert_eq!(
+        reopened
+            .read_certified_lane_block_artifact(lane.lane_id, 1)
+            .expect("restart recovers ordinary certificate")
+            .proposal,
+        ordinary_proposal,
+    );
+    assert!(
+        reopened
+            .durable_autonomous_lane_merge_source(lane.lane_id, 1, network_id, epoch)
+            .is_err(),
+        "ordinary certification must not resurrect autonomous merge eligibility",
+    );
+
+    let group = autonomous_reservation_reconciliation_group(payload.reservation_keys.clone());
+    let classified = reopened
+        .classify_autonomous_lane_reservation_groups(&[group], network_id, &[epoch])
+        .expect("classify role-disjoint retired reservation");
+    assert!(matches!(
+        classified.as_slice(),
+        [AutonomousLaneReservationEvidenceV1::ExactRetired {
+            payload: exact_payload,
+            retirement: exact_retirement,
+            ..
+        }] if exact_payload == &payload && exact_retirement == &retirement
+    ));
 }
 #[test]
 fn autonomous_route_latest_snapshot_rejects_runtime_index_corruption() {

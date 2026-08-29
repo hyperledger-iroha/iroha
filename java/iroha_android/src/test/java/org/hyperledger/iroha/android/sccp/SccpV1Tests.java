@@ -264,13 +264,13 @@ public final class SccpV1Tests {
               transfer(
                   domain,
                   0,
-                  0,
+                  1,
                   0,
                   text("xor"),
                   BigInteger.ONE,
                   0,
                   text("alice"),
-                  1,
+                  0,
                   text("bob"),
                   text("route")));
     }
@@ -280,26 +280,130 @@ public final class SccpV1Tests {
               transfer(
                   0,
                   2,
-                  0,
+                  1,
                   codec,
                   repeated(1, 32),
                   BigInteger.ONE,
-                  1,
+                  0,
                   text("alice"),
                   1,
                   repeated(1, 20),
                   text("route")));
     }
-    expectFailure(() -> transfer(0, 2, 0, 1, text("xor"), BigInteger.ONE, 1, text("alice"), 2, repeated(1, 20), text("route")));
-    expectFailure(() -> transfer(0, 2, 0x1_0000_0000L, 1, text("xor"), BigInteger.ONE, 1, text("alice"), 2, repeated(1, 20), text("route")));
-    expectFailure(() -> transfer(0, 2, 1, 1, text("xor"), BigInteger.ZERO, 1, text("alice"), 2, repeated(1, 20), text("route")));
-    expectFailure(() -> transfer(0, 2, 1, 1, text("xor"), BigInteger.ONE, 1, text("alice"), 2, repeated(1, 19), text("route")));
-    expectFailure(() -> transfer(0, 2, 1, 1, text("xor"), BigInteger.ONE, 1, text("alice"), 2, new byte[20], text("route")));
-    expectFailure(() -> transfer(0, 2, 1, 1, text("contains space"), BigInteger.ONE, 1, text("alice"), 2, repeated(1, 20), text("route")));
-    expectFailure(() -> transfer(0, 2, 1, 1, repeated('a', 257), BigInteger.ONE, 1, text("alice"), 2, repeated(1, 20), text("route")));
+    expectFailure(
+        () ->
+            transfer(
+                0,
+                2,
+                0,
+                0,
+                text("xor"),
+                BigInteger.ONE,
+                0,
+                text("alice"),
+                1,
+                repeated(1, 20),
+                text("route")));
+    expectFailure(
+        () ->
+            transfer(
+                0,
+                2,
+                0x1_0000_0000L,
+                0,
+                text("xor"),
+                BigInteger.ONE,
+                0,
+                text("alice"),
+                1,
+                repeated(1, 20),
+                text("route")));
+    expectFailure(
+        () ->
+            transfer(
+                0,
+                2,
+                1,
+                0,
+                text("xor"),
+                BigInteger.ZERO,
+                0,
+                text("alice"),
+                1,
+                repeated(1, 20),
+                text("route")));
+    expectFailure(
+        () ->
+            transfer(
+                0,
+                2,
+                1,
+                0,
+                text("xor"),
+                BigInteger.ONE,
+                0,
+                text("alice"),
+                1,
+                repeated(1, 19),
+                text("route")));
+    expectFailure(
+        () ->
+            transfer(
+                0,
+                2,
+                1,
+                0,
+                text("xor"),
+                BigInteger.ONE,
+                0,
+                text("alice"),
+                1,
+                new byte[20],
+                text("route")));
+    expectFailure(
+        () ->
+            transfer(
+                0,
+                2,
+                1,
+                0,
+                text("contains space"),
+                BigInteger.ONE,
+                0,
+                text("alice"),
+                1,
+                repeated(1, 20),
+                text("route")));
+    expectFailure(
+        () ->
+            transfer(
+                0,
+                2,
+                1,
+                0,
+                repeated('a', 257),
+                BigInteger.ONE,
+                0,
+                text("alice"),
+                1,
+                repeated(1, 20),
+                text("route")));
     final byte[] badTron = repeated(1, 21);
     badTron[0] = 0x42;
-    expectFailure(() -> transfer(0, 5, 1, 1, text("xor"), BigInteger.ONE, 1, text("alice"), 5, badTron, text("route")));
+    expectFailure(
+        () ->
+            transfer(
+                0,
+                3,
+                1,
+                0,
+                text("xor"),
+                BigInteger.ONE,
+                0,
+                text("alice"),
+                2,
+                badTron,
+                text("route")));
 
     final byte[] tonAccount = repeated(0x31, 36);
     Arrays.fill(tonAccount, 0, 4, (byte) 0);
@@ -308,12 +412,12 @@ public final class SccpV1Tests {
             0,
             4,
             1,
-            1,
+            0,
             text("xor"),
             BigInteger.ONE,
-            1,
+            0,
             text("alice"),
-            7,
+            3,
             tonAccount,
             text("taira_ton_xor"));
     assert Arrays.equals(tonAccount, tonTransfer.recipient());
@@ -326,12 +430,12 @@ public final class SccpV1Tests {
                 0,
                 4,
                 1,
-                1,
+                0,
                 text("xor"),
                 BigInteger.ONE,
-                1,
+                0,
                 text("alice"),
-                7,
+                3,
                 nonBasechain,
                 text("taira_ton_xor")));
     final byte[] zeroAccount = new byte[36];
@@ -341,12 +445,12 @@ public final class SccpV1Tests {
                 0,
                 4,
                 1,
-                1,
+                0,
                 text("xor"),
                 BigInteger.ONE,
-                1,
+                0,
                 text("alice"),
-                7,
+                3,
                 zeroAccount,
                 text("taira_ton_xor")));
   }
@@ -360,12 +464,12 @@ public final class SccpV1Tests {
             1,
             0,
             1,
-            1,
+            0,
             text("xor"),
             BigInteger.ONE,
-            2,
-            repeated(1, 20),
             1,
+            repeated(1, 20),
+            0,
             text(canonical),
             text("taira_eth_xor"));
     assert Arrays.equals(text(canonical), accepted.recipient());
@@ -387,12 +491,12 @@ public final class SccpV1Tests {
                   1,
                   0,
                   1,
-                  1,
+                  0,
                   text("xor"),
                   BigInteger.ONE,
-                  2,
-                  repeated(1, 20),
                   1,
+                  repeated(1, 20),
+                  0,
                   invalid,
                   text("taira_eth_xor")));
     }
@@ -417,7 +521,18 @@ public final class SccpV1Tests {
     final byte[] tron = repeated(4, 21);
     tron[0] = 0x41;
     final SccpTransferPayloadV1 payload =
-        transfer(0, 5, 1, 1, text("xor"), BigInteger.ONE, 1, text("alice"), 5, tron, text("taira_tron_xor"));
+        transfer(
+            0,
+            3,
+            1,
+            0,
+            text("xor"),
+            BigInteger.ONE,
+            0,
+            text("alice"),
+            2,
+            tron,
+            text("taira_tron_xor"));
     final byte[] encoded =
         SccpV1.canonicalCommitmentBytes(
             SccpV1.commitment(
@@ -441,7 +556,18 @@ public final class SccpV1Tests {
     final byte[] binding = hash(0x41);
     final byte[] configuration = hash(0x42);
     final SccpTransferPayloadV1 payload =
-        transfer(0, 2, 1, 1, asset, BigInteger.ONE, 1, text("alice"), 2, repeated(1, 20), text("route"));
+        transfer(
+            0,
+            2,
+            1,
+            0,
+            asset,
+            BigInteger.ONE,
+            0,
+            text("alice"),
+            1,
+            repeated(1, 20),
+            text("route"));
     final SccpOutboundMessageContextV1 context =
         new SccpOutboundMessageContextV1(
             new SccpLaneIdV1(SccpNetworkV1.SORA_TAIRA, SccpNetworkV1.BSC_MAINNET),
@@ -459,7 +585,18 @@ public final class SccpV1Tests {
   }
 
   private static SccpTransferPayloadV1 outboundPayload() {
-    return transfer(0, 2, 1, 1, text("xor"), BigInteger.ONE, 1, text("alice@taira"), 2, repeated(1, 20), text("taira_bsc_xor"));
+    return transfer(
+        0,
+        2,
+        1,
+        0,
+        text("xor"),
+        BigInteger.ONE,
+        0,
+        text("alice@taira"),
+        1,
+        repeated(1, 20),
+        text("taira_bsc_xor"));
   }
 
   private static SccpTransferPayloadV1 transfer(
@@ -487,7 +624,7 @@ public final class SccpV1Tests {
         sender,
         recipientCodec,
         recipient,
-        1,
+        0,
         route);
   }
 

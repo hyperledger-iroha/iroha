@@ -2449,8 +2449,8 @@ public final class SccpJsonParser {
   }
 
   private static int requiredDomain(final Map<String, Object> value, final String field) {
-    final int domain = requiredInt(value, field, 0, 5);
-    if (domain != 0 && domain != 1 && domain != 2 && domain != 4 && domain != 5) {
+    final int domain = requiredInt(value, field, 0, 4);
+    if (domain < 0 || domain > 4) {
       throw new IllegalArgumentException(field + " is an unsupported or retired SCCP domain");
     }
     return domain;

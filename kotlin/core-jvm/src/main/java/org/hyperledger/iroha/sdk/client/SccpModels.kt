@@ -2228,8 +2228,8 @@ object SccpJsonParser {
     }
 
     private fun requiredDomain(value: Map<String, Any?>, field: String): Int =
-        requiredInt(value, field, 0, 5).also {
-            require(it == 0 || it == 1 || it == 2 || it == 4 || it == 5) {
+        requiredInt(value, field, 0, 4).also {
+            require(it in 0..4) {
                 "$field is an unsupported or retired SCCP domain"
             }
         }

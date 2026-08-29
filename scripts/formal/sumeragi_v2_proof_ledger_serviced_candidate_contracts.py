@@ -530,8 +530,8 @@ def _serviced_candidate_production_source_fidelity_errors(
         "verify_leaf": select_item(
             "safety_wal",
             "verify_leaf",
-            "fs::symlink_metadata(self.expected_path.join(name))",
-            "non-Unix WAL-leaf revalidation",
+            "rustix::fs::statat(&self.directory, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)",
+            "descriptor-relative WAL-leaf revalidation",
         ),
         "safety_fixture_open": select_item(
             "safety_wal",
@@ -619,36 +619,62 @@ def _serviced_candidate_production_source_fidelity_errors(
         ),
         "every bound operation must rejoin the lexical final directory and retained identity",
     )
-    for key, sequence, description in (
+    for key, expected_attribute, description in (
         (
             "bind",
-            """
-let metadata = fs::symlink_metadata(expected_path)?;
-if metadata.file_type().is_symlink() || !metadata.is_dir()
-""",
-            "non-Unix basic WAL bind must reject a symlinked immediate parent",
+            '#[cfg(all(test, unix, not(target_os = "espidf")))]',
+            "test-path directory binding must compile only where descriptor-relative no-follow storage is available",
         ),
         (
             "verify_linked",
-            """
-fs::symlink_metadata(&self.expected_path).and_then(|metadata| {
-    if !metadata.file_type().is_symlink() && metadata.is_dir()
-""",
-            "non-Unix basic WAL operations must revalidate a direct immediate parent",
-        ),
-        (
-            "verify_leaf",
-            """
-let linked = fs::symlink_metadata(self.expected_path.join(name))?;
-if !opened.is_file()
-    || linked.file_type().is_symlink()
-    || !linked.is_file()
-""",
-            "non-Unix basic WAL operations must reject a symlinked leaf before mutation",
+            '#[cfg(all(unix, not(target_os = "espidf")))]',
+            "directory revalidation must compile only where descriptor-relative no-follow storage is available",
         ),
     ):
+        item = safety_items[key]
+        if item is None:
+            continue
+        item_offset = sources["safety_wal"].find(item.source)
+        attributes = _leading_rust_attributes(
+            sources["safety_wal"], structural["safety_wal"], item_offset
+        )
+        if attributes != (expected_attribute,):
+            errors.append(
+                f"{paths['safety_wal']}:{item.line}: {description}; "
+                f"found attributes {attributes!r}"
+            )
+    require_item_monotone_order(
+        "safety_wal",
+        safety_items,
+        "verify_leaf",
+        (
+            "self.verify_linked()?",
+            "let opened = file.metadata()?",
+            "rustix::fs::statat(",
+            "ensure_unix_regular_single_link_stat(&linked)?",
+            "opened.nlink() != 1",
+            "opened.dev() != linked.st_dev as u64",
+            "opened.ino() != linked.st_ino as u64",
+        ),
+        "WAL leaf revalidation must join the opened descriptor to the exact no-follow directory entry",
+    )
+    for key in ("open_wal_leaf", "verify_leaf"):
         _require_rust_token_sequence(
-            paths["safety_wal"], safety_items[key], sequence, description, errors
+            paths["safety_wal"],
+            safety_items[key],
+            """
+#[cfg(not(all(unix, not(target_os = "espidf"))))]
+{
+""",
+            "unsupported platforms must fail closed before WAL-leaf path I/O",
+            errors,
+        )
+        _require_rust_token_sequence(
+            paths["safety_wal"],
+            safety_items[key],
+            "Err(unsupported_storage_binding_io())",
+            "unsupported WAL-leaf operation must return the fixed storage-binding error",
+            errors,
         )
     require_item_monotone_order(
         "safety_wal",
@@ -1977,10 +2003,17 @@ if let Some(authorization) = authorization
         (
             "let view_release_target = ordinary_view_escape.as_ref()",
             "driver.pacemaker_progress_blocked_target_view(&queued.command)",
+            "return false",
             "view_release_target.is_some_and(|target_view|",
+            "queued.class != CommandClass::Progress",
+            "queued.identity.kind != RuntimeCommandKind::Authenticated",
+            "queued.ingress_ownership.is_none()",
             "driver.pacemaker_progress_releases_view_block(&queued.command, target_view)",
             "ordinary_view_escape_selected, None",
             "let Some((command, candidate)) = selected else { return Ok(None); };",
+            "let schedule_after = if let Some((arbitration, _)) = &ordinary_view_escape",
+            "schedule.select(",
+            "if work != ScheduledWork::Fifo",
             "self.schedule = next_schedule;",
             "RuntimeQueueSelectionKind::OrdinaryViewProgress",
             "if ordinary_view_escape_selected && (retry_unadmitted || retained_deferred_ingress)",
@@ -2808,11 +2841,19 @@ assert_restored_stage_seven_retirement_does_not_resurrect(0xBD, false, false, fa
         effects_path,
         drain,
         """
-if matches!(&owned.effect, AdapterEffect::Apply { .. })
-    && (self.pending_runner_decision_cleanup.is_some()
-        || !self.pending_durable_validate_admissions.is_empty()
-        || self.pending_live_wal_sign_admission.is_some()
-        || !self.pending_lifecycle_output_admissions.is_empty())
+let released_validation_will_apply = match &owned.effect {
+    AdapterEffect::ValidateBody { round, subject, .. } => self
+        .published_lifecycle_validate_retry_markers
+        .get(&(*round, *subject))
+        .is_some_and(|marker| {
+            !marker.owns_live_lifecycle_row()
+                && marker.latest_statement.phase() == Some(wire::GlobalPhase::Commit)
+        }),
+    _ => false,
+};
+if (matches!(&owned.effect, AdapterEffect::Apply { .. })
+    || released_validation_will_apply)
+    && self.decision_apply_dispatch_barrier_is_occupied()
 {
     break;
 }

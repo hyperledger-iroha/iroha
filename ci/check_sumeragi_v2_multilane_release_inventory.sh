@@ -54,7 +54,7 @@ readonly autoscale_drain_test="nexus_autoscale_two_phase_drain_closes_certifies_
 readonly autoscale_drain_qualified_test="nexus::autoscale_localnet::${autoscale_drain_test}"
 readonly native_test="native_amx_rotating_validator_fault_soak_preserves_independent_participant_qcs"
 readonly native_grouped_pruning_marker="[multilane-release-native-evidence] grouped_sources=2 durable_manifest=passed body_eviction_recovery=passed authenticated_remote_recovery=passed exact_once=passed"
-readonly canonical_production_test_count=863
+readonly canonical_production_test_count=864
 
 for release_support_component in \
   "$release_runner_support" \
@@ -207,7 +207,7 @@ require_exact_token \
   "readonly sumeragi_v2_sdk_diagnostics_harness=\"${sdk_diagnostics_harness}\""
 require_exact_token \
   "$release_runner" \
-  "readonly expected_multilane_focus_test_count=518"
+  "readonly expected_multilane_focus_test_count=522"
 require_exact_token \
   "$release_runner" \
   "readonly expected_multilane_formal_mutation_count=106"
@@ -254,7 +254,7 @@ require_exact_token \
   "_NATIVE_AMX_GROUPED_NEGATIVE_CONTROL_COUNT = 56"
 require_exact_token \
   "$release_receipt_writer" \
-  "_G_UNIT_TEST_COUNT = 518"
+  "_G_UNIT_TEST_COUNT = 522"
 require_exact_token \
   "$release_receipt_writer" \
   "_PRODUCTION_TEST_COUNT = ${canonical_production_test_count}"
@@ -989,7 +989,7 @@ expected_changed_module_counts = {
     "sumeragi::v2_lifecycle_recovery::tests": 5,
     "sumeragi::v2_runner::tests": 37,
     "sumeragi::v2_worker::tests": 90,
-    "network::tests": 83,
+    "network::tests": 84,
     "network::inbound_source_memory_bound_tests": 2,
     "network::handle_update_tests": 4,
     "network_relay_tests": 5,
@@ -1015,8 +1015,8 @@ if observed_counts != module_counts:
     reject("release runner inventory does not match receipt module counts")
 canonical_inventory = ("\n".join(canonical_rows) + "\n").encode()
 if hashlib.sha256(canonical_inventory).hexdigest() != (
-    "42509872b04f64962dc8edc09ca9f007"
-    "bafffe402c4e0847255dc937a105888c"
+    "44784c79c489d83ab142bb0db84e8913"
+    "8c3a54b1349926a80597e2c5b21a83df"
 ):
     reject(
         f"canonical {canonical_production_test_count}-test production TSV "
@@ -1047,7 +1047,10 @@ if process_policy_source.count("run_cargo() {") != 1:
 for token in (
     "lock.mkdir(mode=0o700)",
     'pinned_arguments=("$subcommand" -j1)',
+    'pinned_arguments=("$subcommand" "$2")',
     'pinned_arguments+=("$@")',
+    'if ((!verus_job_bound_inserted)); then',
+    'run_cargo accepts only the pinned cargo verus verify action',
     'local RUSTUP_AUTO_INSTALL=0',
     'export RUSTUP_AUTO_INSTALL',
     'run_cargo forbids caller-owned rustup auto-install policy',
@@ -1389,8 +1392,8 @@ if source_sealed_positions != sorted(source_sealed_positions):
     )
 
 expected_focus_counts = {
-    "required_multilane_core_focus_tests": 313,
-    "required_multilane_queue_journal_focus_tests": 142,
+    "required_multilane_core_focus_tests": 316,
+    "required_multilane_queue_journal_focus_tests": 143,
     "required_multilane_config_lib_focus_tests": 9,
     "required_multilane_config_runtime_focus_tests": 2,
     "required_multilane_config_fixtures_focus_tests": 2,
@@ -1433,9 +1436,9 @@ for array_name, expected_count in expected_focus_counts.items():
         )
     all_focus_entries.extend(entries)
 
-if len(all_focus_entries) != 518 or len(set(all_focus_entries)) != 518:
+if len(all_focus_entries) != 522 or len(set(all_focus_entries)) != 522:
     reject(
-        "multilane focus-test arrays must contain 518 globally distinct tests; "
+        "multilane focus-test arrays must contain 522 globally distinct tests; "
         f"found {len(all_focus_entries)} entries and "
         f"{len(set(all_focus_entries))} distinct entries"
     )
@@ -1445,14 +1448,14 @@ g_unit_groups = (
         "required_multilane_core_focus_tests",
         "g-unit-iroha-core",
         "iroha_core",
-        313,
+        316,
         "--lib",
     ),
     (
         "required_multilane_queue_journal_focus_tests",
         "g-unit-iroha-core-queue-journal",
         "iroha_core",
-        142,
+        143,
         "--lib",
     ),
     (
@@ -1517,7 +1520,7 @@ for array_name, leg_id, package, expected_count, cargo_target in g_unit_groups:
     if source.count(
         f'    g_unit_expected_test_count "$expected_multilane_focus_test_count" \\'
     ) != 1:
-        reject("G-UNIT expected 518 count is not published exactly once")
+        reject("G-UNIT expected 522 count is not published exactly once")
     if expected_count <= 0:
         reject(f"G-UNIT leg {leg_id} has an invalid expected count")
 
@@ -1937,7 +1940,12 @@ for forbidden in (
         )
 if policy.count('if "$IROHA_RELEASE_CARGO_BIN" "$@"; then') != 1:
     reject("shared process policy does not own the sole pinned Cargo execution")
-if 'pinned_arguments=("$subcommand" -j1)' not in policy or 'pinned_arguments+=("$@")' not in policy:
+if (
+    'pinned_arguments=("$subcommand" -j1)' not in policy
+    or 'pinned_arguments=("$subcommand" "$2")' not in policy
+    or 'if ((!verus_job_bound_inserted)); then' not in policy
+    or 'pinned_arguments+=("$@")' not in policy
+):
     reject("shared process policy does not impose the one global -j1 bound")
 if "local status" in policy:
     reject("shared process policy retains the zsh-reserved local status name")
@@ -2687,4 +2695,4 @@ if [[ "$(grep -Fxc -- "      export IROHA_MULTILANE_RELEASE_MODE=1" "$launcher" 
   exit 1
 fi
 
-echo "[multilane-release-inventory] 85 corridor legs, exact ${canonical_production_test_count}/${canonical_production_test_count} production tests across 44 modules, exact 518/518 G-UNIT (313 core, 142 queue-journal, 13 config, 8 data-model, 39 Torii, 1 Torii-shared, 2 integration), four mandatory G-4P gates, guarded Cargo execution, Rust-owned grouped SDK corpus parity, and exact no-skip Sumeragi diagnostics SDK inventories are source-bound (fixture_sha256=${grouped_fixture_sha256}, grouped_suite_source_manifest_sha256=${grouped_suite_source_manifest_sha256}, sdk_diagnostics_suite_source_manifest_sha256=${sdk_diagnostics_suite_source_manifest_sha256})"
+echo "[multilane-release-inventory] 85 corridor legs, exact ${canonical_production_test_count}/${canonical_production_test_count} production tests across 44 modules, exact 522/522 G-UNIT (316 core, 143 queue-journal, 13 config, 8 data-model, 39 Torii, 1 Torii-shared, 2 integration), four mandatory G-4P gates, guarded Cargo execution, Rust-owned grouped SDK corpus parity, and exact no-skip Sumeragi diagnostics SDK inventories are source-bound (fixture_sha256=${grouped_fixture_sha256}, grouped_suite_source_manifest_sha256=${grouped_suite_source_manifest_sha256}, sdk_diagnostics_suite_source_manifest_sha256=${sdk_diagnostics_suite_source_manifest_sha256})"

@@ -26,8 +26,8 @@ use iroha_data_model::{
         PrivacyStatementDigestV1, PrivacyStatementV1, PrivacyTransactionIntentDigestV1,
     },
     transaction::{
-        FeePaymentIntent, SignedTransaction, TransactionBuilder, TransactionPayload,
-        signed::TransactionSignatureError,
+        FeePaymentIntent, SignedTransaction, TransactionAdmissionIntent, TransactionBuilder,
+        TransactionPayload, signed::TransactionSignatureError,
     },
 };
 use rand_core_06::{CryptoRng, OsRng, RngCore};
@@ -368,6 +368,15 @@ impl core::fmt::Debug for JindoPreparedPrivacyActionV1 {
     }
 }
 impl JindoPreparedPrivacyActionV1 {
+    /// Borrow the exact immutable payload used to request an authenticated fee quote.
+    ///
+    /// Fee limits are transaction-intent bound, so callers must prepare the action again with
+    /// the returned quote before signing. The final prepared payload should then be re-quoted to
+    /// confirm that its fixed-width proof and fee-size fixed point preserve the same intent.
+    #[must_use]
+    pub const fn transaction_payload_for_fee_quote_v1(&self) -> &TransactionPayload {
+        &self.payload
+    }
     /// Borrow the final, already revalidated payload for the isolated native
     /// release-evidence runner.
     ///
@@ -376,7 +385,7 @@ impl JindoPreparedPrivacyActionV1 {
     /// same typed envelope and verifier that consensus admission consumes.
     #[cfg(feature = "privacy-release-evidence")]
     pub(crate) const fn release_evidence_payload_v1(&self) -> &TransactionPayload {
-        &self.payload
+        self.transaction_payload_for_fee_quote_v1()
     }
     /// Canonical transaction-intent digest bound into the statement.
     #[must_use]
@@ -606,7 +615,8 @@ fn validate_transaction_context_v1(
         context.authority.clone(),
         context.fee_payment.clone(),
     )
-    .with_metadata(context.metadata.clone());
+    .with_metadata(context.metadata.clone())
+    .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced);
     builder.set_creation_time(context.creation_time);
     if let Some(ttl) = context.time_to_live {
         builder.set_ttl(ttl);
@@ -642,7 +652,8 @@ fn transaction_payload_v1(
         context.fee_payment.clone(),
     )
     .with_instructions([SubmitPrivacyProofV1::new(envelope)])
-    .with_metadata(context.metadata.clone());
+    .with_metadata(context.metadata.clone())
+    .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced);
     builder.set_creation_time(context.creation_time);
     if let Some(ttl) = context.time_to_live {
         builder.set_ttl(ttl);
@@ -1252,6 +1263,13 @@ mod tests {
         assert_eq!(prepared.polynomial_count(), 4);
         assert_eq!(prepared.coefficient_counts(), &[4, 2, 2, 2]);
         assert_eq!(prepared.proof_bytes(), JINDO_NATIVE_PROOF_BYTES_V1 as u32);
+        assert_eq!(
+            prepared
+                .transaction_payload_for_fee_quote_v1()
+                .admission_intent(),
+            TransactionAdmissionIntent::QueuePlanSynced,
+            "the direct Jindo action must bind the public QueuePlan admission path"
+        );
         assert_ne!(prepared.transaction_intent_digest(), [0; 32]);
         assert_ne!(prepared.statement_digest(), [0; 32]);
         assert_ne!(prepared.proof_envelope_hash(), [0; 32]);
@@ -1469,6 +1487,11 @@ mod tests {
             .signed_transaction()
             .verify_signature()
             .expect("locally signed transaction verifies");
+        assert_eq!(
+            signed.signed_transaction().admission_intent(),
+            TransactionAdmissionIntent::QueuePlanSynced,
+            "signing must preserve the proof-bound QueuePlan admission intent"
+        );
         let (_, signed_submission) = signed
             .signed_transaction()
             .privacy_transaction_intent_binding_if_present_v1()

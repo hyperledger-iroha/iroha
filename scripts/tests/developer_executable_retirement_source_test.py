@@ -125,8 +125,14 @@ OPENING_MANIFEST_BLOB = "c5ed5615017f22d7c5fe0a3d30a9d255724c84c8"
 OPENING_MANIFEST_SHA256 = "0a1c9c6910a2e42e8e9945ee11c3850255e249d46fbf29dde13ba198a14c9cdd"
 OPENING_MANIFEST_BYTES = 4_501
 OPENING_MANIFEST_LINES = 147
-POST_MANIFEST_SHA256 = "0ace5038cbc52348fe44e1383b5e76f82d45a628d26f66198f6ee43863361a22"
-POST_MANIFEST_BYTES = 4_161
+HISTORICAL_POST_MANIFEST_SHA256 = (
+    "0ace5038cbc52348fe44e1383b5e76f82d45a628d26f66198f6ee43863361a22"
+)
+HISTORICAL_POST_MANIFEST_BYTES = 4_161
+HISTORICAL_POST_MANIFEST_LINES = 132
+POST_MANIFEST_BLOB = "36a578ad5005fd1f3e7b18da5a74165842b91117"
+POST_MANIFEST_SHA256 = "66f847ad7e9b130e643ea378d0529c8cb1b648ce46a5e079c09df9911d4648ac"
+POST_MANIFEST_BYTES = 4_180
 POST_MANIFEST_LINES = 132
 
 OPENING_CORE_MANIFEST_BLOB = "1e80a31dbd28f6650dbd4dd0ff25decd19723024"
@@ -135,10 +141,16 @@ OPENING_CORE_MANIFEST_SHA256 = (
 )
 OPENING_CORE_MANIFEST_BYTES = 13_937
 OPENING_CORE_MANIFEST_LINES = 375
-CORE_MANIFEST_BLOB = "ded9b8d998f2d23294dd6a852bd9ac0ba79cb7d7"
-CORE_MANIFEST_SHA256 = "442489e3927220a2960d7cce218b3aa3729211c8d1502d0afdee842ab2dd0ab7"
-CORE_MANIFEST_BYTES = 13_738
-CORE_MANIFEST_LINES = 366
+HISTORICAL_CORE_MANIFEST_BLOB = "ded9b8d998f2d23294dd6a852bd9ac0ba79cb7d7"
+HISTORICAL_CORE_MANIFEST_SHA256 = (
+    "442489e3927220a2960d7cce218b3aa3729211c8d1502d0afdee842ab2dd0ab7"
+)
+HISTORICAL_CORE_MANIFEST_BYTES = 13_738
+HISTORICAL_CORE_MANIFEST_LINES = 366
+CORE_MANIFEST_BLOB = "79b745c6b2780b81b2a4c4abdca608780df501cf"
+CORE_MANIFEST_SHA256 = "42e878358198e34aa5eaa4427c0ab9c65d4a3e331bbb09a53215da45cc3e8422"
+CORE_MANIFEST_BYTES = 13_411
+CORE_MANIFEST_LINES = 362
 
 WAVE_FOUR_CONSOLIDATED_TEST_TABLES = (
     """[[test]]
@@ -158,10 +170,10 @@ OPENING_LOCK_BLOB = "bf7633694c3f2fdca07de4d99743a09bad2daa12"
 OPENING_LOCK_SHA256 = "0ddb3f3938cf32035371317100674cd1601c3cb41232237f7a7d28b3aeab6222"
 OPENING_LOCK_BYTES = 315_333
 OPENING_LOCK_LINES = 13_758
-LOCK_BLOB = "5d04cef722cb695dd636110be01ff8de52ae7b45"
-LOCK_SHA256 = "c90b3659d6cb44cd1d6f9e75e7b98aacc0d30bbe23041d4e6e109e8a206fa76b"
-LOCK_BYTES = 311_172
-LOCK_LINES = 13_613
+LOCK_BLOB = "73decc2afc17e8aad2cfe1c4f83a57049d26f2cb"
+LOCK_SHA256 = "d5b8bf5efbdc3ce2a8b1c0d2d75e1c5d1a343a072f836cfb76205bc6ea4cf15f"
+LOCK_BYTES = 311_234
+LOCK_LINES = 13_620
 
 RETIRED_TABLES = (
     """[[bin]]
@@ -389,9 +401,18 @@ def _expected_manifest(opening: bytes) -> bytes:
         _require(text.count(table) == 1, "retired target table opening count changed")
         text = text.replace(table, "", 1)
     postimage = text.encode("utf-8")
-    _require(len(postimage) == POST_MANIFEST_BYTES, "derived manifest byte ledger changed")
-    _require(postimage.count(b"\n") == POST_MANIFEST_LINES, "derived manifest line ledger changed")
-    _require(_sha256(postimage) == POST_MANIFEST_SHA256, "derived manifest hash changed")
+    _require(
+        len(postimage) == HISTORICAL_POST_MANIFEST_BYTES,
+        "historical derived manifest byte ledger changed",
+    )
+    _require(
+        postimage.count(b"\n") == HISTORICAL_POST_MANIFEST_LINES,
+        "historical derived manifest line ledger changed",
+    )
+    _require(
+        _sha256(postimage) == HISTORICAL_POST_MANIFEST_SHA256,
+        "historical derived manifest hash changed",
+    )
     return postimage
 
 
@@ -401,13 +422,22 @@ def _expected_core_manifest(opening: bytes) -> bytes:
         _require(text.count(table) == 1, "wave-four core target opening count changed")
         text = text.replace(table, "", 1)
     postimage = text.encode("utf-8")
-    _require(len(postimage) == CORE_MANIFEST_BYTES, "derived core manifest byte ledger changed")
     _require(
-        postimage.count(b"\n") == CORE_MANIFEST_LINES,
-        "derived core manifest line ledger changed",
+        len(postimage) == HISTORICAL_CORE_MANIFEST_BYTES,
+        "historical derived core manifest byte ledger changed",
     )
-    _require(_sha256(postimage) == CORE_MANIFEST_SHA256, "derived core manifest hash changed")
-    _require(_git_blob_id(postimage) == CORE_MANIFEST_BLOB, "derived core manifest blob changed")
+    _require(
+        postimage.count(b"\n") == HISTORICAL_CORE_MANIFEST_LINES,
+        "historical derived core manifest line ledger changed",
+    )
+    _require(
+        _sha256(postimage) == HISTORICAL_CORE_MANIFEST_SHA256,
+        "historical derived core manifest hash changed",
+    )
+    _require(
+        _git_blob_id(postimage) == HISTORICAL_CORE_MANIFEST_BLOB,
+        "historical derived core manifest blob changed",
+    )
     return postimage
 
 
@@ -463,25 +493,31 @@ def _validate(snapshot: Snapshot, opening_manifest: bytes) -> None:
 
     manifest = snapshot.files[CLI_MANIFEST]
     _require(manifest is not None, "CLI manifest is missing")
-    expected_manifest = _expected_manifest(opening_manifest)
-    _require(manifest == expected_manifest, "CLI manifest postimage drifted")
+    _expected_manifest(opening_manifest)
+    _require(len(manifest) == POST_MANIFEST_BYTES, "CLI manifest byte count changed")
+    _require(
+        manifest.count(b"\n") == POST_MANIFEST_LINES,
+        "CLI manifest line count changed",
+    )
     _require(_sha256(manifest) == POST_MANIFEST_SHA256, "CLI manifest postimage hash drifted")
+    _require(_git_blob_id(manifest) == POST_MANIFEST_BLOB, "CLI manifest postimage blob drifted")
     manifest_text = manifest.decode("utf-8")
     _require(
         len(re.findall(r"^autobins\s*=\s*false$", manifest_text, re.MULTILINE)) == 1,
         "CLI autobins=false contract changed",
     )
     _require(_bin_tables(manifest_text) == EXPECTED_BIN_TABLES, "CLI bin target ledger changed")
+    _require(
+        manifest_text.count('ivm = { workspace = true }') == 1
+        and '"ivm/runtime"' not in manifest_text,
+        "CLI IVM feature authority changed",
+    )
     for identifier in RETIRED_IDENTIFIERS[:3]:
         _require(identifier not in manifest_text, f"retired CLI target resurrected: {identifier}")
 
     core_manifest = snapshot.files[CORE_MANIFEST]
     _require(core_manifest is not None, "iroha_core manifest is missing")
-    expected_core_manifest = _expected_core_manifest(_git_blob(OPENING_CORE_MANIFEST_BLOB))
-    _require(
-        core_manifest == expected_core_manifest,
-        "iroha_core manifest differs from authenticated wave-four postimage",
-    )
+    _expected_core_manifest(_git_blob(OPENING_CORE_MANIFEST_BLOB))
     _require(len(core_manifest) == CORE_MANIFEST_BYTES, "iroha_core manifest byte count changed")
     _require(
         core_manifest.count(b"\n") == CORE_MANIFEST_LINES,
@@ -501,6 +537,14 @@ def _validate(snapshot: Snapshot, opening_manifest: bytes) -> None:
         "iroha_core autoexample discovery contract changed",
     )
     _require("bench_dag" not in core_text, "retired bench_dag target resurrected in manifest")
+    _require(
+        core_text.count('ivm = { workspace = true }') == 1
+        and 'name = "sccp_security"' in core_text
+        and 'required-features = ["iroha-core-tests"]' in core_text
+        and "zk-halo2-ipa-poseidon" not in core_text
+        and "finality-test-fixtures" not in core_text,
+        "iroha_core consolidated target and feature authority changed",
+    )
 
     lock = snapshot.files[LOCKFILE]
     _require(lock is not None, "Cargo.lock is missing")

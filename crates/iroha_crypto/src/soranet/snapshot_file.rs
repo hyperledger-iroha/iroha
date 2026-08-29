@@ -344,11 +344,12 @@ fn prepare_canonical_parent_with_sync(
 }
 #[cfg(unix)]
 fn sync_direct_directory(path: &Path) -> io::Result<()> {
+    use std::os::unix::fs::OpenOptionsExt as _;
+
     let named_before = fs::symlink_metadata(path)?;
     validate_direct_directory(&named_before, "replay ledger directory")?;
     let mut options = fs::OpenOptions::new();
     options.read(true);
-    use std::os::unix::fs::OpenOptionsExt as _;
     options.custom_flags(SNAPSHOT_O_NOFOLLOW_FLAG);
     let directory = options.open(path)?;
     let opened_before = directory.metadata()?;

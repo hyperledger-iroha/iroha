@@ -101,7 +101,8 @@ fn fair_v2_ingress_rejects_timeout_vote_reserve_larger_than_source_partition() {
 }
 #[test]
 fn fair_v2_ingress_reserves_same_source_transport_completion_behind_auxiliary_pressure() {
-    let (handle, ingress, _relay_receiver) = test_sumeragi_handle(9);
+    let (handle, ingress, _relay_receiver) =
+        test_sumeragi_handle_with_source_geometry(7, Some(0));
     let validator = validator_peers(1).pop().expect("validator fixture");
     ingress.close();
     ingress
@@ -133,7 +134,8 @@ fn fair_v2_ingress_reserves_same_source_transport_completion_behind_auxiliary_pr
 }
 #[test]
 fn fair_v2_ingress_prepare_vote_cannot_consume_commit_progress_reservation() {
-    let (handle, ingress, _relay_receiver) = test_sumeragi_handle(9);
+    let (handle, ingress, _relay_receiver) =
+        test_sumeragi_handle_with_source_geometry(7, Some(0));
     let validator = validator_peers(1).pop().expect("validator fixture");
     ingress.close();
     ingress
@@ -275,7 +277,7 @@ fn fair_v2_ingress_certified_escape_survives_exact_same_source_saturation() {
             .and_then(|bytes| bytes.checked_add(completion_bytes))
             .expect("exact test source partition fits usize");
         let ingress = super::FairV2Ingress::new_with_source_geometry_and_transport_frame_caps(
-            7,
+            5,
             2 * source_bytes,
             source_bytes,
             certified_bytes,
@@ -285,7 +287,7 @@ fn fair_v2_ingress_certified_escape_survives_exact_same_source_saturation() {
             usize::MAX,
             usize::MAX,
             usize::MAX,
-            None,
+            Some(0),
         );
         ingress
             .configure_roster([validator.clone()])
@@ -350,7 +352,7 @@ fn fair_v2_ingress_certified_escape_survives_exact_same_source_saturation() {
                         &state,
                         ingress.authenticated_non_validator_source_capacity,
                     ),
-                7,
+                5,
                 "the certified owner consumes the final validator position: case={label}",
             );
         }
@@ -535,7 +537,8 @@ fn fair_v2_ingress_reservation_potential_does_not_increase_on_service() {
 }
 #[test]
 fn fair_v2_ingress_saturated_peer_cannot_block_an_empty_validator_timeout() {
-    let (handle, ingress, _relay_receiver) = test_sumeragi_handle(12);
+    let (handle, ingress, _relay_receiver) =
+        test_sumeragi_handle_with_source_geometry(10, Some(0));
     let validators = validator_peers(2);
     let saturated = validators[0].clone();
     let honest = validators[1].clone();

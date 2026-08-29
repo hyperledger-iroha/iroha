@@ -1346,8 +1346,8 @@ region|published_store_preflight|effects|at|pub(in crate::sumeragi) struct Prepa
 region|retry_marker_finalization|effects|at|fn durable_validate_retry_seals_are_finalization_inert(&self) -> bool {|before|/// Preflight one inert retry marker before the direct Fetch-to-Store
 region|published_marker_handoff|effects|at|fn prepare_from_published_store(|before|/// Exact carrier block hashes still owned by retained missing-sidecar work.
 region|active_published_store_stutter|effects|at|if let AdapterEffect::StoreBody { round, subject, .. } = effect\n                && let Some(marker) = retained_published_store_retry_markers\n                    .get|before|if let AdapterEffect::StoreBody { round, subject, .. } = effect\n                && let Some(marker) =\n                    retained_published_validate_retry_markers.get
-region|published_store_stutter|effects|at|if let AdapterEffect::StoreBody { round, subject, .. } = effect\n                && let Some(marker) =\n                    retained_published_validate_retry_markers.get|before|if let AdapterEffect::ValidateBody { round, subject, .. } = effect\n                && let Some(marker) = retained_published_validate_retry_markers
-region|published_validate_stutter|effects|at|if let AdapterEffect::ValidateBody { round, subject, .. } = effect\n                && let Some(marker) = retained_published_validate_retry_markers\n                    .get(&(*round, *subject))\n                    .cloned()|before|if let AdapterEffect::ValidateBody { round, subject, .. } = effect\n                && let Some(seal) = retained_validate_retry_seals
+region|published_store_stutter|effects|at|if let AdapterEffect::StoreBody { round, subject, .. } = effect\n                && let Some(marker) =\n                    retained_published_validate_retry_markers.get|before|if let AdapterEffect::ValidateBody {\n                tag,\n                round,\n                subject,\n            } = effect\n                && let Some(marker) = retained_published_validate_retry_markers
+region|published_validate_stutter|effects|at|if let AdapterEffect::ValidateBody {\n                tag,\n                round,\n                subject,\n            } = effect\n                && let Some(marker) = retained_published_validate_retry_markers\n                    .get(&(*round, *subject))\n                    .cloned()|before|if let AdapterEffect::ValidateBody { round, subject, .. } = effect\n                && let Some(seal) = retained_validate_retry_seals
 region|historical_store_completion_projection|effects|at|/// Compare an already-running physical Store task with a row published|before|impl PublishedLifecycleStoreRetryCensusEntryV1 {
 region|historical_validate_store_completion_projection|effects|at|/// Prove that an older physical Store completion is already represented|before|/// Move-only preflight for installing one exact Store marker
 region|store_completion_marker_coalescing|effects|at|pub(crate) fn complete_body_store<S: V2EffectServices>(|before|/// Retry every retained Apply task waiting for one exact certified merge entry.
@@ -1359,7 +1359,7 @@ region|registry_store_census|registry|at|pub(super) fn published_lifecycle_store
 region|recovered_store_publication|launch|at|pub(in crate::sumeragi) fn settle_recovered_decision_fetch_store(|before|/// Reserve, claim, and queue one recovered Sign
 region|recovered_store_install|launch|at|.recovered_published_store_retry_markers()|before|if !body_store
 region|finalization_store_cross_census|launch|at|fn verify_published_store_marker_finalization_census(&self) -> Result<(), String> {|before|impl ActivatedProductionLifecycleV1 {
-region|pending_kura_store_cross_census|pending_lifecycle|at|/// Consume the no-clock height into the shared finalized-output rollover.|before|        let Self {
+region|pending_kura_store_cross_census|pending_lifecycle|at|fn locally_ready_for_finalized_rollover(&mut self) -> bool {|before|        let Self {\n            mut launched,
 region|cleanup_terminal_retirement|effects|at|let protected_ready_rebind_keys = stale_body_cleanup|before|// Unprotected Proposal families retire with the superseded view.
 region|lock_retry_marker_cleanup|effects|at|self.durable_validate_retry_seals.retain(\pkey, seal\p {\n            seal.lifecycle_ordinal().is_some()\n                \p\p !superseded_keys.contains(key)\n                \p\p Some(*key) == highest_prepare_body\n        });|before|if retire_retained {
 region|decision_retry_marker_cleanup|effects|at|self.durable_validate_retry_seals.retain(\pkey, seal\p {\n            seal.lifecycle_ordinal().is_some() \p\p (!drain_decision_body && *key == decision_body)\n        });|before|self.body_pipeline_owners.retain
@@ -1540,15 +1540,13 @@ required|published_store_stutter|continue;|published Store retry stopped before 
 forbidden|published_store_stutter|plan_body_pipeline_candidate_terminal|published Store retry must stutter before runtime terminal-owner comparison
 order|retention_preplan|4|if let AdapterEffect::StoreBody { round, subject, .. } = effect\n                && let Some(marker) =\n                    retained_published_validate_retry_markers.get|.project_store_retry(receipt, effect, evidence)|retain_effect.push(false);\n                continue;|.plan_body_pipeline_candidate_terminal(effect, evidence)|published Store marker proof and stutter must precede generic runtime terminal planning
 required|published_validate_stutter|.project_retry(effect, evidence)|published Validate stutter bypassed its monotonic exact-body authority projection
-required|published_validate_stutter|let incoming_is_commit = evidence|published Validate retry stopped classifying its exact current Commit authority
-required|published_validate_stutter|if !marker.owns_live_lifecycle_row() && incoming_is_commit|released terminal Validate stopped reaching its cached-result Apply transaction
 required|published_validate_stutter|RuntimeCandidateAdmissionDisposition::CoalescedRetry|published Validate retry stopped requiring an exact one-to-one stutter
 required|published_validate_stutter|production_adapter_effect_candidate_trace_projection(|published Validate retry stopped refining the reviewed candidate trace
 required|published_validate_stutter|check_production_effect_to_candidate_transition(|published Validate retry stopped checking its candidate refinement
-required|published_validate_stutter|retained_published_validate_retry_markers.insert(key, projected.clone())|published Validate retry stopped committing its monotonic inert marker overlay
-required|published_validate_stutter|retain_effect.push(false);|published Validate retry regained executor dispatch
+required|published_validate_stutter|retained_published_validate_retry_markers.insert(key, projected)|published Validate retry stopped committing its monotonic inert marker overlay
+required|published_validate_stutter|retain_effect.push(readmit_protected_decision);|published Validate retry lost its exact protected-Decision readmission disposition
 required|published_validate_stutter|continue;|published Validate retry reached later lifecycle or terminal planning
-order|published_validate_stutter|7|.project_retry(effect, evidence)|retained_published_validate_retry_markers.insert(key, projected.clone())|RuntimeCandidateAdmissionDisposition::CoalescedRetry|production_adapter_effect_candidate_trace_projection(|check_production_effect_to_candidate_transition(|retain_effect.push(false);|continue;|published Validate retry must publish its monotonic overlay before only non-Decision retries terminate inertly
+order|published_validate_stutter|12|.project_retry(effect, evidence)|let key = (*round, *subject);|let readmit_protected_decision = frontier.decision.is_some_and(\pdecision\p {|.has_exact_pending_live_decision_apply(*tag, decision)|self.validated_bodies.get(&key)|.is_unbound_exact_decision_upgrade(&projected, decision, validated)|RuntimeCandidateAdmissionDisposition::CoalescedRetry|production_adapter_effect_candidate_trace_projection(|check_production_effect_to_candidate_transition(|retained_published_validate_retry_markers.insert(key, projected)|retain_effect.push(readmit_protected_decision);|continue;|published Validate retry must prove exact monotonic refinement and retain only the authenticated protected-Decision upgrade
 forbidden|published_validate_stutter|install_pending_durable_validate_admission|published Validate retry re-entered lifecycle admission
 forbidden|published_validate_stutter|enqueue_|published Validate retry performed service I/O
 forbidden|published_validate_stutter|AdapterEffect::Apply|published Validate retry synthesized an Apply effect
@@ -1556,7 +1554,7 @@ forbidden|published_validate_stutter|begin_apply(|published Validate retry enter
 forbidden|published_validate_stutter|pending_applications|published Validate retry mutated ordinary Apply ownership
 forbidden|published_validate_stutter|live_lifecycle_decision_apply|published Validate retry synthesized lifecycle Apply ownership
 forbidden|published_validate_stutter|plan_body_pipeline_candidate_terminal|published Validate retry must stutter before runtime terminal-owner comparison
-order|retention_preplan|4|retained_published_validate_retry_markers\n                    .get|.project_retry(effect, evidence)|retain_effect.push(false);\n                continue;|.plan_body_pipeline_candidate_terminal(effect, evidence)|published Validate marker proof and stutter must precede generic runtime terminal planning
+order|retention_preplan|4|retained_published_validate_retry_markers\n                    .get|.project_retry(effect, evidence)|retain_effect.push(readmit_protected_decision);\n                continue;|.plan_body_pipeline_candidate_terminal(effect, evidence)|published Validate marker proof and authenticated protected-Decision retention must precede generic runtime terminal planning
 required|published_store_terminal_seal|enum PublishedLifecycleStoreCompletionPlanV1 {|Store completion coalescing lost its closed preflight disposition
 required|published_store_terminal_seal|const fn coalesces_terminal(&self) -> bool {|Store completion disposition stopped distinguishing published terminal ownership
 required|historical_store_completion_projection|fn project_historical_store_completion(|historical Store completion lost its comparison-only projector
@@ -3581,6 +3579,7 @@ region|runner|runner|begin|-|end|-
 region|runner_height|runner_height_driver|begin|-|end|-
 region|runner_cursor|runner_outer_cursor|begin|-|end|-
 region|ingress_plan|scheduler_inputs|after|fn plan_ingress_turn_with_runner_debt(|before|\n    }\n}
+region|fatal_capacity_abort|worker|after|pub(crate) fn fail_closed_into_prepared(|before|    /// Consume the locked reservation into the preflighted exact persistence
 count|scheduler|fn direct_registry_scheduler_inputs(|1|production scheduler factory count drifted
 count|scheduler|SchedulerReadyInputs::from_authenticated(|1|authenticated ready-input factory count drifted
 count|scheduler|SchedulerReadyInputs::from_authenticated_waiting_fetch(|1|authenticated waiting-Fetch factory count drifted
@@ -3630,17 +3629,33 @@ required|worker|enum LifecycleIoCapacityWaitStatus|worker lost capacity wait sta
 required|worker|LifecycleIoCapacityWaitStatus::ForeignOrDisconnected|worker lost foreign/disconnected wait classification
 required|worker|Arc::ptr_eq(&self.output_guard, &services.output_guard)|worker lost output-guard pointer identity
 required|worker|services.output_guard.restart_required()|worker lost restart-required guard check
+required|worker|pub(crate) fn into_released_target(|released capacity wait lost its service-authenticated affine target extraction
+required|worker|if self.status(services) != LifecycleIoCapacityWaitStatus::Released|pending or foreign capacity wait may expose its one-shot target
+required|scheduler|let Ok(target) = wait.into_released_target(services) else|released capacity retry stopped reauthenticating the exact service generation
+required|scheduler|if selector.restore_lifecycle_io_target(target).is_err()|released capacity retry stopped restoring its one-shot target through the fallible selector join
+forbidden|worker|fn restore_into_prepared(|capacity wait regained an unauthenticated or panicking selector-restoration shortcut
+forbidden|worker|fn authenticated_certified_fetch_target(|ordinary Fetch reservation exposed its linear target outside reservation-bound attestation
+required|scheduler|reservation.fail_closed_into_prepared(prepared)|recovered Fetch fatal in-flight collision reopened output before releasing capacity
+order|fatal_capacity_abort|3|drop(operation);|self.queue.admission.release();|drop(state);|fatal lifecycle capacity abort lost fail-stop-before-release ordering
 forbidden|worker|submit_certified_fetch_body_persistence|worker must not own certified-Fetch submission
 forbidden|worker|retry_certified_fetch_body_persistence|worker must not own certified-Fetch retry
 forbidden|worker|CertifiedFetchBodyPersistenceSubmissionError|worker must not expose certified-Fetch submission errors
 forbidden|worker|fn release_advanced(|worker must not expose raw advanced-capacity release
 forbidden|worker|fn generation_exhausted(|worker must not expose raw generation exhaustion
 required|selector|_linearity: LifecycleIngressIoTargetSealLinearity|selector target seal lost linearity
+required|worker|pub(crate) fn matches_captured_certified_fetch_target(|worker reservation lost its exact selector-target attestation boundary
+required|selector|capacity: &LifecycleIoCapacityReservation<'_>|Fetch carrier attestation no longer requires a live capacity reservation
+required|selector|capacity.matches_captured_certified_fetch_target(self)|Fetch carrier attestation stopped joining the moved-from selector to its reservation-owned target
+required|selector|target.context() != self.context|reserved Fetch target lost exact height-context validation
+required|selector|target.ingress_identity() != *self.selected_identity()|reserved Fetch target lost exact ingress-identity validation
+required|selector|target.matches_certified_fetch_work_id(candidate.work_id())|reserved Fetch target lost exact executor-work validation
 required|selector|.filter(\pnext\p *next != u64::MAX)|selector lost maximum-generation rejection
 required|body_store|Arc::ptr_eq(&self.0, &other.0)|body-store identity lost pointer equality
 forbidden|worker|fn lifecycle_capacity_queue_depth|worker must not expose raw lifecycle capacity depth
 order|ingress_plan|6|preflight_selected_target_work_absent()|prepare_certified_fetch_body_persistence(prepared)|preflight_certified_fetch_body_persistence(&task)|coordinator.plan_turn(inputs)|settle_turn(lease, super::TurnOutcome::Blocked(post_submit_wait))|commit_certified_fetch_body_persistence(task)|ingress transaction omitted {required}
-order|ingress_plan|11|ProductionIngressSchedulerInputsError::CoordinatorFaulted|ProductionIngressSchedulerInputsError::UnsettledLease|ProductionIngressSchedulerInputsError::ForeignModeObservation|ProductionIngressSchedulerInputsError::StaleModeObservation|services.matches_lifecycle_body_store(body_store_identity)|services.matches_lifecycle_executor_output_guard(executor)|ProductionIngressSchedulerInputsError::CompetingReadyWork|.prepare_selected_certified_fetch_admission(executor, &self.verified)|.capture_lifecycle_capacity_rank(selector)|self.settle_certified_fetch_admission(admission)|.attest_scheduler_fetch_carrier(&self.coordinator, &mut self.registry)|certified Fetch admission crossed a no-mutation gate or lost exact pre-Phase-A order
+order|ingress_plan|12|ProductionIngressSchedulerInputsError::CoordinatorFaulted|ProductionIngressSchedulerInputsError::UnsettledLease|ProductionIngressSchedulerInputsError::ForeignModeObservation|ProductionIngressSchedulerInputsError::StaleModeObservation|services.matches_lifecycle_body_store(body_store_identity)|services.matches_lifecycle_executor_output_guard(executor)|ProductionIngressSchedulerInputsError::CompetingReadyWork|.prepare_selected_certified_fetch_admission(executor, &self.verified)|.capture_lifecycle_capacity_rank(selector)|self.settle_certified_fetch_admission(admission)|.attest_scheduler_fetch_carrier(|&reservation,|certified Fetch admission crossed a no-mutation gate or lost its reservation-bound carrier attestation
+count|ingress_plan|drop(reservation);|2|fatal post-admission Fetch failures must close output while the queue reservation is retained
+order|ingress_plan|6|ProductionCertifiedFetchAdmissionSettlementV1::RestartRequired => {|drop(reservation);|ProductionIngressSchedulerInputsError::CertifiedFetchAdmissionSettlement|Err(error) => {|drop(reservation);|ProductionIngressSchedulerInputsError::InvalidSelectedCarrier|post-admission fatal branches lost fail-stop-before-capacity-release ordering
 forbidden|registry|SchedulerReadyInputs::from_authenticated(|registry must not mint ready scheduler inputs
 forbidden|concrete|SchedulerReadyInputs::from_authenticated(|concrete admission must not mint ready scheduler inputs
 forbidden|selector|SchedulerReadyInputs::from_authenticated(|selector must not mint ready scheduler inputs
@@ -4522,6 +4537,8 @@ required|widen|selected_positions|ordinary cut widening discarded its exact queu
 required|widen|selected_disposition|ordinary cut widening discarded its exact dequeue disposition
 required|widen|leader_wire_projection|ordinary cut widening discarded its leader-wire projection
 order|driver|9|classify_selected_certified_response_priority(&cut)|SelectedCertifiedResponsePriorityV1::DefinitelyNonPriority|cut.into_ordinary_turn_cut()|SelectedCertifiedResponsePriorityV1::OrdinaryClaimed|capture_lifecycle_ingress_selector(cut)|self.drive_certified_fetch_ingress_selector(selector, runner)|SelectedCertifiedResponsePriorityV1::RecoveredClaimed|prepare_recovered_decision_fetch_from_selected_cut(cut)|self.drive_recovered_ingress_selector(selector, runner)|certified-response tri-state classification and exact handoffs must remain ordered
+count|driver|Err(LifecycleIngressSelectorError::QueueCutChanged)|3|certified-response transient queue-refresh retry inventory changed
+count|driver|ProductionLifecycleIngressSelectionV1::CertifiedFetchRetry|4|certified-response queue-refresh paths no longer all retry the same lifecycle turn
 count|driver|dequeue_prepared_ordinary_ingress(|4|certified-response tri-state routing changed the exact ordinary dequeue inventory
 forbidden|driver|selected_cut_is_recovered_decision_fetch|turn driver retained the retired boolean certified-response selector
 end

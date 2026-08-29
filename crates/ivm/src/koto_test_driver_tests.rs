@@ -1415,9 +1415,7 @@ fn fixture_feature_actions_use_seiyaku_and_kotoage_names_only() {
 fn fixture_contract_effect_grant_targets_only_the_immutable_contract_subject() {
     let caller = parse_account_literal(DEFAULT_CALLER).expect("caller");
     let mut host = KotoTestHost::new(
-        WsvHost::new_with_subject(
-            MockWorldStateView::default(),
-            caller.clone()),
+        WsvHost::new_with_subject(MockWorldStateView::default(), caller.clone()),
         None,
         HashMap::new(),
     );
@@ -1462,9 +1460,7 @@ fn transfer_control_effects_require_exact_subject_asset_domain_and_dataspace_sco
     );
     let asset_literal = asset.canonical_address();
     let mut host = KotoTestHost::new(
-        WsvHost::new_with_subject(
-            MockWorldStateView::default(),
-            controller.clone()),
+        WsvHost::new_with_subject(MockWorldStateView::default(), controller.clone()),
         None,
         HashMap::new(),
     );
@@ -1706,9 +1702,7 @@ fn fixture_account_alias_registration_is_canonical_unique_and_resolvable() {
             .clone(),
     );
     let mut host = KotoTestHost::new(
-        WsvHost::new_with_subject(
-            MockWorldStateView::default(),
-            caller.clone()),
+        WsvHost::new_with_subject(MockWorldStateView::default(), caller.clone()),
         None,
         HashMap::new(),
     );

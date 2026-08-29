@@ -361,9 +361,8 @@ work assumptions are the trusted contracts stated in the protocol document.
 The local-work contract is quantified only over validator hosts admitted by
 the first-release storage-platform gate. An unsupported-platform failure is
 not successful termination and cannot discharge application or
-successor-activation fairness. Revision 4 has no legacy decoder premise: a
-Vote, QC, status record, or finality artifact without its canonical signed
-proposal origin is rejected.
+successor-activation fairness. Revision 4 requires every Vote, QC, status
+record, and finality artifact to carry its canonical signed proposal origin.
 
 ### Quorum lemmas
 
@@ -595,7 +594,19 @@ theorem under that binding. The finite TLC configurations leave the ceiling
 symbolic and larger because their service budget counts abstract actions, not
 milliseconds; those searches validate the conditional transition argument,
 not the operational claim that a particular deployment meets the ten-base
-service premise.
+service premise. Each finite configuration explicitly replaces `Generations`,
+`GenerationCanIncrement`, `ModelConfiguration`, and
+`ByzantineProposalJustificationDomain` with their `Finite*` projections and
+keeps `MaxGeneration >= MaxView`; this avoids evaluating an infinite-`Nat`
+comparison or eagerly materializing the timeout-vote powerset while preserving
+every configured view and every proposal-justification pair that can survive
+the exact installed-TC guard. The production justification domain remains the
+full timeout-certificate/PrepareQC Cartesian product. The asynchronous
+liveness configuration also substitutes a finite physical-ingress ordinal
+ceiling above its trace budget because TLC evaluates integers through a signed
+64-bit implementation; the production model spells the exact `u64` maximum as
+`(2 ^ 64) - 1`. These substitutions are counterexample-search projections,
+not deductive evidence or proof-ledger promotions.
 
 The claim is conditional and per height: after GST, with a representative
 roster of at least four voting peers, a responsive dual quorum, and
@@ -1540,7 +1551,7 @@ reconstruction-refinement, or starvation obligations; the added rollover and
 tip-recovery regressions remain executable regression evidence, not independent
 proof of the promoted obligations.
 
-The current pre-network release inventory names 863 tests across 44 Rust
+The current pre-network release inventory names 864 tests across 44 Rust
 modules. The preceding 298-name inventory arose from the 264-name inventory by
 adding 37 positive regressions which
 comprise 10 per-target exact-output and historical/current typed-rollover tests,
@@ -1666,7 +1677,9 @@ exact FIFO beneath the global-selection overlay produced an intermediate
 retired rows already represented by their stricter replacements, exact-renamed
 four surviving tests, and replaced one retired combined daemon check with its
 two real block/lane checks, yielding the 862-test checkpoint. The eligible-only
-sealed Ready-Proposal-Sign preemption regression yields the current 863-test,
+sealed Ready-Proposal-Sign preemption regression yielded the 863-test
+checkpoint; retaining the exact failed-pre-handshake dial backoff owner yields
+the current 864-test,
 44-module inventory. The complete source-sealed
 pre-network corridor
 contains 85 legs. Six source-
@@ -1730,7 +1743,6 @@ or directories, fail closed. Native atomic replacement is required on Unix and
 Windows, and unsupported directory-sync platforms fail closed. The root marker
 is the local trust anchor, so marker replacement/rollback—including restoration
 of the bootstrap sentinel—and whole-store rollback are outside the guarantee.
-V1/V2 are unsupported.
 
 Ordinary generation advance requires a certified changed roster and
 authenticated terminality. A sealed durable handoff or semantically validated
@@ -1739,11 +1751,11 @@ empty successor projection, without forging close prefixes. Same-roster
 rehydration preserves generation and responder ownership; a new requester
 against a full same-roster table rejects without mutation.
 The canonical module/test TSV inventory SHA-256 is
-`42509872b04f64962dc8edc09ca9f007bafffe402c4e0847255dc937a105888c`.
-The separate source-sealed G-UNIT inventory contains 518 focused tests,
-including 313 core and 142 queue-journal `iroha_core` tests. Its 519-line
+`44784c79c489d83ab142bb0db84e89138c3a54b1349926a80597e2c5b21a83df`.
+The separate source-sealed G-UNIT inventory contains 522 focused tests,
+including 316 core and 143 queue-journal `iroha_core` tests. Its 523-line
 canonical TSV has SHA-256
-`3d2c93cab0528cb668d977642eecfe78e9c20378e887a0b7db4198ffd220eb29`;
+`5e8b82b400b438eabb7733adbccae15b5aa212a98a89161a586cbce686e2f6e9`;
 the sealed Native rows cover exact per-route prevote-byte accounting,
 empty/hard-cap/overflow pair geometry, and precommit error classification.
 The added boundaries preserve the frozen predecessor CommitQC through
@@ -1869,7 +1881,7 @@ atomically. A new Fetch removes that head; an existing ordinary Fetch keeps it
 as the exact completion barrier after upgrading request authority. The
 preceding mutable-source discovery and direct execution evidence covered the
 earlier 168-name inventory. The latest fresh discovery checkpoint covered 738
-names; the current 863-name tree still requires a clean committed, detached,
+names; the current 864-name tree still requires a clean committed, detached,
 source-sealed serial release execution. An
 earlier exact one-attempt
 four-validator genesis rerun is green at 1/1 in 456.76 seconds. Neither

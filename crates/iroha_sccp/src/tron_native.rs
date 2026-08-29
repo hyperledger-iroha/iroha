@@ -2195,15 +2195,16 @@ mod tests {
         assert_eq!(validated.source_event_digest, statement.source_event_digest);
     }
     #[test]
-    fn native_transaction_accepts_current_java_tron_raw_data_and_rejects_field_3() {
+    fn native_transaction_rejects_retired_three_argument_java_tron_call_and_field_aliases() {
         // Provenance: `protocol.Transaction.raw` field numbers and types come
         // from tronprotocol/protocol `core/Tron.proto`. The SCCP profile accepts
         // the current field-1 + field-4 TAPOS shape and rejects deprecated field 3.
         // The field-1 + field-4 shape comes from the Java `setReference` demo
         // in tronprotocol/documentation `TRX/Tron-overview.md`: it takes height
         // bytes [6..8] and block-hash bytes [8..16], without setting field 3.
-        // This literal is the resulting deterministic raw-data protobuf for
-        // the test SCCP trigger, with `00 00` height bytes and `44` hash bytes.
+        // This literal retains the old three-argument transfer selector as a
+        // negative-only fixture. V1 requires the fourth replay-witness argument,
+        // so an otherwise-current TAPOS envelope must reject this retired call.
         const JAVA_TRON_RAW_DATA_HEX: &str = concat!(
             "0x0a020000220844444444444444444080897a5a9002081f128b020a31747970652e676f6f676c65617069732e636f6d2f",
             "70726f746f636f6c2e54726967676572536d617274436f6e747261637412d5010a154122222222222222222222222222",
@@ -2223,17 +2224,18 @@ mod tests {
             ]
         );
         let transfer = test_transfer();
-        let (owner, contract) = parse_tron_raw_transaction_sccp_call(
-            &raw_data,
-            [0x33; 20],
-            test_sender(),
-            &transfer.recipient,
-            transfer.amount,
-            transfer.nonce,
-        )
-        .expect("byte-exact Java-Tron raw data");
-        assert_eq!(owner, test_sender());
-        assert_eq!(&contract[1..], &[0x33; 20]);
+        assert_eq!(
+            parse_tron_raw_transaction_sccp_call(
+                &raw_data,
+                [0x33; 20],
+                test_sender(),
+                &transfer.recipient,
+                transfer.amount,
+                transfer.nonce,
+            ),
+            Err(TronNativeTransactionError::WrongCallData),
+            "the retired three-argument selector must not alias the mandatory-witness ABI"
+        );
 
         let mut deprecated_ref_block_num = raw_data.clone();
         deprecated_ref_block_num.splice(4..4, [0x18, 0xb4, 0x24]);

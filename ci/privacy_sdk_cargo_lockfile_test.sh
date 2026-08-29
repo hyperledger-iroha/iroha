@@ -1268,6 +1268,46 @@ if [[ "$("${TEST_PYTHON}" -c 'import sys; print(".".join(map(str, sys.version_in
   exit 1
 fi
 
+# Production's cd9e release lock is deliberately external and is not a
+# repository test fixture. Model that boundary with a distinct private lock
+# and a private helper copy pinned only to the fixture digest. The checked-in
+# helper remains pinned to cd9e and is asserted again at the end of this test.
+PROVISION_RELEASE_FIXTURE="${TEST_ROOT}/provision-release-authority/Cargo.lock"
+PROVISION_HELPER_ROOT="${TEST_ROOT}/provision-helper"
+PROVISION_HELPER_PATH="${PROVISION_HELPER_ROOT}/privacy_sdk_cargo_lockfile.sh"
+mkdir -p "$(dirname "${PROVISION_RELEASE_FIXTURE}")" "${PROVISION_HELPER_ROOT}"
+write_test_lock "${PROVISION_RELEASE_FIXTURE}" "privacy-release-authority"
+PROVISION_RELEASE_FIXTURE_SHA256="$(
+  "${TEST_PYTHON}" -I -S -c \
+    'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' \
+    "${PROVISION_RELEASE_FIXTURE}"
+)"
+[[ "${PROVISION_RELEASE_FIXTURE_SHA256}" != \
+  "${PRIVACY_SDK_FROZEN_RELEASE_CARGO_LOCK_SHA256}" ]]
+[[ "${PROVISION_RELEASE_FIXTURE_SHA256}" != \
+  "${PRIVACY_SDK_TRACKED_ROOT_CARGO_LOCK_SHA256}" ]]
+sed \
+  "s/${PRIVACY_SDK_FROZEN_RELEASE_CARGO_LOCK_SHA256}/${PROVISION_RELEASE_FIXTURE_SHA256}/" \
+  "${SCRIPT_DIR}/privacy_sdk_cargo_lockfile.sh" >"${PROVISION_HELPER_PATH}"
+cp "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" \
+  "${PROVISION_HELPER_ROOT}/privacy_sdk_cargo_wrapper.sh"
+sed \
+  "s/${PRIVACY_SDK_FROZEN_RELEASE_CARGO_LOCK_SHA256}/${PROVISION_RELEASE_FIXTURE_SHA256}/" \
+  "${SCRIPT_DIR}/check_privacy_python_sdk.sh" \
+  >"${PROVISION_HELPER_ROOT}/check_privacy_python_sdk.sh"
+cp "${SCRIPT_DIR}/verify_privacy_python_wheel.py" \
+  "${PROVISION_HELPER_ROOT}/verify_privacy_python_wheel.py"
+chmod 700 \
+  "${PROVISION_HELPER_PATH}" \
+  "${PROVISION_HELPER_ROOT}/privacy_sdk_cargo_wrapper.sh" \
+  "${PROVISION_HELPER_ROOT}/check_privacy_python_sdk.sh"
+grep -Fq \
+  "${PROVISION_RELEASE_FIXTURE_SHA256}" \
+  "${PROVISION_HELPER_PATH}"
+! grep -Fq \
+  "${PRIVACY_SDK_FROZEN_RELEASE_CARGO_LOCK_SHA256}" \
+  "${PROVISION_HELPER_PATH}"
+
 # Exercise the checked-in CI provisioning corridor with fake Cargo. The fake
 # implements only generate-lockfile and records the exact unstable-option and
 # external-lock arguments; no real Cargo command runs in this self-test.
@@ -1281,6 +1321,9 @@ export PROVISION_CARGO_LOG
 mkdir -p "${PROVISION_REPOSITORY}/.cargo" "${PROVISION_BIN}"
 : >"${PROVISION_REPOSITORY}/Cargo.toml"
 install_tracked_test_root_lock "${PROVISION_REPOSITORY}"
+PROVISION_WORKSPACE_LOCK_SEAL="$(
+  privacy_sdk_file_seal "${PROVISION_REPOSITORY}/Cargo.lock" "${TEST_PYTHON}"
+)"
 write_test_rust_toolchain "${PROVISION_REPOSITORY}"
 cp "${SOURCE_ROOT}/.cargo/config.toml" \
   "${PROVISION_REPOSITORY}/.cargo/config.toml"
@@ -1319,7 +1362,9 @@ printf '%s\n' \
   '  printf "%s\\n" "# adversarial provisioning workspace lock" >"${FAKE_PROVISION_WORKSPACE_LOCK}"' \
   'fi' \
   >"${PROVISION_BIN}/cargo"
-install -m 600 "${SOURCE_ROOT}/Cargo.lock" "${PROVISION_BIN}/frozen-Cargo.lock"
+install -m 600 \
+  "${PROVISION_RELEASE_FIXTURE}" \
+  "${PROVISION_BIN}/frozen-Cargo.lock"
 chmod 700 "${PROVISION_BIN}/cargo"
 printf '%s\n' '#!/usr/bin/env bash' 'exit 0' >"${PROVISION_BIN}/rustc"
 printf '%s\n' '#!/usr/bin/env bash' 'exit 0' >"${PROVISION_BIN}/rustdoc"
@@ -1383,7 +1428,7 @@ for policy_environment in \
     "${policy_environment}=adversarial" \
     PROVISION_CARGO_LOG="${PROVISION_CARGO_LOG}" \
     PATH="${PROVISION_BIN}:${PATH}" \
-    bash "${SCRIPT_DIR}/privacy_sdk_cargo_lockfile.sh" provision-ci \
+    bash "${PROVISION_HELPER_PATH}" provision-ci \
     "${PROVISION_POLICY_REPOSITORY}" \
     "${PROVISION_POLICY_CORRIDOR}" \
     "${PROVISION_POLICY_ENV}" \
@@ -1462,7 +1507,7 @@ expect_failure \
   env \
   PROVISION_CARGO_LOG="${PROVISION_CARGO_LOG}" \
   PATH="${PROVISION_BIN}:${PATH}" \
-  bash "${SCRIPT_DIR}/privacy_sdk_cargo_lockfile.sh" provision-ci \
+  bash "${PROVISION_HELPER_PATH}" provision-ci \
   "${PROVISION_NESTED_REPOSITORY}" \
   "${PROVISION_NESTED_CORRIDOR}" \
   "${PROVISION_NESTED_ENV}" \
@@ -1489,7 +1534,7 @@ expect_failure \
   env \
   PROVISION_CARGO_LOG="${PROVISION_CARGO_LOG}" \
   PATH="${RUSTUP_SHADOW_BIN}:${PROVISION_BIN}:${PATH}" \
-  bash "${SCRIPT_DIR}/privacy_sdk_cargo_lockfile.sh" provision-ci \
+  bash "${PROVISION_HELPER_PATH}" provision-ci \
   "${PROVISION_POLICY_REPOSITORY}" \
   "${TEST_ROOT}/rustup-shadow-corridor" \
   "${RUSTUP_SHADOW_ENV}" \
@@ -1519,7 +1564,7 @@ expect_failure \
   env \
   PROVISION_CARGO_LOG="${PROVISION_CARGO_LOG}" \
   PATH="${PROVISION_BIN}:${PATH}" \
-  bash "${SCRIPT_DIR}/privacy_sdk_cargo_lockfile.sh" provision-ci \
+  bash "${PROVISION_HELPER_PATH}" provision-ci \
   "${PROVISION_CONFIG_REPOSITORY}" \
   "${PROVISION_CONFIG_CORRIDOR}" \
   "${PROVISION_CONFIG_ENV}" \
@@ -1568,7 +1613,7 @@ expect_failure \
   PROVISION_CARGO_LOG="${PROVISION_CARGO_LOG}" \
   CARGO_HOME="${PROVISION_AMBIENT_CARGO_HOME}" \
   PATH="${PROVISION_BIN}:${PATH}" \
-  bash "${SCRIPT_DIR}/privacy_sdk_cargo_lockfile.sh" provision-ci \
+  bash "${PROVISION_HELPER_PATH}" provision-ci \
   "${PROVISION_CARGO_FAILURE_REPOSITORY}" \
   "${PROVISION_CARGO_FAILURE_CORRIDOR}" \
   "${PROVISION_CARGO_FAILURE_ENV}" \
@@ -1612,7 +1657,7 @@ expect_failure \
   PROVISION_CARGO_LOG="${PROVISION_CARGO_LOG}" \
   CARGO_HOME="${PROVISION_AMBIENT_CARGO_HOME}" \
   PATH="${PROVISION_BIN}:${PATH}" \
-  bash "${SCRIPT_DIR}/privacy_sdk_cargo_lockfile.sh" provision-ci \
+  bash "${PROVISION_HELPER_PATH}" provision-ci \
   "${PROVISION_RUSTUP_FAILURE_REPOSITORY}" \
   "${TEST_ROOT}/provision-rustup-nonzero-corridor" \
   "${PROVISION_RUSTUP_FAILURE_ENV}" \
@@ -1634,7 +1679,7 @@ CARGO_HOME="${PROVISION_AMBIENT_CARGO_HOME}" \
 CARGO_INCREMENTAL=0 \
 CARGO_ENCODED_RUSTFLAGS="" \
 PATH="${PROVISION_BIN}:${PATH}" \
-  bash "${SCRIPT_DIR}/privacy_sdk_cargo_lockfile.sh" provision-ci \
+  bash "${PROVISION_HELPER_PATH}" provision-ci \
     "${PROVISION_REPOSITORY}" \
     "${PROVISION_CORRIDOR}" \
     "${PROVISION_GITHUB_ENV}" \
@@ -1642,8 +1687,12 @@ PATH="${PROVISION_BIN}:${PATH}" \
     "${PROVISION_BIN}/rustup" \
     "1.93.1-x86_64-unknown-linux-gnu" \
     "${TEST_PYTHON}" >/dev/null
-if [[ -e "${PROVISION_REPOSITORY}/Cargo.lock" || -L "${PROVISION_REPOSITORY}/Cargo.lock" ]]; then
-  echo "CI provisioning created workspace Cargo.lock" >&2
+if [[ -L "${PROVISION_REPOSITORY}/Cargo.lock" || \
+  ! -f "${PROVISION_REPOSITORY}/Cargo.lock" || \
+  "$(privacy_sdk_file_seal \
+    "${PROVISION_REPOSITORY}/Cargo.lock" "${TEST_PYTHON}")" != \
+    "${PROVISION_WORKSPACE_LOCK_SEAL}" ]]; then
+  echo "CI provisioning changed the tracked workspace Cargo.lock" >&2
   exit 1
 fi
 assert_exact_lines "${PROVISION_CARGO_LOG}" \
@@ -1691,9 +1740,9 @@ grep -Fq "CARGO_HOME=${PROVISION_CORRIDOR}/cargo-home" "${PROVISION_GITHUB_ENV}"
   done <"${PROVISION_GITHUB_PATH}"
   export PATH
   cd "${PROVISION_REPOSITORY}"
-  bash "${SCRIPT_DIR}/privacy_sdk_cargo_lockfile.sh" verify-ci \
+  bash "${PROVISION_HELPER_PATH}" verify-ci \
     "${PROVISION_REPOSITORY}" "${TEST_PYTHON}"
-  bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" metadata
+  bash "${PROVISION_HELPER_ROOT}/privacy_sdk_cargo_wrapper.sh" metadata
 )
 for deterministic_environment_drift in \
   jobs offline incremental encoded encoded-unset bootstrap; do
@@ -1719,7 +1768,7 @@ for deterministic_environment_drift in \
       "privacy SDK CI deterministic Cargo environment changed" \
       env \
       PRIVACY_SDK_DETERMINISTIC_DRIFT="${deterministic_environment_drift}" \
-      bash "${SCRIPT_DIR}/privacy_sdk_cargo_lockfile.sh" verify-ci \
+      bash "${PROVISION_HELPER_PATH}" verify-ci \
       "${PROVISION_REPOSITORY}" "${TEST_PYTHON}"
   )
 done
@@ -1736,7 +1785,7 @@ done
   expect_failure \
     "privacy SDK CI Cargo selector must be absent before wrapper selection" \
     env CARGO="${PROVISION_CORRIDOR}/bin/cargo" \
-    bash "${SCRIPT_DIR}/privacy_sdk_cargo_lockfile.sh" verify-ci \
+    bash "${PROVISION_HELPER_PATH}" verify-ci \
     "${PROVISION_REPOSITORY}" "${TEST_PYTHON}"
 )
 (
@@ -1756,7 +1805,7 @@ done
   cd "${PROVISION_REPOSITORY}"
   expect_failure \
     "registry cache link identity changed" \
-    bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" metadata
+    bash "${PROVISION_HELPER_ROOT}/privacy_sdk_cargo_wrapper.sh" metadata
 )
 
 PROVISION_EMPTY_CACHE_REPOSITORY="${TEST_ROOT}/provision-empty-cache-repository"
@@ -1778,7 +1827,7 @@ FAKE_PROVISION_POPULATE_CACHE=1 \
 PROVISION_CARGO_LOG="${PROVISION_CARGO_LOG}" \
 CARGO_HOME="${PROVISION_EMPTY_AMBIENT_HOME}" \
 PATH="${PROVISION_BIN}:${PATH}" \
-  bash "${SCRIPT_DIR}/privacy_sdk_cargo_lockfile.sh" provision-ci \
+  bash "${PROVISION_HELPER_PATH}" provision-ci \
     "${PROVISION_EMPTY_CACHE_REPOSITORY}" \
     "${PROVISION_EMPTY_CACHE_CORRIDOR}" \
     "${PROVISION_EMPTY_CACHE_ENV}" \
@@ -1799,7 +1848,7 @@ PATH="${PROVISION_BIN}:${PATH}" \
     PATH="${provisioned_path_entry}:${PATH}"
   done <"${PROVISION_EMPTY_CACHE_PATH}"
   export PATH
-  bash "${SCRIPT_DIR}/privacy_sdk_cargo_lockfile.sh" verify-ci \
+  bash "${PROVISION_HELPER_PATH}" verify-ci \
     "${PROVISION_EMPTY_CACHE_REPOSITORY}" "${TEST_PYTHON}"
 )
 
@@ -1816,12 +1865,12 @@ cp "${SOURCE_ROOT}/.cargo/config.toml" \
 : >"${PROVISION_BAD_ENV}"
 : >"${PROVISION_BAD_PATH}"
 expect_failure \
-  "external lock generation created workspace Cargo.lock" \
+  "tracked root Cargo.lock changed while the privacy SDK guard was running" \
   env \
   FAKE_PROVISION_WORKSPACE_LOCK="${PROVISION_BAD_REPOSITORY}/Cargo.lock" \
   PROVISION_CARGO_LOG="${PROVISION_CARGO_LOG}" \
   PATH="${PROVISION_BIN}:${PATH}" \
-  bash "${SCRIPT_DIR}/privacy_sdk_cargo_lockfile.sh" provision-ci \
+  bash "${PROVISION_HELPER_PATH}" provision-ci \
   "${PROVISION_BAD_REPOSITORY}" \
   "${PROVISION_BAD_CORRIDOR}" \
   "${PROVISION_BAD_ENV}" \
@@ -1858,12 +1907,15 @@ INTEGRATION_VENV="${TEST_ROOT}/fake venv"$'\n'"record-boundary"
 INTEGRATION_BIN="${TEST_ROOT}/integration-toolchain/1.93.1-aarch64-apple-darwin/bin"
 INTEGRATION_SELECTED_LOCK="${INTEGRATION_PRIVATE_ROOT}/Cargo.lock"
 prepare_python_guard_root "${INTEGRATION_ROOT}"
+INTEGRATION_WORKSPACE_SEAL="$(
+  privacy_sdk_file_seal "${INTEGRATION_ROOT}/Cargo.lock" "${TEST_PYTHON}"
+)"
 mkdir -p \
   "${INTEGRATION_PRIVATE_ROOT}" \
   "$(dirname "${INTEGRATION_SELECTED_LOCK}")" \
   "${INTEGRATION_VENV}/bin" \
   "${INTEGRATION_BIN}"
-install -m 600 "${SOURCE_ROOT}/Cargo.lock" "${INTEGRATION_SELECTED_LOCK}"
+install -m 600 "${PROVISION_RELEASE_FIXTURE}" "${INTEGRATION_SELECTED_LOCK}"
 
 INTEGRATION_CARGO_LOG="${TEST_ROOT}/integration-cargo.log"
 INTEGRATION_PYTHON_LOG="${TEST_ROOT}/integration-python.log"
@@ -3190,7 +3242,7 @@ run_ambient_build_environment_negative_control() {
     PRIVACY_PYTHON_SDK_PYTHON_BIN="${TEST_PYTHON}" \
     PRIVACY_PYTHON_SDK_TEST_MODE=1 \
     PRIVACY_PYTHON_SDK_TEST_VENV="${INTEGRATION_VENV}" \
-    bash "${SCRIPT_DIR}/check_privacy_python_sdk.sh"
+    bash "${PROVISION_HELPER_ROOT}/check_privacy_python_sdk.sh"
 }
 expect_failure \
   "PRIVACY_PYTHON_SDK_VENV is forbidden" \
@@ -3199,7 +3251,7 @@ expect_failure \
   PRIVACY_PYTHON_SDK_ROOT="${INTEGRATION_ROOT}" \
   PRIVACY_PYTHON_SDK_PYTHON_BIN="${TEST_PYTHON}" \
   PRIVACY_PYTHON_SDK_VENV="${INTEGRATION_VENV}" \
-  bash "${SCRIPT_DIR}/check_privacy_python_sdk.sh"
+  bash "${PROVISION_HELPER_ROOT}/check_privacy_python_sdk.sh"
 expect_failure \
   "requires explicit test mode" \
   run_python_guard_for_root "${INTEGRATION_ROOT}" \
@@ -3207,19 +3259,19 @@ expect_failure \
   PRIVACY_PYTHON_SDK_ROOT="${INTEGRATION_ROOT}" \
   PRIVACY_PYTHON_SDK_PYTHON_BIN="${TEST_PYTHON}" \
   PRIVACY_PYTHON_SDK_TEST_VENV="${INTEGRATION_VENV}" \
-  bash "${SCRIPT_DIR}/check_privacy_python_sdk.sh"
+  bash "${PROVISION_HELPER_ROOT}/check_privacy_python_sdk.sh"
 expect_failure \
   "Python/root overrides require explicit test mode" \
   run_python_guard_for_root "${SOURCE_ROOT}" \
   env \
   PRIVACY_PYTHON_SDK_PYTHON_BIN="${TEST_PYTHON}" \
-  bash "${SCRIPT_DIR}/check_privacy_python_sdk.sh"
+  bash "${PROVISION_HELPER_ROOT}/check_privacy_python_sdk.sh"
 expect_failure \
   "Python/root overrides require explicit test mode" \
   run_python_guard_for_root "${INTEGRATION_ROOT}" \
   env \
   PRIVACY_PYTHON_SDK_ROOT="${INTEGRATION_ROOT}" \
-  bash "${SCRIPT_DIR}/check_privacy_python_sdk.sh"
+  bash "${PROVISION_HELPER_ROOT}/check_privacy_python_sdk.sh"
 
 run_repository_cargo_config_negative_control() {
   local kind="$1"
@@ -3248,7 +3300,7 @@ run_repository_cargo_config_negative_control() {
     PRIVACY_PYTHON_SDK_PYTHON_BIN="${TEST_PYTHON}" \
     PRIVACY_PYTHON_SDK_TEST_MODE=1 \
     PRIVACY_PYTHON_SDK_TEST_VENV="${INTEGRATION_VENV}" \
-    bash "${SCRIPT_DIR}/check_privacy_python_sdk.sh"
+    bash "${PROVISION_HELPER_ROOT}/check_privacy_python_sdk.sh"
 }
 run_repository_cargo_config_negative_control alias
 run_repository_cargo_config_negative_control build
@@ -3268,7 +3320,7 @@ expect_failure \
   PRIVACY_PYTHON_SDK_TEST_MODE=1 \
   PRIVACY_PYTHON_SDK_TEST_VENV="${INTEGRATION_VENV}" \
   PATH="${INTEGRATION_BIN}:${PATH}" \
-  bash "${SCRIPT_DIR}/check_privacy_python_sdk.sh"
+  bash "${PROVISION_HELPER_ROOT}/check_privacy_python_sdk.sh"
 rm "${FAKE_SITE_PACKAGES}/stale.pth"
 printf '%s\n' "raise RuntimeError('stale')" >"${FAKE_SITE_PACKAGES}/sitecustomize.py"
 expect_failure \
@@ -3282,7 +3334,7 @@ expect_failure \
   PRIVACY_PYTHON_SDK_TEST_MODE=1 \
   PRIVACY_PYTHON_SDK_TEST_VENV="${INTEGRATION_VENV}" \
   PATH="${INTEGRATION_BIN}:${PATH}" \
-  bash "${SCRIPT_DIR}/check_privacy_python_sdk.sh"
+  bash "${PROVISION_HELPER_ROOT}/check_privacy_python_sdk.sh"
 rm "${FAKE_SITE_PACKAGES}/sitecustomize.py"
 
 for ambient_variable in \
@@ -3349,7 +3401,7 @@ for python_optimization in 1 2; do
     PRIVACY_PYTHON_SDK_PYTHON_BIN="${TEST_PYTHON}" \
     PRIVACY_PYTHON_SDK_TEST_MODE=1 \
     PRIVACY_PYTHON_SDK_TEST_VENV="${INTEGRATION_VENV}" \
-    bash "${SCRIPT_DIR}/check_privacy_python_sdk.sh"
+    bash "${PROVISION_HELPER_ROOT}/check_privacy_python_sdk.sh"
 done
 PIP_ESCAPE_TARGET="${TEST_ROOT}/escaped-pip-target"
 PIP_ESCAPE_CONFIG="${TEST_ROOT}/adversarial-pip.conf"
@@ -3364,7 +3416,7 @@ expect_failure \
   PRIVACY_PYTHON_SDK_PYTHON_BIN="${TEST_PYTHON}" \
   PRIVACY_PYTHON_SDK_TEST_MODE=1 \
   PRIVACY_PYTHON_SDK_TEST_VENV="${INTEGRATION_VENV}" \
-  bash "${SCRIPT_DIR}/check_privacy_python_sdk.sh"
+  bash "${PROVISION_HELPER_ROOT}/check_privacy_python_sdk.sh"
 if [[ -e "${PIP_ESCAPE_TARGET}" || -L "${PIP_ESCAPE_TARGET}" ]]; then
   echo "ambient pip configuration escaped the private venv" >&2
   exit 1
@@ -3376,7 +3428,10 @@ fi
 
 MISSING_WORKSPACE_ROOT="${TEST_ROOT}/missing-workspace-lock-repository"
 prepare_python_guard_root "${MISSING_WORKSPACE_ROOT}"
-run_python_guard_for_root "${MISSING_WORKSPACE_ROOT}" env \
+rm "${MISSING_WORKSPACE_ROOT}/Cargo.lock"
+expect_failure \
+  "privacy SDK CI requires the sealed tracked root Cargo.lock" \
+  run_python_guard_for_root "${MISSING_WORKSPACE_ROOT}" env \
   INTEGRATION_CARGO_LOG="${INTEGRATION_CARGO_LOG}" \
   IROHA_PRIVACY_CARGO_LOCKFILE_PATH="${INTEGRATION_PRIVATE_ROOT}/Cargo.lock" \
   IROHA_PRIVACY_REAL_CARGO="${INTEGRATION_BIN}/cargo" \
@@ -3389,7 +3444,7 @@ run_python_guard_for_root "${MISSING_WORKSPACE_ROOT}" env \
   PRIVACY_PYTHON_SDK_TEST_MODE=1 \
   PRIVACY_PYTHON_SDK_TEST_VENV="${INTEGRATION_VENV}" \
   PATH="${INTEGRATION_BIN}:${PATH}" \
-  bash "${SCRIPT_DIR}/check_privacy_python_sdk.sh"
+  bash "${PROVISION_HELPER_ROOT}/check_privacy_python_sdk.sh"
 if [[ -e "${MISSING_WORKSPACE_ROOT}/Cargo.lock" || -L "${MISSING_WORKSPACE_ROOT}/Cargo.lock" ]]; then
   echo "Python SDK guard created Cargo.lock in an initially clean workspace" >&2
   exit 1
@@ -3397,8 +3452,9 @@ fi
 
 CREATED_WORKSPACE_ROOT="${TEST_ROOT}/created-workspace-lock-repository"
 prepare_python_guard_root "${CREATED_WORKSPACE_ROOT}"
+rm "${CREATED_WORKSPACE_ROOT}/Cargo.lock"
 expect_failure \
-  "workspace Cargo.lock was created" \
+  "privacy SDK CI requires the sealed tracked root Cargo.lock" \
   run_python_guard_for_root "${CREATED_WORKSPACE_ROOT}" \
   env \
   FAKE_MATURIN_MUTATE_PATH="${CREATED_WORKSPACE_ROOT}/Cargo.lock" \
@@ -3409,7 +3465,12 @@ expect_failure \
   PRIVACY_PYTHON_SDK_TEST_MODE=1 \
   PRIVACY_PYTHON_SDK_TEST_VENV="${INTEGRATION_VENV}" \
   PATH="${INTEGRATION_BIN}:${PATH}" \
-  bash "${SCRIPT_DIR}/check_privacy_python_sdk.sh"
+  bash "${PROVISION_HELPER_ROOT}/check_privacy_python_sdk.sh"
+if [[ -e "${CREATED_WORKSPACE_ROOT}/Cargo.lock" || \
+  -L "${CREATED_WORKSPACE_ROOT}/Cargo.lock" ]]; then
+  echo "missing-root rejection reached fake Maturin" >&2
+  exit 1
+fi
 
 INTEGRATION_SELECTED_SEAL="$(
   privacy_sdk_file_seal "${INTEGRATION_SELECTED_LOCK}" "${TEST_PYTHON}"
@@ -3434,7 +3495,7 @@ run_python_guard_for_root "${INTEGRATION_ROOT}" env \
   PRIVACY_PYTHON_SDK_TEST_MODE=1 \
   PRIVACY_PYTHON_SDK_TEST_VENV="${INTEGRATION_VENV}" \
   PATH="${RUSTC_PATH_SHADOW_BIN}:${INTEGRATION_BIN}:${PATH}" \
-  bash "${SCRIPT_DIR}/check_privacy_python_sdk.sh"
+  bash "${PROVISION_HELPER_ROOT}/check_privacy_python_sdk.sh"
 if [[ -e "${RUSTC_PATH_SHADOW_MARKER}" || -L "${RUSTC_PATH_SHADOW_MARKER}" ]]; then
   echo "Maturin executed an unsealed PATH-shadow rustc" >&2
   exit 1
@@ -3444,9 +3505,9 @@ if [[ -e "${VENV_RUSTC_SHADOW_MARKER}" || -L "${VENV_RUSTC_SHADOW_MARKER}" ]]; t
   exit 1
 fi
 
-privacy_sdk_assert_optional_file_state \
+privacy_sdk_assert_file_seal \
   "${INTEGRATION_ROOT}/Cargo.lock" \
-  "absent" \
+  "${INTEGRATION_WORKSPACE_SEAL}" \
   "integration workspace Cargo.lock" \
   "${TEST_PYTHON}"
 privacy_sdk_assert_file_seal \
@@ -3562,7 +3623,7 @@ PY
   "${INTEGRATION_PYTHON_LOG}" \
   "${INTEGRATION_ROOT}" \
   "${INTEGRATION_VENV}" \
-  "${SCRIPT_DIR}/verify_privacy_python_wheel.py" \
+  "${PROVISION_HELPER_ROOT}/verify_privacy_python_wheel.py" \
   "${INTEGRATION_CARGO_LOG}" <<'PY'
 import os
 import re
@@ -3976,7 +4037,7 @@ run_maturin_policy_negative_control() {
     PRIVACY_PYTHON_SDK_TEST_MODE=1 \
     PRIVACY_PYTHON_SDK_TEST_VENV="${INTEGRATION_VENV}" \
     PATH="${INTEGRATION_BIN}:${PATH}" \
-    bash "${SCRIPT_DIR}/check_privacy_python_sdk.sh"
+    bash "${PROVISION_HELPER_ROOT}/check_privacy_python_sdk.sh"
 }
 for maturin_policy_negative in \
   config-content \
@@ -4015,7 +4076,7 @@ for maturin_argument_near_miss in \
     PRIVACY_PYTHON_SDK_TEST_MODE=1 \
     PRIVACY_PYTHON_SDK_TEST_VENV="${INTEGRATION_VENV}" \
     PATH="${INTEGRATION_BIN}:${PATH}" \
-    bash "${SCRIPT_DIR}/check_privacy_python_sdk.sh"
+    bash "${PROVISION_HELPER_ROOT}/check_privacy_python_sdk.sh"
 done
 for maturin_cargo_environment_near_miss in \
   metadata-missing metadata-wrong rustc-present; do
@@ -4045,7 +4106,7 @@ for maturin_cargo_environment_near_miss in \
     PRIVACY_PYTHON_SDK_TEST_MODE=1 \
     PRIVACY_PYTHON_SDK_TEST_VENV="${INTEGRATION_VENV}" \
     PATH="${INTEGRATION_BIN}:${PATH}" \
-    bash "${SCRIPT_DIR}/check_privacy_python_sdk.sh"
+    bash "${PROVISION_HELPER_ROOT}/check_privacy_python_sdk.sh"
 done
 
 PROVISIONED_GATE_ROOT="${TEST_ROOT}/provisioned-gate-repository"
@@ -4065,7 +4126,7 @@ printf '%s\n' '[alias]' 'build = "ambient-poison"' \
 CARGO_HOME="${PROVISIONED_GATE_AMBIENT_HOME}" \
 PROVISION_CARGO_LOG="${PROVISION_CARGO_LOG}" \
 PATH="${PROVISION_BIN}:${PATH}" \
-  bash "${SCRIPT_DIR}/privacy_sdk_cargo_lockfile.sh" provision-ci \
+  bash "${PROVISION_HELPER_PATH}" provision-ci \
     "${PROVISIONED_GATE_ROOT}" \
     "${PROVISIONED_GATE_CORRIDOR}" \
     "${PROVISIONED_GATE_ENV}" \
@@ -4089,8 +4150,8 @@ PATH="${PROVISION_BIN}:${PATH}" \
   PRIVACY_PYTHON_SDK_PYTHON_BIN="${TEST_PYTHON}" \
   PRIVACY_PYTHON_SDK_TEST_MODE=1 \
   PRIVACY_PYTHON_SDK_TEST_VENV="${INTEGRATION_VENV}" \
-    bash "${SCRIPT_DIR}/check_privacy_python_sdk.sh"
-  bash "${SCRIPT_DIR}/privacy_sdk_cargo_lockfile.sh" verify-ci \
+    bash "${PROVISION_HELPER_ROOT}/check_privacy_python_sdk.sh"
+  bash "${PROVISION_HELPER_PATH}" verify-ci \
     "${PROVISIONED_GATE_ROOT}" "${TEST_PYTHON}"
 )
 (
@@ -4113,7 +4174,7 @@ PATH="${PROVISION_BIN}:${PATH}" \
     PRIVACY_PYTHON_SDK_PYTHON_BIN="${TEST_PYTHON}" \
     PRIVACY_PYTHON_SDK_TEST_MODE=1 \
     PRIVACY_PYTHON_SDK_TEST_VENV="${INTEGRATION_VENV}" \
-    bash "${SCRIPT_DIR}/check_privacy_python_sdk.sh"
+    bash "${PROVISION_HELPER_ROOT}/check_privacy_python_sdk.sh"
 )
 grep -Fq "CARGO_HOME=${PROVISIONED_GATE_CORRIDOR}/cargo-home" \
   "${PROVISION_CARGO_LOG}"
@@ -4130,7 +4191,7 @@ expect_failure \
   PRIVACY_PYTHON_SDK_TEST_MODE=1 \
   PRIVACY_PYTHON_SDK_TEST_VENV="${INTEGRATION_VENV}" \
   PATH="${INTEGRATION_BIN}:${PATH}" \
-  bash "${SCRIPT_DIR}/check_privacy_python_sdk.sh"
+  bash "${PROVISION_HELPER_ROOT}/check_privacy_python_sdk.sh"
 for audit_negative in missing reordered extra; do
   case "${audit_negative}" in
     missing)
@@ -4158,7 +4219,7 @@ for audit_negative in missing reordered extra; do
     PRIVACY_PYTHON_SDK_TEST_MODE=1 \
     PRIVACY_PYTHON_SDK_TEST_VENV="${INTEGRATION_VENV}" \
     PATH="${INTEGRATION_BIN}:${PATH}" \
-    bash "${SCRIPT_DIR}/check_privacy_python_sdk.sh"
+    bash "${PROVISION_HELPER_ROOT}/check_privacy_python_sdk.sh"
 done
 
 run_wheel_mutation_negative_control() {
@@ -4167,7 +4228,7 @@ run_wheel_mutation_negative_control() {
   local wheel_selected="${TEST_ROOT}/wheel-${phase}-private/Cargo.lock"
   prepare_python_guard_root "${wheel_root}"
   mkdir -p "$(dirname "${wheel_selected}")"
-  install -m 600 "${SOURCE_ROOT}/Cargo.lock" "${wheel_selected}"
+  install -m 600 "${PROVISION_RELEASE_FIXTURE}" "${wheel_selected}"
   expect_failure \
     "fresh private wheel changed" \
     run_python_guard_for_root "${wheel_root}" \
@@ -4180,7 +4241,7 @@ run_wheel_mutation_negative_control() {
     PRIVACY_PYTHON_SDK_TEST_MODE=1 \
     PRIVACY_PYTHON_SDK_TEST_VENV="${INTEGRATION_VENV}" \
     PATH="${INTEGRATION_BIN}:${PATH}" \
-    bash "${SCRIPT_DIR}/check_privacy_python_sdk.sh"
+    bash "${PROVISION_HELPER_ROOT}/check_privacy_python_sdk.sh"
 }
 run_wheel_mutation_negative_control preflight
 run_wheel_mutation_negative_control verify
@@ -4194,11 +4255,11 @@ run_mutation_negative_control() {
   local expected_failure
   prepare_python_guard_root "${mutation_root}"
   mkdir -p "$(dirname "${mutation_selected}")"
-  install -m 600 "${SOURCE_ROOT}/Cargo.lock" "${mutation_selected}"
+  install -m 600 "${PROVISION_RELEASE_FIXTURE}" "${mutation_selected}"
   case "${target_kind}" in
     workspace)
       mutation_target="${mutation_root}/Cargo.lock"
-      expected_failure="workspace Cargo.lock was created"
+      expected_failure="workspace Cargo.lock changed"
       ;;
     selected)
       mutation_target="${mutation_selected}"
@@ -4230,7 +4291,7 @@ run_mutation_negative_control() {
     PRIVACY_PYTHON_SDK_TEST_MODE=1 \
     PRIVACY_PYTHON_SDK_TEST_VENV="${INTEGRATION_VENV}" \
     PATH="${INTEGRATION_BIN}:${PATH}" \
-    bash "${SCRIPT_DIR}/check_privacy_python_sdk.sh"
+    bash "${PROVISION_HELPER_ROOT}/check_privacy_python_sdk.sh"
 }
 run_mutation_negative_control workspace
 run_mutation_negative_control selected
@@ -4245,7 +4306,7 @@ run_artifact_set_negative_control() {
   local artifact_directory="${artifact_root}/python/iroha_python/src/iroha_python"
   prepare_python_guard_root "${artifact_root}"
   mkdir -p "$(dirname "${artifact_selected}")"
-  install -m 600 "${SOURCE_ROOT}/Cargo.lock" "${artifact_selected}"
+  install -m 600 "${PROVISION_RELEASE_FIXTURE}" "${artifact_selected}"
   expect_failure \
     "checkout Python native artifacts" \
     run_python_guard_for_root "${artifact_root}" \
@@ -4259,7 +4320,7 @@ run_artifact_set_negative_control() {
     PRIVACY_PYTHON_SDK_TEST_MODE=1 \
     PRIVACY_PYTHON_SDK_TEST_VENV="${INTEGRATION_VENV}" \
     PATH="${INTEGRATION_BIN}:${PATH}" \
-    bash "${SCRIPT_DIR}/check_privacy_python_sdk.sh"
+    bash "${PROVISION_HELPER_ROOT}/check_privacy_python_sdk.sh"
 }
 run_artifact_set_negative_control add
 run_artifact_set_negative_control nested

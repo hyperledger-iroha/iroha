@@ -3,9 +3,9 @@
 
 The two audited shards reuse the fixed ``zk::pasta_tiny`` circuits instead of
 redeclaring equivalent Halo2 ``Circuit`` implementations inside individual
-tests.  This guard authenticates the preimages, preserves every historical
-test identity and attribute, pins the shared circuit implementations, and
-keeps the pre-existing permutation callback test outside the compaction.
+tests.  This guard authenticates the historical preimages and the current
+post-migration test inventories, pins the shared circuit implementations, and
+tracks the callback-bearing permutation test separately across the migration.
 """
 
 from __future__ import annotations
@@ -34,6 +34,7 @@ class ShardContract:
     opening_lines: int
     line_ceiling: int
     postimage_sha256: str
+    preimage_tests: tuple[str, ...]
     tests: tuple[str, ...]
 
 
@@ -45,17 +46,45 @@ SHARDS = (
             "f131f0e3c9efeeb90364bce5c6679bf8b2ca4b3d3d0b277e5e1307b2bcaa6fe6"
         ),
         opening_lines=1_710,
-        line_ceiling=1_054,
+        line_ceiling=1_065,
         postimage_sha256=(
-            "935467f108d033c2fed19cf98313f220913f6be624b5c685fb308c72c70a5415"
+            "ae11bcdbb3754eafe12d08c0e62e3409347f188502e8ba543f0522955d1863d2"
         ),
-        tests=(
+        preimage_tests=(
             "vote_bool_commit_merkle8_mock_prover_succeeds",
             "fallback_commit_open_rejects_additive_placeholder_commitment",
             "fallback_tiny_merkle2_rejects_additive_placeholder_root",
             "fallback_anon_transfer_commit_rejects_unshifted_placeholder_commitment",
             "fallback_vote_bool_merkle2_rejects_stale_merkle_shortcut",
             "vote_bool_commit_merkle8_poseidon_mock_prover",
+            "vk_cache_reuses_entries",
+            "verifier_key_cache_rejects_parseable_key_for_another_circuit",
+            "packaged_vk_cache_rejects_unparseable_key_without_runtime_keygen",
+            "zk1_envelope_pasta_ipa_verify_add_public",
+            "kaigi_roster_backend_accepts_valid_proof",
+            "kaigi_usage_backend_accepts_valid_proof",
+            "proof_hash_stable",
+            "proof_and_vk_hash_domains_are_distinct",
+            "proof_hash_length_prefixes_backend_and_payload",
+            "dedup_works",
+            "hash_vk_stable",
+            "preverify_basic",
+            "halo2_gate_requires_vk_and_valid_encoding",
+            "halo2_end_to_end_proof_verification",
+            "halo2_verify_with_instance_add_kzg",
+            "halo2_verify_add_2rows_kzg",
+            "halo2_verify_id_public_kzg_with_and_without_inst",
+            "halo2_verify_ipa_acceptance_variants",
+            "halo2_verify_add_2rows_ipa",
+            "halo2_verify_add3_ipa",
+        ),
+        tests=(
+            "vote_bool_commit_merkle8_mock_prover_succeeds",
+            "constrained_pow5_vote_membership_rejects_a_forged_commitment",
+            "commit_open_rejects_additive_placeholder_commitment",
+            "tiny_merkle2_rejects_additive_placeholder_root",
+            "anon_transfer_commit_rejects_unshifted_placeholder_commitment",
+            "vote_bool_merkle2_rejects_stale_merkle_shortcut",
             "vk_cache_reuses_entries",
             "verifier_key_cache_rejects_parseable_key_for_another_circuit",
             "packaged_vk_cache_rejects_unparseable_key_without_runtime_keygen",
@@ -85,13 +114,36 @@ SHARDS = (
             "2bf04114dd343ce6533185813d3bd3dea1bb1bd393f65b67bdb85e351bc21858"
         ),
         opening_lines=1_904,
-        line_ceiling=996,
+        line_ceiling=906,
         postimage_sha256=(
-            "7968853f3a5c8e74b7efd5f95c95a361095de9f8ac813ef99bd64e533111c179"
+            "945fa60cca5f019755a3cac229a4e2c529d5c69bbf44f2dc43d3acf8b4270948"
         ),
-        tests=(
+        preimage_tests=(
             "halo2_verify_anon_transfer_2x2_merkle8_poseidon_ipa_zk1_noncanonical",
             "halo2_verify_anon_transfer_2x2_merkle8_poseidon_ipa_zk1_invalid_header",
+            "halo2_verify_tiny_commit_open_ipa_zk1_truncated_prof",
+            "halo2_verify_tiny_merkle2_ipa_zk1_invalid_header_extreme",
+            "halo2_verify_tiny_commit_open_ipa_zk1_positive",
+            "halo2_verify_tiny_merkle2_ipa_zk1_positive",
+            "halo2_verify_tiny_commit_open_ipa_zk1_multiple_prof_and_unknown_rejects",
+            "halo2_verify_tiny_commit_open_ipa_zk1_unknown_tlv_stress_rejects",
+            "halo2_verify_tiny_commit_open_ipa_zk1_duplicate_i10p_last_correct_rejects",
+            "halo2_verify_tiny_commit_open_ipa_zk1_duplicate_i10p_last_wrong_rejects",
+            "halo2_verify_tiny_commit_open_ipa_zk1_unknown_tlv_randomized_rejects",
+            "halo2_verify_tiny_commit_open_ipa_zk1_permutation_harness",
+            "halo2_verify_zk1_prof_length_exceeds_cap_rejected",
+            "halo2_verify_add2inst_public_ipa",
+            "halo2_verify_anon_transfer_ipa",
+            "halo2_verify_vote_bool_ipa",
+            "halo2_verify_id_public_ipa_with_and_without_inst",
+            "halo2_verify_with_instance_add_ipa",
+            "halo2_verify_with_instance_mul_kzg",
+            "halo2_verify_with_instance_malformed_length_kzg",
+            "halo2_verify_with_instance_noncanonical_kzg",
+        ),
+        tests=(
+            "halo2_verify_anon_transfer_2x2_merkle8_pow5_ipa_zk1_noncanonical",
+            "halo2_verify_anon_transfer_2x2_merkle8_pow5_ipa_zk1_invalid_header",
             "halo2_verify_tiny_commit_open_ipa_zk1_truncated_prof",
             "halo2_verify_tiny_merkle2_ipa_zk1_invalid_header_extreme",
             "halo2_verify_tiny_commit_open_ipa_zk1_positive",
@@ -143,6 +195,12 @@ FORBIDDEN = re.compile(
     r"rustfmt::skip|include_(?:str|bytes)!"
 )
 PROTECTED_CALLBACK_TEST = "halo2_verify_tiny_commit_open_ipa_zk1_permutation_harness"
+PROTECTED_CALLBACK_PREIMAGE_SHA256 = (
+    "8d94bfe43fab8f4aed977351617bebccde2c781172f61df9ec77e17a39d94ceb"
+)
+PROTECTED_CALLBACK_POSTIMAGE_SHA256 = (
+    "813f2609c3dcdf103221621a4ba4f0f44215dec08f865e24953365bef6f7a9ee"
+)
 
 
 class GuardError(AssertionError):
@@ -273,10 +331,10 @@ def _validate_sources(shard_sources: tuple[str, str], zk_source: str) -> None:
         current_lines += lines
         preimage_tests = _test_contract(preimage)
         current_tests = _test_contract(source)
+        if tuple(name for name, _ in preimage_tests) != shard.preimage_tests:
+            raise GuardError(f"authenticated preimage inventory drifted for {shard.path}")
         if tuple(name for name, _ in current_tests) != shard.tests:
-            raise GuardError(f"historical test inventory drifted for {shard.path}")
-        if current_tests != preimage_tests:
-            raise GuardError(f"test attributes or ordering drifted for {shard.path}")
+            raise GuardError(f"current test inventory drifted for {shard.path}")
         if "impl Circuit<" in source:
             raise GuardError(f"duplicate local Circuit implementation in {shard.path}")
 
@@ -286,9 +344,12 @@ def _validate_sources(shard_sources: tuple[str, str], zk_source: str) -> None:
         raise GuardError("combined Halo2 shard line ceiling exceeded")
 
     preimage_03 = _blob(SHARDS[1].preimage_blob)
+    preimage_protected = _function(preimage_03, PROTECTED_CALLBACK_TEST)
+    if _sha256(preimage_protected) != PROTECTED_CALLBACK_PREIMAGE_SHA256:
+        raise GuardError("authenticated callback-bearing preimage changed")
     protected = _function(shard_sources[1], PROTECTED_CALLBACK_TEST)
-    if protected != _function(preimage_03, PROTECTED_CALLBACK_TEST):
-        raise GuardError("pre-existing callback-bearing permutation test changed")
+    if _sha256(protected) != PROTECTED_CALLBACK_POSTIMAGE_SHA256:
+        raise GuardError("callback-bearing permutation postimage changed")
 
     audited_03 = shard_sources[1].replace(protected, "")
     if FORBIDDEN.search(shard_sources[0]) or FORBIDDEN.search(audited_03):

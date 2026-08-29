@@ -131,6 +131,46 @@ fn shared_sdk_fixture_is_generated_and_validated_by_rust() {
             .and_then(norito::json::Value::as_str)
             .expect("fixture schema hash")
     );
+    let payload_object = boundary
+        .get("payload")
+        .and_then(norito::json::Value::as_object)
+        .expect("fixture boundary payload object");
+    for (field, expected) in [
+        ("count", "-7"),
+        (
+            "exact_int",
+            "1606938044258990275541962092341162602522202993782792835301376",
+        ),
+        ("exact_decimal", "-12345678901234567890.125"),
+        (
+            "exact_quantity",
+            "12345678901234567890.0000000000000000000000000001",
+        ),
+    ] {
+        assert_eq!(
+            payload_object
+                .get(field)
+                .and_then(norito::json::Value::as_str),
+            Some(expected),
+            "{field} must remain a canonical JSON string",
+        );
+    }
+    let entry_pc =
+        u64::try_from(parsed.prefix_len()).expect("prefix fits u64") + entrypoint.entry_pc;
+    let key: Name = "trigger_event_json".parse().expect("public input key");
+    let host = host_with_arguments(BTreeMap::from([(
+        key,
+        tlv(PointerType::NoritoBytes, &generated),
+    )]));
+    let mut vm = IVM::new(u64::MAX);
+    vm.load_program(&code)
+        .expect("load shared fixture contract");
+    vm.set_program_counter(entry_pc)
+        .expect("select shared quote wrapper");
+    vm.set_host(host);
+    vm.run()
+        .expect("execute shared exact-number argument fixture");
+    assert_eq!(common::decode_i64_register(&vm, 10), -7);
 }
 #[test]
 fn compiled_wrapper_decodes_record_and_loads_aligned_words() {
@@ -190,7 +230,7 @@ seiyaku JsonArgumentRecordRuntime {
         .find(|entrypoint| entrypoint.name == "run")
         .expect("run entrypoint descriptor");
     let entry_pc = u64::try_from(parsed.prefix_len()).expect("prefix fits u64") + run.entry_pc;
-    let payload = Json::from_str_norito(r#"{"event":{"value":29}}"#)
+    let payload = Json::from_str_norito(r#"{"event":{"value":"29"}}"#)
         .expect("valid named Json boundary field");
     let key: Name = "trigger_event_json".parse().expect("public input key");
     let host = host_with_arguments(BTreeMap::from([(key, argument_record_tlv(run, &payload))]));
@@ -206,6 +246,25 @@ seiyaku JsonArgumentRecordRuntime {
     assert!(present);
     assert_eq!(payload.len(), 1);
     assert_eq!(common::decode_i64_word(&vm, payload[0]), 29);
+
+    let numeric_token =
+        Json::from_str_norito(r#"{"event":{"value":29}}"#).expect("number-token JSON field");
+    let key: Name = "trigger_event_json".parse().expect("public input key");
+    let host = host_with_arguments(BTreeMap::from([(
+        key,
+        argument_record_tlv(run, &numeric_token),
+    )]));
+    let mut vm = IVM::new(u64::MAX);
+    vm.load_program(&code).expect("load compiled program");
+    vm.set_program_counter(entry_pc)
+        .expect("select run wrapper");
+    vm.set_host(host);
+    vm.run().expect("execute numeric-token Json argument");
+    assert_eq!(
+        ivm::sum::read_words(&vm, vm.register(10), layout),
+        Ok((false, vec![])),
+        "typed int getter must reject a JSON number token",
+    );
 }
 #[test]
 fn compiled_wrapper_rebuilds_recursive_public_types_from_one_record() {

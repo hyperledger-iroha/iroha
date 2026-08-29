@@ -216,6 +216,101 @@ fn scalar_and_aggregate_state_roots_roundtrip_as_schema_bound_records() {
     let vm = compile_init_and_run(source);
     assert_eq!(common::decode_i64_register(&vm, 10), 27);
 }
+
+#[test]
+fn exact_numeric_state_survives_a_fresh_host_snapshot_roundtrip() {
+    let source = r#"
+        seiyaku DurableNumericState {
+            state int Whole;
+            state decimal Rate;
+            state quantity Supply;
+
+            hajimari() {
+                let int zero_whole = 0;
+                let decimal zero_rate = 0;
+                let quantity zero_supply = 0;
+                Whole = zero_whole;
+                Rate = zero_rate;
+                Supply = zero_supply;
+            }
+
+            kotoage fn store() -> int authorize("WriteState") {
+                Whole = 1606938044258990275541962092341162602522202993782792835301376;
+                Rate = -12345678901234567890.125;
+                Supply = 12345678901234567890.0000000000000000000000000001;
+                return 1;
+            }
+
+            view fn inspect() -> bool {
+                return Whole == 1606938044258990275541962092341162602522202993782792835301376
+                    && Rate == -12345678901234567890.125
+                    && Supply == 12345678901234567890.0000000000000000000000000001;
+            }
+        }
+    "#;
+    let program = Compiler::new()
+        .compile_source(source)
+        .expect("compile exact durable numeric-state contract");
+    let parsed = ProgramMetadata::parse(&program).expect("parse durable numeric-state metadata");
+    let interface = parsed
+        .contract_interface
+        .as_ref()
+        .expect("durable numeric-state contract carries CNTR");
+    let entry_pc = |name: &str| {
+        u64::try_from(parsed.prefix_len()).expect("program prefix fits u64")
+            + interface
+                .entrypoints
+                .iter()
+                .find(|entrypoint| entrypoint.name == name)
+                .unwrap_or_else(|| panic!("missing `{name}` entrypoint"))
+                .entry_pc
+    };
+
+    let mut writer = CoreHost::new();
+    let mut write_vm = IVM::new(u64::MAX);
+    write_vm
+        .load_program(&program)
+        .expect("load durable numeric-state contract for writing");
+    write_vm
+        .set_program_counter(entry_pc("store"))
+        .expect("select numeric-state writer");
+    write_vm
+        .run_with_host(&mut writer)
+        .expect("persist all exact numeric state values");
+    assert_eq!(writer.state_paths(), ["Rate", "Supply", "Whole"]);
+
+    let persisted = writer
+        .state_paths()
+        .into_iter()
+        .map(|path| {
+            let value = writer
+                .state_bytes(&path)
+                .unwrap_or_else(|| panic!("missing persisted state `{path}`"));
+            (path, value)
+        })
+        .collect::<Vec<_>>();
+    let mut reader = CoreHost::new();
+    for (path, value) in persisted {
+        reader.insert_state_value(path, value);
+    }
+
+    let mut read_vm = IVM::new(u64::MAX);
+    read_vm
+        .load_program(&program)
+        .expect("load durable numeric-state contract after restart");
+    read_vm
+        .set_program_counter(entry_pc("inspect"))
+        .expect("select numeric-state reader");
+    read_vm
+        .run_with_host(&mut reader)
+        .expect("read all exact numeric values after restart");
+    assert_eq!(
+        read_vm.register(10),
+        1,
+        "schema-bound int, decimal, and quantity state must retain exact values"
+    );
+}
+
 #[test]
 fn pointer_literal_state_is_materialized_before_record_encoding() {
     let source = include_str!("../fixtures/koto_v1/kotodama_v1_runtime_acceptance/012.ko");

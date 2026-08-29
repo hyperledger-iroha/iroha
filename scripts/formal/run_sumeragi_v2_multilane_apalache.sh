@@ -228,19 +228,19 @@ run_positive \
   "$NATIVE_MODULE" \
   multilane_native_application_evidence_fixed.cfg \
   8 \
-  "NativeEvidenceTypeInvariant, NativeStandaloneEvidenceInvariant, NativeEvidenceRetentionBoundInvariant, NativeNoClobberPublicationInvariant, NativeLegacyDenseRejectedInvariant, NativePruneJournalInvariant, SidecarsRequireManifestInvariant, FrontierPublicationInvariant, PrunedEvidenceVerifiableInvariant, SameRouteControlOnlyInvariant, MLSeparateParticipantApplication, MLNativeSourceClaimInjective, MLNativeContiguousActiveRoute, MLNativeGroupExactCover, MLNativeManifestAuthenticates, MLUnifiedStartupEvidenceRepairSafe, MLNativeDurabilityPrecedesFrontier, MLNativeLatestIndexExact"
+  "NativeEvidenceTypeInvariant, NativeStandaloneEvidenceInvariant, NativeEvidenceRetentionBoundInvariant, MLNativeSharedEvidenceBudget, MLNativeSingleIncomingPairHeadroom, MLNativeTempPromotionAuthenticated, MLNativeRetainedHistoryExact, MLNativePruneOldestPrefix, MLNativePruneProtectedLatestExact, MLNativePruneExactObjectRemoval, NativeNoClobberPublicationInvariant, NativeLegacyDenseRejectedInvariant, NativePruneJournalInvariant, SidecarsRequireManifestInvariant, FrontierPublicationInvariant, PrunedEvidenceVerifiableInvariant, SameRouteControlOnlyInvariant, MLSeparateParticipantApplication, MLNativeSourceClaimInjective, MLNativeContiguousActiveRoute, MLNativeGroupExactCover, MLNativeManifestAuthenticates, MLUnifiedStartupEvidenceRepairSafe, MLNativeDurabilityPrecedesFrontier, MLNativeLatestIndexExact"
 run_positive \
   autonomous-reservation-carrier \
   "$AUTONOMOUS_MODULE" \
   multilane_autonomous_reservation_carrier_fixed.cfg \
-  10 \
+  12 \
   "ReservationCarrierTypeInvariant, SingleOwnershipInvariant, ExactCarrierIdentityInvariant, ControlOnlyAnchorInvariant, CandidateAuthorizationInvariant, ReleaseOrderingInvariant, QueueReleaseCompletionInvariant, AtMostOnceApplicationInvariant, NoReleaseAfterApplicationInvariant, NoStaleIncarnationReleaseInvariant, ForgottenOnlyAfterApplicationInvariant, MLReservationSingleOwner, MLReservationIdentityStable, MLCertifiedBundleDurable, MLMergeCandidateExactPrefix, MLCarrierCommitSurfaceExact, MLCarrierExactlyOnce, MLRestartOwnershipPartition, MLRecoveredCarrierBodyAuthenticated, MLRecoveredCarrierLengthAuthenticated, MLHistoricalRecoveryContextExact, MLHistoricalQueueGateOrder, MLHistoricalAllGroupsPreflight, MLLocalProducerRecoveryRequiresQueueOwner, MLTerminalOutcomeJoinAuthenticated, MLCanonicalTerminalBatchAtomic, MLTerminalStartupSweepOrder, MLStageEvidenceMonotonic"
 run_positive \
   queue-plan-admission-registry \
   "$QUEUE_PLAN_ADMISSION_MODULE" \
   multilane_queue_plan_admission_registry_fixed.cfg \
   8 \
-  "QueuePlanAdmissionTypeInvariant, MLAdmissionCasUnique, MLCertificateDurable, MLPublic202Exact, MLExecutionRequiresExactBinding, MLQueueEligibilityExact, MLAdmissionAtMostOnceExecution, MLImmutableAdmissionTombstone, MLCancellationStopsExecution"
+  "QueuePlanAdmissionTypeInvariant, MLAdmissionCasUnique, MLCertificateDurable, MLPublic202Exact, MLExecutionRequiresExactBinding, MLQueuePlanExecutionAutonomousOnly, MLQueueEligibilityExact, MLAdmissionAtMostOnceExecution, MLImmutableAdmissionTombstone, MLCancellationStopsExecution"
 run_positive \
   kura-replica-retention \
   "$KURA_RETENTION_MODULE" \
@@ -285,7 +285,7 @@ release_gate_boundary "apalache:before-evidence-publication" || exit $?
     "$(hash_file "${FORMAL_DIR}/${NATIVE_MODULE}.tla")" \
     "$(hash_file "${FORMAL_DIR}/multilane_native_application_evidence_fixed.cfg")" \
     "$(hash_file "${LOG_DIR}/native-application-evidence.check.log")"
-  printf 'result\tautonomous-reservation-carrier\t%s\t%s\t10\tNoError\t%s\t%s\t%s\n' \
+  printf 'result\tautonomous-reservation-carrier\t%s\t%s\t12\tNoError\t%s\t%s\t%s\n' \
     "$AUTONOMOUS_MODULE" \
     "multilane_autonomous_reservation_carrier_fixed.cfg" \
     "$(hash_file "${FORMAL_DIR}/${AUTONOMOUS_MODULE}.tla")" \

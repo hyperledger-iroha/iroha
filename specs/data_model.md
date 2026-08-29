@@ -137,6 +137,12 @@ These types sit alongside the existing Ed25519/BLS/ML-DSA primitives and become 
     `set_creation_time`, `sign`.
   - Public Torii submission requires `TransactionAdmissionIntent::QueuePlanSynced`;
     omission and unknown intent tags fail closed rather than consulting metadata.
+  - `QueuePlanSynced` is an autonomous-only execution role. Its certificate may
+    ride a proposal-native control carrier, but the signed transaction's physical
+    FIFO position or live-reservation ordinal remains a strict barrier until its
+    terminal autonomous outcome. It may execute only through the authenticated
+    autonomous payload plus certified merge corridor. An ordinary global block
+    external entrypoint carrying this intent is invalid.
   - Admission rejects an empty mixed batch and schedules a valid one as a global live-state barrier. Its items execute in input order against one transaction view and commit or roll back as one atomic unit. A transaction batch containing a contract call requires one signature-bound gas limit shared by all of its explicit ISIs and calls; fees settle once for the transaction.
 - Trigger actions may also carry a mixed batch. One trigger invocation preserves the same ordered atomic semantics and shares one deterministic trigger gas budget across all items.
 - `SignedTransaction` (versioned with `iroha_version`): carries `TransactionSignature` and payload; provides hashing and signature verification.

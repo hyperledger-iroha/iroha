@@ -910,7 +910,7 @@ pub struct SccpMessagePublicInputsV1 {
     rename_all = "snake_case",
     deny_unknown_fields
 )]
-/// Exact governed destination contract selected for a verified SCCP call.
+/// Exact governed EVM-family destination contract selected for verified material.
 pub enum SccpDestinationCallTargetV1 {
     /// EVM route contract on the exact governed EVM network.
     Evm {
@@ -928,13 +928,6 @@ pub enum SccpDestinationCallTargetV1 {
         #[norito(with = "json_utils::hex20")]
         route_address: [u8; 20],
     },
-    /// TON route contract on an exact zero-state-bound TON network.
-    Ton {
-        /// Exact destination network.
-        network: SccpNetworkV1,
-        /// Governed raw basechain route-contract address.
-        route_address: SccpTonAddressV1,
-    },
 }
 #[derive(
     Clone,
@@ -947,8 +940,8 @@ pub enum SccpDestinationCallTargetV1 {
     norito::derive::JsonDeserialize,
 )]
 #[norito(deny_unknown_fields)]
-/// State-verified destination settlement material derived from one closed SCCP proof artifact.
-pub struct SccpVerifiedDestinationMaterialV1 {
+/// State-verified EVM/TRON settlement material derived from one closed BN254 artifact.
+pub struct SccpVerifiedBn254DestinationMaterialV1 {
     /// Material schema version. SCCP V1 requires `1`.
     pub version: u8,
     /// Closed proof backend selected by the governed destination family.
@@ -992,6 +985,48 @@ pub struct SccpVerifiedDestinationMaterialV1 {
     /// Original SORA message and finality bundle retained for audit and settlement.
     pub bundle: TairaSccpMessageProofV1,
 }
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
+#[norito(
+    tag = "family",
+    content = "material",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+/// Curve- and destination-family-specific material produced by one verified proof.
+pub enum SccpVerifiedDestinationMaterialV1 {
+    /// EVM or TRON material authenticated by the BN254 verifier.
+    EvmOrTron(SccpVerifiedBn254DestinationMaterialV1),
+    /// TON material authenticated by the BLS12-381 verifier.
+    Ton(SccpVerifiedTonDestinationMaterialV1),
+}
+impl SccpVerifiedDestinationMaterialV1 {
+    /// Return the exact public inputs shared by every destination family.
+    #[must_use]
+    pub const fn public_inputs(&self) -> &SccpMessagePublicInputsV1 {
+        match self {
+            Self::EvmOrTron(material) => &material.public_inputs,
+            Self::Ton(material) => &material.public_inputs,
+        }
+    }
+
+    /// Return the original message/finality bundle retained for settlement audit.
+    #[must_use]
+    pub const fn bundle(&self) -> &TairaSccpMessageProofV1 {
+        match self {
+            Self::EvmOrTron(material) => &material.bundle,
+            Self::Ton(material) => &material.bundle,
+        }
+    }
+}
 /// Build exact EVM/TRON `finalizeFromTaira` calldata from verified proof
 /// material and a caller-supplied current-state replay witness.
 ///
@@ -1002,6 +1037,9 @@ pub fn encode_sccp_verified_destination_calldata_v1(
     material: &SccpVerifiedDestinationMaterialV1,
     replay_witness: &SccpSparseMerkleWitnessV1,
 ) -> Option<Vec<u8>> {
+    let SccpVerifiedDestinationMaterialV1::EvmOrTron(material) = material else {
+        return None;
+    };
     match (&material.target, material.backend) {
         (
             SccpDestinationCallTargetV1::Evm { .. },
@@ -2046,8 +2084,6 @@ pub struct SccpVerifiedTonDestinationMaterialV1 {
     pub network: SccpNetworkV1,
     /// Exact governed route contract.
     pub route_address: SccpTonAddressV1,
-    /// Caller-selected TON query id; replay identity remains the message id.
-    pub query_id: u64,
     /// Nonzero governed route revision.
     pub route_revision: u32,
     /// Canonical TON recipient authenticated by the SCCP payload.
@@ -2084,9 +2120,13 @@ pub struct SccpVerifiedTonDestinationMaterialV1 {
 /// three caller-supplied current-state replay witnesses.
 #[must_use]
 pub fn encode_sccp_ton_verified_destination_body_boc_v1(
-    material: &SccpVerifiedTonDestinationMaterialV1,
+    material: &SccpVerifiedDestinationMaterialV1,
+    query_id: u64,
     replay_witnesses: &SccpTonMintReplayWitnessesV1,
 ) -> Option<Vec<u8>> {
+    let SccpVerifiedDestinationMaterialV1::Ton(material) = material else {
+        return None;
+    };
     if material.version != 1
         || material.backend != BridgeSccpDestinationProofBackendV1::TonGroth16Bls12381
         || material.network != SccpNetworkV1::TonMainnet
@@ -2095,7 +2135,7 @@ pub fn encode_sccp_ton_verified_destination_body_boc_v1(
     }
     decode_sccp_groth16_bls12381_proof_bytes_v1(&material.proof_bytes)?;
     encode_sccp_ton_finalize_from_taira_body_boc_after_verification_v1(
-        material.query_id,
+        query_id,
         &material.public_inputs,
         &material.public_signals,
         material.statement_hash,
@@ -4387,59 +4427,6 @@ fn sccp_ton_payload_amount_to_jetton_base_units_v1(
         && amount <= deployment.max_wrapped_supply)
         .then_some(amount)
 }
-/// Verify a closed TON destination proof against exact governed history and
-/// explicitly trusted Taira finality.
-#[must_use]
-pub fn verify_sccp_ton_destination_proof_v1(
-    proof: &BridgeSccpDestinationProofV1,
-    bundle: &TairaSccpMessageProofV1,
-    governed_route: &SccpGovernedRouteV1,
-    trusted_finality: &TairaBridgeFinalityProofV1,
-    query_id: u64,
-) -> Option<SccpVerifiedTonDestinationMaterialV1> {
-    let embedded_finality = decode_taira_bridge_finality_proof(&bundle.finality_proof)?;
-    if embedded_finality != *trusted_finality {
-        return None;
-    }
-    let artifact = decode_bridge_sccp_ton_destination_proof_v1(proof)?;
-    if !sccp_ton_groth16_bls12381_artifact_matches_governed_route_v1(
-        &artifact,
-        bundle,
-        governed_route,
-    ) {
-        return None;
-    }
-    let SccpDestinationDeploymentV1::Ton(deployment) = governed_route.destination else {
-        return None;
-    };
-    let SccpPayloadV1::Transfer(transfer) = &bundle.payload;
-    let recipient = decode_sccp_ton_account36_v1(&transfer.recipient)?;
-    let amount = sccp_ton_payload_amount_to_jetton_base_units_v1(transfer.amount, &deployment)?;
-    let canonical_payload_bytes = canonical_sccp_payload_bytes(&bundle.payload).ok()?;
-    let proof_bytes = canonical_sccp_groth16_bls12381_proof_bytes_v1(&artifact.result.proof)?;
-    if !verify_taira_bridge_finality_proof_cryptographic(trusted_finality) {
-        return None;
-    }
-    Some(SccpVerifiedTonDestinationMaterialV1 {
-        version: 1,
-        backend: BridgeSccpDestinationProofBackendV1::TonGroth16Bls12381,
-        network: governed_route.lane_id.source,
-        route_address: deployment.route_address,
-        query_id,
-        route_revision: transfer.route_revision,
-        recipient,
-        amount,
-        destination_binding_hash: artifact.request.destination_binding_hash,
-        route_configuration_hash: artifact.request.route_configuration_hash,
-        public_inputs: artifact.request.public_inputs,
-        public_signals: artifact.request.public_signals,
-        statement_hash: artifact.request.statement_hash,
-        request_hash: artifact.request.request_hash,
-        proof_bytes,
-        canonical_payload_bytes,
-        bundle: bundle.clone(),
-    })
-}
 fn sccp_governed_route_groth16_material_v1(
     governed_route: &SccpGovernedRouteV1,
 ) -> Option<(
@@ -5105,7 +5092,8 @@ fn build_sccp_verified_destination_material_v1(
         SccpDestinationDeploymentV1::Ton(_) => return None,
     };
     let SccpPayloadV1::Transfer(transfer) = &bundle.payload;
-    Some(SccpVerifiedDestinationMaterialV1 {
+    Some(SccpVerifiedDestinationMaterialV1::EvmOrTron(
+        SccpVerifiedBn254DestinationMaterialV1 {
         version: 1,
         backend: artifact.request.backend,
         counterparty_domain: artifact.request.target_network.domain_id(),
@@ -5122,8 +5110,9 @@ fn build_sccp_verified_destination_material_v1(
         request_hash: artifact.request.request_hash,
         proof_bytes: artifact.result.proof_bytes.clone(),
         canonical_payload_bytes,
-        bundle: bundle.clone(),
-    })
+            bundle: bundle.clone(),
+        },
+    ))
 }
 /// Decode one destination artifact, its canonical embedded SCCP bundle, and its Taira finality
 /// proof exactly once without evaluating a pairing or BLS aggregate.
@@ -5329,30 +5318,28 @@ fn build_sccp_verified_ton_destination_material_from_parsed_v1(
         return None;
     };
     let SccpPayloadV1::Transfer(transfer) = &parsed.bundle.payload;
-    decode_sccp_ton_account36_v1(&transfer.recipient)?;
-    sccp_ton_payload_amount_to_jetton_base_units_v1(transfer.amount, &deployment)?;
-    Some(SccpVerifiedDestinationMaterialV1 {
-        version: 1,
-        backend: BridgeSccpDestinationProofBackendV1::TonGroth16Bls12381,
-        counterparty_domain: SCCP_DOMAIN_TON,
-        route_revision: transfer.route_revision,
-        destination_binding_hash: artifact.request.destination_binding_hash,
-        route_configuration_hash: artifact.request.route_configuration_hash,
-        semantic_proof_profile: artifact.request.semantic_proof_profile,
-        semantic_proof_profile_hash: artifact.request.semantic_proof_profile_hash,
-        sora_finality_anchor: artifact.request.sora_finality_anchor,
-        sora_finality_anchor_hash: artifact.request.sora_finality_anchor_hash,
-        target: SccpDestinationCallTargetV1::Ton {
+    let recipient = decode_sccp_ton_account36_v1(&transfer.recipient)?;
+    let amount = sccp_ton_payload_amount_to_jetton_base_units_v1(transfer.amount, &deployment)?;
+    Some(SccpVerifiedDestinationMaterialV1::Ton(
+        SccpVerifiedTonDestinationMaterialV1 {
+            version: 1,
+            backend: BridgeSccpDestinationProofBackendV1::TonGroth16Bls12381,
             network: governed_route.lane_id.source,
             route_address: deployment.route_address,
+            route_revision: transfer.route_revision,
+            recipient,
+            amount,
+            destination_binding_hash: artifact.request.destination_binding_hash,
+            route_configuration_hash: artifact.request.route_configuration_hash,
+            public_inputs: artifact.request.public_inputs,
+            public_signals: artifact.request.public_signals,
+            statement_hash: artifact.request.statement_hash,
+            request_hash: artifact.request.request_hash,
+            proof_bytes: canonical_sccp_groth16_bls12381_proof_bytes_v1(&artifact.result.proof)?,
+            canonical_payload_bytes: parsed.canonical_payload_bytes.clone(),
+            bundle: parsed.bundle.clone(),
         },
-        public_inputs: artifact.request.public_inputs,
-        statement_hash: artifact.request.statement_hash,
-        request_hash: artifact.request.request_hash,
-        proof_bytes: canonical_sccp_groth16_bls12381_proof_bytes_v1(&artifact.result.proof)?,
-        canonical_payload_bytes: parsed.canonical_payload_bytes.clone(),
-        bundle: parsed.bundle.clone(),
-    })
+    ))
 }
 /// Bind one parsed artifact to the exact historical governed route, evaluate
 /// one Groth16 pairing and the embedded Taira finality certificate, and derive
@@ -7377,19 +7364,17 @@ mod tests {
                 bls12381_point_decodes: 0,
             }
         );
-        let generic = verify_parsed_sccp_destination_proof_v1(parsed, &route, &finality)
+        let verified = verify_parsed_sccp_destination_proof_v1(parsed, &route, &finality)
             .expect("generic route verifier accepts TON with one BLS12-381 pairing");
-        assert_eq!(generic.backend, bridge_proof.backend);
-        assert!(matches!(
-            generic.target,
-            SccpDestinationCallTargetV1::Ton {
-                network: SccpNetworkV1::TonMainnet,
-                route_address,
-            } if route_address == ton_address(0x82)
-        ));
+        let SccpVerifiedDestinationMaterialV1::Ton(material) = &verified else {
+            panic!("TON proof must produce TON-specific verified material")
+        };
+        assert_eq!(material.backend, bridge_proof.backend);
+        assert_eq!(material.network, SccpNetworkV1::TonMainnet);
+        assert_eq!(material.route_address, ton_address(0x82));
         assert!(
             encode_sccp_verified_destination_calldata_v1(
-                &generic,
+                &verified,
                 &SccpSparseMerkleWitnessV1::empty_shard(),
             )
             .is_none(),
@@ -7404,27 +7389,21 @@ mod tests {
             work.bls12381_point_decodes > 0,
             "route-bound TON verification must perform metered point validation"
         );
-        let material = verify_sccp_ton_destination_proof_v1(
-            &bridge_proof,
-            &bundle,
-            &route,
-            &finality,
-            0x0102_0304_0506_0708,
-        )
-        .expect("verified TON settlement material");
-        assert_eq!(material.network, SccpNetworkV1::TonMainnet);
-        assert_eq!(material.route_address, ton_address(0x82));
         assert_eq!(material.recipient, recipient);
         assert_eq!(material.amount, 3);
         assert_eq!(material.proof_bytes, raw_proof_bytes);
+        let query_id = 0x0102_0304_0506_0708;
         let replay_witnesses = SccpTonMintReplayWitnessesV1 {
             bridge: SccpSparseMerkleWitnessV1::empty_shard(),
             master: SccpSparseMerkleWitnessV1::empty_shard(),
             wallet: SccpSparseMerkleWitnessV1::empty_shard(),
         };
-        let internal_message_body_boc =
-            encode_sccp_ton_verified_destination_body_boc_v1(&material, &replay_witnesses)
-                .expect("current-state TON witnesses build the final message body");
+        let internal_message_body_boc = encode_sccp_ton_verified_destination_body_boc_v1(
+            &verified,
+            query_id,
+            &replay_witnesses,
+        )
+        .expect("current-state TON witnesses build the final message body");
         assert!(internal_message_body_boc.starts_with(&SCCP_TON_BOC_MAGIC_V1));
         let cells = decode_test_ton_boc_cells(&internal_message_body_boc);
         assert_eq!(cells.len(), 18);
@@ -7434,7 +7413,7 @@ mod tests {
             &cells[0].data[..4],
             &SCCP_TON_FINALIZE_FROM_TAIRA_OPCODE_V1.to_be_bytes()
         );
-        assert_eq!(&cells[0].data[4..12], &material.query_id.to_be_bytes());
+        assert_eq!(&cells[0].data[4..12], &query_id.to_be_bytes());
         assert_eq!(&cells[0].data[12..14], &1_u16.to_be_bytes());
         assert_eq!(&cells[0].data[14..46], &request.public_inputs.message_id);
         assert_eq!(&cells[0].data[46..], &request.statement_hash);
@@ -7490,12 +7469,11 @@ mod tests {
         untrusted_finality.finality_artifact.height += 1;
         reset_sccp_destination_proof_work_counters_v1();
         assert!(
-            verify_sccp_ton_destination_proof_v1(
+            verify_sccp_destination_proof_v1(
                 &bridge_proof,
                 &bundle,
                 &route,
                 &untrusted_finality,
-                material.query_id,
             )
             .is_none()
         );
@@ -7506,12 +7484,11 @@ mod tests {
         let mut wrong_outer = bridge_proof.clone();
         wrong_outer.route_configuration_hash[0] ^= 1;
         assert!(
-            verify_sccp_ton_destination_proof_v1(
+            verify_sccp_destination_proof_v1(
                 &wrong_outer,
                 &bundle,
                 &route,
                 &finality,
-                material.query_id,
             )
             .is_none()
         );
@@ -7697,13 +7674,16 @@ mod tests {
             decode_canonical_sccp_groth16_bn254_proof_artifact_json_v1(&artifact_json),
             Some(fixture.artifact.clone())
         );
-        let material = verify_sccp_destination_proof_v1(
+        let verified = verify_sccp_destination_proof_v1(
             &fixture.bridge_proof,
             &fixture.bundle,
             &fixture.route,
             &trusted_finality(&fixture.bundle),
         )
         .expect("verified destination settlement material");
+        let SccpVerifiedDestinationMaterialV1::EvmOrTron(material) = &verified else {
+            panic!("EVM proof must produce BN254-specific verified material")
+        };
         assert_eq!(material.route_revision, 1);
         assert_eq!(
             material.route_configuration_hash,
@@ -7717,7 +7697,7 @@ mod tests {
             fixture.request.destination_binding_hash
         );
         let replay_witness = SccpSparseMerkleWitnessV1::empty_shard();
-        let calldata = encode_sccp_verified_destination_calldata_v1(&material, &replay_witness)
+        let calldata = encode_sccp_verified_destination_calldata_v1(&verified, &replay_witness)
             .expect("current-state replay witness builds destination calldata");
         assert_eq!(&calldata[..4], &SCCP_FINALIZE_FROM_TAIRA_SELECTOR_V1);
         let proof_offset =

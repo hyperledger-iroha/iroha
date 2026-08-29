@@ -6,6 +6,9 @@ mod tests {
     use rand_core::{CryptoRng, RngCore, TryCryptoRng, TryRngCore};
     const TEST_RELAY_AUTHENTICATED_BINDING: [u8; TRANSCRIPT_BINDING_LEN] =
         [0xB7; TRANSCRIPT_BINDING_LEN];
+    const TEST_RELAY_AUTH_CLIENT_HELLO: &[u8] = b"dual-auth-client-hello";
+    const TEST_RELAY_AUTH_BODY: &[u8] = b"dual-auth-relay-body";
+    const TEST_RELAY_AUTH_TRANSCRIPT: [u8; 32] = [0xA5; 32];
     fn checked_random_keypair() -> RelayAuthenticationSignerV1 {
         RelayAuthenticationSignerV1::try_new(
             Arc::new(
@@ -33,6 +36,38 @@ mod tests {
             TEST_RELAY_AUTHENTICATED_BINDING,
         )
         .expect("construct checked relay authentication signer")
+    }
+    fn signed_relay_authentication(
+        seed: u8,
+    ) -> (RelayAuthenticationSignerV1, RelayAuthenticationSignaturesV1) {
+        let relay_keys = checked_seeded_keypair(seed);
+        let mut frame = Vec::new();
+        append_relay_authentication(
+            &mut frame,
+            HandshakeSuite::Nk2Hybrid,
+            TEST_RELAY_AUTH_CLIENT_HELLO,
+            TEST_RELAY_AUTH_BODY,
+            &TEST_RELAY_AUTH_TRANSCRIPT,
+            &relay_keys,
+            b"iroha-p2p/1",
+            "iroha-quic",
+        )
+        .expect("append authenticated relay identity");
+        let mut cursor = MessageCursor::new(&frame);
+        let signatures =
+            read_relay_authentication(&mut cursor).expect("parse dual relay authentication");
+        assert!(cursor.remaining_slice().is_empty());
+        assert_eq!(frame[0], RELAY_AUTH_SCHEME_ED25519_MLDSA65_V1);
+        assert_eq!(signatures.ed25519.len(), ED25519_SIGNATURE_LEN);
+        assert_eq!(
+            signatures.mldsa65.len(),
+            MlDsaSuite::MlDsa65.signature_len()
+        );
+        assert_eq!(
+            frame.len(),
+            1 + ED25519_SIGNATURE_LEN + MlDsaSuite::MlDsa65.signature_len()
+        );
+        (relay_keys, signatures)
     }
     #[test]
     fn bounded_fixture_reader_enforces_the_requested_limit() {
@@ -96,43 +131,14 @@ mod tests {
     }
     #[test]
     fn relay_authentication_roundtrip_rejects_key_binding_and_signature_tamper() {
-        let relay_keys = checked_seeded_keypair(0x61);
+        let (relay_keys, signatures) = signed_relay_authentication(0x61);
         let wrong_relay_keys = checked_seeded_keypair(0x62);
-        let client_hello = b"dual-auth-client-hello";
-        let relay_body = b"dual-auth-relay-body";
-        let transcript_hash = [0xA5; 32];
-        let mut frame = Vec::new();
-        append_relay_authentication(
-            &mut frame,
-            HandshakeSuite::Nk2Hybrid,
-            client_hello,
-            relay_body,
-            &transcript_hash,
-            &relay_keys,
-            b"iroha-p2p/1",
-            "iroha-quic",
-        )
-        .expect("append authenticated relay identity");
-        let mut cursor = MessageCursor::new(&frame);
-        let signatures =
-            read_relay_authentication(&mut cursor).expect("parse dual relay authentication");
-        assert!(cursor.remaining_slice().is_empty());
-        assert_eq!(frame[0], RELAY_AUTH_SCHEME_ED25519_MLDSA65_V1);
-        assert_eq!(signatures.ed25519.len(), ED25519_SIGNATURE_LEN);
-        assert_eq!(
-            signatures.mldsa65.len(),
-            MlDsaSuite::MlDsa65.signature_len()
-        );
-        assert_eq!(
-            frame.len(),
-            1 + ED25519_SIGNATURE_LEN + MlDsaSuite::MlDsa65.signature_len()
-        );
         let verifier = relay_keys.verifier();
         verify_relay_authentication(
             HandshakeSuite::Nk2Hybrid,
-            client_hello,
-            relay_body,
-            &transcript_hash,
+            TEST_RELAY_AUTH_CLIENT_HELLO,
+            TEST_RELAY_AUTH_BODY,
+            &TEST_RELAY_AUTH_TRANSCRIPT,
             &signatures,
             &verifier,
             b"iroha-p2p/1",
@@ -141,9 +147,9 @@ mod tests {
         .expect("verify authenticated relay identity");
         let mismatch = verify_relay_authentication(
             HandshakeSuite::Nk2Hybrid,
-            client_hello,
-            relay_body,
-            &transcript_hash,
+            TEST_RELAY_AUTH_CLIENT_HELLO,
+            TEST_RELAY_AUTH_BODY,
+            &TEST_RELAY_AUTH_TRANSCRIPT,
             &signatures,
             &wrong_relay_keys.verifier(),
             b"iroha-p2p/1",
@@ -163,9 +169,9 @@ mod tests {
         .expect("nonzero mismatched relay binding verifier");
         let mismatch = verify_relay_authentication(
             HandshakeSuite::Nk2Hybrid,
-            client_hello,
-            relay_body,
-            &transcript_hash,
+            TEST_RELAY_AUTH_CLIENT_HELLO,
+            TEST_RELAY_AUTH_BODY,
+            &TEST_RELAY_AUTH_TRANSCRIPT,
             &signatures,
             &wrong_binding,
             b"iroha-p2p/1",
@@ -184,9 +190,9 @@ mod tests {
         tampered_ed25519.ed25519[0] ^= 0x80;
         let tampered = verify_relay_authentication(
             HandshakeSuite::Nk2Hybrid,
-            client_hello,
-            relay_body,
-            &transcript_hash,
+            TEST_RELAY_AUTH_CLIENT_HELLO,
+            TEST_RELAY_AUTH_BODY,
+            &TEST_RELAY_AUTH_TRANSCRIPT,
             &tampered_ed25519,
             &verifier,
             b"iroha-p2p/1",
@@ -202,9 +208,9 @@ mod tests {
         tampered_mldsa65.mldsa65[0] ^= 0x80;
         let tampered = verify_relay_authentication(
             HandshakeSuite::Nk2Hybrid,
-            client_hello,
-            relay_body,
-            &transcript_hash,
+            TEST_RELAY_AUTH_CLIENT_HELLO,
+            TEST_RELAY_AUTH_BODY,
+            &TEST_RELAY_AUTH_TRANSCRIPT,
             &tampered_mldsa65,
             &verifier,
             b"iroha-p2p/1",
@@ -251,7 +257,7 @@ mod tests {
 
         let mut zero_mldsa65 = vec![0; canonical_len];
         zero_mldsa65[0] = RELAY_AUTH_SCHEME_ED25519_MLDSA65_V1;
-        zero_mldsa65[1..1 + ED25519_SIGNATURE_LEN].fill(0xA5);
+        zero_mldsa65[1..=ED25519_SIGNATURE_LEN].fill(0xA5);
         let error = read_relay_authentication(&mut MessageCursor::new(&zero_mldsa65))
             .err()
             .expect("all-zero ML-DSA-65 signature must fail");

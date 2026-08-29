@@ -438,16 +438,13 @@ pub fn compiled_privacy_profile_snapshot_result_v1(
 /// violates the closed catalog contract.
 pub fn compiled_privacy_profile_catalog_v1()
 -> Result<PrivacyCompiledProfileCatalogV1, PrivacyCompiledProfileCatalogValidationErrorV1> {
-    static CATALOG: OnceLock<
-        Result<PrivacyCompiledProfileCatalogV1, PrivacyCompiledProfileCatalogValidationErrorV1>,
-    > = OnceLock::new();
-    CATALOG
-        .get_or_init(build_compiled_privacy_profile_catalog_v1)
-        .clone()
+    let catalog = compiled_privacy_profile_catalog_cache_v1().clone();
+    catalog.validate()?;
+    Ok(catalog)
 }
-fn build_compiled_privacy_profile_catalog_v1()
--> Result<PrivacyCompiledProfileCatalogV1, PrivacyCompiledProfileCatalogValidationErrorV1> {
-    let catalog = PrivacyCompiledProfileCatalogV1 {
+fn compiled_privacy_profile_catalog_cache_v1() -> &'static PrivacyCompiledProfileCatalogV1 {
+    static CATALOG: OnceLock<PrivacyCompiledProfileCatalogV1> = OnceLock::new();
+    CATALOG.get_or_init(|| PrivacyCompiledProfileCatalogV1 {
         version: PRIVACY_COMPILED_PROFILE_CATALOG_VERSION_V1,
         protocols: PrivacyProtocolIdV1::ALL
             .into_iter()
@@ -456,9 +453,7 @@ fn build_compiled_privacy_profile_catalog_v1()
                 compiled_profile: compiled_privacy_profile_snapshot_result_v1(protocol_id),
             })
             .collect(),
-    };
-    catalog.validate()?;
-    Ok(catalog)
+    })
 }
 /// Validate an archive as the exact compiled-profile catalog of this binary.
 ///
@@ -503,12 +498,16 @@ pub fn committed_privacy_capability_snapshot_v1(
     qualification: Option<PrivacyExact12QualificationRecordV1>,
     mut activation_for: impl FnMut(PrivacyProtocolIdV1) -> Option<PrivacyProtocolActivationRecordV1>,
 ) -> Result<PrivacyCapabilitySnapshotV1, PrivacyCapabilitySnapshotValidationErrorV1> {
-    let protocols = PrivacyProtocolIdV1::ALL
-        .into_iter()
-        .map(|protocol_id| PrivacyCapabilityRowV1 {
-            protocol_id,
-            compiled_profile: compiled_privacy_profile_snapshot_result_v1(protocol_id),
-            activation: activation_for(protocol_id),
+    // Compiled profiles are immutable binary metadata. Reuse the exact catalog
+    // initialized during node startup instead of rebuilding expensive fixed
+    // algebraic schedules while a Torii request is holding a committed view.
+    let protocols = compiled_privacy_profile_catalog_cache_v1()
+        .protocols
+        .iter()
+        .map(|row| PrivacyCapabilityRowV1 {
+            protocol_id: row.protocol_id,
+            compiled_profile: row.compiled_profile,
+            activation: activation_for(row.protocol_id),
         })
         .collect();
     let snapshot = PrivacyCapabilitySnapshotV1 {

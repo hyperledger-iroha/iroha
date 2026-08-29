@@ -160,16 +160,16 @@ _RUNNER_TOOL_PROBE_OPERATION_IDS = {
 }
 _RECEIPT_VALIDATOR_COMPONENT_SHA256 = {
     "write_sumeragi_v2_release_receipt_corridor_log.py": (
-        "3fcd0a6dabf5a9aa5380225bdaf66db4678f9144ec349a024d573e307a1571b2"
+        "5de112cad5f1eef2ebeb0225c854e69183aab977262733c226000179861728d7"
     ),
     "write_sumeragi_v2_release_receipt_formal_artifacts.py": (
-        "9411977ab12ce893cb747d2f1be149972e601924a46a5f9e8c0e3ddaab6469c4"
+        "2e997ee27e45fdf6651cd1e94689e08d348078e688ab34862d8d6396c6887ba5"
     ),
     "write_sumeragi_v2_release_receipt_gate_evidence.py": (
-        "0654dc5ac1f8235bc66df852947003054d4d17658703ffe72a38be3be352441b"
+        "0d89b39300b4d1b83e28623a75bcabdf31574451dfe68d8f1b67a49afd1dc440"
     ),
     "write_sumeragi_v2_release_receipt_publication.py": (
-        "0f8c776e7ba182a8abe9aeb8c630d9946736389b7279d31939a20a7b7f8b7f16"
+        "a74465a49f847a03ce4c7b17997f3434b8baf3f006c78d6e535854826848232d"
     ),
 }
 _BOOTSTRAP_COMPONENT_FILES = (
@@ -177,7 +177,7 @@ _BOOTSTRAP_COMPONENT_FILES = (
 )
 _BOOTSTRAP_COMPONENT_SHA256 = {
     "bootstrap_sumeragi_v2_release_receipt_replay.py": (
-        "ebc24402ef78e332d3c1d268e1d5fb3927318335e64aee4d2061f4bd3e1cf61c"
+        "f5593c473235d24df71ed42ca3ab74f7a8421aae6601aebb148c7e0b6e4aeab0"
     ),
 }
 _APPROVAL_CLASS_IDS = (

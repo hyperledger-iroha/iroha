@@ -183,6 +183,7 @@ impl RecordLayer {
         }
         let mut key = Zeroizing::new([0_u8; SESSION_KEY_LEN]);
         key.copy_from_slice(payload);
+        drop(session_key);
         Ok(Self {
             endpoint,
             session_key: key,

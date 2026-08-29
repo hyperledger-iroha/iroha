@@ -2221,13 +2221,13 @@ green at that checkpoint. That historical checkpoint did not include a Cargo
 result against its split source; newer receipts above supersede it, without
 replacing the complete release gates.
 
-The static release inventory contract now enumerates `863/863` production tests
-across 44 modules and `518/518` focused `G-UNIT` entries. Its canonical 519-line
+The static release inventory contract now enumerates `864/864` production tests
+across 44 modules and `522/522` focused `G-UNIT` entries. Its canonical 523-line
 TSV has
 SHA-256
-`3d2c93cab0528cb668d977642eecfe78e9c20378e887a0b7db4198ffd220eb29`.
+`5e8b82b400b438eabb7733adbccae15b5aa212a98a89161a586cbce686e2f6e9`.
 The separate canonical production module/test TSV has SHA-256
-`42509872b04f64962dc8edc09ca9f007bafffe402c4e0847255dc937a105888c`;
+`44784c79c489d83ab142bb0db84e89138c3a54b1349926a80597e2c5b21a83df`;
 the newest inventoried rows bind stale exact `TimeoutVote` retransmission
 coalescing without reply-route regression, Ready local Proposal Sign plus
 its exact output taking precedence over a pending Timeout Certificate, the
@@ -2263,7 +2263,7 @@ symbols, three ordered checks, and 14 mutations with no pending structural
 source check. The reviewed Rust include topology contains 70 parents and 425
 direct entries; its canonical payload SHA-256 is
 `0e92b92181eb915d6b70f2ec963fb721ebdd6c0519446a1c5bc7ef1d5013635f`.
-The release-inventory contract is statically reconciled at 85/863/518, and the
+The release-inventory contract is statically reconciled at 85/864/522, and the
 structural model/source contract suite passes. The aggregate proof-ledger
 checker discharges its current Rust/model/mutation/source obligations except
 for the separately recorded task-start `Cargo.lock` mismatch; the static
@@ -2278,11 +2278,11 @@ correspondence plus drain/restart/liveness evidence remain mandatory.
 The Rust-owned protocol-4 grouped fixture contains 56 negative controls and
 hashes to
 `e4fb62addba3c3b8aecdbff55840e21620c770ab96d346ca55b156cf0239942b`;
-its staged grouped and diagnostics suite-source manifests contain 1,400 and
-1,402 records respectively and hash to
-`fdc4c3fb9192277bc6a80018ecb62ed096f12cb41a4c40bde0681ee8f6478577`
+its staged grouped and diagnostics suite-source manifests contain 1,451 and
+1,453 records respectively and hash to
+`bdf4efd88885521e3806cfe610e7ab3d72d690ebe329a4b7acfc0b2fe9b22ae0`
 and
-`f2e7d3b79dd311b93f9ade26a846940dcd12b636c551a70800f63817a10bfa4c`;
+`90235165ad20cc6e4363d4fd6935b8c25bc2e1856cdbbad3323dcc5c4843c2a3`;
 the synchronized 48-line wire TSV hashes to
 `79240b3b95d8c40dc8f1129177a88dca3f31fe08027fe9f5372b6a67b05e9a4c`.
 The current grouped harness inventories OpenAPI `7`, Python `63`, JavaScript
@@ -2297,7 +2297,7 @@ source/distribution `88`, Swift `34`, Kotlin `43`, and Java `42` tests. Its
 Swift/Kotlin/Java wire consumers are runner- and receipt-bound; the Rust wire
 consumer is bound directly by the release runner and receipt. The
 receipt-required unsupported-version-before-signing regression preserves the exact
-863-production-test and 518-G-UNIT-test counts. Rust's separated client test
+864-production-test and 522-G-UNIT-test counts. Rust's separated client test
 module covers both complete endpoint-payload swaps while retaining its
 14-test count, so the API-separation source gap is closed. This is
 mutable-source inventory consistency, not deterministic regeneration, SDK
@@ -2306,13 +2306,11 @@ artifacts remain dirty and unsigned. Exact-five replay is source- and
 receipt-bound to the protected schema-v3 OpenAPI Node closure, but immutable
 candidate execution remains unclaimed.
 
-The first-release in-flight persistence corridor accepts only schema V1:
+The first-release in-flight persistence corridor has one canonical schema:
 `LaneExecutablePayloadV1` version 1, QueuePlan journal V1, and reservation
-journal V1, with contiguous zero-based tags. V2, V4, and V5 readers, rewrite
-fixtures, migrations, and dual decoders are retired and must fail closed. The
-formal/source-bound layout manifests, hashes, inventories, and immutable receipt
-must be regenerated from the final V1 candidate; the former schema-5 counts and
-hashes are not evidence for this hard cut. The current structural checker is
+journal V1, with contiguous zero-based tags. The formal/source-bound layout
+manifests, hashes, inventories, and immutable receipt must be regenerated from
+the final V1 candidate. The current structural checker is
 blocked by the separately owned Kura include-inventory mismatch between
 `02a_unauthenticated_preflight.rs` and
 `02a_fresh_single_lane_preflight.rs` across 74 bindings, so no green
@@ -2329,9 +2327,9 @@ The remaining work is evidence-driven and must stay in order:
   retain separate `SidecarTopologyProgress` and `SidecarReplyControl` Lane
   reservations so parked ordinary output and saturated shared capacity cannot
   starve Request/Close or CloseAck/GenerationHint progress.
-  `MergeSidecarLifecycleSnapshotV3` must remain the only durable schema, with
-  V1/V2 rejected, a durable generation-zero bootstrap marker, semantic
-  validation before bootstrap adoption or cleanup, selected-state/root
+  `MergeSidecarLifecycleSnapshotV3` must remain the only durable schema, with a
+  durable generation-zero bootstrap marker, semantic validation before
+  bootstrap adoption or cleanup, selected-state/root
   directory re-sync before destructive recovery cleanup, fail-closed alias and
   reparse-point rejection, and the checked generation increment plus empty
   responder state committed through an fsynced inactive slot and
@@ -2355,13 +2353,13 @@ The remaining work is evidence-driven and must stay in order:
   merge-sidecar/lane/runner/worker/core tests, formatting, clippy, codec guard,
   proof-ledger and TLAPS-sharding tests, proof checker, and source-fidelity
   mutations before release evidence is accepted, then finish the remaining
-  863-test,
+  864-test,
   44-module production inventory legs and archived G-UNIT execution.
   The asynchronous reply-route product assigns all 54 structural TLAPS
   projection rows; that is source inventory only. Its V2 inductive-safety,
   successor-isolation, and temporal-product obligations remain in the formal
   dependency queue.
-- Finish `G-UNIT` with a fresh archived run of all 518 source-bound focused tests
+- Finish `G-UNIT` with a fresh archived run of all 522 source-bound focused tests
   across core multilane and queue-journal code, `iroha_data_model`, Torii, and
   the integration-support library, then complete and archive the Rust-owned
   control-corpus replay across OpenAPI, both Python surfaces, JavaScript
@@ -2369,11 +2367,11 @@ The remaining work is evidence-driven and must stay in order:
   `ML-API-04`/`G-SDK`. The current protocol-4 corpus has 56 negative controls,
   fixture SHA-256
   `e4fb62addba3c3b8aecdbff55840e21620c770ab96d346ca55b156cf0239942b`,
-  staged grouped/diagnostics suite-source manifests at exactly 1,400 and 1,402
+  staged grouped/diagnostics suite-source manifests at exactly 1,451 and 1,453
   records with SHA-256 values
-  `fdc4c3fb9192277bc6a80018ecb62ed096f12cb41a4c40bde0681ee8f6478577`
+  `bdf4efd88885521e3806cfe610e7ab3d72d690ebe329a4b7acfc0b2fe9b22ae0`
   and
-  `f2e7d3b79dd311b93f9ade26a846940dcd12b636c551a70800f63817a10bfa4c`,
+  `90235165ad20cc6e4363d4fd6935b8c25bc2e1856cdbbad3323dcc5c4843c2a3`,
   to be regenerated and receipt-bound from the exact immutable candidate, and
   wire-TSV SHA-256
   `79240b3b95d8c40dc8f1129177a88dca3f31fe08027fe9f5372b6a67b05e9a4c`.
@@ -28386,7 +28384,7 @@ rejects escaping or writable-output symlinks plus hard-linked source files.
 The original checkout manifest and sealed manifest are both retained; every
 child completion uses the latter. One canonical aggregate receipt binds
 original HEAD/tree/`Cargo.lock`, all 85 pre-network legs and their exact
-863-test inventory plus the separate exact 518-test G-UNIT inventory, the
+864-test inventory plus the separate exact 522-test G-UNIT inventory, the
 formal harness lock/toolchain, matrix, chaos, and soak
 evidence. The formal leg archives a tee-captured all-legs log plus
 `proof_coverage.json` and `proof_evidence.json`; receipt publication reruns the

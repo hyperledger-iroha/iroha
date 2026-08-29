@@ -31,6 +31,7 @@ import org.hyperledger.iroha.sdk.norito.NoritoHeader
 import org.hyperledger.iroha.sdk.norito.SchemaHash
 import org.hyperledger.iroha.sdk.sccp.SccpLaneIdV1
 import org.hyperledger.iroha.sdk.sccp.SccpNetworkV1
+import org.hyperledger.iroha.sdk.sccp.SccpReplayV1
 import org.hyperledger.iroha.sdk.sccp.SccpV1
 import org.hyperledger.iroha.sdk.testing.TestEd25519Keys
 import org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapter
@@ -91,6 +92,31 @@ class SccpClientExactTest {
             message.toJsonBytes(),
             "/v1/bridge/messages",
         )
+        val occupiedWitness = Base64.getEncoder().encodeToString(
+            canonicalReplayWitnessBytes(priorRecordDigest = ByteArray(32) { 1 }),
+        )
+        assertFailsWith<IllegalArgumentException> {
+            SccpNativeMessageSubmitRequest(
+                authority,
+                nativeArtifact,
+                occupiedWitness,
+                bridgeFeePayment,
+            )
+        }
+        val explicitDefaultWitness = Base64.getEncoder().encodeToString(
+            canonicalReplayWitnessBytes(
+                siblingBitmap = ByteArray(32).also { it[31] = 1 },
+                siblings = listOf(SccpReplayV1.emptyHashes().first()),
+            ),
+        )
+        assertFailsWith<IllegalArgumentException> {
+            SccpNativeMessageSubmitRequest(
+                authority,
+                nativeArtifact,
+                explicitDefaultWitness,
+                bridgeFeePayment,
+            )
+        }
 
         val transactionBytes = NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1).encodeTransaction(
             TransactionPayload(
@@ -125,44 +151,35 @@ class SccpClientExactTest {
             )
         }
         val signature = Base64.getEncoder().encodeToString(ByteArray(64) { 1 })
-        val genericSignature = Base64.getEncoder().encodeToString(ByteArray(65) { 1 })
-        assertEquals(genericSignature, normalizeOptionalSignature(genericSignature))
-        val signed = destinationRequest(
-            authority = authority,
-            destinationProofB64 = artifact,
-            signatureB64 = signature,
-            transactionPayloadB64 = transaction,
-            creationTimeMs = 7,
-        )
-        assertEquals(
-            setOf(
-                "authority", "fee_payment", "destination_proof_b64", "signature_b64",
-                "transaction_payload_b64", "creation_time_ms",
-            ),
-            signed.toJsonMap().keys,
-        )
-        HttpClientTransport.preflightSccpBridgeSubmitJson(
-            signed.toJsonBytes(),
-            "/v1/bridge/proofs/submit",
-        )
-        val signedMessage = messageRequest(
-            authority = authority,
-            nativeProofB64 = nativeArtifact,
-            signatureB64 = signature,
-            transactionPayloadB64 = transaction,
-            creationTimeMs = 7,
-        )
-        assertEquals(
-            setOf(
-                "authority", "fee_payment", "native_proof_b64", "signature_b64",
-                "transaction_payload_b64", "replay_witness_b64", "creation_time_ms",
-            ),
-            signedMessage.toJsonMap().keys,
-        )
-        HttpClientTransport.preflightSccpBridgeSubmitJson(
-            signedMessage.toJsonBytes(),
-            "/v1/bridge/messages",
-        )
+        assertFailsWith<IllegalArgumentException> {
+            destinationRequest(
+                authority = authority,
+                destinationProofB64 = artifact,
+                signatureB64 = signature,
+                transactionPayloadB64 = transaction,
+                creationTimeMs = 7,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            messageRequest(
+                authority = authority,
+                nativeProofB64 = nativeArtifact,
+                signatureB64 = signature,
+                transactionPayloadB64 = transaction,
+                creationTimeMs = 7,
+            )
+        }
+        val retiredSignedFields = proof.toJsonMap().toMutableMap().also {
+            it["signature_b64"] = signature
+            it["transaction_payload_b64"] = transaction
+            it["creation_time_ms"] = 7
+        }
+        assertFailsWith<IllegalArgumentException> {
+            HttpClientTransport.preflightSccpBridgeSubmitJson(
+                jsonBytes(retiredSignedFields),
+                "/v1/bridge/proofs/submit",
+            )
+        }
         val ordinaryTransaction = Base64.getEncoder().encodeToString(
             NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1).encodeTransaction(
                 NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1)
@@ -274,10 +291,9 @@ class SccpClientExactTest {
             )
 
         fun signedRequest(feePayment: FeePaymentIntent): SccpDestinationProofSubmitRequest =
-            SccpDestinationProofSubmitRequest(
-                authority = authority,
-                destinationProofB64 = canonicalArtifact(),
-                feePayment = expectedFeePayment,
+            destinationRequest(
+                authority,
+                canonicalArtifact(),
                 signatureB64 = signature,
                 transactionPayloadB64 = Base64.getEncoder()
                     .encodeToString(transactionBytes(feePayment)),
@@ -294,17 +310,7 @@ class SccpClientExactTest {
         assertTrue(codec.encodeTransaction(decoded).contentEquals(encoded))
         assertEquals(selector, program.literal())
 
-        val request = signedRequest(expectedFeePayment)
-        assertEquals(selector, (request.feePayment as FeePaymentIntent.Sponsor).programId.literal())
-        SccpNativeMessageSubmitRequest(
-            authority = authority,
-            nativeProofB64 = canonicalNativeArtifact(),
-            replayWitnessB64 = canonicalReplayWitnessArtifact(),
-            feePayment = expectedFeePayment,
-            signatureB64 = signature,
-            transactionPayloadB64 = Base64.getEncoder().encodeToString(encoded),
-            creationTimeMs = 7,
-        )
+        assertFailsWith<IllegalArgumentException> { signedRequest(expectedFeePayment) }
 
         val mutations = listOf(
             FeePaymentIntent.sponsor(
@@ -875,14 +881,12 @@ class SccpClientExactTest {
         signatureB64: String? = null,
         transactionPayloadB64: String? = null,
         creationTimeMs: Long? = null,
-    ): SccpDestinationProofSubmitRequest = SccpDestinationProofSubmitRequest(
-        authority,
-        destinationProofB64,
-        bridgeFeePayment,
-        signatureB64,
-        transactionPayloadB64,
-        creationTimeMs,
-    )
+    ): SccpDestinationProofSubmitRequest {
+        require(signatureB64 == null && transactionPayloadB64 == null && creationTimeMs == null) {
+            "signed SCCP request fields are not part of the first-release SDK surface"
+        }
+        return SccpDestinationProofSubmitRequest(authority, destinationProofB64, bridgeFeePayment)
+    }
 
     private fun messageRequest(
         authority: String,
@@ -890,15 +894,17 @@ class SccpClientExactTest {
         signatureB64: String? = null,
         transactionPayloadB64: String? = null,
         creationTimeMs: Long? = null,
-    ): SccpNativeMessageSubmitRequest = SccpNativeMessageSubmitRequest(
-        authority,
-        nativeProofB64,
-        canonicalReplayWitnessArtifact(),
-        bridgeFeePayment,
-        signatureB64,
-        transactionPayloadB64,
-        creationTimeMs,
-    )
+    ): SccpNativeMessageSubmitRequest {
+        require(signatureB64 == null && transactionPayloadB64 == null && creationTimeMs == null) {
+            "signed SCCP request fields are not part of the first-release SDK surface"
+        }
+        return SccpNativeMessageSubmitRequest(
+            authority,
+            nativeProofB64,
+            canonicalReplayWitnessArtifact(),
+            bridgeFeePayment,
+        )
+    }
 
     @Test
     fun registryValidatesElevenSignalKeySemanticPolicyAndExactFamilies() {
@@ -2726,8 +2732,33 @@ class SccpClientExactTest {
 
     private fun canonicalReplayWitnessArtifact(): String =
         Base64.getEncoder().encodeToString(
-            canonicalArtifactBytes(SCCP_REPLAY_WITNESS_SCHEMA_NAME),
+            canonicalReplayWitnessBytes(),
         )
+
+    private fun canonicalReplayWitnessBytes(
+        priorRecordDigest: ByteArray = ByteArray(32),
+        siblingBitmap: ByteArray = ByteArray(32),
+        siblings: List<ByteArray> = emptyList(),
+    ): ByteArray {
+        val siblingSequence = ByteArrayOutputStream().also { output ->
+            writeU64(output, siblings.size.toLong())
+            siblings.forEach { writeCompactField(output, it) }
+        }.toByteArray()
+        val payload = ByteArrayOutputStream().also { output ->
+            writeCompactField(output, SccpReplayV1.emptyHashes().last())
+            writeCompactField(output, priorRecordDigest)
+            writeCompactField(output, siblingBitmap)
+            writeCompactField(output, siblingSequence)
+        }.toByteArray()
+        val header = NoritoHeader(
+            SchemaHash.hash16(SCCP_REPLAY_WITNESS_SCHEMA_NAME),
+            payload.size,
+            CRC64.compute(payload),
+            NoritoCodec.DEFAULT_FLAGS,
+            NoritoHeader.COMPRESSION_NONE,
+        )
+        return header.encode() + payload
+    }
 
     private fun canonicalArtifactBytes(schemaName: String, padding: Int = 0): ByteArray {
         val schema = SchemaHash.hash16(schemaName)
@@ -2896,6 +2927,17 @@ class SccpClientExactTest {
 
     private fun writeLengthPrefixed(out: ByteArrayOutputStream, value: ByteArray) {
         writeU32(out, value.size)
+        out.write(value)
+    }
+
+    private fun writeCompactField(out: ByteArrayOutputStream, value: ByteArray) {
+        var remaining = value.size
+        do {
+            var next = remaining and 0x7f
+            remaining = remaining ushr 7
+            if (remaining != 0) next = next or 0x80
+            out.write(next)
+        } while (remaining != 0)
         out.write(value)
     }
 

@@ -1,7 +1,8 @@
 #[test]
 fn roster_origin_relay_completion_has_authenticated_source_count_and_byte_owner() {
     const FORGED_OCCURRENCES: usize = 32;
-    let (handle, ingress, _relay_receiver) = test_sumeragi_handle(25);
+    let (handle, ingress, _relay_receiver) =
+        test_sumeragi_handle_with_source_geometry(23, Some(1));
     let validators = validator_peers(4);
     let authenticated_non_validator_via = validator_peers(5)
         .pop()

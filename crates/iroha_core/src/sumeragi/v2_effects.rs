@@ -3677,6 +3677,7 @@ impl V2EffectExecutor<SerializedV2Runtime> {
     pub(in crate::sumeragi) fn arm_live_lifecycle_validate_successor(
         &mut self,
         dispatch_key: LifecycleValidateDispatchKeyV1,
+        incumbent_dispatch_key: Option<LifecycleValidateDispatchKeyV1>,
         round: wire::ConsensusRound,
         subject: wire::BlockSubject,
         apply_is_authorized: bool,
@@ -3710,7 +3711,12 @@ impl V2EffectExecutor<SerializedV2Runtime> {
             {
                 Ok(())
             }
-            Some(existing) if existing.can_refine_to(&candidate) => {
+            Some(existing)
+                if incumbent_dispatch_key == Some(existing.dispatch_key)
+                    && existing.can_refine_to(&candidate) =>
+            {
+                // Durable completion may refine only the explicitly attested
+                // incumbent carrier at this physical Validate address.
                 self.live_lifecycle_validate_successor = Some(candidate);
                 Ok(())
             }

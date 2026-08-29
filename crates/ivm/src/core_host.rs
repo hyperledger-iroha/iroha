@@ -2302,6 +2302,22 @@ mod tests {
         EmbeddedContractInterfaceV1, EmbeddedEntrypointDescriptor, EmbeddedStateDescriptor,
         EmbeddedStateType, LITERAL_SECTION_MAGIC, ProgramMetadata,
     };
+
+    fn shared_argument_fixture_payload() -> Json {
+        let fixture: norito::json::Value = norito::json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/kotodama/entrypoint_argument_record_v1.json"
+        )))
+        .expect("parse shared contract argument fixture");
+        let payload = fixture
+            .as_object()
+            .and_then(|root| root.get("torii_boundary"))
+            .and_then(norito::json::Value::as_object)
+            .and_then(|boundary| boundary.get("payload"))
+            .expect("shared fixture Torii payload")
+            .clone();
+        Json::from(payload)
+    }
     fn state_interface(name: &str, ty: EmbeddedStateType) -> EmbeddedContractInterfaceV1 {
         EmbeddedContractInterfaceV1 {
             seiyaku_name: "StateMapHostFixture".to_owned(),
@@ -3942,16 +3958,14 @@ mod tests {
             crate::sum::SumLayoutV1::option(1).expect("int Option layout"),
         )
         .expect("read int Option");
-        assert!(present, "numeric JSON integer tokens must be accepted");
-        assert_eq!(words.len(), 1);
-        let int = vm.validate_tlv(words[0]).expect("int TLV");
-        assert_eq!(int.type_id, PointerType::Int);
+        assert!(
+            !present,
+            "generic JSON_SET_I64 number tokens stay outside the exact-number surface"
+        );
+        assert!(words.is_empty());
         assert_eq!(
             get_gas,
-            CoreHost::json_gas(
-                object_with_value_len + key_name_bytes.len(),
-                int.payload.len() + 16,
-            )
+            CoreHost::json_gas(object_with_value_len + key_name_bytes.len(), 16)
         );
         let name: Name = "wonderland".parse().expect("name");
         let name_bytes = norito::to_bytes(&name).expect("encode name");
@@ -4477,64 +4491,186 @@ mod tests {
         );
     }
     #[test]
-    fn json_quantity_getter_accepts_only_canonical_strings() {
+    fn exact_json_getters_accept_only_canonical_strings_through_core_host() {
         let mut host = CoreHost::new();
         let mut vm = IVM::new(u64::MAX);
-        let json = Json::from_str_norito(r#"{"amount":"1.25"}"#).expect("quantity JSON");
+        let json = shared_argument_fixture_payload();
         let json_ptr = vm
             .alloc_input_tlv(&make_pointer_tlv(
                 PointerType::Json,
                 &norito::to_bytes(&json).expect("encode JSON"),
             ))
             .expect("allocate JSON");
-        let key: Name = "amount".parse().expect("amount key");
-        let key_ptr = vm
-            .alloc_input_tlv(&make_pointer_tlv(
-                PointerType::Name,
-                &norito::to_bytes(&key).expect("encode key"),
-            ))
-            .expect("allocate key");
-        let syscall = syscalls::SYSCALL_JSON_GET_QUANTITY;
-        vm.set_register(10, json_ptr);
-        vm.set_register(11, key_ptr);
-        host.syscall(syscall, &mut vm).expect("get quantity");
-        let (some, words) = crate::sum::read_words(
-            &vm,
-            vm.register(10),
-            crate::sum::SumLayoutV1::option(1).expect("quantity option layout"),
-        )
-        .expect("quantity option");
-        assert!(some);
-        let tlv = vm.validate_tlv(words[0]).expect("quantity TLV");
-        assert_eq!(tlv.type_id, PointerType::Quantity);
-        let quantity = QuantityValueV1::decode_frame(tlv.payload)
-            .expect("decode quantity frame")
-            .into_quantity();
-        assert_eq!(quantity.to_string(), "1.25");
-        for invalid in [
-            r#"{"amount":"-1"}"#,
-            r#"{"amount":"1.2500"}"#,
-            r#"{"amount":1}"#,
+        for (key, syscall, pointer_type, expected) in [
+            (
+                "exact_int",
+                syscalls::SYSCALL_JSON_GET_INT,
+                PointerType::Int,
+                "1606938044258990275541962092341162602522202993782792835301376",
+            ),
+            (
+                "exact_decimal",
+                syscalls::SYSCALL_JSON_GET_DECIMAL,
+                PointerType::Decimal,
+                "-12345678901234567890.125",
+            ),
+            (
+                "exact_quantity",
+                syscalls::SYSCALL_JSON_GET_QUANTITY,
+                PointerType::Quantity,
+                "12345678901234567890.0000000000000000000000000001",
+            ),
         ] {
-            let invalid = Json::from_str_norito(invalid).expect("invalid quantity JSON");
-            let invalid_ptr = vm
+            let key: Name = key.parse().expect("exact-number key");
+            let key_ptr = vm
                 .alloc_input_tlv(&make_pointer_tlv(
-                    PointerType::Json,
-                    &norito::to_bytes(&invalid).expect("encode invalid JSON"),
+                    PointerType::Name,
+                    &norito::to_bytes(&key).expect("encode key"),
                 ))
-                .expect("allocate invalid JSON");
-            vm.set_register(10, invalid_ptr);
+                .expect("allocate key");
+            vm.set_register(10, json_ptr);
             vm.set_register(11, key_ptr);
-            host.syscall(syscalls::SYSCALL_JSON_GET_QUANTITY, &mut vm)
-                .expect("invalid quantity is Option::none");
+            host.syscall(syscall, &mut vm).expect("exact JSON getter");
+            let (some, words) = crate::sum::read_words(
+                &vm,
+                vm.register(10),
+                crate::sum::SumLayoutV1::option(1).expect("exact-number option layout"),
+            )
+            .expect("exact-number option");
+            assert!(some, "{key} must produce Option::some");
+            let tlv = vm.validate_tlv(words[0]).expect("exact-number TLV");
+            assert_eq!(tlv.type_id, pointer_type);
+            let actual = match pointer_type {
+                PointerType::Int => {
+                    iroha_primitives::numeric_abi::IntValueV1::decode_frame(tlv.payload)
+                        .expect("decode int frame")
+                        .into_int()
+                        .to_string()
+                }
+                PointerType::Decimal => {
+                    iroha_primitives::numeric_abi::DecimalValueV1::decode_frame(tlv.payload)
+                        .expect("decode decimal frame")
+                        .into_numeric()
+                        .to_string()
+                }
+                PointerType::Quantity => QuantityValueV1::decode_frame(tlv.payload)
+                    .expect("decode quantity frame")
+                    .into_quantity()
+                    .to_string(),
+                _ => unreachable!("fixed exact-number pointer cases"),
+            };
+            assert_eq!(actual, expected);
+        }
+        let token_json =
+            Json::from_str_norito(r#"{"decimal_token":1.25,"int_token":7,"quantity_token":7}"#)
+                .expect("noncanonical numeric-token JSON");
+        let token_json_ptr = vm
+            .alloc_input_tlv(&make_pointer_tlv(
+                PointerType::Json,
+                &norito::to_bytes(&token_json).expect("encode numeric-token JSON"),
+            ))
+            .expect("allocate numeric-token JSON");
+        for (key, syscall) in [
+            ("int_token", syscalls::SYSCALL_JSON_GET_INT),
+            ("decimal_token", syscalls::SYSCALL_JSON_GET_DECIMAL),
+            ("quantity_token", syscalls::SYSCALL_JSON_GET_QUANTITY),
+        ] {
+            let key: Name = key.parse().expect("numeric-token key");
+            let key_ptr = vm
+                .alloc_input_tlv(&make_pointer_tlv(
+                    PointerType::Name,
+                    &norito::to_bytes(&key).expect("encode key"),
+                ))
+                .expect("allocate key");
+            vm.set_register(10, token_json_ptr);
+            vm.set_register(11, key_ptr);
+            host.syscall(syscall, &mut vm)
+                .expect("numeric token is Option::none");
             assert_eq!(
                 crate::sum::read_words(
                     &vm,
                     vm.register(10),
-                    crate::sum::SumLayoutV1::option(1).expect("quantity option layout"),
+                    crate::sum::SumLayoutV1::option(1).expect("exact-number option layout"),
                 ),
-                Ok((false, vec![]))
+                Ok((false, vec![])),
+                "{key} must reject a JSON number token",
             );
+        }
+    }
+
+    #[test]
+    fn exact_json_getter_quote_minus_one_allocates_no_output() {
+        for (key, syscall) in [
+            ("int", syscalls::SYSCALL_JSON_GET_INT),
+            ("decimal", syscalls::SYSCALL_JSON_GET_DECIMAL),
+            ("quantity", syscalls::SYSCALL_JSON_GET_QUANTITY),
+        ] {
+            let mut host = CoreHost::new();
+            let mut vm = IVM::new(u64::MAX);
+            let json = Json::from_str_norito(
+                r#"{"decimal":"-12345678901234567890.125","int":"1606938044258990275541962092341162602522202993782792835301376","quantity":"12345678901234567890.0000000000000000000000000001"}"#,
+            )
+            .expect("exact-number JSON");
+            let json_ptr = vm
+                .alloc_input_tlv(&make_pointer_tlv(
+                    PointerType::Json,
+                    &norito::to_bytes(&json).expect("encode exact-number JSON"),
+                ))
+                .expect("allocate exact-number JSON");
+            let key: Name = key.parse().expect("exact-number key");
+            let key_ptr = vm
+                .alloc_input_tlv(&make_pointer_tlv(
+                    PointerType::Name,
+                    &norito::to_bytes(&key).expect("encode exact-number key"),
+                ))
+                .expect("allocate exact-number key");
+            let scall = encoding::wide::encode_syscallx(syscall);
+            vm.load_program(&assemble_program(&[scall, encoding::wide::encode_halt()]))
+                .expect("load exact-number getter program");
+            vm.set_register(10, json_ptr);
+            vm.set_register(11, key_ptr);
+            let quote = host
+                .prepare_syscall(syscall, &vm)
+                .expect("quote exact-number getter");
+            let instruction_gas = gas::cost_of(scall).expect("SYSTEM is scheduled");
+            vm.set_gas_limit(
+                quote
+                    .checked_add(instruction_gas)
+                    .and_then(|budget| budget.checked_sub(1))
+                    .expect("exact-number quote has a positive bounded budget"),
+            );
+            let registers_before = [vm.register(10), vm.register(11)];
+            let heap_before = vm.memory.heap_allocated_len();
+            let writes_before = vm.memory.write_log();
+            assert_eq!(vm.run_with_host(&mut host), Err(VMError::OutOfGas));
+            assert_eq!(vm.remaining_gas(), quote - 1);
+            assert_eq!([vm.register(10), vm.register(11)], registers_before);
+            assert_eq!(vm.memory.heap_allocated_len(), heap_before);
+            assert_eq!(vm.memory.write_log(), writes_before);
+        }
+    }
+
+    #[test]
+    fn unassigned_exact_json_getters_fail_before_core_host_work() {
+        let mut host = CoreHost::new();
+        let mut vm = IVM::new(50_000);
+        vm.set_register(10, 0x1111);
+        vm.set_register(11, 0x2222);
+        for number in 0x01_0163..=0x01_0165 {
+            let registers_before = [vm.register(10), vm.register(11)];
+            let heap_before = vm.memory.heap_allocated_len();
+            let gas_before = vm.remaining_gas();
+            assert_eq!(
+                host.prepare_syscall(number, &vm),
+                Err(VMError::UnknownSyscall(number))
+            );
+            assert_eq!(
+                host.syscall(number, &mut vm),
+                Err(VMError::UnknownSyscall(number))
+            );
+            assert_eq!([vm.register(10), vm.register(11)], registers_before);
+            assert_eq!(vm.memory.heap_allocated_len(), heap_before);
+            assert_eq!(vm.remaining_gas(), gas_before);
         }
     }
     #[test]

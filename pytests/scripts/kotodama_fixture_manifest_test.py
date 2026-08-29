@@ -77,7 +77,7 @@ def test_checked_in_inventory_is_complete_and_reconstructable() -> None:
     stats = checker.validate_manifest(ROOT, MANIFEST)
     assert stats.fixtures == 248
     assert stats.legacy_fixtures == 52
-    assert stats.tests == 563
+    assert stats.tests == 572
 
 
 def test_payload_corruption_fails_closed(tmp_path: Path) -> None:

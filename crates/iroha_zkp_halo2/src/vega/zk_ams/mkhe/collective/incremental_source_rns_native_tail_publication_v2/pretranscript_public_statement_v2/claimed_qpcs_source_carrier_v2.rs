@@ -36,12 +36,18 @@ use super::super::super::super::super::{
         RnsNativeComparatorRangeCarryErrorV1, RnsNativeComparatorRangeCarryPrerequisiteV1,
         verify_rns_native_comparator_range_carry_v1,
     },
+    rns_native_composite_verifier::{
+        ZkAmsMkheRnsNativeCompositeCandidateReceiptV1,
+        ZkAmsMkheRnsNativeCompositeVerificationErrorV1,
+        verify_zk_ams_mkhe_rns_native_composite_from_source_chain_v2,
+    },
     rns_native_cross_field_inventory::RnsNativePreQpcsQMaskInventoryPreflightV1,
     rns_native_cross_field_rlwe_direct::{
         RnsNativeCrossFieldRlweClaimedInventoryNumericV2,
         RnsNativeCrossFieldRlweClaimedInventoryParentV1, RnsNativeCrossFieldRlweDirectErrorV1,
     },
     rns_native_direct_global_membership_handoff::{
+        RnsNativeDirectGlobalMembershipCompositeTransitionErrorV2,
         RnsNativeDirectGlobalMembershipHandoffErrorV1, RnsNativeDirectGlobalMembershipHandoffV1,
         verify_rns_native_direct_global_membership_handoff_v2 as verify_direct_global_membership_handoff_core_v2,
     },
@@ -97,8 +103,10 @@ use super::super::super::super::super::{
     },
     rns_native_terminal_cross_basis::RnsNativeTerminalCrossBasisKernelPrerequisiteV1,
     rns_native_transcript::{
-        ZkAmsMkheRnsNativeQpcsBoundTranscriptV1, ZkAmsMkheRnsNativeTerminalRootsV1,
+        ZkAmsMkheRnsNativeChallengeSeedsV1, ZkAmsMkheRnsNativeQpcsBoundTranscriptV1,
+        ZkAmsMkheRnsNativeTerminalRootsV1,
     },
+    rns_native_wire::ZkAmsMkheRnsNativeProofEnvelopeV1,
     rns_native_zero_padding_commitment::RnsNativeZeroPaddingCommitmentPrerequisiteV1,
 };
 
@@ -293,7 +301,7 @@ const _: () = {
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum RnsNativeClaimedQpcsSourceCarrierErrorV2 {
+pub(in crate::vega::zk_ams::mkhe) enum RnsNativeClaimedQpcsSourceCarrierErrorV2 {
     PublicRead,
     Qpcs,
     SourcePreflight,
@@ -311,6 +319,28 @@ impl fmt::Display for RnsNativeClaimedQpcsSourceCarrierErrorV2 {
 }
 
 impl std::error::Error for RnsNativeClaimedQpcsSourceCarrierErrorV2 {}
+
+/// Failure at the consuming claimed-qPCS-to-composite terminal seam.
+///
+/// The two variants preserve whether the authenticated source-chain context
+/// could not be constructed or the atomic four-stage composite verifier
+/// rejected that context.  Neither variant carries partial verification state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::vega::zk_ams::mkhe) enum RnsNativeClaimedQpcsCompositeVerificationErrorV2 {
+    /// The retained direct/membership/source-packing lineage could not mint the
+    /// sole authenticated composite input.
+    Handoff(RnsNativeDirectGlobalMembershipCompositeTransitionErrorV2),
+    /// The atomic composite verifier rejected the consumed authenticated input.
+    CompositeVerification(ZkAmsMkheRnsNativeCompositeVerificationErrorV1),
+}
+
+impl fmt::Display for RnsNativeClaimedQpcsCompositeVerificationErrorV2 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{self:?}")
+    }
+}
+
+impl std::error::Error for RnsNativeClaimedQpcsCompositeVerificationErrorV2 {}
 
 /// Fixed-shape qPCS inputs accepted only by the consuming claimed transition.
 /// There is deliberately no final transcript field: qPCS borrows final seeds
@@ -361,6 +391,50 @@ struct RnsNativeClaimedQpcsRetainedPublicationV2 {
     equation_commitment_digests: [[u8; 32]; EQUATIONS_V2],
     limb_commitment_digests: [[u8; 32]; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1],
     carrier_binding_digest: [u8; 32],
+}
+
+/// Move-only qPCS/publication authority retained by the final composite input.
+///
+/// The complete publication owners, read receipt, public-statement facts, and
+/// fixed commitment inventories stay owned here.  Construction is private to
+/// the one consuming post-source-packing transition below; no digest-only or
+/// raw-parts constructor exists.
+#[must_use = "the authenticated qPCS publication must remain owned through composite verification"]
+pub(in crate::vega::zk_ams::mkhe) struct RnsNativeQpcsCompositeAuthorityV2<'envelope> {
+    retained: RnsNativeClaimedQpcsRetainedPublicationV2,
+    envelope: &'envelope ZkAmsMkheRnsNativeProofEnvelopeV1,
+}
+
+impl RnsNativeQpcsCompositeAuthorityV2<'_> {
+    pub(in crate::vega::zk_ams::mkhe) fn validate_composite_context_v2(
+        &self,
+        envelope: &ZkAmsMkheRnsNativeProofEnvelopeV1,
+        transcript: &ZkAmsMkheRnsNativeChallengeSeedsV1,
+    ) -> Result<(), RnsNativeClaimedQpcsSourceCarrierErrorV2> {
+        let mut publication_digests = [[0; 32]; EQUATIONS_V2 + ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1 + 1];
+        publication_digests[..EQUATIONS_V2]
+            .copy_from_slice(&self.retained.equation_commitment_digests);
+        publication_digests[EQUATIONS_V2..EQUATIONS_V2 + ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1]
+            .copy_from_slice(&self.retained.limb_commitment_digests);
+        publication_digests[EQUATIONS_V2 + ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1] =
+            self.retained.carrier_binding_digest;
+        if !core::ptr::eq(self.envelope, envelope)
+            || envelope.profile_manifest_digest() != transcript.profile_manifest_digest()
+            || envelope.topology_digest() != transcript.topology_digest()
+            || envelope.release_candidate_digest() != transcript.release_candidate_digest()
+            || envelope.statement_digest() != transcript.statement_digest()
+            || envelope.operational_context_digest() != transcript.operational_context_digest()
+            || envelope.source_receipt_digest() != transcript.source_receipt_digest()
+            || publication_digests.contains(&[0; 32])
+            || publication_digests
+                .iter()
+                .enumerate()
+                .any(|(index, digest)| publication_digests[index + 1..].contains(digest))
+        {
+            return Err(RnsNativeClaimedQpcsSourceCarrierErrorV2::InvalidBinding);
+        }
+        Ok(())
+    }
 }
 
 /// Move-only witness that the numeric origin was minted while the full
@@ -1059,6 +1133,34 @@ impl<'source, 'proof, S: ZkAmsMkheRnsNativeRepeatableSourceSnapshotV1>
         let Self { retained, stage } = self;
         let stage = verify_rns_native_source_packing_same_opening_owned_v2(stage)?;
         Ok(RnsNativeClaimedQpcsOwnedStageV2 { retained, stage })
+    }
+}
+
+impl<'source, 'proof, S: ZkAmsMkheRnsNativeRepeatableSourceSnapshotV1>
+    RnsNativeClaimedQpcsOwnedStageV2<
+        RnsNativeSourcePackingSameOpeningPrerequisiteV1<
+            'proof,
+            RnsNativeDirectGlobalMembershipHandoffV1<'source, 'proof, S>,
+        >,
+    >
+{
+    /// Consume the complete retained-publication/direct/membership/
+    /// same-opening lineage directly through the atomic composite verifier.
+    /// No detached all-stage input or partial-stage result escapes this seam.
+    pub(in crate::vega::zk_ams::mkhe) fn verify_composite_v2<'envelope>(
+        self,
+        envelope: &'envelope ZkAmsMkheRnsNativeProofEnvelopeV1,
+    ) -> Result<
+        ZkAmsMkheRnsNativeCompositeCandidateReceiptV1,
+        RnsNativeClaimedQpcsCompositeVerificationErrorV2,
+    > {
+        let Self { retained, stage } = self;
+        let qpcs_authority = RnsNativeQpcsCompositeAuthorityV2 { retained, envelope };
+        let input = stage
+            .into_composite_context_v2(qpcs_authority, envelope)
+            .map_err(RnsNativeClaimedQpcsCompositeVerificationErrorV2::Handoff)?;
+        verify_zk_ams_mkhe_rns_native_composite_from_source_chain_v2(input)
+            .map_err(RnsNativeClaimedQpcsCompositeVerificationErrorV2::CompositeVerification)
     }
 }
 

@@ -207,6 +207,74 @@ def test_native_merge_manifest_contract_rejects_lost_startup_association_control
     support.replace_once_after(
         path,
         "historical_autonomous_recovery_reaches_exactly_once_canonical_merge_application",
+        "ApplyFixture::new_for_production_recovered_decision_apply_with_native_lane_lifecycle()",
+        "ApplyFixture::new_for_production_recovered_decision_apply_with_lane_lifecycle()",
+    )
+    errors = support.validate_native_prepublication_fixture(
+        tmp_path, module, models
+    )
+    assert any(
+        "Native corridor macro test" in error
+        and "new_for_production_recovered_decision_apply_with_native_lane_lifecycle" in error
+        for error in errors
+    ), errors
+
+    support.shutil.copy2(
+        support.ROOT_DIR
+        / "crates/iroha_core/src/sumeragi/tests/"
+        "v2_apply_unsealed_01c_historical_recovery.rs",
+        path,
+    )
+    fixture_path = (
+        tmp_path
+        / "crates/iroha_core/src/sumeragi/tests/v2_apply_unsealed_00.rs"
+    )
+    support.replace_once_after(
+        fixture_path,
+        "fn new_for_production_recovered_decision_apply_with_native_lane_lifecycle(",
+        "Self::new_with_options_and_network(false, false, true, true, true)",
+        "Self::new_with_options_and_network(false, false, true, true, false)",
+    )
+    errors = support.validate_native_prepublication_fixture(
+        tmp_path, module, models
+    )
+    assert any(
+        "Native merge-manifest relation" in error
+        and "new_for_production_recovered_decision_apply_with_native_lane_lifecycle"
+        in error
+        for error in errors
+    ), errors
+
+    support.shutil.copy2(
+        support.ROOT_DIR
+        / "crates/iroha_core/src/sumeragi/tests/"
+        "v2_apply_unsealed_01c_historical_recovery.rs",
+        path,
+    )
+    support.replace_once_after(
+        path,
+        "historical_autonomous_recovery_reaches_exactly_once_canonical_merge_application",
+        "for _ in 0..4 {",
+        "for _ in 0..3 {",
+    )
+    errors = support.validate_native_prepublication_fixture(
+        tmp_path, module, models
+    )
+    assert any(
+        "Native corridor macro test" in error
+        and "for _ in 0..4" in error
+        for error in errors
+    ), errors
+
+    support.shutil.copy2(
+        support.ROOT_DIR
+        / "crates/iroha_core/src/sumeragi/tests/"
+        "v2_apply_unsealed_01c_historical_recovery.rs",
+        path,
+    )
+    support.replace_once_after(
+        path,
+        "historical_autonomous_recovery_reaches_exactly_once_canonical_merge_application",
         '"planned merge association authorizes exact Native startup repair"',
         '"startup repair no longer checks its planned merge association"',
     )

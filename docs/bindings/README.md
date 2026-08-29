@@ -16,7 +16,7 @@ gates (WP1-E/F/G) and the cross-SDK cadence council have a single reference.
   regeneration entry points.
 - **Canonical playbook:** `specs/norito_binding_regen_playbook.md` spells out
   the rotation policy, expected evidence, and the escalation workflow for Android,
-  Swift, Python, and future bindings.
+  Kotlin, Swift, Python, JavaScript, C#, and future bindings.
 - **Norito schema parity:** `scripts/check_norito_bindings_sync.py` (invoked via
   `scripts/check_norito_bindings_sync.sh` and gated in CI by
   `ci/check_norito_bindings_sync.sh`) blocks CI when the Rust, Java, Kotlin, or
@@ -31,11 +31,23 @@ gates (WP1-E/F/G) and the cross-SDK cadence council have a single reference.
 | Binding | Entry points | Fixture / regen command | Drift guards | Evidence |
 |---------|--------------|-------------------------|--------------|----------|
 | Android (Java) | `java/iroha_android/` (`java/iroha_android/README.md`) | Two-root owner procedure above → generated descriptor and `.norito` mirror | `scripts/check_android_fixtures.py`, `ci/check_android_fixtures.sh`, `java/iroha_android/gradlew :core:test` | `artifacts/android/fixture_runs/` |
+| Kotlin/JVM | `kotlin/core-jvm/` (`kotlin/README.md`) | Reads `fixtures/norito_rpc/` directly and shares its owner publication with the identical Java resource mirror | `kotlin/gradlew :core-jvm:test`, `norito-rpc-verify` | Two-root owner completion manifests |
 | Swift (iOS/macOS) | `IrohaSwift/` (`IrohaSwift/README.md`) | Two-root owner procedure above → descriptor-only mirror | `scripts/check_swift_fixtures.py`, `ci/check_swift_fixtures.sh` | `specs/swift_parity_triage.md`, `specs/sdk/swift/ios2_fixture_cadence_brief.md` |
 | Python | `python/iroha_python/` (`python/iroha_python/README.md`) | Two-root owner procedure above → descriptor-only mirror | `scripts/check_python_fixtures.py`, `python/iroha_python/scripts/run_checks.sh` | `specs/norito_binding_regen_playbook.md`, `specs/sdk/python/connect_end_to_end.md` |
 | JavaScript | `javascript/iroha_js/` (`specs/sdk/js/publishing.md`) | Reads `fixtures/norito_rpc/` directly; refresh with the two-root owner procedure above | `npm run test`, `javascript/iroha_js/scripts/verify-release-tarball.mjs`, `javascript/iroha_js/scripts/record-release-provenance.mjs` | `artifacts/js-sdk-provenance/`, `artifacts/js/npm_staging/`, `artifacts/js/verification/`, `artifacts/js/sbom/` |
+| C# | `csharp/` (`csharp/README.md`) | Links the canonical descriptors and all 27 `.norito` blobs directly from `fixtures/norito_rpc/` | `dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj`, `norito-rpc-verify` | Two-root owner completion manifests |
 
 ## Binding details
+
+### Kotlin/JVM
+Kotlin does not own a fixture mirror. `kotlin/core-jvm` resolves the canonical
+descriptors and all 27 `.norito` blobs from `fixtures/norito_rpc/` and validates
+them through `AndroidFixtureSupport`. The same two-root owner publication writes
+an identical descriptor-and-blob set under
+`java/iroha_android/src/test/resources/` for Java's classpath-based tests. That
+Java resource tree is a generated consumer, never an input to Kotlin or the
+owner generator. Rotate both consumers together and finish with
+`norito-rpc-verify`.
 
 ### Android (Java)
 The Android SDK lives under `java/iroha_android/`. Its files under
@@ -86,3 +98,14 @@ lands under `artifacts/js-sdk-provenance/`, `artifacts/js/npm_staging/`,
 `artifacts/js/sbom/`, and `artifacts/js/verification/`, providing deterministic
 evidence for roadmap JS5/JS6 and WP1-F benchmark runs. The publishing playbook in
 `specs/sdk/js/` ties the automation together.
+
+### C#
+The C# test project links `transaction_payloads.json`,
+`transaction_fixtures.manifest.json`, and all 27 manifest-addressed `.norito`
+blobs directly from `fixtures/norito_rpc/` into its build output. It also links
+the shared Kotodama argument-record fixture from `fixtures/kotodama/`; there is
+no C#-owned regeneration root or fixture copy. Its closed-schema parity suite
+opens every `encoded_file`, verifies the canonical Base64, lengths, hashes, and
+Norito frames, and sends the shared argument payload through the production
+contract-call boundary. Any rotation must come from the reviewed two-root owner
+publication and pass `norito-rpc-verify` before the C# suite consumes it.

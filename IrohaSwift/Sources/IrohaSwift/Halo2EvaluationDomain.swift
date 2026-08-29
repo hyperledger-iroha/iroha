@@ -2,6 +2,7 @@ import Foundation
 
 public enum Halo2EvaluationDomainError: Error, Equatable {
     case invalidK(UInt32)
+    case kExceedsMaximum(k: UInt32, maximum: UInt32)
     case invalidValueCount(expected: Int, actual: Int)
 }
 
@@ -12,9 +13,16 @@ public struct Halo2EvaluationDomain: Equatable, Sendable {
     public let omegaInv: PastaFp
     public let nInv: PastaFp
 
-    public init(k: UInt32) throws {
-        guard k <= UInt32(PastaFpParameters.twoAdicity) else {
+    public init(k: UInt32, maximumK: UInt32) throws {
+        let intrinsicMaximumK = UInt32(PastaFpParameters.twoAdicity)
+        guard maximumK <= intrinsicMaximumK else {
+            throw Halo2EvaluationDomainError.invalidK(maximumK)
+        }
+        guard k <= intrinsicMaximumK else {
             throw Halo2EvaluationDomainError.invalidK(k)
+        }
+        guard k <= maximumK else {
+            throw Halo2EvaluationDomainError.kExceedsMaximum(k: k, maximum: maximumK)
         }
         let n = 1 << Int(k)
         let exponent = UInt64(1) << UInt64(PastaFpParameters.twoAdicity - Int(k))
@@ -110,6 +118,8 @@ public struct Halo2EvaluationDomain: Equatable, Sendable {
 public enum Halo2ExtendedEvaluationDomainError: Error, Equatable {
     case invalidDegree(Int)
     case invalidK(UInt32)
+    case kExceedsMaximum(k: UInt32, maximum: UInt32)
+    case extendedKExceedsMaximum(required: UInt32, maximum: UInt32)
     case invalidValueCount(expected: Int, actual: Int)
     case nonInvertibleVanishingEvaluation
 }
@@ -132,20 +142,63 @@ public struct Halo2ExtendedEvaluationDomain: Equatable, Sendable {
     private let gCosetInv: PastaFp
     private let tEvaluationsInv: [PastaFp]
 
-    public init(degree: Int, k: UInt32) throws {
+    public init(
+        degree: Int,
+        k: UInt32,
+        maximumK: UInt32,
+        maximumExtendedK: UInt32
+    ) throws {
         guard degree >= 2 else {
             throw Halo2ExtendedEvaluationDomainError.invalidDegree(degree)
         }
-        guard k <= UInt32(PastaFpParameters.twoAdicity) else {
+        let intrinsicMaximumK = UInt32(PastaFpParameters.twoAdicity)
+        guard maximumK <= intrinsicMaximumK else {
+            throw Halo2ExtendedEvaluationDomainError.invalidK(maximumK)
+        }
+        guard maximumExtendedK <= intrinsicMaximumK else {
+            throw Halo2ExtendedEvaluationDomainError.invalidK(maximumExtendedK)
+        }
+        guard k <= intrinsicMaximumK else {
             throw Halo2ExtendedEvaluationDomainError.invalidK(k)
+        }
+        guard k <= maximumK else {
+            throw Halo2ExtendedEvaluationDomainError.kExceedsMaximum(k: k, maximum: maximumK)
+        }
+        guard k <= maximumExtendedK else {
+            throw Halo2ExtendedEvaluationDomainError.extendedKExceedsMaximum(
+                required: k,
+                maximum: maximumExtendedK
+            )
         }
         let n = 1 << Int(k)
         let quotientPolynomialDegree = degree - 1
-        var extendedK = k
-        while (1 << Int(extendedK)) < n * quotientPolynomialDegree {
-            extendedK += 1
+        let (minimumExtendedN, minimumExtendedNOverflow) =
+            n.multipliedReportingOverflow(by: quotientPolynomialDegree)
+        guard !minimumExtendedNOverflow else {
+            throw Halo2ExtendedEvaluationDomainError.invalidDegree(degree)
         }
-        guard extendedK <= UInt32(PastaFpParameters.twoAdicity) else {
+        var extendedK = k
+        var extendedN = n
+        while extendedN < minimumExtendedN {
+            guard extendedK < intrinsicMaximumK else {
+                throw Halo2ExtendedEvaluationDomainError.invalidK(k)
+            }
+            let requiredExtendedK = extendedK + 1
+            guard requiredExtendedK <= maximumExtendedK else {
+                throw Halo2ExtendedEvaluationDomainError.extendedKExceedsMaximum(
+                    required: requiredExtendedK,
+                    maximum: maximumExtendedK
+                )
+            }
+            let (doubledExtendedN, doubledExtendedNOverflow) =
+                extendedN.multipliedReportingOverflow(by: 2)
+            guard !doubledExtendedNOverflow else {
+                throw Halo2ExtendedEvaluationDomainError.invalidK(k)
+            }
+            extendedN = doubledExtendedN
+            extendedK = requiredExtendedK
+        }
+        guard extendedK <= intrinsicMaximumK else {
             throw Halo2ExtendedEvaluationDomainError.invalidK(k)
         }
 
@@ -163,7 +216,7 @@ public struct Halo2ExtendedEvaluationDomain: Equatable, Sendable {
         }
         guard let omegaInv = omega.inverted(),
               let nInv = PastaFp(UInt64(n)).inverted(),
-              let extendedNInv = PastaFp(UInt64(1 << Int(extendedK))).inverted() else {
+              let extendedNInv = PastaFp(UInt64(extendedN)).inverted() else {
             throw Halo2ExtendedEvaluationDomainError.invalidK(k)
         }
 
@@ -186,7 +239,7 @@ public struct Halo2ExtendedEvaluationDomain: Equatable, Sendable {
         self.degree = degree
         self.quotientPolynomialDegree = quotientPolynomialDegree
         self.extendedK = extendedK
-        self.extendedN = 1 << Int(extendedK)
+        self.extendedN = extendedN
         self.omega = omega
         self.omegaInv = omegaInv
         self.extendedOmega = extendedOmega
@@ -267,7 +320,7 @@ public struct Halo2ExtendedEvaluationDomain: Equatable, Sendable {
         if rotation >= 0 {
             return value * omega.powVartime([UInt64(rotation), 0, 0, 0])
         }
-        return value * omegaInv.powVartime([UInt64(-rotation), 0, 0, 0])
+        return value * omegaInv.powVartime([UInt64(rotation.magnitude), 0, 0, 0])
     }
 
     private func distributePowers(_ values: inout [PastaFp], by factor: PastaFp) {

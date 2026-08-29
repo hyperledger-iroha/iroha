@@ -112,11 +112,41 @@ SelectedBatchSize ==
   IF Mode = "OversizeSelectedQueuePlan" THEN 4097 ELSE 2
 
 PrefixThrough(prefix) ==
-  IF prefix = 0 THEN {} ELSE 1..prefix
+  {key \in 1..SelectedBatchSize : key <= prefix}
 
 CanonicalKeyPrefix(keys, bound) ==
   /\ keys \subseteq PrefixThrough(bound)
   /\ keys = PrefixThrough(Cardinality(keys))
+
+Configuration ==
+  /\ Mode \in Modes
+  /\ Cardinality(Validators) = 3
+  /\ Producer # ReplicaOne
+  /\ Producer # ReplicaTwo
+  /\ ReplicaOne # ReplicaTwo
+  /\ BindingA # BindingB
+
+VARIABLES
+  \* @type: Str -> Str;
+  ownership,
+  \* @type: Str -> Str;
+  payloadBinding,
+  \* @type: { plan: Str, selectedCount: Int, reservation: Str };
+  queue,
+  \* @type: { kuraActive: Set(Str), inputDurable: Set(Str), readyQcDurable: Bool };
+  carrier,
+  \* @type: { bodies: Set(Str), readyAuthorized: Set(Str), crashed: Set(Str), producerAlive: Bool };
+  session,
+  \* @type: { everQueuePlanV1: Bool, everReservationV1: Bool, everInputDurable: Set(Str), everReadyAuthorized: Set(Str), readySigned: Set(Str), everReadyQcDurable: Bool, reservationCommittedKeys: Set(Int), queuePlanTombstonedKeys: Set(Int), reservationCommitForgottenKeys: Set(Int), pendingHighWater: Int, releasedHighWater: Int };
+  history,
+  \* @type: { laneCommitScope: Str, releaseScope: Str, laneCommitOwner: Str, releaseOwner: Str, wsvCommitted: Bool, applicationCount: Int, appliedBy: Str };
+  decision,
+  \* @type: { kuraRetired: Bool, pendingPrefix: Int, releasedPrefix: Int, fifoRestored: Bool };
+  release
+
+vars ==
+  <<ownership, payloadBinding, queue, carrier, session, history, decision,
+    release>>
 
 CommitTerminal ==
   /\ queue.reservation = "CommitForgotten"
@@ -135,30 +165,6 @@ OrdinaryFifoTerminal ==
   \/ ReplicaQueueFifoPreservedTerminal
 
 ReleaseTerminal == OrdinaryFifoTerminal \/ ReplicaQueueAbsentTerminal
-
-Configuration ==
-  /\ Mode \in Modes
-  /\ Cardinality(Validators) = 3
-  /\ Producer # ReplicaOne
-  /\ Producer # ReplicaTwo
-  /\ ReplicaOne # ReplicaTwo
-  /\ BindingA # BindingB
-
-VARIABLES
-  \* @type: Str -> Str;
-  ownership,
-  \* @type: Str -> Str;
-  payloadBinding,
-  queue,
-  carrier,
-  session,
-  history,
-  decision,
-  release
-
-vars ==
-  <<ownership, payloadBinding, queue, carrier, session, history, decision,
-    release>>
 
 Init ==
   /\ Configuration

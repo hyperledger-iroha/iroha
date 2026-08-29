@@ -156,6 +156,7 @@ else
     tlv_validate
     kotodama_lower
     numeric_v1
+    artifact_admission_v1
   )
 fi
 for t in "${ivm_targets[@]}"; do

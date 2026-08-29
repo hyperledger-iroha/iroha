@@ -10,8 +10,6 @@ mod reputation_journal;
 mod reserve;
 mod runtime_governance_client_auth;
 use self::{blocks_api::AsyncBlockStream, events_api::AsyncEventStream};
-#[cfg(test)]
-use crate::data_model::transaction::TransactionEntrypoint;
 pub use crate::query::QueryError;
 use crate::{
     config::Config,
@@ -33,7 +31,8 @@ use crate::{
         },
         prelude::*,
         transaction::{
-            TransactionBuilder, TransactionSubmissionReceipt, error::TransactionRejectionReason,
+            TransactionBuilder, TransactionEntrypoint, TransactionSubmissionReceipt,
+            error::TransactionRejectionReason,
         },
     },
     http::{Method as HttpMethod, RequestBuilder, Response, StatusCode},
@@ -82,6 +81,7 @@ use iroha_data_model::{
         LaneLifecyclePlan, LaneLifecycleStatusV1, UniversalAccountId,
     },
     privacy::PrivacyExact12CapabilityManifestV1,
+    query::error::QueryExecutionFail,
     soracloud::{CANONICAL_REQUEST_WITNESS_VERSION_V1, CanonicalRequestWitnessV1},
     sorafs::orderbook_submission::{
         SorafsOrderbookSubmissionIdentityV1,
@@ -139,7 +139,8 @@ use iroha_torii_shared::{
     AccountOnboardingCurrentStateRequestV1, AccountOnboardingCurrentStateResponseV1,
     AccountReadResponse, ErrorEnvelope, FeeQuoteRequest, FeeQuoteResponse,
     FeeSponsorProgramByIdRequest, NORITO_V1_WEBSOCKET_SUBPROTOCOL,
-    PipelineTransactionStatusResponse, TriggerCompletionListResponse,
+    PipelineTransactionDetailsResponse, PipelineTransactionStatusResponse,
+    TriggerCompletionListResponse,
     offline_api::{
         OfflineOperationKind, OfflineOperationReference, OfflineOperationResult,
         OfflineOperationState, OfflineOperationStatus, OfflineRedeemRequest, OfflineStatus,
@@ -13053,6 +13054,39 @@ mod evidence_http_tests {
     fn transaction_hash(seed: u8) -> HashOf<SignedTransaction> {
         HashOf::from_untyped_unchecked(Hash::prehashed([seed; Hash::LENGTH]))
     }
+    fn committed_transaction_details_fixture(
+        client: &Client,
+        result: iroha_data_model::transaction::TransactionResult,
+    ) -> (SignedTransaction, PipelineTransactionDetailsResponse) {
+        use crate::crypto::MerkleProof;
+        use iroha_data_model::query::CommittedTransaction;
+        let signed = client.build_transaction(
+            Vec::<InstructionBox>::new(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            Metadata::default(),
+        );
+        let entrypoint = TransactionEntrypoint::External(signed.clone());
+        let entrypoint_hash = signed.hash_as_entrypoint();
+        assert_eq!(entrypoint.hash(), entrypoint_hash);
+        let transaction = CommittedTransaction {
+            block_hash: HashOf::from_untyped_unchecked(Hash::prehashed([0x77; Hash::LENGTH])),
+            entrypoint_hash,
+            entrypoint_proof: MerkleProof::from_audit_path(0, Vec::new()),
+            entrypoint,
+            result_hash: result.hash(),
+            result_proof: MerkleProof::from_audit_path(0, Vec::new()),
+            result,
+            merge_inclusion: None,
+        };
+        (
+            signed,
+            PipelineTransactionDetailsResponse {
+                hash: entrypoint_hash.to_string(),
+                transaction,
+                trigger_completions: Vec::new(),
+            },
+        )
+    }
     fn captured_pipeline_status(
         seed: u8,
         response: HttpResponse<Vec<u8>>,
@@ -13179,6 +13213,284 @@ mod evidence_http_tests {
         );
         assert_request_paths(&snapshots, &["/v1/pipeline/transactions/status"]);
         assert_status_scope(&snapshots[0], "global");
+    }
+    #[test]
+    fn state_rejection_recovers_exact_nested_reason_from_authenticated_details() {
+        use iroha_data_model::{
+            isi::error::{InstructionExecutionError, InvalidParameterError},
+            transaction::{TransactionResult, error::TransactionRejectionReason},
+        };
+        let client = client_with_base_url(base_url());
+        mark_data_model_compatible(&client);
+        let message =
+            "privacy activation at 306 is too early after height 7; earliest is 307".to_owned();
+        let rejection = TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                message.clone(),
+            )),
+        ));
+        let (transaction, details) = committed_transaction_details_fixture(
+            &client,
+            TransactionResult::new(Err(rejection.clone())),
+        );
+        let signed_hash = transaction.hash();
+        let entrypoint_hash = transaction.hash_as_entrypoint();
+        let status_response = pipeline_response(
+            &signed_hash.to_string(),
+            &norito::json!({ "kind": "Rejected", "block_height": 9 }),
+            "global",
+            "state",
+        );
+        let details_response = norito_response(StatusCode::OK, &details);
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let responder = {
+            let snapshots = Arc::clone(&snapshots);
+            move |snapshot: RequestSnapshot| {
+                let path = snapshot.url.path().to_owned();
+                snapshots.lock().expect("snapshot lock").push(snapshot);
+                match path.as_str() {
+                    "/v1/pipeline/transactions/status" => Ok(status_response.clone()),
+                    torii_uri::TRANSACTION_DETAILS => Ok(details_response.clone()),
+                    _ => panic!("unexpected rejection-details request path: {path}"),
+                }
+            }
+        };
+        let status = with_mock_http(responder, || {
+            client.transaction_confirmation_status_with_rejection_details(
+                signed_hash,
+                entrypoint_hash,
+            )
+        })
+        .expect("authoritative rejection status")
+        .expect("terminal rejection");
+        let TxConfirmationStatus::Rejected(Some(actual)) = status else {
+            panic!("expected detailed rejection status, got {status:?}");
+        };
+        assert_eq!(actual, rejection);
+        let report = tx_rejection_to_report(&actual);
+        assert!(
+            report
+                .chain()
+                .any(|cause| cause.to_string().contains(&message)),
+            "exact nested rejection was absent from error chain: {report:#}"
+        );
+        let snapshots = snapshots.lock().expect("snapshot lock");
+        assert_request_paths(
+            &snapshots,
+            &[
+                "/v1/pipeline/transactions/status",
+                torii_uri::TRANSACTION_DETAILS,
+            ],
+        );
+    }
+    #[test]
+    fn unauthorized_rejection_details_are_final() {
+        use iroha_data_model::{
+            isi::error::{InstructionExecutionError, InvalidParameterError},
+            transaction::{TransactionResult, error::TransactionRejectionReason},
+        };
+        let client = client_with_base_url(base_url());
+        mark_data_model_compatible(&client);
+        let rejection = TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                "private rejection".to_owned(),
+            )),
+        ));
+        let (transaction, _) =
+            committed_transaction_details_fixture(&client, TransactionResult::new(Err(rejection)));
+        let signed_hash = transaction.hash();
+        let entrypoint_hash = transaction.hash_as_entrypoint();
+        let status_response = pipeline_response(
+            &signed_hash.to_string(),
+            &norito::json!({ "kind": "Rejected", "block_height": 9 }),
+            "global",
+            "state",
+        );
+        let details_response = norito_response(
+            StatusCode::FORBIDDEN,
+            &ValidationFail::NotPermitted("private transaction details".to_owned()),
+        );
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let responder = {
+            let snapshots = Arc::clone(&snapshots);
+            move |snapshot: RequestSnapshot| {
+                let path = snapshot.url.path().to_owned();
+                snapshots.lock().expect("snapshot lock").push(snapshot);
+                match path.as_str() {
+                    "/v1/pipeline/transactions/status" => Ok(status_response.clone()),
+                    torii_uri::TRANSACTION_DETAILS => Ok(details_response.clone()),
+                    _ => panic!("unexpected rejection-details request path: {path}"),
+                }
+            }
+        };
+        let error = with_mock_http(responder, || {
+            client.transaction_confirmation_status_with_rejection_details(
+                signed_hash,
+                entrypoint_hash,
+            )
+        })
+        .expect_err("authenticated authorization failure must be final");
+        assert!(is_final_tx_confirmation_error(&error));
+        assert!(
+            error
+                .chain()
+                .any(|cause| cause.to_string().contains("private transaction details")),
+            "authenticated authorization reason was absent: {error:#}"
+        );
+        let snapshots = snapshots.lock().expect("snapshot lock");
+        assert_request_paths(
+            &snapshots,
+            &[
+                "/v1/pipeline/transactions/status",
+                torii_uri::TRANSACTION_DETAILS,
+            ],
+        );
+    }
+    #[test]
+    fn undecodable_rejection_details_error_remains_nonfinal() {
+        use iroha_data_model::transaction::{TransactionResult, error::TransactionRejectionReason};
+        let client = client_with_base_url(base_url());
+        mark_data_model_compatible(&client);
+        let rejection = TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
+            "private rejection".to_owned(),
+        ));
+        let (transaction, _) =
+            committed_transaction_details_fixture(&client, TransactionResult::new(Err(rejection)));
+        let signed_hash = transaction.hash();
+        let entrypoint_hash = transaction.hash_as_entrypoint();
+        let status_response = pipeline_response(
+            &signed_hash.to_string(),
+            &norito::json!({ "kind": "Rejected", "block_height": 9 }),
+            "global",
+            "state",
+        );
+        let responder = move |snapshot: RequestSnapshot| match snapshot.url.path() {
+            "/v1/pipeline/transactions/status" => Ok(status_response.clone()),
+            torii_uri::TRANSACTION_DETAILS => Ok(empty_response(StatusCode::FORBIDDEN)),
+            path => panic!("unexpected rejection-details request path: {path}"),
+        };
+        let error = with_mock_http(responder, || {
+            client.transaction_confirmation_status_with_rejection_details(
+                signed_hash,
+                entrypoint_hash,
+            )
+        })
+        .expect_err("undecodable details error must propagate");
+        assert!(
+            !is_final_tx_confirmation_error(&error),
+            "QueryError::Other must remain retryable: {error:#}"
+        );
+    }
+    #[test]
+    fn missing_rejection_details_retry_then_return_exact_details() {
+        use iroha_data_model::transaction::{TransactionResult, error::TransactionRejectionReason};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let client = client_with_base_url(base_url());
+        mark_data_model_compatible(&client);
+        let rejection = TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
+            "private rejection".to_owned(),
+        ));
+        let (transaction, details) = committed_transaction_details_fixture(
+            &client,
+            TransactionResult::new(Err(rejection.clone())),
+        );
+        let signed_hash = transaction.hash();
+        let entrypoint_hash = transaction.hash_as_entrypoint();
+        let status_response = pipeline_response(
+            &signed_hash.to_string(),
+            &norito::json!({ "kind": "Rejected", "block_height": 9 }),
+            "global",
+            "state",
+        );
+        let details_response = norito_response(StatusCode::OK, &details);
+        let detail_attempts = Arc::new(AtomicUsize::new(0));
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let responder = {
+            let snapshots = Arc::clone(&snapshots);
+            let detail_attempts = Arc::clone(&detail_attempts);
+            move |snapshot: RequestSnapshot| {
+                let path = snapshot.url.path().to_owned();
+                snapshots.lock().expect("snapshot lock").push(snapshot);
+                match path.as_str() {
+                    "/v1/pipeline/transactions/status" => Ok(status_response.clone()),
+                    torii_uri::TRANSACTION_DETAILS
+                        if detail_attempts.fetch_add(1, Ordering::SeqCst) == 0 =>
+                    {
+                        Ok(empty_response(StatusCode::NOT_FOUND))
+                    }
+                    torii_uri::TRANSACTION_DETAILS => Ok(details_response.clone()),
+                    _ => panic!("unexpected rejection-details request path: {path}"),
+                }
+            }
+        };
+        let (retryable, resolved) = with_mock_http(responder, || {
+            let retryable = client.transaction_confirmation_status_with_rejection_details(
+                signed_hash,
+                entrypoint_hash,
+            );
+            let resolved = client.transaction_confirmation_status_with_rejection_details(
+                signed_hash,
+                entrypoint_hash,
+            );
+            (retryable, resolved)
+        });
+        assert_eq!(
+            retryable.expect("not-found details lookup must remain retryable"),
+            None
+        );
+        assert_eq!(
+            resolved.expect("second authenticated lookup must resolve"),
+            Some(TxConfirmationStatus::Rejected(Some(rejection)))
+        );
+        assert_eq!(detail_attempts.load(Ordering::SeqCst), 2);
+        let snapshots = snapshots.lock().expect("snapshot lock");
+        assert_request_paths(
+            &snapshots,
+            &[
+                "/v1/pipeline/transactions/status",
+                torii_uri::TRANSACTION_DETAILS,
+                "/v1/pipeline/transactions/status",
+                torii_uri::TRANSACTION_DETAILS,
+            ],
+        );
+    }
+    #[test]
+    fn successful_authenticated_details_for_rejected_status_are_final() {
+        use iroha_data_model::transaction::{DataTriggerSequence, TransactionResult};
+        let client = client_with_base_url(base_url());
+        mark_data_model_compatible(&client);
+        let (transaction, details) = committed_transaction_details_fixture(
+            &client,
+            TransactionResult::new(Ok(DataTriggerSequence::default())),
+        );
+        let signed_hash = transaction.hash();
+        let entrypoint_hash = transaction.hash_as_entrypoint();
+        let status_response = pipeline_response(
+            &signed_hash.to_string(),
+            &norito::json!({ "kind": "Rejected", "block_height": 9 }),
+            "global",
+            "state",
+        );
+        let details_response = norito_response(StatusCode::OK, &details);
+        let responder = move |snapshot: RequestSnapshot| match snapshot.url.path() {
+            "/v1/pipeline/transactions/status" => Ok(status_response.clone()),
+            torii_uri::TRANSACTION_DETAILS => Ok(details_response.clone()),
+            path => panic!("unexpected rejection-details request path: {path}"),
+        };
+        let error = with_mock_http(responder, || {
+            client.transaction_confirmation_status_with_rejection_details(
+                signed_hash,
+                entrypoint_hash,
+            )
+        })
+        .expect_err("authenticated success contradicting rejected status must be final");
+        assert!(is_final_tx_confirmation_error(&error));
+        assert!(
+            error
+                .chain()
+                .any(|cause| cause.to_string().contains("successful transaction result")),
+            "authenticated inconsistency was absent: {error:#}"
+        );
     }
     #[test]
     fn pipeline_status_cached_failures_are_not_confirmation() {
@@ -15160,6 +15472,7 @@ impl Client {
         let (submit_result_sender, submit_result_receiver) =
             tokio::sync::oneshot::channel::<Result<(), eyre::Report>>();
         let hash = transaction.hash();
+        let entrypoint_hash = transaction.hash_as_entrypoint();
         tracing::debug!(%hash, ?transaction, "Submitting transaction");
         thread::scope(|spawner| {
             let submitter_handle = spawner.spawn(move || {
@@ -15169,8 +15482,12 @@ impl Client {
                 let result = self.submit_transaction(transaction).map(|_| ());
                 let _ = submit_result_sender.send(result);
             });
-            let confirmation_res =
-                self.listen_for_tx_confirmation(init_sender, submit_result_receiver, hash);
+            let confirmation_res = self.listen_for_tx_confirmation(
+                init_sender,
+                submit_result_receiver,
+                hash,
+                entrypoint_hash,
+            );
             match submitter_handle.join() {
                 Ok(()) => confirmation_res,
                 Err(_) => Err(eyre!("Transaction submitter thread panicked")),
@@ -15194,6 +15511,7 @@ impl Client {
         init_sender: tokio::sync::oneshot::Sender<bool>,
         submit_result_receiver: tokio::sync::oneshot::Receiver<Result<(), eyre::Report>>,
         hash: HashOf<SignedTransaction>,
+        entrypoint_hash: HashOf<TransactionEntrypoint>,
     ) -> Result<HashOf<SignedTransaction>> {
         debug!(
             %hash,
@@ -15257,7 +15575,12 @@ impl Client {
                                     max_queued_duration,
                                     poll_interval,
                                     submit_result_receiver.take(),
-                                    || client.transaction_confirmation_status(hash_for_check),
+                                    || {
+                                        client.transaction_confirmation_status_with_rejection_details(
+                                            hash_for_check,
+                                            entrypoint_hash,
+                                        )
+                                    },
                                 ),
                             )
                             .await
@@ -15271,7 +15594,12 @@ impl Client {
                                     max_queued_duration,
                                     poll_interval,
                                     submit_result_receiver.take(),
-                                    || client.transaction_confirmation_status(hash_for_check),
+                                    || {
+                                        client.transaction_confirmation_status_with_rejection_details(
+                                            hash_for_check,
+                                            entrypoint_hash,
+                                        )
+                                    },
                                 ),
                             )
                             .await
@@ -15307,7 +15635,12 @@ impl Client {
                                         "tx confirmation stream returned error; falling back to pipeline status query"
                                     );
                                     Self::resolve_global_status_fallback(
-                                        || client.transaction_confirmation_status(hash),
+                                        || {
+                                            client.transaction_confirmation_status_with_rejection_details(
+                                                hash,
+                                                entrypoint_hash,
+                                            )
+                                        },
                                         hash,
                                         Duration::from_millis(200),
                                         3,
@@ -15323,7 +15656,12 @@ impl Client {
                                     "tx confirmation timed out; falling back to pipeline status query"
                                 );
                                 Self::resolve_global_status_fallback(
-                                    || client.transaction_confirmation_status(hash),
+                                    || {
+                                        client.transaction_confirmation_status_with_rejection_details(
+                                            hash,
+                                            entrypoint_hash,
+                                        )
+                                    },
                                     hash,
                                     Duration::from_millis(200),
                                     3,
@@ -15501,6 +15839,48 @@ impl Client {
                 err
             }
         })
+    }
+    fn transaction_confirmation_status_with_rejection_details(
+        &self,
+        hash: HashOf<SignedTransaction>,
+        entrypoint_hash: HashOf<TransactionEntrypoint>,
+    ) -> Result<Option<TxConfirmationStatus>> {
+        let status = self.transaction_confirmation_status(hash)?;
+        if !matches!(&status, Some(TxConfirmationStatus::Rejected(None))) {
+            return Ok(status);
+        }
+
+        // The public status route intentionally carries no rejection payload. Resolve it through
+        // the signed, authority-checked details route without weakening that public contract.
+        let details = match self.get_transaction_details(entrypoint_hash) {
+            Ok(details) => details,
+            Err(QueryError::Validation(ValidationFail::QueryFailed(
+                QueryExecutionFail::NotFound | QueryExecutionFail::CapacityLimit,
+            ))) => {
+                debug!(
+                    %hash,
+                    %entrypoint_hash,
+                    "authenticated transaction rejection details are not yet available; retrying"
+                );
+                return Ok(None);
+            }
+            Err(error @ (QueryError::Validation(_) | QueryError::ResponseShape(_))) => {
+                return Err(tx_confirmation_final_report(eyre::Report::new(error)));
+            }
+            Err(QueryError::Other(error)) => return Err(error),
+        };
+        match rejection_reason_from_transaction_details(&details, hash, entrypoint_hash) {
+            Ok(reason) => Ok(Some(TxConfirmationStatus::Rejected(Some(reason)))),
+            Err(error) => {
+                warn!(
+                    %hash,
+                    %entrypoint_hash,
+                    ?error,
+                    "authenticated transaction rejection details were inconsistent"
+                );
+                Err(tx_confirmation_final_report(error))
+            }
+        }
     }
     fn transaction_pipeline_status(
         &self,
@@ -22432,6 +22812,41 @@ impl Client {
         Self::decode_json_http_status(resp, StatusCode::OK, "Failed to get VK with HTTP status")
     }
 }
+fn rejection_reason_from_transaction_details(
+    details: &PipelineTransactionDetailsResponse,
+    signed_hash: HashOf<SignedTransaction>,
+    entrypoint_hash: HashOf<TransactionEntrypoint>,
+) -> Result<TransactionRejectionReason> {
+    let transaction = &details.transaction;
+    if details.hash != entrypoint_hash.to_string()
+        || transaction.entrypoint_hash() != &entrypoint_hash
+        || transaction.entrypoint().hash() != entrypoint_hash
+        || transaction.result_hash() != &transaction.result().hash()
+    {
+        return Err(eyre!(
+            "transaction-details response does not match the requested entrypoint/result hash"
+        ));
+    }
+    let TransactionEntrypoint::External(committed) = transaction.entrypoint() else {
+        return Err(eyre!(
+            "transaction-details response is not for an external signed transaction"
+        ));
+    };
+    if committed.hash() != signed_hash {
+        return Err(eyre!(
+            "transaction-details response does not match the requested signed transaction hash"
+        ));
+    }
+    transaction
+        .result()
+        .0
+        .as_ref()
+        .err()
+        .cloned()
+        .ok_or_else(|| {
+            eyre!("transaction-details response contains a successful transaction result")
+        })
+}
 fn tx_confirmation_status_from_pipeline_response(
     payload: &PipelineTransactionStatusResponse,
 ) -> Option<TxConfirmationStatus> {
@@ -22626,6 +23041,9 @@ where
                     },
                     Ok(None) => {}
                     Err(err) => {
+                        if is_final_tx_confirmation_error(&err) {
+                            return Err(err);
+                        }
                         debug!(%hash, ?err, "pipeline status poll failed; retrying");
                     }
                 }
@@ -22719,6 +23137,9 @@ where
                                     },
                                     Ok(None) => {}
                                     Err(err) => {
+                                        if is_final_tx_confirmation_error(&err) {
+                                            return Some(Err(err));
+                                        }
                                         debug!(
                                             %hash,
                                             ?err,
@@ -22774,6 +23195,9 @@ where
                                                 );
                                             }
                                             Err(err) => {
+                                                if is_final_tx_confirmation_error(&err) {
+                                                    return Some(Err(err));
+                                                }
                                                 debug!(
                                                     %hash,
                                                     ?err,
@@ -23218,6 +23642,104 @@ mod tx_confirmation_stream_tests {
         )
         .await;
         assert!(closed);
+    }
+    #[tokio::test]
+    async fn final_status_error_propagates_from_periodic_poll() {
+        let hash: HashOf<SignedTransaction> =
+            HashOf::from_untyped_unchecked(Hash::prehashed([0x31; Hash::LENGTH]));
+        let mut events = stream::pending::<Result<EventBox, eyre::Report>>();
+        let error = tokio::time::timeout(
+            Duration::from_millis(50),
+            listen_for_tx_confirmation_stream_with_status_check(
+                &mut events,
+                hash,
+                Duration::from_secs(1),
+                Duration::from_millis(1),
+                None,
+                || {
+                    Err(super::tx_confirmation_final_report(eyre!(
+                        "final polling status error"
+                    )))
+                },
+            ),
+        )
+        .await
+        .expect("final polling error must stop the stream wait")
+        .expect_err("final polling error must propagate");
+        assert!(super::is_final_tx_confirmation_error(&error));
+        assert!(error.to_string().contains("final polling status error"));
+    }
+    #[tokio::test]
+    async fn final_status_error_propagates_from_uncorrelated_block_check() {
+        let hash: HashOf<SignedTransaction> =
+            HashOf::from_untyped_unchecked(Hash::prehashed([0x32; Hash::LENGTH]));
+        let height = std::num::NonZeroU64::new(8).expect("nonzero height");
+        let mut events = stream::iter([Ok::<_, eyre::Report>(block_event(
+            height,
+            BlockStatus::Committed,
+        ))]);
+        let error = tokio::time::timeout(
+            Duration::from_millis(50),
+            listen_for_tx_confirmation_stream_with_status_check(
+                &mut events,
+                hash,
+                Duration::from_secs(1),
+                Duration::from_secs(1),
+                None,
+                || {
+                    Err(super::tx_confirmation_final_report(eyre!(
+                        "final block-correlation status error"
+                    )))
+                },
+            ),
+        )
+        .await
+        .expect("uncorrelated-block branch must stop before the first poll")
+        .expect_err("final uncorrelated-block status error must propagate");
+        assert!(super::is_final_tx_confirmation_error(&error));
+        assert!(
+            error
+                .to_string()
+                .contains("final block-correlation status error")
+        );
+    }
+    #[tokio::test]
+    async fn final_status_error_propagates_from_applied_block_check() {
+        let hash: HashOf<SignedTransaction> =
+            HashOf::from_untyped_unchecked(Hash::prehashed([0x33; Hash::LENGTH]));
+        let height = std::num::NonZeroU64::new(9).expect("nonzero height");
+        let mut events = stream::iter([
+            Ok::<_, eyre::Report>(transaction_event(
+                hash,
+                Some(height),
+                TransactionStatus::Approved,
+            )),
+            Ok::<_, eyre::Report>(block_event(height, BlockStatus::Applied)),
+        ]);
+        let error = tokio::time::timeout(
+            Duration::from_millis(50),
+            listen_for_tx_confirmation_stream_with_status_check(
+                &mut events,
+                hash,
+                Duration::from_secs(1),
+                Duration::from_secs(1),
+                None,
+                || {
+                    Err(super::tx_confirmation_final_report(eyre!(
+                        "final applied-block status error"
+                    )))
+                },
+            ),
+        )
+        .await
+        .expect("applied-block branch must stop before the first poll")
+        .expect_err("final applied-block status error must propagate");
+        assert!(super::is_final_tx_confirmation_error(&error));
+        assert!(
+            error
+                .to_string()
+                .contains("final applied-block status error")
+        );
     }
     #[tokio::test]
     async fn queued_timeout_honors_max_duration() {
@@ -24199,10 +24721,7 @@ mod tests {
         fs,
         io::{Read, Write},
         net::TcpListener,
-        sync::{
-            Arc, Mutex,
-            atomic::{AtomicUsize, Ordering},
-        },
+        sync::{Arc, Mutex},
         time::{Duration, Instant},
     };
     use tempfile::tempdir;

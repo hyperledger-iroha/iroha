@@ -196,7 +196,7 @@ THEOREM CoreNextSerializedBusyActionClassification ==
        \/ CoreSerializedBusyOwnerRemovalAction
        \/ CoreSerializedBusyCrashAction
        \/ CoreSerializedBusyInstallAction
-BY DEF Next,
+BY DEF Next, ByzantineProposalJustificationDomain,
        CoreSerializedBusyExactFrameAction,
        CoreSerializedBusyEvidenceGrowthAction,
        CoreSerializedBusyOwnerCreationAction,
@@ -2949,7 +2949,7 @@ PROOF
       BY <2>8, Isa DEF AsyncByzantineTimeout
     <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>3c, <2>4, <2>5,
                 <2>6, <2>7, <2>8
-         DEF AsyncFaultStep
+         DEF AsyncFaultStep, ByzantineProposalJustificationDomain
   <1> QED BY <1>1
 
 THEOREM AsyncNonRunnerStepLeavesOutstandingTags ==

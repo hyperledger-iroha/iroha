@@ -394,7 +394,7 @@ The schema names and 16-byte schema hashes are:
 | `decimal` | `iroha.numeric.DecimalValueV1` | `ba2ffed52e4d8ee16f17efefe1828524` |
 | `quantity` | `iroha.numeric.QuantityValueV1` | `e4769984c81ce0e8b678f2eb06274ee3` |
 
-ABI V1 descriptor format 7 embeds numeric-semantics descriptor version 3 and
+ABI V1 descriptor format 8 embeds numeric-semantics descriptor version 3 and
 the bounded typed-private-input descriptor used by full-width numeric
 commitments. It binds all three value domains, exact-intermediate and
 result-validation rules,
@@ -526,12 +526,14 @@ ABI V1 contains the unconditional numeric syscall blocks:
 0x010140..0x01014f  quantity
 ```
 
-Typed exact-number JSON getters occupy `0x010160..0x010165`: `int`, `decimal`,
-and `quantity`, followed by their direct-pointer variants. They accept only a
-canonical base-10 JSON string. A JSON number token, exponent spelling, leading
-plus or zero, negative quantity, removable fractional zero, or out-of-domain
-string returns `Option::none`; it is never rounded or converted through a host
-floating-point type.
+Typed exact-number JSON getters occupy exactly `0x010160..0x010162`: `int`,
+`decimal`, and `quantity`. They accept only a canonical base-10 JSON string. A
+JSON number token, exponent spelling, leading plus or zero, negative quantity,
+removable fractional zero, or out-of-domain string returns `Option::none`; it
+is never rounded or converted through a host floating-point type. Numbers
+`0x010163..0x010165` are unassigned and return `UnknownSyscall` before syscall
+gas charging, allocation, or state mutation. Generic `JSON_SET_I64` remains a
+number-token constructor outside the exact-number surface.
 
 The detailed signatures live in `crates/ivm/spec/syscalls.toml`. The retired
 pre-release generic-`Numeric` and `Amount` syscall blocks are not in the V1

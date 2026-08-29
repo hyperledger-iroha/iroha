@@ -74,9 +74,9 @@ def _valid_cli_tail(tmp_path: Path) -> list[str]:
         "--cargo-target-dir",
         str(target),
         "--cargo-lock-size",
-        "311172",
+        "311234",
         "--cargo-lock-sha256",
-        "c90b3659d6cb44cd1d6f9e75e7b98aacc0d30bbe23041d4e6e109e8a206fa76b",
+        "d5b8bf5efbdc3ce2a8b1c0d2d75e1c5d1a343a072f836cfb76205bc6ea4cf15f",
     ]
 
 
@@ -123,7 +123,7 @@ def test_stage_snapshot_rejects_missing_extra_symlink_and_hardlink(tmp_path: Pat
     root.mkdir(mode=0o700)
     _write_dummy_stage(root, "iroha3-dev")
     baseline = MODULE._snapshot(root, "iroha3-dev", closed_stage=True)
-    assert len(baseline) == 15
+    assert len(baseline) == 11
 
     extra = root / "defaults" / "kagami" / "iroha3-dev" / "extra"
     extra.write_bytes(b"extra")
@@ -238,7 +238,7 @@ def test_post_manifest_has_only_the_dev_profile_owner() -> None:
     }
     assert set(owners) == {"kagami-iroha3-dev-profile-bundle"}
     dev = set(owners["kagami-iroha3-dev-profile-bundle"]["outputs"])
-    assert len(dev) == 15
+    assert len(dev) == 11
     assert all("iroha3-taira" not in output and "iroha3-nexus" not in output for output in dev)
     for owner in owners.values():
         assert "Cargo.lock" in owner["inputs"]
@@ -246,7 +246,7 @@ def test_post_manifest_has_only_the_dev_profile_owner() -> None:
         assert "--write" in owner["generator"]
         assert "--check" in owner["check"]
         assert "--stage-a" in owner["check"] and "--stage-b" in owner["check"]
-        assert "--cargo-lock-size 311172" in owner["generator"]
-        assert "c90b3659d6cb44cd1d6f9e75e7b98aacc0d30bbe23041d4e6e109e8a206fa76b" in owner["generator"]
-        assert "--cargo-lock-size 311172" in owner["check"]
-        assert "c90b3659d6cb44cd1d6f9e75e7b98aacc0d30bbe23041d4e6e109e8a206fa76b" in owner["check"]
+        assert "--cargo-lock-size 311234" in owner["generator"]
+        assert "d5b8bf5efbdc3ce2a8b1c0d2d75e1c5d1a343a072f836cfb76205bc6ea4cf15f" in owner["generator"]
+        assert "--cargo-lock-size 311234" in owner["check"]
+        assert "d5b8bf5efbdc3ce2a8b1c0d2d75e1c5d1a343a072f836cfb76205bc6ea4cf15f" in owner["check"]

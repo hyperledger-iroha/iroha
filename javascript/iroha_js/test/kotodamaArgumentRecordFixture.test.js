@@ -2,8 +2,9 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
-import { ToriiClient } from "../src/toriiClient.js";
-import { blake2b256 } from "../src/blake2b.js";
+import { contractPayloadDigestHex } from "../src/contractPayload.js";
+import { NetworkId } from "../src/networkId.js";
+import { LocalSigningContext, ToriiClient } from "../src/toriiClient.js";
 
 const fixture = JSON.parse(
   readFileSync(
@@ -20,40 +21,44 @@ test("contract call preserves the shared Rust argument-record fixture at the Tor
 
   let submittedBody;
   const boundary = fixture.torii_boundary;
-  const transactionPayload = Buffer.from([1]);
-  const signingMessage = Buffer.from(blake2b256(transactionPayload));
-  signingMessage[signingMessage.length - 1] |= 1;
+  assert.equal(typeof boundary.payload.exact_int, "string");
+  assert.equal(
+    boundary.payload.exact_int,
+    "1606938044258990275541962092341162602522202993782792835301376",
+  );
+  assert.equal(typeof boundary.payload.exact_decimal, "string");
+  assert.equal(boundary.payload.exact_decimal, "-12345678901234567890.125");
+  assert.equal(typeof boundary.payload.exact_quantity, "string");
+  assert.equal(
+    boundary.payload.exact_quantity,
+    "12345678901234567890.0000000000000000000000000001",
+  );
   const fetchImpl = async (_url, init) => {
     submittedBody = JSON.parse(init.body);
-    return new Response(
-      JSON.stringify({
-        ok: true,
-        submitted: false,
-        dataspace: "universal",
-        code_hash_hex: "11".repeat(32),
-        abi_hash_hex: "22".repeat(32),
-        creation_time_ms: 1,
-        entrypoint: boundary.entrypoint,
-        transaction_payload_b64: transactionPayload.toString("base64"),
-        signing_message_b64: signingMessage.toString("base64"),
-        operation_receipt: {
-          operation_kind: "contract_call",
-          status: "pending_signature",
-          transport: "torii",
-          dataspace: "universal",
-          contract_alias: boundary.contract_alias,
-          entrypoint: boundary.entrypoint,
-          gas_limit: boundary.fee_payment.value.gas_limit,
-          fee_payment: boundary.fee_payment,
-          payload_digest_hex: "33".repeat(32),
-        },
-      }),
-      { status: 200, headers: { "content-type": "application/json" } },
-    );
+    return new Response("fixture boundary reached", { status: 503 });
   };
-  const client = new ToriiClient("https://fixture.invalid", { fetchImpl });
+  const networkId = NetworkId.parse(
+    "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+  );
+  const client = new ToriiClient("https://fixture.invalid", {
+    fetchImpl,
+    localSigningContext: new LocalSigningContext(networkId),
+  });
 
-  await client.prepareContractCall(boundary);
+  await assert.rejects(
+    client.prepareContractCall({
+      ...boundary,
+      draftIntent: {
+        executableB64: "AQ==",
+        metadataB64: "AA==",
+        contractAddress:
+          "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
+        codeHashHex: "11".repeat(32),
+        payloadDigestHex: contractPayloadDigestHex(boundary.payload),
+      },
+    }),
+    /503/u,
+  );
 
   assert.deepEqual(submittedBody, {
     authority: boundary.authority,

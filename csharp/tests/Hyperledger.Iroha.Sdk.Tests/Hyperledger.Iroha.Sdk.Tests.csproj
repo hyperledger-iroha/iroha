@@ -29,6 +29,8 @@
     <None Include="../../../IrohaSwift/Fixtures/swift_*.norito" Link="Fixtures/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../../fixtures/norito_rpc/transaction_fixtures.manifest.json" Link="Fixtures/norito_rpc/transaction_fixtures.manifest.json" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../../fixtures/norito_rpc/transaction_payloads.json" Link="Fixtures/norito_rpc/transaction_payloads.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../../fixtures/norito_rpc/*.norito" Link="Fixtures/norito_rpc/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../../fixtures/kotodama/entrypoint_argument_record_v1.json" Link="Fixtures/kotodama/entrypoint_argument_record_v1.json" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../../fixtures/sccp/native_transfer_event_v1.json" Link="Fixtures/sccp/native_transfer_event_v1.json" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../../fixtures/sccp/replay_forest_v1.json" Link="Fixtures/sccp/replay_forest_v1.json" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../../fixtures/norito_rpc/alias_setup_v1/alias_setup_v1.json" Link="Fixtures/alias_setup_v1.json" CopyToOutputDirectory="PreserveNewest" />

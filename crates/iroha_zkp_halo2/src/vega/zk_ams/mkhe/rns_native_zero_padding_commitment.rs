@@ -1143,5 +1143,33 @@ fn encode_test_proof_v1(
 }
 
 #[cfg(test)]
+pub(super) fn deterministic_zero_padding_stage_fixture_v1(
+    build_transcript: impl Fn([u8; DIGEST_BYTES_V1]) -> ZkAmsMkheRnsNativeChallengeSeedsV1,
+) -> Result<
+    (
+        [u8; DIGEST_BYTES_V1],
+        [[u8; DIGEST_BYTES_V1]; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1],
+        Vec<u8>,
+    ),
+    RnsNativeZeroPaddingCommitmentErrorV1,
+> {
+    let (commitments, blindings) = deterministic_test_commitments_v1();
+    let mut commitment_bytes = Vec::with_capacity(COMMITMENTS_BYTES_V1);
+    for point in &commitments {
+        commitment_bytes.extend_from_slice(
+            &point
+                .to_non_identity_wire_bytes()
+                .map_err(|_| RnsNativeZeroPaddingCommitmentErrorV1::InvalidPoint)?,
+        );
+    }
+    let limb_digests = limb_digests_v1(&commitment_bytes)?;
+    let provisional_transcript = build_transcript([0xa5; DIGEST_BYTES_V1]);
+    let root = padding_root_v1(&provisional_transcript, &limb_digests)?;
+    let transcript = build_transcript(root);
+    let encoded = encode_test_proof_v1(&transcript, &commitments, &blindings)?;
+    Ok((root, encoded.limb_digests, encoded.bytes))
+}
+
+#[cfg(test)]
 #[path = "rns_native_zero_padding_commitment_tests.rs"]
 mod tests;

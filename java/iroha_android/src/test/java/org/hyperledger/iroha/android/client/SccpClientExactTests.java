@@ -27,6 +27,7 @@ import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 import org.hyperledger.iroha.android.sccp.SccpLaneIdV1;
 import org.hyperledger.iroha.android.sccp.SccpNetworkV1;
+import org.hyperledger.iroha.android.sccp.SccpReplayV1;
 import org.hyperledger.iroha.android.sccp.SccpV1;
 import org.hyperledger.iroha.android.testing.TestEd25519Keys;
 import org.hyperledger.iroha.norito.CRC64;
@@ -93,6 +94,30 @@ public final class SccpClientExactTests {
         Set.of("authority", "fee_payment", "native_proof_b64", "replay_witness_b64"));
     HttpClientTransport.preflightSccpBridgeSubmitJson(
         message.toJsonBytes(), "/v1/bridge/messages");
+    expectFailure(
+        () ->
+            new SccpNativeMessageSubmitRequest(
+                AUTHORITY,
+                nativeArtifact,
+                Base64.getEncoder()
+                    .encodeToString(
+                        canonicalReplayWitnessBytes(
+                            fill(32, 1), new byte[32], Collections.emptyList())),
+                BRIDGE_FEE_PAYMENT));
+    final byte[] defaultBitmap = new byte[32];
+    defaultBitmap[31] = 1;
+    expectFailure(
+        () ->
+            new SccpNativeMessageSubmitRequest(
+                AUTHORITY,
+                nativeArtifact,
+                Base64.getEncoder()
+                    .encodeToString(
+                        canonicalReplayWitnessBytes(
+                            new byte[32],
+                            defaultBitmap,
+                            List.of(SccpReplayV1.emptyHashes().get(0)))),
+                BRIDGE_FEE_PAYMENT));
 
     final byte[] transactionBytes;
     try {
@@ -138,35 +163,16 @@ public final class SccpClientExactTests {
                 Base64.getEncoder().encodeToString(gasBoundTransaction),
                 7L));
     final String signature = Base64.getEncoder().encodeToString(fill(64, 1));
-    final String genericSignature = Base64.getEncoder().encodeToString(fill(65, 1));
-    assert SccpSubmitEncoding.normalizeOptionalSignature(genericSignature).equals(genericSignature);
-    final SccpDestinationProofSubmitRequest signed =
-        destinationRequest(
-            AUTHORITY, artifact, signature, transaction, 7L);
-    assert signed.toJsonMap().keySet().equals(
-        Set.of(
-            "authority",
-            "fee_payment",
-            "destination_proof_b64",
-            "signature_b64",
-            "transaction_payload_b64",
-            "creation_time_ms"));
-    HttpClientTransport.preflightSccpBridgeSubmitJson(
-        signed.toJsonBytes(), "/v1/bridge/proofs/submit");
-    final SccpNativeMessageSubmitRequest signedMessage =
-        messageRequest(
-            AUTHORITY, nativeArtifact, signature, transaction, 7L);
-    assert signedMessage.toJsonMap().keySet().equals(
-        Set.of(
-            "authority",
-            "fee_payment",
-            "native_proof_b64",
-            "replay_witness_b64",
-            "signature_b64",
-            "transaction_payload_b64",
-            "creation_time_ms"));
-    HttpClientTransport.preflightSccpBridgeSubmitJson(
-        signedMessage.toJsonBytes(), "/v1/bridge/messages");
+    expectFailure(() -> destinationRequest(AUTHORITY, artifact, signature, transaction, 7L));
+    expectFailure(() -> messageRequest(AUTHORITY, nativeArtifact, signature, transaction, 7L));
+    final Map<String, Object> retiredSignedFields = new LinkedHashMap<>(proof.toJsonMap());
+    retiredSignedFields.put("signature_b64", signature);
+    retiredSignedFields.put("transaction_payload_b64", transaction);
+    retiredSignedFields.put("creation_time_ms", 7);
+    expectFailure(
+        () ->
+            HttpClientTransport.preflightSccpBridgeSubmitJson(
+                jsonBytes(retiredSignedFields), "/v1/bridge/proofs/submit"));
     final String ordinaryTransaction;
     try {
       final NoritoJavaCodecAdapter codec =
@@ -284,64 +290,6 @@ public final class SccpClientExactTests {
     assert Arrays.equals(codec.encodeTransaction(decoded), encoded);
     assert program.literal().equals(selector);
 
-    final String signature = Base64.getEncoder().encodeToString(fill(64, 1));
-    final String transaction = Base64.getEncoder().encodeToString(encoded);
-    final SccpDestinationProofSubmitRequest request =
-        new SccpDestinationProofSubmitRequest(
-            AUTHORITY,
-            canonicalArtifact(),
-            expectedFeePayment,
-            signature,
-            transaction,
-            7L);
-    assert ((FeePaymentIntent.Sponsor) request.feePayment()).programId().literal()
-        .equals(selector);
-    new SccpNativeMessageSubmitRequest(
-        AUTHORITY,
-        canonicalNativeArtifact(),
-        canonicalReplayWitnessArtifact(),
-        expectedFeePayment,
-        signature,
-        transaction,
-        7L);
-
-    final List<FeePaymentIntent> mutations =
-        List.of(
-            FeePaymentIntent.sponsor(
-                new FeeSponsorProgramId(OTHER_AUTHORITY, "cbsi_web"),
-                1L,
-                Collections.emptyList(),
-                9L),
-            FeePaymentIntent.sponsor(
-                new FeeSponsorProgramId(program.sponsor(), "cbsi_fx"),
-                1L,
-                Collections.emptyList(),
-                9L),
-            FeePaymentIntent.sponsor(program, 2L, Collections.emptyList(), 9L),
-            FeePaymentIntent.sponsor(program, 1L, Collections.emptyList(), 10L),
-            FeePaymentIntent.authority(Collections.emptyList(), 9L));
-    for (final FeePaymentIntent mutation : mutations) {
-      final byte[] mutationBytes =
-          codec.encodeTransaction(
-              TransactionPayload.builder()
-                  .setNetworkId(
-                      org.hyperledger.iroha.android.testing.TestNetworkIds.canonical())
-                  .setAuthority(AUTHORITY)
-                  .setCreationTimeMs(7L)
-                  .setInstructions(Collections.emptyList())
-                  .setFeePayment(mutation)
-                  .setAdmissionIntent(TransactionAdmissionIntent.QUEUE_PLAN_SYNCED)
-                  .build());
-      expectFailure(
-          () ->
-              new SccpDestinationProofSubmitRequest(
-                  AUTHORITY,
-                  canonicalArtifact(),
-                  expectedFeePayment,
-                  signature,
-                  Base64.getEncoder().encodeToString(mutationBytes),
-                  7L));
-    }
     expectFailure(() -> new FeeSponsorProgramId(program.sponsor(), "cbsi_e\u0301"));
   }
 
@@ -1514,11 +1462,11 @@ public final class SccpClientExactTests {
 
     final Map<String, Object> tronProjection = recent(9, MESSAGE_ID);
     tronProjection.put("target_profile", "tron-mainnet");
-    tronProjection.put("target_domain", 5);
+    tronProjection.put("target_domain", 3);
     tronProjection.put("route_id", "taira_tron_xor");
     final Map<String, Object> tronTransfer =
         object(object(tronProjection.get("payload_projection")).get("Transfer"));
-    tronTransfer.put("dest_domain", 5);
+    tronTransfer.put("dest_domain", 3);
     tronTransfer.put(
         "recipient",
         Map.of("TronAddress21", Map.of("bytes", "0x41" + "11".repeat(20))));
@@ -1550,11 +1498,11 @@ public final class SccpClientExactTests {
                 jsonBytes(Map.of("items", List.of(wrongProjectionRoute)))));
     final Map<String, Object> zeroTronRecipient = recent(9, MESSAGE_ID);
     zeroTronRecipient.put("target_profile", "tron-mainnet");
-    zeroTronRecipient.put("target_domain", 5);
+    zeroTronRecipient.put("target_domain", 3);
     zeroTronRecipient.put("route_id", "taira_tron_xor");
     final Map<String, Object> zeroTronTransfer =
         object(object(zeroTronRecipient.get("payload_projection")).get("Transfer"));
-    zeroTronTransfer.put("dest_domain", 5);
+    zeroTronTransfer.put("dest_domain", 3);
     zeroTronTransfer.put(
         "recipient",
         Map.of("TronAddress21", Map.of("bytes", "0x41" + "00".repeat(20))));
@@ -2585,14 +2533,14 @@ public final class SccpClientExactTests {
     transfer.put("nonce", "7");
     transfer.put("route_revision", 1);
     transfer.put("asset_home_domain", 0);
-    transfer.put("asset_id_codec", 1);
+    transfer.put("asset_id_codec", 0);
     transfer.put("asset_id", "0x786f72");
     transfer.put("amount", "1000");
-    transfer.put("sender_codec", 1);
+    transfer.put("sender_codec", 0);
     transfer.put("sender", "0x616c696365407461697261");
-    transfer.put("recipient_codec", 2);
+    transfer.put("recipient_codec", 1);
     transfer.put("recipient", "0x" + hash(0x11).substring(0, 40));
-    transfer.put("route_id_codec", 1);
+    transfer.put("route_id_codec", 0);
     transfer.put("route_id", "0x74616972615f6273635f786f72");
     return transfer;
   }
@@ -2716,8 +2664,32 @@ public final class SccpClientExactTests {
 
   private static String canonicalReplayWitnessArtifact() {
     return Base64.getEncoder()
-        .encodeToString(
-            canonicalArtifactBytes(SccpSubmitEncoding.REPLAY_WITNESS_SCHEMA_NAME, 0));
+        .encodeToString(canonicalReplayWitnessBytes(new byte[32], new byte[32], List.of()));
+  }
+
+  private static byte[] canonicalReplayWitnessBytes(
+      final byte[] priorRecordDigest,
+      final byte[] siblingBitmap,
+      final List<byte[]> siblings) {
+    final ByteArrayOutputStream siblingSequence = new ByteArrayOutputStream();
+    writeU64(siblingSequence, siblings.size());
+    for (final byte[] sibling : siblings) writeCompactField(siblingSequence, sibling);
+    final ByteArrayOutputStream payload = new ByteArrayOutputStream();
+    writeCompactField(payload, SccpReplayV1.emptyHashes().get(SccpReplayV1.DEPTH));
+    writeCompactField(payload, priorRecordDigest);
+    writeCompactField(payload, siblingBitmap);
+    writeCompactField(payload, siblingSequence.toByteArray());
+    final byte[] body = payload.toByteArray();
+    final NoritoHeader header =
+        new NoritoHeader(
+            SchemaHash.hash16(SccpSubmitEncoding.REPLAY_WITNESS_SCHEMA_NAME),
+            body.length,
+            CRC64.compute(body),
+            NoritoHeader.COMPACT_LEN,
+            NoritoHeader.COMPRESSION_NONE);
+    final byte[] result = Arrays.copyOf(header.encode(), NoritoHeader.HEADER_LENGTH + body.length);
+    System.arraycopy(body, 0, result, NoritoHeader.HEADER_LENGTH, body.length);
+    return result;
   }
 
   private static byte[] canonicalArtifactBytes(
@@ -2860,6 +2832,18 @@ public final class SccpClientExactTests {
     for (int shift = 0; shift < 8; shift++) out.write((int) ((value >>> (shift * 8)) & 0xff));
   }
 
+  private static void writeCompactField(
+      final ByteArrayOutputStream out, final byte[] value) {
+    int remaining = value.length;
+    do {
+      int next = remaining & 0x7f;
+      remaining >>>= 7;
+      if (remaining != 0) next |= 0x80;
+      out.write(next);
+    } while (remaining != 0);
+    out.write(value, 0, value.length);
+  }
+
   private static void writeU128(final ByteArrayOutputStream out, final BigInteger value) {
     for (int shift = 0; shift < 16; shift++) {
       out.write(value.shiftRight(shift * 8).and(BigInteger.valueOf(0xff)).intValue());
@@ -2926,13 +2910,14 @@ public final class SccpClientExactTests {
       final String signatureB64,
       final String transactionPayloadB64,
       final Long creationTimeMs) {
+    if (signatureB64 != null || transactionPayloadB64 != null || creationTimeMs != null) {
+      throw new IllegalArgumentException(
+          "signed SCCP request fields are not part of the first-release SDK surface");
+    }
     return new SccpDestinationProofSubmitRequest(
         authority,
         destinationProofB64,
-        BRIDGE_FEE_PAYMENT,
-        signatureB64,
-        transactionPayloadB64,
-        creationTimeMs);
+        BRIDGE_FEE_PAYMENT);
   }
 
   private static SccpNativeMessageSubmitRequest messageRequest(
@@ -2946,14 +2931,15 @@ public final class SccpClientExactTests {
       final String signatureB64,
       final String transactionPayloadB64,
       final Long creationTimeMs) {
+    if (signatureB64 != null || transactionPayloadB64 != null || creationTimeMs != null) {
+      throw new IllegalArgumentException(
+          "signed SCCP request fields are not part of the first-release SDK surface");
+    }
     return new SccpNativeMessageSubmitRequest(
         authority,
         nativeProofB64,
         canonicalReplayWitnessArtifact(),
-        BRIDGE_FEE_PAYMENT,
-        signatureB64,
-        transactionPayloadB64,
-        creationTimeMs);
+        BRIDGE_FEE_PAYMENT);
   }
 
   private static final class SccpSubmitExecutor implements HttpTransportExecutor {

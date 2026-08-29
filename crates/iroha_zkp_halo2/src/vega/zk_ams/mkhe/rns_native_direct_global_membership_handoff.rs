@@ -25,6 +25,8 @@
 use core::fmt;
 
 use super::{
+    collective::RnsNativeQpcsCompositeAuthorityV2,
+    rns_native_composite_verifier::RnsNativeCrossFieldRlweCompositeInputV2,
     rns_native_cross_field_rlwe_direct::{
         RnsNativeCrossFieldRlweAllRootsVerifiedV2, RnsNativeCrossFieldRlweDirectErrorV1,
         RnsNativeCrossFieldRlweSafeCoreProjectionV1,
@@ -46,7 +48,8 @@ use super::{
         RnsNativeSignedSourceRoleV1, RnsNativeSourcePackingAggregateReplayV1,
         RnsNativeSourcePackingAuthenticatedSourceAxesV1,
         RnsNativeSourcePackingCombinedDirectMembershipPredecessorV1,
-        RnsNativeSourcePackingCombinedOuterBindingsV1,
+        RnsNativeSourcePackingCombinedOuterBindingsV1, RnsNativeSourcePackingCompositeAuthorityV2,
+        RnsNativeSourcePackingCompositeTransitionV2,
         RnsNativeSourcePackingOwnedReplayPredecessorV2, RnsNativeSourcePackingReplayReceiptV1,
         RnsNativeSourcePackingSafeCoreV1, RnsNativeSourcePackingSameOpeningContextV1,
         RnsNativeSourcePackingSameOpeningErrorV1, SIGNED_BLOCKS_PER_PLANE_V1, SIGNED_OWNERS_V1,
@@ -55,6 +58,7 @@ use super::{
         difference_scalar_from_be_bytes_v1, difference_source_index_v1,
         signed_scalar_from_twos_complement_be_i64_v1, signed_source_index_v1,
     },
+    rns_native_wire::ZkAmsMkheRnsNativeProofEnvelopeV1,
 };
 
 use crate::vega::{
@@ -117,6 +121,38 @@ impl From<RnsNativeCrossFieldRlweDirectErrorV1> for RnsNativeDirectGlobalMembers
     }
 }
 
+/// Failure while consuming the completed handoff into the final composite
+/// context.  Earlier root-recovery failures cannot inhabit this transition.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum RnsNativeDirectGlobalMembershipCompositeTransitionErrorV2 {
+    SourcePacking(RnsNativeSourcePackingSameOpeningErrorV1),
+    CompositeContext(RnsNativeCrossFieldRlweDirectErrorV1),
+}
+
+impl fmt::Display for RnsNativeDirectGlobalMembershipCompositeTransitionErrorV2 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{self:?}")
+    }
+}
+
+impl std::error::Error for RnsNativeDirectGlobalMembershipCompositeTransitionErrorV2 {}
+
+impl From<RnsNativeSourcePackingSameOpeningErrorV1>
+    for RnsNativeDirectGlobalMembershipCompositeTransitionErrorV2
+{
+    fn from(error: RnsNativeSourcePackingSameOpeningErrorV1) -> Self {
+        Self::SourcePacking(error)
+    }
+}
+
+impl From<RnsNativeCrossFieldRlweDirectErrorV1>
+    for RnsNativeDirectGlobalMembershipCompositeTransitionErrorV2
+{
+    fn from(error: RnsNativeCrossFieldRlweDirectErrorV1) -> Self {
+        Self::CompositeContext(error)
+    }
+}
+
 fn source_packing_safe_core_v1(
     projection: RnsNativeCrossFieldRlweSafeCoreProjectionV1,
 ) -> RnsNativeSourcePackingSafeCoreV1 {
@@ -170,6 +206,34 @@ impl<'source, 'proof, S: ZkAmsMkheRnsNativeSourceSnapshotV1>
 
     fn combined_outer_bindings_v1(&self) -> RnsNativeSourcePackingCombinedOuterBindingsV1 {
         self.outer_bindings
+    }
+}
+
+impl<'source, 'proof, 'envelope, S: ZkAmsMkheRnsNativeSourceSnapshotV1>
+    RnsNativeSourcePackingCompositeTransitionV2<'proof, 'envelope>
+    for RnsNativeDirectGlobalMembershipHandoffV1<'source, 'proof, S>
+{
+    type CompositeInput = RnsNativeCrossFieldRlweCompositeInputV2<'source, 'proof, 'envelope, S>;
+    type Error = RnsNativeDirectGlobalMembershipCompositeTransitionErrorV2;
+
+    fn consume_source_packing_for_composite_v2(
+        self,
+        source_packing_authority: RnsNativeSourcePackingCompositeAuthorityV2<'envelope>,
+        qpcs_authority: RnsNativeQpcsCompositeAuthorityV2<'envelope>,
+        envelope: &'envelope ZkAmsMkheRnsNativeProofEnvelopeV1,
+    ) -> Result<Self::CompositeInput, Self::Error> {
+        source_packing_authority
+            .validate_predecessor_v2(self.safe_core, self.outer_bindings)
+            .map_err(RnsNativeDirectGlobalMembershipCompositeTransitionErrorV2::from)?;
+        let Self {
+            _atomic_direct,
+            membership_residual: _,
+            safe_core: _,
+            outer_bindings: _,
+        } = self;
+        _atomic_direct
+            .into_composite_context_v2(envelope, source_packing_authority, qpcs_authority)
+            .map_err(RnsNativeDirectGlobalMembershipCompositeTransitionErrorV2::from)
     }
 }
 

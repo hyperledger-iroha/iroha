@@ -30,6 +30,7 @@ import {
   normalizeSccpSoraOutboundMaterial,
   parseSccpBridgeSubmitResponseJson,
   parseSccpJsonObject,
+  sccpReplayEmptyHashesV1,
   sccpSourceEventDigest,
 } from "../src/sccp.js";
 import { ToriiClient } from "../src/toriiClient.js";
@@ -372,8 +373,117 @@ function nativeProofB64(options) {
   return b64(sccpNoritoFrame(NATIVE_MESSAGE_PROOF_NORITO_TYPE, options));
 }
 
-function replayWitnessB64(options) {
-  return b64(sccpNoritoFrame(REPLAY_WITNESS_NORITO_TYPE, options));
+function compactLength(value) {
+  let remaining = BigInt(value);
+  const bytes = [];
+  do {
+    let byte = Number(remaining & 0x7fn);
+    remaining >>= 7n;
+    if (remaining !== 0n) byte |= 0x80;
+    bytes.push(byte);
+  } while (remaining !== 0n);
+  return Buffer.from(bytes);
+}
+
+function compactField(value) {
+  const bytes = Buffer.from(value);
+  return Buffer.concat([compactLength(bytes.length), bytes]);
+}
+
+function compactString(value) {
+  const bytes = Buffer.from(value, "utf8");
+  return Buffer.concat([compactLength(bytes.length), bytes]);
+}
+
+function rawByteVector(value) {
+  const bytes = Buffer.from(value);
+  return Buffer.concat([littleEndian(bytes.length, 8), bytes]);
+}
+
+function replayWitnessPayload(
+  priorRecordDigest = Buffer.alloc(32),
+  expectedRoot = Buffer.from(sccpReplayEmptyHashesV1().at(-1).slice(2), "hex"),
+) {
+  return Buffer.concat([
+    compactField(expectedRoot),
+    compactField(priorRecordDigest),
+    compactField(Buffer.alloc(32)),
+    compactField(littleEndian(0, 8)),
+  ]);
+}
+
+function replayWitnessB64(options = {}) {
+  const payload = options.payload ?? replayWitnessPayload();
+  return b64(sccpNoritoFrame(REPLAY_WITNESS_NORITO_TYPE, { ...options, payload }));
+}
+
+function canonicalSccpTransactionPayload({
+  creationTimeMs,
+  proofBase64,
+  destination,
+  backendTag,
+  routeHash = Buffer.alloc(32, 0x31),
+  rangeStart = 7,
+  rangeEnd = 9,
+  replayWitnessBase64 = replayWitnessB64(),
+  instructionCount = 1,
+} = {}) {
+  const proof = Buffer.from(proofBase64, "base64");
+  const typedContainer = Buffer.concat([
+    compactField(littleEndian(backendTag, 4)),
+    compactField(routeHash),
+    compactField(rawByteVector(proof)),
+  ]);
+  const bridgePayload = Buffer.concat([
+    littleEndian(destination ? 3 : 2, 4),
+    compactField(typedContainer),
+  ]);
+  const range = Buffer.concat([
+    compactField(littleEndian(rangeStart, 8)),
+    compactField(littleEndian(rangeEnd, 8)),
+  ]);
+  const bridgeProof = Buffer.concat([compactField(range), compactField(bridgePayload)]);
+  const replayOption = destination
+    ? Buffer.from([0])
+    : Buffer.concat([
+        Buffer.from([1]),
+        compactField(
+          Buffer.from(replayWitnessBase64, "base64").subarray(40),
+        ),
+      ]);
+  const archive = sccpNoritoFrame(
+    "iroha_data_model::isi::bridge::SubmitBridgeProof",
+    {
+      payload: Buffer.concat([
+        compactField(bridgeProof),
+        compactField(replayOption),
+      ]),
+    },
+  );
+  const instruction = Buffer.concat([
+    compactField(compactString("iroha.instruction.v1::bridge::SubmitBridgeProof")),
+    compactField(rawByteVector(archive)),
+  ]);
+  const instructions = Buffer.concat([
+    littleEndian(instructionCount, 8),
+    compactField(instruction),
+  ]);
+  const executable = Buffer.concat([
+    littleEndian(0, 4),
+    compactField(instructions),
+  ]);
+  return Buffer.concat([
+    compactField(Buffer.from([0])),
+    compactField(Buffer.from([0])),
+    compactField(littleEndian(creationTimeMs, 8)),
+    compactField(executable),
+    compactField(Buffer.from([0])),
+    compactField(Buffer.from([0])),
+    compactField(Buffer.from([0])),
+    compactField(littleEndian(1, 4)),
+    compactField(littleEndian(0, 8)),
+    compactField(Buffer.from([0])),
+  ]);
 }
 
 function abiWord(value) {
@@ -398,7 +508,7 @@ const TEST_NETWORK_IDENTITIES = Object.freeze({
   "sora-taira": Object.freeze({ tag: 0x40, domain: 0, bytes: Buffer.from("fc56984b2be7431d840e21514d1883f0", "hex") }),
   "ethereum-mainnet": Object.freeze({ tag: 0x41, domain: 1, bytes: littleEndian(1, 8), routeId: "taira_eth_xor", id: 1 }),
   "bsc-mainnet": Object.freeze({ tag: 0x42, domain: 2, bytes: littleEndian(56, 8), routeId: "taira_bsc_xor", id: 56 }),
-  "tron-mainnet": Object.freeze({ tag: 0x43, domain: 5, bytes: littleEndian(0x2b66_53dc, 4), routeId: "taira_tron_xor", id: 0x2b66_53dc }),
+  "tron-mainnet": Object.freeze({ tag: 0x43, domain: 3, bytes: littleEndian(0x2b66_53dc, 4), routeId: "taira_tron_xor", id: 0x2b66_53dc }),
   "ton-mainnet": Object.freeze({
     tag: 0x44,
     domain: 4,
@@ -782,14 +892,14 @@ function messageBundle() {
         nonce: "7",
         route_revision: 1,
         asset_home_domain: 0,
-        asset_id_codec: 1,
+        asset_id_codec: 0,
         asset_id: "0x786f72",
         amount: "1",
-        sender_codec: 1,
+        sender_codec: 0,
         sender: "0x616c696365",
-        recipient_codec: 2,
+        recipient_codec: 1,
         recipient: `0x${HASH(0x21).slice(0, 40)}`,
-        route_id_codec: 1,
+        route_id_codec: 0,
         route_id: "0x74616972615f6273635f786f72",
       },
     },
@@ -931,10 +1041,7 @@ function recentItem(height = 9, id = MESSAGE_ID, commitmentIndex = 0) {
 }
 
 function preparedResponse(overrides = {}) {
-  const payload = Uint8Array.of(1, 2, 3, 4);
-  const digest = Uint8Array.from(blake2b256(payload));
-  digest[31] |= 1;
-  return {
+  const response = {
     submitted: false,
     payload_kind: "transfer",
     message_id_hex: MESSAGE_ID,
@@ -946,10 +1053,43 @@ function preparedResponse(overrides = {}) {
     range_end_height: 9,
     creation_time_ms: 10,
     tx_hash_hex: null,
-    transaction_payload_b64: b64(payload),
-    signing_message_b64: b64(digest),
+    transaction_payload_b64: null,
+    signing_message_b64: null,
     ...overrides,
   };
+  const nativeTags = {
+    "bridge/sccp/native/ethereum-beacon-v1": 0,
+    "bridge/sccp/native/bsc-parlia-v1": 1,
+    "bridge/sccp/native/tron-dpos-v1": 2,
+    "bridge/sccp/native/ton-masterchain-v1": 3,
+  };
+  const destinationTags = {
+    "evm-groth16-bn254-v1": 0,
+    "tron-groth16-bn254-v1": 1,
+    "ton-groth16-bls12381-v1": 2,
+  };
+  const destination = Object.prototype.hasOwnProperty.call(destinationTags, response.backend);
+  const proofBase64 = destination ? destinationProofB64() : nativeProofB64();
+  const payload = overrides.transaction_payload_b64 === undefined
+    ? canonicalSccpTransactionPayload({
+        creationTimeMs: response.creation_time_ms,
+        proofBase64,
+        destination,
+        backendTag: destination ? destinationTags[response.backend] : nativeTags[response.backend],
+        routeHash: Buffer.from(response.route_configuration_hash_hex, "hex"),
+        rangeStart: response.range_start_height,
+        rangeEnd: response.range_end_height,
+      })
+    : Buffer.from(response.transaction_payload_b64 ?? "", "base64");
+  const digest = Uint8Array.from(blake2b256(payload));
+  digest[31] |= 1;
+  if (!response.submitted) {
+    response.transaction_payload_b64 = b64(payload);
+    if (overrides.signing_message_b64 === undefined) {
+      response.signing_message_b64 = b64(digest);
+    }
+  }
+  return response;
 }
 
 test("closed SCCP inventory exposes only the four external mainnets and Sora Taira", async () => {
@@ -978,7 +1118,7 @@ test("closed SCCP inventory exposes only the four external mainnets and Sora Tai
     ["sora-taira", "0x40", 0, true],
     ["ethereum-mainnet", "0x41", 1, false],
     ["bsc-mainnet", "0x42", 2, false],
-    ["tron-mainnet", "0x43", 5, false],
+    ["tron-mainnet", "0x43", 3, false],
     ["ton-mainnet", "0x44", 4, false],
   ]) {
     assert.match(
@@ -993,7 +1133,7 @@ test("closed SCCP inventory exposes only the four external mainnets and Sora Tai
   for (const descriptor of Object.values(SCCP_NETWORK_PROFILES)) {
     assert.equal("genesisHash" in descriptor, false);
   }
-  assert.deepEqual(Object.keys(SCCP_CODEC_KEYS), ["1", "2", "5", "7"]);
+  assert.deepEqual(Object.keys(SCCP_CODEC_KEYS), ["0", "1", "2", "3"]);
   assert.deepEqual(SCCP_PAYLOAD_KINDS, ["transfer"]);
   assert.deepEqual(SCCP_NETWORK_PROFILES["ton-mainnet"], {
     profile: "ton-mainnet",
@@ -1021,12 +1161,12 @@ test("closed SCCP inventory exposes only the four external mainnets and Sora Tai
 });
 
 test("closed codecs accept exact layouts and reject retired tags and textual aliases", () => {
-  assert.deepEqual(normalizeSccpCodecValue(1, "merchant@taira"), new TextEncoder().encode("merchant@taira"));
+  assert.deepEqual(normalizeSccpCodecValue(0, "merchant@taira"), new TextEncoder().encode("merchant@taira"));
   assert.match(AUTHORITY, /[^\x00-\x7f]/u, "fixture must exercise non-ASCII I105 digits");
-  assert.deepEqual(normalizeSccpCodecValue(1, AUTHORITY), new TextEncoder().encode(AUTHORITY));
-  assert.equal(normalizeSccpCodecValue(2, new Uint8Array(20).fill(1)).length, 20);
+  assert.deepEqual(normalizeSccpCodecValue(0, AUTHORITY), new TextEncoder().encode(AUTHORITY));
+  assert.equal(normalizeSccpCodecValue(1, new Uint8Array(20).fill(1)).length, 20);
   assert.equal(
-    normalizeSccpCodecValue(5, Uint8Array.from([0x41, ...new Uint8Array(20).fill(2)])).length,
+    normalizeSccpCodecValue(2, Uint8Array.from([0x41, ...new Uint8Array(20).fill(2)])).length,
     21,
   );
   assert.equal(
@@ -1047,14 +1187,14 @@ test("closed codecs accept exact layouts and reject retired tags and textual ali
     [7, new Uint8Array(35).fill(1)],
     [2, `0x${"11".repeat(20)}`],
     [2, new Uint8Array(20)],
-    [5, Uint8Array.from([0x42, ...new Uint8Array(20).fill(1)])],
-    [1, " padded"],
-    [1, "contains space"],
-    [1, "line\nbreak"],
-    [1, "merchant\ud83d\ude42"],
-    [1, `${AUTHORITY.slice(0, -1)}${AUTHORITY.endsWith("1") ? "2" : "1"}`],
-    [1, `n369${AUTHORITY.slice("test".length)}`],
-    [1, `${AUTHORITY}${"\uff72".repeat(100)}`],
+    [2, Uint8Array.from([0x42, ...new Uint8Array(20).fill(1)])],
+    [0, " padded"],
+    [0, "contains space"],
+    [0, "line\nbreak"],
+    [0, "merchant\ud83d\ude42"],
+    [0, `${AUTHORITY.slice(0, -1)}${AUTHORITY.endsWith("1") ? "2" : "1"}`],
+    [0, `n369${AUTHORITY.slice("test".length)}`],
+    [0, `${AUTHORITY}${"\uff72".repeat(100)}`],
   ]) assert.throws(() => normalizeSccpCodecValue(tag, value));
 });
 
@@ -1317,9 +1457,9 @@ test("registry destination hashes match the canonical Rust EVM and TRON layouts"
     },
     {
       source: "tron-mainnet",
-      destinationBindingHash: "92E97991624F1AA91809B0DC719FB1994869ABDDEC2569406D2B041255E9FF12",
-      deploymentConfigHash: "9C3377FDC27D491C769623FB62980C96D0A16FF5FB4CC3A755B122835AA40DE4",
-      routeConfigurationHash: "1C142B2B00E42AE4B6F95DEDA13939E8683016FB4C2F49AD91C8595C373B3CC4",
+      destinationBindingHash: "83B2BB7F5497E89D613DF3C6CFB745D84C4976DD4B447DDAE65D8B485EE9A408",
+      deploymentConfigHash: "F95AD7752CF34AA4BF813E23CF517591372DBB7FEF6E344C37ED16BE63FF3414",
+      routeConfigurationHash: "060705F1FB6C32BDE115DD29B6885CADE7F734DF4768772F1DA857C914018FD9",
     },
   ];
   for (const vector of vectors) {
@@ -2075,7 +2215,7 @@ test("bundle and proof-request JSON enforce the closed transfer/Groth16 schema",
   oversizedNonce.payload.Transfer.nonce = (1n << 64n).toString();
   assert.throws(() => normalizeSccpMessageBundle(oversizedNonce), /u64/u);
   const wrongRecipientCodec = messageBundle();
-  wrongRecipientCodec.payload.Transfer.recipient_codec = 5;
+  wrongRecipientCodec.payload.Transfer.recipient_codec = 0;
   assert.throws(() => normalizeSccpMessageBundle(wrongRecipientCodec), /protocol domain/u);
   const longMerklePath = messageBundle();
   longMerklePath.merkle_proof.steps = Array.from({ length: 65 }, () => ({
@@ -2117,9 +2257,14 @@ test("bundle and proof-request JSON enforce the closed transfer/Groth16 schema",
 });
 
 test("submit DTOs preserve the exact prepared transaction for detached signing", () => {
-  const transactionPayload = b64(Uint8Array.of(1, 2, 3, 4));
   const destinationProof = destinationProofB64();
   const nativeProof = nativeProofB64();
+  const transactionPayload = b64(canonicalSccpTransactionPayload({
+    creationTimeMs: 10,
+    proofBase64: destinationProof,
+    destination: true,
+    backendTag: 0,
+  }));
   const proof = normalizeBridgeProofSubmitPayload({
     authority: AUTHORITY,
     fee_payment: feePayment(),
@@ -2143,16 +2288,97 @@ test("submit DTOs preserve the exact prepared transaction for detached signing",
     native_proof_b64: nativeProof,
     replay_witness_b64: replayWitnessB64(),
   })), ["authority", "fee_payment", "native_proof_b64", "replay_witness_b64"]);
+  const nativeTransactionPayload = b64(canonicalSccpTransactionPayload({
+    creationTimeMs: 10,
+    proofBase64: nativeProof,
+    destination: false,
+    backendTag: 1,
+  }));
   const native = normalizeBridgeMessageSubmitPayload({
     authority: AUTHORITY,
     fee_payment: feePayment(),
     signature_b64: "AQ==",
-    transaction_payload_b64: transactionPayload,
+    transaction_payload_b64: nativeTransactionPayload,
     native_proof_b64: nativeProof,
     replay_witness_b64: replayWitnessB64(),
     creation_time_ms: 10,
   });
-  assert.equal(native.transaction_payload_b64, transactionPayload);
+  assert.equal(native.transaction_payload_b64, nativeTransactionPayload);
+});
+
+test("signed submit DTOs bind the sole instruction, exact proof, and non-membership witness", () => {
+  const nativeProof = nativeProofB64();
+  const witness = replayWitnessB64();
+  const signed = (transactionPayload, proof = nativeProof, replay = witness) => ({
+    authority: AUTHORITY,
+    fee_payment: feePayment(),
+    signature_b64: "AQ==",
+    transaction_payload_b64: b64(transactionPayload),
+    native_proof_b64: proof,
+    replay_witness_b64: replay,
+    creation_time_ms: 10,
+  });
+  const canonical = canonicalSccpTransactionPayload({
+    creationTimeMs: 10,
+    proofBase64: nativeProof,
+    destination: false,
+    backendTag: 1,
+    replayWitnessBase64: witness,
+  });
+  assert.doesNotThrow(() => normalizeBridgeMessageSubmitPayload(signed(canonical)));
+
+  const otherProof = nativeProofB64({ payload: Buffer.from([2]) });
+  assert.throws(
+    () => normalizeBridgeMessageSubmitPayload(signed(
+      canonicalSccpTransactionPayload({
+        creationTimeMs: 10,
+        proofBase64: otherProof,
+        destination: false,
+        backendTag: 1,
+        replayWitnessBase64: witness,
+      }),
+    )),
+    /proof does not match/u,
+  );
+  const otherWitness = replayWitnessB64({
+    payload: replayWitnessPayload(Buffer.alloc(32), Buffer.alloc(32, 0x77)),
+  });
+  assert.throws(
+    () => normalizeBridgeMessageSubmitPayload(signed(
+      canonicalSccpTransactionPayload({
+        creationTimeMs: 10,
+        proofBase64: nativeProof,
+        destination: false,
+        backendTag: 1,
+        replayWitnessBase64: otherWitness,
+      }),
+    )),
+    /replay witness does not match/u,
+  );
+  assert.throws(
+    () => normalizeBridgeMessageSubmitPayload(signed(
+      canonicalSccpTransactionPayload({
+        creationTimeMs: 10,
+        proofBase64: nativeProof,
+        destination: false,
+        backendTag: 1,
+        replayWitnessBase64: witness,
+        instructionCount: 2,
+      }),
+    )),
+    /exactly one instruction/u,
+  );
+  assert.throws(
+    () => normalizeBridgeMessageSubmitPayload({
+      authority: AUTHORITY,
+      fee_payment: feePayment(),
+      native_proof_b64: nativeProof,
+      replay_witness_b64: replayWitnessB64({
+        payload: replayWitnessPayload(Buffer.alloc(32, 0x55)),
+      }),
+    }),
+    /non-membership|prior digest/u,
+  );
 });
 
 test("submit DTOs reject mixed signing state, malformed encodings, and retired fields", () => {
@@ -2716,7 +2942,10 @@ test("Torii proof submit sends only the closed destination artifact DTO", async 
   const client = new ToriiClient("https://example.invalid", {
     fetchImpl: async (url, init) => {
       observed = { url: String(url), body: JSON.parse(init.body) };
-      return response(preparedResponse({ creation_time_ms: 42 }));
+      return response(preparedResponse({
+        creation_time_ms: 42,
+        backend: "evm-groth16-bn254-v1",
+      }));
     },
   });
   await client.submitBridgeProof({
@@ -2738,7 +2967,10 @@ test("Torii proof submit sends only the closed destination artifact DTO", async 
 
 test("Torii prepare then submit resends the byte-identical transaction payload", async () => {
   const calls = [];
-  const prepared = preparedResponse({ creation_time_ms: 42 });
+  const prepared = preparedResponse({
+    creation_time_ms: 42,
+    backend: "evm-groth16-bn254-v1",
+  });
   const client = new ToriiClient("https://example.invalid", {
     fetchImpl: async (url, init) => {
       const body = JSON.parse(init.body);
@@ -2770,10 +3002,7 @@ test("Torii prepare then submit resends the byte-identical transaction payload",
   assert.equal(submission.submitted, true);
   assert.equal(calls[1].body.transaction_payload_b64, prepared.transaction_payload_b64);
   assert.deepEqual(calls[1].body.fee_payment, feePayment());
-  assert.deepEqual(
-    [...Buffer.from(calls[1].body.transaction_payload_b64, "base64")],
-    [1, 2, 3, 4],
-  );
+  assert(Buffer.from(calls[1].body.transaction_payload_b64, "base64").length > 40);
 });
 
 test("Torii rejects response state that contradicts prepare or signed submit", async () => {
@@ -2795,15 +3024,19 @@ test("Torii rejects response state that contradicts prepare or signed submit", a
     }),
     /signing state/u,
   );
+  const prepared = preparedResponse({
+    creation_time_ms: 42,
+    backend: "evm-groth16-bn254-v1",
+  });
   const submitClient = new ToriiClient("https://example.invalid", {
-    fetchImpl: async () => response(preparedResponse({ creation_time_ms: 42 })),
+    fetchImpl: async () => response(prepared),
   });
   await assert.rejects(
     () => submitClient.submitBridgeProof({
       authority: AUTHORITY,
       fee_payment: feePayment(),
       signature_b64: "AQ==",
-      transaction_payload_b64: "Ag==",
+      transaction_payload_b64: prepared.transaction_payload_b64,
       destination_proof_b64: destinationProofB64(),
       creation_time_ms: 42,
     }),

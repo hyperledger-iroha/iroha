@@ -1407,7 +1407,8 @@ fn retained_vote_does_not_hide_timeout_certificate_that_closes_its_view() {
 }
 #[test]
 fn certified_view_cut_admits_the_strict_same_round_timeout_upgrade() {
-    let (_handle, ingress, _relay_receiver) = test_sumeragi_handle(64);
+    let (_handle, ingress, _relay_receiver) =
+        test_sumeragi_handle_with_source_geometry(64, Some(0));
     let roster = validator_peers(4);
     let first_origin = roster
         .first()
@@ -1481,7 +1482,7 @@ fn certified_view_cut_admits_the_strict_same_round_timeout_upgrade() {
             v2_timeout_certificate(round.view),
             stale_origin
         )),
-        Err(super::FairV2IngressPushError::Rejected(_))
+        Ok(super::FairV2IngressPushDisposition::Coalesced)
     ));
 }
 
@@ -1679,6 +1680,595 @@ fn same_origin_timeout_upgrade_waits_on_the_active_predecessor() {
         ingress.state.lock().open,
         "a same-round upgrade must wait without fail-stop"
     );
+}
+
+const HISTORY_SERVE_OWNER_HEIGHT: u64 = 4;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HistoryServeRequestKind {
+    CommitCertificate,
+    CertifiedBody,
+}
+
+impl HistoryServeRequestKind {
+    fn matches(self, inbound: &InboundBlockMessage) -> bool {
+        matches!(
+            (self, inbound.message()),
+            (
+                Self::CommitCertificate,
+                BlockMessage::V2(wire::ConsensusMessageV2 {
+                    payload: wire::ConsensusMessageV2Payload::CommitCertificateRequest(_),
+                    ..
+                })
+            ) | (
+                Self::CertifiedBody,
+                BlockMessage::V2(wire::ConsensusMessageV2 {
+                    payload: wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_),
+                    ..
+                })
+            )
+        )
+    }
+}
+
+fn signed_history_serve_request(
+    kind: HistoryServeRequestKind,
+    requester_key: &KeyPair,
+    network_id: NetworkId,
+    height: u64,
+) -> BlockMessage {
+    let requester = PeerId::new(requester_key.public_key().clone());
+    match kind {
+        HistoryServeRequestKind::CommitCertificate => {
+            let mut request = wire::CommitCertificateRequest {
+                protocol_version: wire::PROTOCOL_VERSION,
+                network_id,
+                context_id: wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
+                    b"fair-v2-ingress-history-context",
+                ))),
+                height,
+                requester,
+                signature: Vec::new(),
+            };
+            request.signature = iroha_crypto::Signature::new(
+                requester_key.private_key(),
+                &request.signature_preimage(),
+            )
+            .payload()
+            .to_vec();
+            BlockMessage::V2(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::CommitCertificateRequest(request),
+            ))
+        }
+        HistoryServeRequestKind::CertifiedBody => {
+            let BlockMessage::V2(message) = v2_vote(wire::GlobalPhase::Commit) else {
+                unreachable!("v2 vote fixture always returns a v2 envelope");
+            };
+            let wire::ConsensusMessageV2Payload::Vote(vote) = message.payload else {
+                unreachable!("v2 vote fixture always carries a Vote");
+            };
+            let round = wire::ConsensusRound {
+                context_id: vote.round.context_id,
+                height,
+                view: vote.round.view,
+            };
+            let mut request = wire::CertifiedBodyRequest {
+                round,
+                subject: vote.subject,
+                certificate: wire::QuorumCertificate {
+                    round,
+                    proposal_round: round,
+                    phase: wire::GlobalPhase::Commit,
+                    subject: vote.subject,
+                    execution_commitment: vote.execution_commitment,
+                    signers: vec![vote.signer],
+                    aggregate_signature: vote.signature,
+                },
+                requester,
+                signature: Vec::new(),
+            };
+            request.signature = iroha_crypto::Signature::new(
+                requester_key.private_key(),
+                &request.signature_preimage(),
+            )
+            .payload()
+            .to_vec();
+            BlockMessage::V2(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request),
+            ))
+        }
+    }
+}
+
+fn history_serve_request_inbound_with_live_route(
+    message: BlockMessage,
+    requester: &PeerId,
+) -> InboundBlockMessage {
+    let mut routes = NetworkReplyRouteTestFixture::new(requester.clone());
+    let route = routes.mint(requester.clone());
+    InboundBlockMessage::try_from_transport_with_reply_route(
+        message,
+        requester.clone(),
+        requester.clone(),
+        route,
+    )
+    .expect("history-serve fixture retains its exact live reply route")
+}
+
+fn cached_history_serve_height(
+    ingress: &Arc<super::FairV2Ingress>,
+    kind: HistoryServeRequestKind,
+) -> Option<u64> {
+    let state = ingress.state.lock();
+    state
+        .lanes
+        .values()
+        .flat_map(|lane| lane.entries.iter())
+        .find(|entry| kind.matches(entry.inbound.as_ref()))
+        .expect("the history-serve request owns one queued occurrence")
+        .history_serve_request
+        .map(|request| request.height())
+}
+
+fn queue_retained_history_control_owner(
+    ingress: &Arc<super::FairV2Ingress>,
+    validator: &PeerId,
+    network_id: &NetworkId,
+) -> (TempDir, BlockMessage) {
+    let mut owner_message = v2_vote(wire::GlobalPhase::Prepare);
+    let owner_round = match &mut owner_message {
+        BlockMessage::V2(wire::ConsensusMessageV2 {
+            payload: wire::ConsensusMessageV2Payload::Vote(vote),
+            ..
+        }) => {
+            vote.round.height = HISTORY_SERVE_OWNER_HEIGHT;
+            vote.round.view = 1;
+            vote.proposal_round = vote.round;
+            vote.round
+        }
+        _ => unreachable!("vote fixture carries a v2 Vote"),
+    };
+    let directory = bind_test_leader_wire_gate(ingress, validator, owner_round, 1);
+    ingress.state.lock().configured_network_id = Some(*network_id);
+    assert!(matches!(
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+            owner_message.clone(),
+            validator.clone(),
+        )),
+        Ok(super::FairV2IngressPushDisposition::Enqueued)
+    ));
+    assert_eq!(
+        ingress
+            .state
+            .lock()
+            .leader_wire_lifecycles
+            .values()
+            .next()
+            .expect("the retained Vote owns one leader-wire barrier")
+            .token
+            .source_class,
+        super::FairV2IngressLeaderWireSourceClass::Control
+    );
+    (directory, owner_message)
+}
+
+fn queue_retained_history_chunk_owner(
+    ingress: &Arc<super::FairV2Ingress>,
+    roster: &[PeerId],
+    network_id: &NetworkId,
+) -> (TempDir, BlockMessage, u64) {
+    let chunk_origin = roster
+        .first()
+        .expect("history-serve Chunk fixture has one origin")
+        .clone();
+    let proposal_message = v2_maximum_structural_proposal_wire(minimal_rs16_layout(), roster.len());
+    let (round, manifest_hash) = match &proposal_message {
+        BlockMessage::V2(wire::ConsensusMessageV2 {
+            payload: wire::ConsensusMessageV2Payload::Proposal(proposal),
+            ..
+        }) => (proposal.round, HashOf::new(&proposal.manifest)),
+        _ => unreachable!("proposal fixture carries a v2 Proposal"),
+    };
+    let directory = bind_test_leader_wire_gate_with_roster(ingress, roster, round, 2);
+    ingress.state.lock().configured_network_id = Some(*network_id);
+    assert!(matches!(
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+            proposal_message,
+            chunk_origin.clone(),
+        )),
+        Ok(super::FairV2IngressPushDisposition::Enqueued)
+    ));
+    let mut proposal = ingress
+        .try_recv_if(|_| true)
+        .expect("the history-serve fixture Proposal reaches runtime");
+    let proposal_runtime = proposal
+        .take_ingress_ownership()
+        .and_then(|ownership| ownership.leader_wire_runtime_receipt().cloned())
+        .expect("the fixture Proposal retains its exact runtime receipt");
+    ingress
+        .mark_leader_wire_volatile_terminal(&proposal_runtime)
+        .expect("terminalize the fixture Proposal after binding Chunk coordinates");
+
+    let chunk_message = BlockMessage::V2(wire::ConsensusMessageV2::new(
+        wire::ConsensusMessageV2Payload::PayloadChunk(wire::PayloadChunk {
+            manifest_hash,
+            index: 0,
+            bytes: vec![0xA5],
+            sender: 0,
+            signature: vec![0x5A],
+        }),
+    ));
+    assert!(matches!(
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+            chunk_message.clone(),
+            chunk_origin,
+        )),
+        Ok(super::FairV2IngressPushDisposition::Enqueued)
+    ));
+    assert_eq!(
+        ingress
+            .state
+            .lock()
+            .leader_wire_lifecycles
+            .values()
+            .find(|record| {
+                record.status == super::FairV2IngressLeaderWireStatus::Ingress
+                    && record.token.source_class == super::FairV2IngressLeaderWireSourceClass::Chunk
+            })
+            .expect("the retained PayloadChunk owns one leader-wire barrier")
+            .token
+            .source_class,
+        super::FairV2IngressLeaderWireSourceClass::Chunk
+    );
+    (directory, chunk_message, round.height)
+}
+
+fn assert_history_request_blocked_by_control_owner(
+    kind: HistoryServeRequestKind,
+    requester: &PeerId,
+    configured_network_id: &NetworkId,
+    inbound: InboundBlockMessage,
+    expected_cached_height: Option<u64>,
+    reason: &str,
+) {
+    let (_handle, ingress, _relay_receiver) = test_sumeragi_handle(64);
+    let (_directory, _owner_message) =
+        queue_retained_history_control_owner(&ingress, requester, configured_network_id);
+    assert!(matches!(
+        ingress.try_push(inbound),
+        Ok(super::FairV2IngressPushDisposition::Enqueued)
+    ));
+    assert_eq!(
+        cached_history_serve_height(&ingress, kind),
+        expected_cached_height,
+        "{reason}"
+    );
+    assert!(
+        ingress
+            .try_recv_if(|inbound| kind.matches(inbound))
+            .is_none(),
+        "{reason}"
+    );
+    assert_eq!(
+        ingress.state.lock().len,
+        2,
+        "the retained Control owner and blocked request both remain queued: {reason}"
+    );
+}
+
+#[test]
+fn signed_historical_requests_cross_retained_control_owner_without_retiring_it() {
+    for kind in [
+        HistoryServeRequestKind::CommitCertificate,
+        HistoryServeRequestKind::CertifiedBody,
+    ] {
+        let (_handle, ingress, _relay_receiver) = test_sumeragi_handle(64);
+        let requester_key = KeyPair::random();
+        let requester = PeerId::new(requester_key.public_key().clone());
+        let network_id = crate::sumeragi::synthetic_network_id("fair-v2-ingress-test");
+        let (_directory, owner_message) =
+            queue_retained_history_control_owner(&ingress, &requester, &network_id);
+        let request_message = signed_history_serve_request(kind, &requester_key, network_id, 1);
+        let request_inbound =
+            history_serve_request_inbound_with_live_route(request_message.clone(), &requester);
+        assert_eq!(
+            super::fair_v2_ingress_history_serve_request(&request_inbound)
+                .map(|request| request.height()),
+            Some(1),
+            "the signed {kind:?} request is pre-authenticated before queue locking"
+        );
+        assert!(matches!(
+            ingress.try_push(request_inbound),
+            Ok(super::FairV2IngressPushDisposition::Enqueued)
+        ));
+        assert_eq!(cached_history_serve_height(&ingress, kind), Some(1));
+
+        let selected = ingress
+            .try_recv_if(|inbound| kind.matches(inbound))
+            .unwrap_or_else(|| panic!("signed historical {kind:?} crosses Control"));
+        assert_eq!(selected.message().encode(), request_message.encode());
+        assert_eq!(
+            ingress.state.lock().len,
+            1,
+            "the history dependency cannot retire its retained Control owner"
+        );
+        let retained_owner = ingress
+            .try_recv_if(|_| true)
+            .expect("the exact Control owner remains queued after history service");
+        assert_eq!(retained_owner.message().encode(), owner_message.encode());
+    }
+}
+
+#[test]
+fn signed_historical_requests_cross_retained_chunk_owner_without_retiring_it() {
+    for kind in [
+        HistoryServeRequestKind::CommitCertificate,
+        HistoryServeRequestKind::CertifiedBody,
+    ] {
+        let (_handle, ingress, _relay_receiver) = test_sumeragi_handle(64);
+        let chunk_key = KeyPair::random();
+        let requester_key = KeyPair::random();
+        let roster = vec![
+            PeerId::new(chunk_key.public_key().clone()),
+            PeerId::new(requester_key.public_key().clone()),
+        ];
+        let requester = roster[1].clone();
+        let network_id = crate::sumeragi::synthetic_network_id("fair-v2-ingress-test");
+        let (_directory, chunk_message, owner_height) =
+            queue_retained_history_chunk_owner(&ingress, &roster, &network_id);
+        assert!(1 < owner_height);
+        let request_message = signed_history_serve_request(kind, &requester_key, network_id, 1);
+        let request_inbound =
+            history_serve_request_inbound_with_live_route(request_message.clone(), &requester);
+        assert!(matches!(
+            ingress.try_push(request_inbound),
+            Ok(super::FairV2IngressPushDisposition::Enqueued)
+        ));
+        assert_eq!(cached_history_serve_height(&ingress, kind), Some(1));
+
+        let selected = ingress
+            .try_recv_if(|inbound| kind.matches(inbound))
+            .unwrap_or_else(|| panic!("signed historical {kind:?} crosses Chunk"));
+        assert_eq!(selected.message().encode(), request_message.encode());
+        assert_eq!(
+            ingress.state.lock().len,
+            1,
+            "the history dependency cannot retire its retained Chunk owner"
+        );
+        let mut retained_owner = ingress
+            .try_recv_if(|_| true)
+            .expect("the exact Chunk owner remains queued after history service");
+        assert_eq!(retained_owner.message().encode(), chunk_message.encode());
+        let chunk_runtime = retained_owner
+            .take_ingress_ownership()
+            .and_then(|ownership| ownership.leader_wire_runtime_receipt().cloned())
+            .expect("the retained Chunk keeps its exact runtime receipt");
+        ingress
+            .mark_leader_wire_volatile_terminal(&chunk_runtime)
+            .expect("terminalize the normally drained retained Chunk");
+    }
+}
+
+#[test]
+fn historical_request_cache_fails_closed_on_identity_binding_and_network() {
+    let configured_network_id = crate::sumeragi::synthetic_network_id("fair-v2-ingress-test");
+    for kind in [
+        HistoryServeRequestKind::CommitCertificate,
+        HistoryServeRequestKind::CertifiedBody,
+    ] {
+        let requester_key = KeyPair::random();
+        let requester = PeerId::new(requester_key.public_key().clone());
+        let mut request =
+            signed_history_serve_request(kind, &requester_key, configured_network_id, 1);
+        match &mut request {
+            BlockMessage::V2(wire::ConsensusMessageV2 {
+                payload: wire::ConsensusMessageV2Payload::CommitCertificateRequest(request),
+                ..
+            }) => request.signature = vec![0xA5],
+            BlockMessage::V2(wire::ConsensusMessageV2 {
+                payload: wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request),
+                ..
+            }) => request.signature = vec![0xA5],
+            _ => unreachable!("history-serve fixture carries its requested payload"),
+        }
+        let inbound = history_serve_request_inbound_with_live_route(request, &requester);
+        assert!(
+            super::fair_v2_ingress_history_serve_request(&inbound).is_none(),
+            "bad {kind:?} signature cannot populate the cached projection"
+        );
+        assert_history_request_blocked_by_control_owner(
+            kind,
+            &requester,
+            &configured_network_id,
+            inbound,
+            None,
+            "a bad requester signature must fail closed",
+        );
+    }
+
+    for mismatched_round in [true, false] {
+        let requester_key = KeyPair::random();
+        let requester = PeerId::new(requester_key.public_key().clone());
+        let mut request = signed_history_serve_request(
+            HistoryServeRequestKind::CertifiedBody,
+            &requester_key,
+            configured_network_id,
+            1,
+        );
+        let BlockMessage::V2(wire::ConsensusMessageV2 {
+            payload: wire::ConsensusMessageV2Payload::CertifiedBodyRequest(body_request),
+            ..
+        }) = &mut request
+        else {
+            unreachable!("history-serve fixture carries CertifiedBodyRequest");
+        };
+        if mismatched_round {
+            body_request.certificate.proposal_round.view = body_request
+                .certificate
+                .proposal_round
+                .view
+                .checked_add(1)
+                .expect("fixture view has a successor");
+        } else {
+            body_request.certificate.subject.payload_hash =
+                Hash::new(b"mismatched certified-body subject");
+        }
+        body_request.signature = iroha_crypto::Signature::new(
+            requester_key.private_key(),
+            &body_request.signature_preimage(),
+        )
+        .payload()
+        .to_vec();
+        let inbound = history_serve_request_inbound_with_live_route(request, &requester);
+        assert!(
+            super::fair_v2_ingress_history_serve_request(&inbound).is_none(),
+            "an authentically signed certificate binding mismatch cannot populate the cache"
+        );
+        assert_history_request_blocked_by_control_owner(
+            HistoryServeRequestKind::CertifiedBody,
+            &requester,
+            &configured_network_id,
+            inbound,
+            None,
+            "a certified-body certificate binding mismatch must fail closed",
+        );
+    }
+
+    let requester_key = KeyPair::random();
+    let requester = PeerId::new(requester_key.public_key().clone());
+    let wrong_network_id = crate::sumeragi::synthetic_network_id("fair-v2-ingress-wrong-network");
+    let request = signed_history_serve_request(
+        HistoryServeRequestKind::CommitCertificate,
+        &requester_key,
+        wrong_network_id,
+        1,
+    );
+    let inbound = history_serve_request_inbound_with_live_route(request, &requester);
+    assert_eq!(
+        super::fair_v2_ingress_history_serve_request(&inbound).map(|request| request.height()),
+        Some(1),
+        "identity pre-authentication precedes the configured-network filter"
+    );
+    assert_history_request_blocked_by_control_owner(
+        HistoryServeRequestKind::CommitCertificate,
+        &requester,
+        &configured_network_id,
+        inbound,
+        None,
+        "a CommitCertificateRequest for another network must fail closed",
+    );
+}
+
+#[test]
+fn historical_request_dependency_fails_closed_on_height_and_reply_route() {
+    let configured_network_id = crate::sumeragi::synthetic_network_id("fair-v2-ingress-test");
+    for kind in [
+        HistoryServeRequestKind::CommitCertificate,
+        HistoryServeRequestKind::CertifiedBody,
+    ] {
+        for height in [
+            0,
+            HISTORY_SERVE_OWNER_HEIGHT,
+            HISTORY_SERVE_OWNER_HEIGHT + 1,
+        ] {
+            let requester_key = KeyPair::random();
+            let requester = PeerId::new(requester_key.public_key().clone());
+            let request =
+                signed_history_serve_request(kind, &requester_key, configured_network_id, height);
+            let inbound = history_serve_request_inbound_with_live_route(request, &requester);
+            assert_eq!(
+                super::fair_v2_ingress_history_serve_request(&inbound)
+                    .map(|request| request.height()),
+                Some(height)
+            );
+            assert_history_request_blocked_by_control_owner(
+                kind,
+                &requester,
+                &configured_network_id,
+                inbound,
+                Some(height),
+                "zero, equal, and future heights cannot bypass the retained owner",
+            );
+        }
+
+        let requester_key = KeyPair::random();
+        let requester = PeerId::new(requester_key.public_key().clone());
+        let request = signed_history_serve_request(kind, &requester_key, configured_network_id, 1);
+        let inbound = InboundBlockMessage::from_authenticated_peer(request, requester.clone());
+        assert_eq!(
+            super::fair_v2_ingress_history_serve_request(&inbound).map(|request| request.height()),
+            Some(1)
+        );
+        if kind == HistoryServeRequestKind::CommitCertificate {
+            assert_history_request_blocked_by_control_owner(
+                kind,
+                &requester,
+                &configured_network_id,
+                inbound,
+                Some(1),
+                "a history request without a reply route cannot bypass",
+            );
+        } else {
+            let (_handle, ingress, _relay_receiver) = test_sumeragi_handle(64);
+            let (_directory, owner_message) =
+                queue_retained_history_control_owner(&ingress, &requester, &configured_network_id);
+            assert!(matches!(
+                ingress.try_push(inbound),
+                Err(super::FairV2IngressPushError::Rejected(_))
+            ));
+            assert_eq!(ingress.state.lock().len, 1);
+            let retained_owner = ingress
+                .try_recv_if(|_| true)
+                .expect("route-less CertifiedBodyRequest cannot remove the Control owner");
+            assert_eq!(retained_owner.message().encode(), owner_message.encode());
+        }
+
+        let requester_key = KeyPair::random();
+        let requester = PeerId::new(requester_key.public_key().clone());
+        let request = signed_history_serve_request(kind, &requester_key, configured_network_id, 1);
+        let mut routes = NetworkReplyRouteTestFixture::new(requester.clone());
+        let route = routes.mint(requester.clone());
+        let route_witness = route.clone();
+        let inbound = InboundBlockMessage::try_from_transport_with_reply_route(
+            request,
+            requester.clone(),
+            requester.clone(),
+            route,
+        )
+        .expect("the route is live while the inbound occurrence is normalized");
+        assert!(routes.mark_reply_unwritable_while_delivery_active(&route_witness));
+        assert!(!route_witness.is_reply_writable());
+        assert_history_request_blocked_by_control_owner(
+            kind,
+            &requester,
+            &configured_network_id,
+            inbound,
+            Some(1),
+            "an unwritable reply route cannot release a retained owner",
+        );
+
+        let (_handle, ingress, _relay_receiver) = test_sumeragi_handle(64);
+        let (_directory, owner_message) =
+            queue_retained_history_control_owner(&ingress, &requester, &configured_network_id);
+        let request = signed_history_serve_request(kind, &requester_key, configured_network_id, 1);
+        let wrong_target = PeerId::new(KeyPair::random().public_key().clone());
+        let mut routes = NetworkReplyRouteTestFixture::new(requester.clone());
+        let wrong_route = routes.mint(wrong_target);
+        assert!(matches!(
+            InboundBlockMessage::try_from_transport_with_reply_route(
+                request,
+                requester.clone(),
+                requester.clone(),
+                wrong_route,
+            ),
+            Err(NetworkReplyRouteError::Retargeted)
+        ));
+        assert_eq!(ingress.state.lock().len, 1);
+        let retained_owner = ingress
+            .try_recv_if(|_| true)
+            .expect("a route-target mismatch cannot enter or replace the Control owner");
+        assert_eq!(retained_owner.message().encode(), owner_message.encode());
+    }
 }
 
 #[test]
@@ -2457,7 +3047,7 @@ fn v2_ingress_is_bounded_and_never_blocks_a_network_caller() {
 }
 #[test]
 fn saturated_v2_ingress_returns_the_exact_owned_message_for_retry() {
-    let (handle, receiver, _relay_receiver) = test_sumeragi_handle_with_source_geometry(4, Some(1));
+    let (handle, receiver, _relay_receiver) = test_sumeragi_handle_with_source_geometry(3, Some(1));
     let sender = validator_peers(1).pop().expect("sender fixture");
     assert!(matches!(
         handle.try_incoming_block_message_from_owned(sender.clone(), v2_message()),
@@ -2761,10 +3351,11 @@ fn validator_peers(count: u8) -> Vec<PeerId> {
 }
 #[test]
 fn byzantine_v2_source_cannot_consume_honest_ingress_reservations_or_service_turns() {
-    // The exact N=4, H=2 corridor needs 28 slots. Add one deliberate
+    // The exact N=4, H=2 corridor needs 26 slots: five protected positions
+    // per validator plus three per authenticated non-validator source. Add one deliberate
     // ordinary-pressure slot so this test can retain two attacker items
     // while still proving that a third cannot consume any protected slot.
-    let (handle, ingress, _relay_receiver) = test_sumeragi_handle_with_source_geometry(29, Some(2));
+    let (handle, ingress, _relay_receiver) = test_sumeragi_handle_with_source_geometry(27, Some(2));
     let validators = validator_peers(4);
     let attacker = validators[0].clone();
     let outsider = validator_peers(5).pop().expect("outsider fixture");
@@ -2811,7 +3402,7 @@ fn byzantine_v2_source_cannot_consume_honest_ingress_reservations_or_service_tur
 #[test]
 fn relayed_origin_churn_uses_one_via_lane_and_preserves_protocol_origin() {
     const RELAYED_ORIGINS: usize = 32;
-    let (handle, ingress, _relay_receiver) = test_sumeragi_handle(23);
+    let (handle, ingress, _relay_receiver) = test_sumeragi_handle_with_source_geometry(21, Some(0));
     let validators = validator_peers(4);
     let via = validators[0].clone();
     let lane_origin = validators[1].clone();

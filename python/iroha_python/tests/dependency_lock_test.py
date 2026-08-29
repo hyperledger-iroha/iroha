@@ -223,8 +223,8 @@ def test_privacy_gate_enforces_the_ci_lock_and_native_build_policy() -> None:
     }
     assert workflow.count("ci/privacy_sdk_cargo_lockfile.sh provision-ci") == 4
     assert workflow.count("ci/privacy_sdk_cargo_lockfile.sh verify-ci") == 8
-    assert workflow.count("run: cargo fetch --locked") == 5
-    assert workflow.count("cargo fetch --locked") == 6
+    assert workflow.count("run: cargo fetch --locked") == 4
+    assert workflow.count("cargo fetch --locked") == 4
     assert "Swatinem/rust-cache@" not in workflow
     assert workflow.count("id: privacy-python") == 2
     for setup_id, expected_count in {
@@ -280,8 +280,8 @@ def test_privacy_gate_enforces_the_ci_lock_and_native_build_policy() -> None:
         )
         assert block is not None
         source = block.group(1)
-        assert source.count("Install and verify the frozen workspace Cargo lock") == 1
-        assert source.count("cargo fetch --locked") == 1
+        assert source.count("Authenticate distinct privacy release lock") == 1
+        assert source.count("fetch --locked --lockfile-path") == 1
         assert "cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79" in source
         assert "provision-ci" not in source
     for workflow_path in (

@@ -60,7 +60,7 @@ _REPLY_WRITER_DEADLINE_NETWORK_ITEM_SHA256 = {
         "93884415a18ff4e3f7c0c680d0219b8a1d01ebdca398b9c8534aa678a20a21e0"
     ),
     "NetworkBase::post_reliable_actor_frame_to_writer": (
-        "9347732994ea2854fc8185768ca08bbd0b3bac410fdb65b3d724b4ccb71d0c4b"
+        "36e36738ea178308c723438134f5ccfeda275ef638830e08195f03879bc0db3d"
     ),
     "NetworkBase::expire_reply_writer_occurrence": (
         "47b73c3e71be2a9896d208bb15097d7359194a738374bee812813a44d4f8a140"
@@ -209,12 +209,11 @@ macro_rules! admit_lane_reply {
 """,
     "direct_frame": """
 macro_rules! direct_frame {
-    ($origin:expr, $target:expr, $priority:expr, $payload:expr $(,)?) => {
+    ($origin:expr, $target:expr, $payload:expr $(,)?) => {
         RelayMessage::new(
             $origin,
             RelayTarget::Direct(($target).clone()),
             DEFAULT_RELAY_TTL,
-            $priority,
             $payload,
         )
     };
@@ -348,14 +347,18 @@ def _reply_writer_deadline_production_source_fidelity_errors(
         else:
             sources[path] = path.read_text(encoding="utf-8")
 
-    _loaded_worker_path, reviewed_worker_source = _read_reviewed_rust_source(
-        repo_root,
-        worker_path.relative_to(repo_root).as_posix(),
-        errors,
-        "exact reply adaptive-attempt worker source",
-    )
-    if reviewed_worker_source:
-        sources[worker_path] = reviewed_worker_source
+    for reviewed_path, description in (
+        (network_path, "exact reply peer-writer source"),
+        (worker_path, "exact reply adaptive-attempt worker source"),
+    ):
+        _loaded_path, reviewed_source = _read_reviewed_rust_source(
+            repo_root,
+            reviewed_path.relative_to(repo_root).as_posix(),
+            errors,
+            description,
+        )
+        if reviewed_source:
+            sources[reviewed_path] = reviewed_source
 
     token_cache = {
         path: rust_code_tokens(source) for path, source in sources.items()
@@ -423,15 +426,18 @@ pub reply_writer_flush_timeout_ms: DurationMs,
         """
 let min_interval = MIN_TIMER_INTERVAL;
 let idle_timeout = idle_timeout.get().max(min_interval);
+let preauth_timeout = preauth_timeout.get().max(min_interval);
 let reply_writer_flush_timeout = reply_writer_flush_timeout.get().max(min_interval);
 let dial_timeout = dial_timeout.get().max(min_interval);
 """,
-        "the configured exact-reply writer deadline must be clamped to the 100ms timer floor",
+        "the configured pre-authentication and exact-reply writer deadlines must be clamped to the 100ms timer floor",
     )
     require(
         user_path,
         """
 idle_timeout,
+preauth_timeout,
+preauth_max_connections_per_ip,
 reply_writer_flush_timeout,
 connect_startup_delay: connect_startup_delay.get(),
 """,
@@ -441,8 +447,8 @@ connect_startup_delay: connect_startup_delay.get(),
     require(
         network_path,
         """
-struct PendingWriterFlush {
-    receiver: tokio::sync::oneshot::Receiver<()>,
+pub(super) struct PendingWriterFlush {
+    pub(super) receiver: tokio::sync::oneshot::Receiver<()>,
 }
 """,
         "a pending peer-writer occurrence must retain only its flush receiver; the deadline belongs to the actor item",
@@ -450,9 +456,9 @@ struct PendingWriterFlush {
     require(
         network_path,
         """
-struct ExactReplyWriterDeadline {
-    admitted_at: tokio::time::Instant,
-    timeout: Duration,
+pub(super) struct ExactReplyWriterDeadline {
+    pub(super) admitted_at: tokio::time::Instant,
+    pub(super) timeout: Duration,
 }
 """,
         "each exact-reply actor item must retain its first-dispatch instant and scaled timeout",
@@ -482,12 +488,20 @@ enum NetworkReplyFlushCompletion {
     require(
         network_path,
         """
+pub(super) reply_writer_timeout_attempt: Option<u8>,
+pub(super) reply_writer_deadline: Option<ExactReplyWriterDeadline>,
+pub(super) reply_flush_ack: Option<tokio::sync::oneshot::Sender<NetworkReplyFlushCompletion>>,
+""",
+        "the actor item must retain adaptive attempt, fixed deadline, and exact completion sender",
+    )
+    require(
+        network_path,
+        """
 reply_writer_timeout_attempt: Option<u8>,
 reply_writer_deadline: Option<ExactReplyWriterDeadline>,
 reply_flush_ack: Option<tokio::sync::oneshot::Sender<NetworkReplyFlushCompletion>>,
 """,
-        "the actor item must retain adaptive attempt, fixed deadline, and exact completion sender",
-        count=2,
+        "the actor retention constructor must preserve adaptive attempt, fixed deadline, and exact completion sender",
     )
     require(
         network_path,
@@ -502,6 +516,7 @@ pub async fn start_with_crypto_and_initial_authorities(
         relay_ttl,
         soranet_handshake,
         idle_timeout,
+        preauth_timeout,
         reply_writer_flush_timeout,
         connect_startup_delay,
 """,
@@ -541,7 +556,7 @@ connect_startup_delay_until,
     handle_context = (
         (
             "impl", "<", "T", ":", "Pload", "+", "message", "::",
-            "ClassifyTopic", ",", "E", ":", "Enc", "+", "Sync", ">",
+            "ClassifyTopic", "+", "Sync", ",", "E", ":", "Enc", "+", "Sync", ">",
             "NetworkBaseHandle", "<", "T", ",", "E", ">",
         ),
     )
@@ -771,39 +786,59 @@ connect_startup_delay_until,
     dispatch_inner = network_items[
         "NetworkBase::dispatch_reliable_actor_message_inner"
     ]
-    for constructor, description in (
+    materialize = _require_rust_item(
+        network_path, network_source, "materialize", errors
+    )
+    _require_rust_item_context(
+        network_path,
+        materialize,
         (
-            """
-let frame = RelayMessage::new_signed(
-    &self.key_pair,
-    RelayTarget::Direct(post.peer_id.clone()),
-    self.relay_ttl,
-    post.priority,
-    post.data.clone(),
-);
-""",
-            "exact direct reply dispatch must retain the authenticated relay origin",
+            (
+                "impl", "<", "T", ":", "Encode", ">",
+                "AdmittedNetworkPayload", "<", "T", ">",
+            ),
         ),
-        (
-            """
-let frame = RelayMessage::new_signed(
-    &self.key_pair,
-    RelayTarget::Broadcast,
-    self.relay_ttl,
-    broadcast.priority,
-    broadcast.data.clone(),
-);
+        "single-allocation authenticated relay materialization",
+        errors,
+    )
+    _require_rust_token_sequence(
+        network_path,
+        materialize,
+        """
+match self {
+    Self::Signed(frame) => Self::Signed(frame),
+    Self::Unsigned(NetworkMessage::Post(post)) => {
+        Self::Signed(Arc::new(RelayMessage::new_signed(
+            key_pair,
+            RelayTarget::Direct(post.peer_id),
+            relay_ttl,
+            post.data,
+        )))
+    }
+    Self::Unsigned(NetworkMessage::Broadcast(broadcast)) => {
+        Self::Signed(Arc::new(RelayMessage::new_signed(
+            key_pair,
+            RelayTarget::Broadcast,
+            relay_ttl,
+            broadcast.data,
+        )))
+    }
+}
 """,
-            "reliable broadcast dispatch must retain the authenticated relay origin",
-        ),
-    ):
-        _require_rust_token_sequence(
-            network_path,
-            dispatch_inner,
-            constructor,
-            description,
-            errors,
-        )
+        "materialization must authenticate each unsigned target and preserve an already signed allocation",
+        errors,
+    )
+    _require_rust_token_sequence(
+        network_path,
+        dispatch_inner,
+        """
+let message = message.materialize(&self.key_pair, self.relay_ttl);
+let frame = Arc::clone(message.signed_frame());
+let transferred = match &frame.target {
+""",
+        "reliable dispatch must materialize once and reuse the same signed frame across retries",
+        errors,
+    )
 
     identity_constructor = network_items[
         "NetworkReplyFlushIdentity::from_admitted_ticket"
@@ -1189,7 +1224,13 @@ match outcome {
         """
 if exact_reply_flushed {
     debug_assert!(reliable_progress);
-    debug_assert!(matches!(&message, NetworkMessage::Post(_)));
+    debug_assert!(match &message {
+        AdmittedNetworkPayload::Unsigned(NetworkMessage::Post(_)) => true,
+        AdmittedNetworkPayload::Signed(frame) => {
+            matches!(&frame.target, RelayTarget::Direct(_))
+        }
+        AdmittedNetworkPayload::Unsigned(NetworkMessage::Broadcast(_)) => false,
+    });
     if let Some(reply_flush_ack) = reply_flush_ack {
         let _ = reply_flush_ack.send(NetworkReplyFlushCompletion::Flushed);
     }

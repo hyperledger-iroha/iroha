@@ -5386,6 +5386,23 @@ mod tests {
         };
         assert!(matches!(elements[0].kind(), TypeExpr::Path(path) if path == "bool"));
         assert!(matches!(elements[1].kind(), TypeExpr::Path(path) if path == "string"));
+
+        std::thread::Builder::new()
+            .name("kotodama-type-error-drop".to_owned())
+            .stack_size(64 * 1024)
+            .spawn(|| {
+                let depth = FrontendBudget::v1().max_nesting().saturating_sub(3);
+                let nested = format!("{}int{}", "Option<".repeat(depth), ">".repeat(depth));
+                let source = format!("module TestModule {{ struct Wrapper {{ {nested} : }} }}");
+                let error = parse(&source).expect_err("a field name is required after its type");
+                assert!(
+                    error.contains("type-first"),
+                    "the later declaration-order error must survive iterative type cleanup: {error}"
+                );
+            })
+            .expect("spawn small-stack type cleanup test")
+            .join()
+            .expect("small-stack type cleanup test");
     }
     #[test]
     fn parses_list_literals_and_filtered_comprehensions() {

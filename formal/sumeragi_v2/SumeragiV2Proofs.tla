@@ -444,7 +444,7 @@ THEOREM NextLockFootprintClassification ==
     => \/ LockStableNext
        \/ (\E request \in pendingLockCommit: PersistLockCommit(request))
        \/ (\E request \in pendingInstallTC: PersistInstallTC(request))
-BY DEF Next, LockStableNext
+BY DEF Next, ByzantineProposalJustificationDomain, LockStableNext
 
 THEOREM LockStableNextLeavesContextAndLocks ==
   LockStableNext => UnchangedContextAndLocks

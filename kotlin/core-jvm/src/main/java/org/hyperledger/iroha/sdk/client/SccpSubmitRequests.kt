@@ -2,33 +2,22 @@ package org.hyperledger.iroha.sdk.client
 
 import java.util.Base64
 import org.hyperledger.iroha.sdk.address.AccountAddress
-import org.hyperledger.iroha.sdk.address.AccountAddressException
 import org.hyperledger.iroha.sdk.address.requireCanonicalI105Address
 import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
-import org.hyperledger.iroha.sdk.core.model.TransactionAdmissionIntent
 import org.hyperledger.iroha.sdk.norito.NoritoHeader
 import org.hyperledger.iroha.sdk.norito.SchemaHash
+import org.hyperledger.iroha.sdk.sccp.SccpReplayV1
+import org.hyperledger.iroha.sdk.sccp.SccpSparseMerkleWitnessV1
 import org.hyperledger.iroha.sdk.sccp.SccpV1
-import org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapter
 
 /** Exact request payload for POST /v1/bridge/proofs/submit. */
 class SccpDestinationProofSubmitRequest(
     authority: String,
     destinationProofB64: String,
     feePayment: FeePaymentIntent,
-    signatureB64: String? = null,
-    transactionPayloadB64: String? = null,
-    creationTimeMs: Long? = null,
 ) {
     val authority: String = requireCanonicalSccpAuthority(authority)
     val feePayment: FeePaymentIntent = feePayment
-    val signatureB64: String? = normalizeOptionalSignature(signatureB64)
-    val transactionPayloadB64: String? = normalizeOptionalTransactionPayload(
-        transactionPayloadB64,
-        creationTimeMs,
-        this.authority,
-        this.feePayment,
-    )
     val destinationProofB64: String = destinationProofB64.also {
         validateCanonicalSccpNoritoBase64(
             it,
@@ -37,24 +26,12 @@ class SccpDestinationProofSubmitRequest(
             SCCP_DESTINATION_ARTIFACT_SCHEMA_NAME,
         )
     }
-    val creationTimeMs: Long? = creationTimeMs?.also {
-        require(it > 0) { "creationTimeMs must be positive" }
-    }
-
-    init {
-        validateSccpDetachedSigningState(signatureB64, transactionPayloadB64, this.creationTimeMs)
-    }
-
     /** Exact JSON object accepted by Torii; route overrides are unrepresentable. */
     fun toJsonMap(): Map<String, Any> = linkedMapOf<String, Any>(
         "authority" to authority,
         "fee_payment" to feePayment.toJsonMap(),
         "destination_proof_b64" to destinationProofB64,
-    ).also { output ->
-        signatureB64?.let { output["signature_b64"] = it }
-        transactionPayloadB64?.let { output["transaction_payload_b64"] = it }
-        creationTimeMs?.let { output["creation_time_ms"] = it }
-    }
+    )
 
     fun toJsonBytes(): ByteArray = JsonEncoder.encode(toJsonMap()).toByteArray(Charsets.UTF_8)
 }
@@ -65,19 +42,9 @@ class SccpNativeMessageSubmitRequest(
     nativeProofB64: String,
     replayWitnessB64: String,
     feePayment: FeePaymentIntent,
-    signatureB64: String? = null,
-    transactionPayloadB64: String? = null,
-    creationTimeMs: Long? = null,
 ) {
     val authority: String = requireCanonicalSccpAuthority(authority)
     val feePayment: FeePaymentIntent = feePayment
-    val signatureB64: String? = normalizeOptionalSignature(signatureB64)
-    val transactionPayloadB64: String? = normalizeOptionalTransactionPayload(
-        transactionPayloadB64,
-        creationTimeMs,
-        this.authority,
-        this.feePayment,
-    )
     val nativeProofB64: String = nativeProofB64.also {
         validateCanonicalSccpNoritoBase64(
             it,
@@ -87,32 +54,18 @@ class SccpNativeMessageSubmitRequest(
         )
     }
     val replayWitnessB64: String = replayWitnessB64.also {
-        validateCanonicalSccpNoritoBase64(
+        validateCanonicalSccpReplayWitnessBase64(
             it,
             "replayWitnessB64",
-            SCCP_MAX_REPLAY_WITNESS_BYTES,
-            SCCP_REPLAY_WITNESS_SCHEMA_NAME,
         )
     }
-    val creationTimeMs: Long? = creationTimeMs?.also {
-        require(it > 0) { "creationTimeMs must be positive" }
-    }
-
-    init {
-        validateSccpDetachedSigningState(signatureB64, transactionPayloadB64, this.creationTimeMs)
-    }
-
     /** Exact JSON object accepted by Torii; settlement selectors are unrepresentable. */
     fun toJsonMap(): Map<String, Any> = linkedMapOf<String, Any>(
         "authority" to authority,
         "fee_payment" to feePayment.toJsonMap(),
         "native_proof_b64" to nativeProofB64,
         "replay_witness_b64" to replayWitnessB64,
-    ).also { output ->
-        signatureB64?.let { output["signature_b64"] = it }
-        transactionPayloadB64?.let { output["transaction_payload_b64"] = it }
-        creationTimeMs?.let { output["creation_time_ms"] = it }
-    }
+    )
 
     fun toJsonBytes(): ByteArray = JsonEncoder.encode(toJsonMap()).toByteArray(Charsets.UTF_8)
 }
@@ -124,7 +77,6 @@ internal const val SCCP_MAX_DESTINATION_ARTIFACT_BASE64_BYTES = 22_544_384
 internal const val SCCP_MAX_NATIVE_PROOF_BYTES = 16 * 1024 * 1024
 internal const val SCCP_MAX_REPLAY_WITNESS_BYTES = 16 * 1024
 internal const val SCCP_MAX_TRANSACTION_PAYLOAD_BYTES = 16 * 1024 * 1024
-private const val SCCP_MAX_DETACHED_SIGNATURE_BYTES = 16 * 1024
 internal const val SCCP_DESTINATION_ARTIFACT_SCHEMA_NAME =
     "iroha_data_model::bridge::BridgeSccpDestinationProofV1"
 internal const val SCCP_NATIVE_INBOUND_PROOF_SCHEMA_NAME =
@@ -135,9 +87,6 @@ internal val SCCP_PROOF_REQUEST_SCHEMA_NAMES = setOf(
     "iroha_sccp::SccpGroth16Bn254ProofRequestV1",
     "iroha_sccp::SccpTonGroth16Bls12381ProofRequestV1",
 )
-private val SCCP_TRANSACTION_CODEC =
-    NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1)
-
 internal fun validateCanonicalSccpNoritoBase64(
     value: String,
     field: String,
@@ -179,6 +128,20 @@ internal fun validateCanonicalSccpProofRequestNorito(
     SCCP_PROOF_REQUEST_SCHEMA_NAMES,
 )
 
+internal fun validateCanonicalSccpReplayWitnessBase64(
+    value: String,
+    field: String,
+): ByteArray {
+    val archive = validateCanonicalSccpNoritoBase64(
+        value,
+        field,
+        SCCP_MAX_REPLAY_WITNESS_BYTES,
+        SCCP_REPLAY_WITNESS_SCHEMA_NAME,
+    )
+    validateCanonicalSccpReplayWitnessArchive(archive, field)
+    return archive
+}
+
 private fun validateCanonicalSccpNoritoBytes(
     decoded: ByteArray,
     field: String,
@@ -219,109 +182,82 @@ internal fun requireCanonicalSccpAuthority(value: String): String {
     return canonical
 }
 
-internal fun normalizeOptionalSignature(value: String?): String? {
-    if (value == null) return null
-    val decoded = decodeCanonicalBase64(
-        value,
-        "signature_b64",
-        SCCP_MAX_DETACHED_SIGNATURE_BYTES,
+private fun validateCanonicalSccpReplayWitnessArchive(archive: ByteArray, field: String) {
+    val payload = NoritoHeader.decode(archive, null).payload
+    val cursor = SccpCompactCursor(payload)
+    val expectedRoot = cursor.field("$field.expected_shard_root").requireSize(32, field)
+    val priorRecordDigest = cursor.field("$field.prior_record_digest").requireSize(32, field)
+    val siblingBitmap = cursor.field("$field.sibling_bitmap").requireSize(32, field)
+    val siblingSequence = SccpCompactCursor(cursor.field("$field.siblings"))
+    require(cursor.finished()) { "$field contains trailing fields" }
+    val siblingCount = siblingSequence.u64("$field.siblings.count")
+    require(siblingCount <= SccpReplayV1.DEPTH.toLong()) { "$field contains too many siblings" }
+    val siblings = ArrayList<ByteArray>(siblingCount.toInt())
+    repeat(siblingCount.toInt()) {
+        siblings.add(siblingSequence.field("$field.sibling").requireSize(32, field))
+    }
+    require(siblingSequence.finished()) { "$field sibling sequence contains trailing bytes" }
+    require(priorRecordDigest.all { it.toInt() == 0 }) {
+        "$field must prove non-membership with an all-zero prior record digest"
+    }
+    SccpReplayV1.rootFromWitness(
+        ByteArray(32) { 1 },
+        null,
+        SccpSparseMerkleWitnessV1(
+            expectedRoot,
+            priorRecordDigest,
+            siblingBitmap,
+            siblings,
+        ),
     )
-    require(decoded.any { it.toInt() != 0 }) {
-        "signature_b64 must contain one admitted nonzero signature payload"
-    }
-    return value
 }
 
-internal fun validateSccpDetachedSigningState(
-    signatureB64: String?,
-    transactionPayloadB64: String?,
-    creationTimeMs: Long?,
-) {
-    when {
-        signatureB64 == null && transactionPayloadB64 == null -> Unit
-        signatureB64 != null && transactionPayloadB64 != null -> require(creationTimeMs != null && creationTimeMs > 0) {
-            "signed SCCP submission requires an explicit positive creation_time_ms"
+private fun ByteArray.requireSize(size: Int, field: String): ByteArray = also {
+    require(it.size == size) { "$field contains a malformed fixed byte array" }
+}
+
+private class SccpCompactCursor(private val input: ByteArray) {
+    private var offset = 0
+
+    fun field(field: String): ByteArray {
+        val length = compactLength(field)
+        require(length <= Int.MAX_VALUE.toLong()) { "$field length exceeds the runtime bound" }
+        return exact(length.toInt(), field)
+    }
+
+    fun u64(field: String): Long {
+        val bytes = exact(8, field)
+        require((bytes[7].toInt() and 0x80) == 0) { "$field exceeds the signed runtime bound" }
+        var value = 0L
+        for (index in bytes.indices) {
+            value = value or ((bytes[index].toLong() and 0xff) shl (index * 8))
         }
-        else -> throw IllegalArgumentException(
-            "SCCP preparation requires neither signature_b64 nor transaction_payload_b64; signed submission requires both",
-        )
+        return value
     }
-}
 
-internal fun normalizeOptionalTransactionPayload(
-    value: String?,
-    creationTimeMs: Long?,
-    expectedAuthority: String,
-    expectedFeePayment: FeePaymentIntent,
-): String? {
-    if (value == null) return null
-    val bytes = decodeCanonicalBase64(value, "transaction_payload_b64", SCCP_MAX_TRANSACTION_PAYLOAD_BYTES)
-    val payload = try {
-        SCCP_TRANSACTION_CODEC.decodeTransaction(bytes)
-    } catch (ex: Exception) {
-        throw IllegalArgumentException(
-            "transaction_payload_b64 must contain one canonical transaction payload",
-            ex,
-        )
-    }
-    val canonical = try {
-        SCCP_TRANSACTION_CODEC.encodeTransaction(payload)
-    } catch (ex: Exception) {
-        throw IllegalArgumentException("transaction_payload_b64 could not be canonically re-encoded", ex)
-    }
-    require(canonical.contentEquals(bytes)) { "transaction_payload_b64 is not canonical" }
-    require(sameCanonicalAccountId(payload.authority, expectedAuthority)) {
-        "transaction payload authority does not match authority"
-    }
-    require(sameSccpFeePayerAndGasBound(expectedFeePayment, payload.feePayment)) {
-        "transaction payload changed the requested payer, sponsor revision, or gas bound"
-    }
-    require(payload.admissionIntent == TransactionAdmissionIntent.QUEUE_PLAN_SYNCED) {
-        "transaction payload admission intent must be QueuePlanSynced"
-    }
-    if (creationTimeMs != null) {
-        require(payload.creationTimeMs == creationTimeMs) {
-            "transaction payload creation time does not match creation_time_ms"
+    fun finished(): Boolean = offset == input.size
+
+    private fun compactLength(field: String): Long {
+        var result = 0L
+        var shift = 0
+        while (true) {
+            val value = exact(1, field)[0].toInt() and 0xff
+            val chunk = value and 0x7f
+            require(shift < 63 || chunk <= 1) { "$field compact length exceeds u64" }
+            result = result or (chunk.toLong() shl shift)
+            if (value and 0x80 == 0) {
+                require(shift == 0 || chunk != 0) { "$field compact length is overlong" }
+                return result
+            }
+            shift += 7
+            require(shift < 64) { "$field compact length exceeds u64" }
         }
     }
-    return value
-}
 
-private fun sameSccpFeePayerAndGasBound(
-    expected: FeePaymentIntent,
-    actual: FeePaymentIntent,
-): Boolean {
-    if (expected.gasLimit != actual.gasLimit) return false
-    return when {
-        expected is FeePaymentIntent.Authority && actual is FeePaymentIntent.Authority -> true
-        expected is FeePaymentIntent.Sponsor && actual is FeePaymentIntent.Sponsor ->
-            expected.programRevision == actual.programRevision &&
-                expected.programId.name == actual.programId.name &&
-                sameCanonicalAccountId(expected.programId.sponsor, actual.programId.sponsor)
-        else -> false
+    private fun exact(length: Int, field: String): ByteArray {
+        require(length >= 0 && offset <= input.size - length) { "$field is truncated" }
+        return input.copyOfRange(offset, offset + length).also { offset += length }
     }
-}
-
-private fun sameCanonicalAccountId(left: String, right: String): Boolean = try {
-    // AccountId wire identity is domainless and excludes its I105 display discriminant.
-    val leftBytes = AccountAddress.parseEncodedIgnoringCurveSupport(left, null).canonicalBytes
-    val rightBytes = AccountAddress.parseEncodedIgnoringCurveSupport(right, null).canonicalBytes
-    leftBytes.contentEquals(rightBytes)
-} catch (ex: AccountAddressException) {
-    throw IllegalArgumentException("transaction payload account must be canonical I105", ex)
-}
-
-internal fun decodeCanonicalBase64(value: String, field: String, maximum: Int): ByteArray {
-    require(value.isNotEmpty() && value == value.trim()) { "$field must be canonical padded base64" }
-    require(value.length <= maximumBase64Length(maximum)) { "$field exceeds its canonical size bound" }
-    val decoded = try {
-        Base64.getDecoder().decode(value)
-    } catch (ex: IllegalArgumentException) {
-        throw IllegalArgumentException("$field must be valid base64", ex)
-    }
-    require(decoded.isNotEmpty() && decoded.size <= maximum) { "$field exceeds its canonical size bound" }
-    require(Base64.getEncoder().encodeToString(decoded) == value) { "$field must be canonical padded base64" }
-    return decoded
 }
 
 private fun maximumBase64Length(maximumBytes: Int): Int = 4 * ((maximumBytes + 2) / 3)

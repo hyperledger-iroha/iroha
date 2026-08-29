@@ -1918,7 +1918,10 @@ pub(crate) mod tests {
                     authority,
                     iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 )
-                .with_instructions::<InstructionBox>([]);
+                .with_instructions::<InstructionBox>([])
+                .with_admission_intent(
+                    iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
+                );
                 builder.set_creation_time(Duration::from_millis(
                     epoch.saturating_mul(10).saturating_add(index),
                 ));

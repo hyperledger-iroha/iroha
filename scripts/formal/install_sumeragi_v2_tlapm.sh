@@ -156,7 +156,7 @@ else
   set +e
     http_status="$(/usr/bin/env -i HOME="$work_dir" PATH="$SANITIZED_RUNTIME_PATH" \
       TMPDIR="$work_dir" LANG=C LC_ALL=C TZ=UTC \
-      /usr/bin/curl --proto '=https' --tlsv1.2 --fail --location --retry 3 \
+      /usr/bin/curl --proto '=https' --http1.1 --tlsv1.2 --fail --location --retry 3 \
     --header 'Accept: application/octet-stream' \
     --header 'X-GitHub-Api-Version: 2022-11-28' \
     --write-out '%{http_code}' --output "$archive_path" "$URL")"

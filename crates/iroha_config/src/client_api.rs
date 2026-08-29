@@ -1228,7 +1228,8 @@ fn finalize_network(
         transaction_gossip_resend_ticks: tx_gossip_resend_ticks.ok_or_else(|| {
             NoritoError::Message("missing transaction_gossip_resend_ticks".into())
         })?,
-        soranet_handshake: soranet_handshake.unwrap_or_default(),
+        soranet_handshake: soranet_handshake
+            .ok_or_else(|| NoritoError::Message("missing network.soranet_handshake".into()))?,
         soranet_privacy: soranet_privacy_summary.unwrap_or_default(),
         soranet_vpn: soranet_vpn_summary.unwrap_or_default(),
         lane_profile: lane_profile.unwrap_or(base::LaneProfile::Core),
@@ -2574,8 +2575,10 @@ impl From<base::SoranetPuzzle> for SoranetHandshakePuzzleSummary {
 }
 impl<'a> FastFromJson<'a> for SoranetHandshakePuzzleSummary {
     fn parse(w: &mut TapeWalker<'a>, _arena: &mut Arena) -> Result<Self, NoritoError> {
-        let mut summary = Self::default();
         w.expect_object_start()?;
+        let mut memory_kib = None;
+        let mut time_cost = None;
+        let mut lanes = None;
         let kh_memory = norito::json::key_hash_const("memory_kib");
         let kh_time = norito::json::key_hash_const("time_cost");
         let kh_lanes = norito::json::key_hash_const("lanes");
@@ -2584,16 +2587,22 @@ impl<'a> FastFromJson<'a> for SoranetHandshakePuzzleSummary {
             w.expect_colon_resync()?;
             match kh {
                 x if x == kh_memory && w.last_key() == "memory_kib" => {
-                    summary.memory_kib = u32::try_from(w.parse_u64_inline()?)
-                        .map_err(|_| NoritoError::Message("u32 overflow".into()))?;
+                    memory_kib = Some(
+                        u32::try_from(w.parse_u64_inline()?)
+                            .map_err(|_| NoritoError::Message("u32 overflow".into()))?,
+                    );
                 }
                 x if x == kh_time && w.last_key() == "time_cost" => {
-                    summary.time_cost = u32::try_from(w.parse_u64_inline()?)
-                        .map_err(|_| NoritoError::Message("u32 overflow".into()))?;
+                    time_cost = Some(
+                        u32::try_from(w.parse_u64_inline()?)
+                            .map_err(|_| NoritoError::Message("u32 overflow".into()))?,
+                    );
                 }
                 x if x == kh_lanes && w.last_key() == "lanes" => {
-                    summary.lanes = u32::try_from(w.parse_u64_inline()?)
-                        .map_err(|_| NoritoError::Message("u32 overflow".into()))?;
+                    lanes = Some(
+                        u32::try_from(w.parse_u64_inline()?)
+                            .map_err(|_| NoritoError::Message("u32 overflow".into()))?,
+                    );
                 }
                 _ => {
                     return Err(NoritoError::Message(format!(
@@ -2605,7 +2614,19 @@ impl<'a> FastFromJson<'a> for SoranetHandshakePuzzleSummary {
             let _ = w.consume_comma_if_present()?;
         }
         w.expect_object_end()?;
-        Ok(summary)
+        Ok(Self {
+            memory_kib: memory_kib.ok_or_else(|| {
+                NoritoError::Message(
+                    "missing memory_kib in SoraNet handshake puzzle summary".into(),
+                )
+            })?,
+            time_cost: time_cost.ok_or_else(|| {
+                NoritoError::Message("missing time_cost in SoraNet handshake puzzle summary".into())
+            })?,
+            lanes: lanes.ok_or_else(|| {
+                NoritoError::Message("missing lanes in SoraNet handshake puzzle summary".into())
+            })?,
+        })
     }
 }
 impl JsonDeserialize for SoranetHandshakePuzzleSummary {
@@ -2822,12 +2843,34 @@ impl<'a> FastFromJson<'a> for SoranetHandshakePowSummary {
         }
         w.expect_object_end()?;
         Ok(Self {
-            difficulty: difficulty.unwrap_or(0),
-            max_future_skew_secs: max_future_skew.unwrap_or(0),
-            min_ticket_ttl_secs: min_ticket_ttl.unwrap_or(0),
-            ticket_ttl_secs: ticket_ttl.unwrap_or(0),
-            outbound_mint_capacity: outbound_mint_capacity.unwrap_or(0),
-            inbound_verify_capacity: inbound_verify_capacity.unwrap_or(0),
+            difficulty: difficulty.ok_or_else(|| {
+                NoritoError::Message("missing difficulty in SoraNet handshake PoW summary".into())
+            })?,
+            max_future_skew_secs: max_future_skew.ok_or_else(|| {
+                NoritoError::Message(
+                    "missing max_future_skew_secs in SoraNet handshake PoW summary".into(),
+                )
+            })?,
+            min_ticket_ttl_secs: min_ticket_ttl.ok_or_else(|| {
+                NoritoError::Message(
+                    "missing min_ticket_ttl_secs in SoraNet handshake PoW summary".into(),
+                )
+            })?,
+            ticket_ttl_secs: ticket_ttl.ok_or_else(|| {
+                NoritoError::Message(
+                    "missing ticket_ttl_secs in SoraNet handshake PoW summary".into(),
+                )
+            })?,
+            outbound_mint_capacity: outbound_mint_capacity.ok_or_else(|| {
+                NoritoError::Message(
+                    "missing outbound_mint_capacity in SoraNet handshake PoW summary".into(),
+                )
+            })?,
+            inbound_verify_capacity: inbound_verify_capacity.ok_or_else(|| {
+                NoritoError::Message(
+                    "missing inbound_verify_capacity in SoraNet handshake PoW summary".into(),
+                )
+            })?,
             puzzle: puzzle.ok_or_else(|| {
                 NoritoError::Message("missing puzzle: mandatory SoraNet puzzle summary".into())
             })?,
@@ -3071,13 +3114,31 @@ impl<'a> FastFromJson<'a> for SoranetHandshakeSummary {
         }
         w.expect_object_end()?;
         Ok(Self {
-            descriptor_commit_hex: descriptor_commit_hex.unwrap_or_default(),
-            client_capabilities_hex: client_capabilities_hex.unwrap_or_default(),
-            relay_capabilities_hex: relay_capabilities_hex.unwrap_or_default(),
-            kem_id: kem_id.unwrap_or(0),
-            sig_id: sig_id.unwrap_or(0),
+            descriptor_commit_hex: descriptor_commit_hex.ok_or_else(|| {
+                NoritoError::Message(
+                    "missing descriptor_commit_hex in SoraNet handshake summary".into(),
+                )
+            })?,
+            client_capabilities_hex: client_capabilities_hex.ok_or_else(|| {
+                NoritoError::Message(
+                    "missing client_capabilities_hex in SoraNet handshake summary".into(),
+                )
+            })?,
+            relay_capabilities_hex: relay_capabilities_hex.ok_or_else(|| {
+                NoritoError::Message(
+                    "missing relay_capabilities_hex in SoraNet handshake summary".into(),
+                )
+            })?,
+            kem_id: kem_id.ok_or_else(|| {
+                NoritoError::Message("missing kem_id in SoraNet handshake summary".into())
+            })?,
+            sig_id: sig_id.ok_or_else(|| {
+                NoritoError::Message("missing sig_id in SoraNet handshake summary".into())
+            })?,
             resume_hash_hex,
-            pow: pow.unwrap_or_default(),
+            pow: pow.ok_or_else(|| {
+                NoritoError::Message("missing pow in SoraNet handshake summary".into())
+            })?,
         })
     }
 }
@@ -3115,6 +3176,43 @@ mod test {
         fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
             parse_via_fast(parser)
         }
+    }
+    fn complete_soranet_puzzle_summary_value() -> json::Value {
+        norito::json!({
+            "memory_kib": 65_536,
+            "time_cost": 2,
+            "lanes": 1,
+        })
+    }
+    fn complete_soranet_pow_summary_value() -> json::Value {
+        norito::json!({
+            "difficulty": 6,
+            "max_future_skew_secs": 300,
+            "min_ticket_ttl_secs": 30,
+            "ticket_ttl_secs": 300,
+            "outbound_mint_capacity": 3,
+            "inbound_verify_capacity": 3,
+            "puzzle": (complete_soranet_puzzle_summary_value()),
+        })
+    }
+    fn complete_soranet_handshake_summary_value() -> json::Value {
+        norito::json!({
+            "descriptor_commit_hex": "00",
+            "client_capabilities_hex": "00",
+            "relay_capabilities_hex": "00",
+            "kem_id": 1,
+            "sig_id": 1,
+            "resume_hash_hex": null,
+            "pow": (complete_soranet_pow_summary_value()),
+        })
+    }
+    fn json_without_object_field(mut value: json::Value, field: &str) -> String {
+        let removed = value
+            .as_object_mut()
+            .expect("test JSON value must be an object")
+            .remove(field);
+        assert!(removed.is_some(), "test JSON object is missing `{field}`");
+        json::to_json(&value).expect("serialize test JSON value")
     }
     #[test]
     #[allow(clippy::too_many_lines)]
@@ -3295,6 +3393,104 @@ mod test {
         assert_eq!(network.require_sm_openssl_preview_match, Some(true));
     }
     #[test]
+    fn network_snapshot_requires_soranet_handshake() {
+        let payload = norito::json!({
+            "chain_discriminant": 0,
+            "block_gossip_size": 10,
+            "block_gossip_period_ms": 5_000,
+            "transaction_gossip_size": 512,
+            "transaction_gossip_period_ms": 1_000,
+            "transaction_gossip_resend_ticks": 1,
+        });
+        let payload = json::to_json(&payload).expect("serialize network snapshot");
+
+        let error = json::from_json::<Network>(&payload)
+            .expect_err("network snapshot must include SoraNet handshake summary");
+
+        assert!(
+            error
+                .to_string()
+                .contains("missing network.soranet_handshake"),
+            "unexpected error: {error}"
+        );
+    }
+    #[test]
+    fn soranet_handshake_snapshot_requires_pow() {
+        let payload = json_without_object_field(complete_soranet_handshake_summary_value(), "pow");
+
+        let error = json::from_json::<SoranetHandshakeSummary>(&payload)
+            .expect_err("SoraNet handshake snapshot must include PoW summary");
+
+        assert!(
+            error
+                .to_string()
+                .contains("missing pow in SoraNet handshake summary"),
+            "unexpected error: {error}"
+        );
+    }
+    #[test]
+    fn soranet_handshake_summary_requires_every_non_null_scalar_field() {
+        for field in [
+            "descriptor_commit_hex",
+            "client_capabilities_hex",
+            "relay_capabilities_hex",
+            "kem_id",
+            "sig_id",
+        ] {
+            let payload =
+                json_without_object_field(complete_soranet_handshake_summary_value(), field);
+
+            let error = json::from_json::<SoranetHandshakeSummary>(&payload)
+                .expect_err("incomplete SoraNet handshake summary must be rejected");
+
+            assert!(
+                error
+                    .to_string()
+                    .contains(&format!("missing {field} in SoraNet handshake summary")),
+                "unexpected error for missing `{field}`: {error}"
+            );
+        }
+    }
+    #[test]
+    fn soranet_pow_summary_requires_every_scalar_field() {
+        for field in [
+            "difficulty",
+            "max_future_skew_secs",
+            "min_ticket_ttl_secs",
+            "ticket_ttl_secs",
+            "outbound_mint_capacity",
+            "inbound_verify_capacity",
+        ] {
+            let payload = json_without_object_field(complete_soranet_pow_summary_value(), field);
+
+            let error = json::from_json::<SoranetHandshakePowSummary>(&payload)
+                .expect_err("incomplete SoraNet PoW summary must be rejected");
+
+            assert!(
+                error
+                    .to_string()
+                    .contains(&format!("missing {field} in SoraNet handshake PoW summary")),
+                "unexpected error for missing `{field}`: {error}"
+            );
+        }
+    }
+    #[test]
+    fn soranet_puzzle_summary_requires_every_field() {
+        for field in ["memory_kib", "time_cost", "lanes"] {
+            let payload = json_without_object_field(complete_soranet_puzzle_summary_value(), field);
+
+            let error = json::from_json::<SoranetHandshakePuzzleSummary>(&payload)
+                .expect_err("incomplete SoraNet puzzle summary must be rejected");
+
+            assert!(
+                error.to_string().contains(&format!(
+                    "missing {field} in SoraNet handshake puzzle summary"
+                )),
+                "unexpected error for missing `{field}`: {error}"
+            );
+        }
+    }
+    #[test]
     fn soranet_pow_update_rejects_retired_required_field() {
         let error = norito::json::from_json::<SoranetHandshakePowUpdate>(r#"{"required":false}"#)
             .expect_err("the retired PoW switch must be rejected");
@@ -3357,7 +3553,8 @@ mod test {
     }
     #[test]
     fn soranet_pow_summary_requires_puzzle_parameters() {
-        let error = norito::json::from_json::<SoranetHandshakePowSummary>(r#"{}"#)
+        let payload = json_without_object_field(complete_soranet_pow_summary_value(), "puzzle");
+        let error = norito::json::from_json::<SoranetHandshakePowSummary>(&payload)
             .expect_err("mandatory puzzle summary must be present");
         assert!(
             error.to_string().contains("missing puzzle"),

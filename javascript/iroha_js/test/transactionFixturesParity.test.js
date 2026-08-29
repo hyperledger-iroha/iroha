@@ -1326,6 +1326,14 @@ test("fixture base64 hashes match manifest", () => {
       fixture.payload_base64,
       `${fixture.name}.payload_base64`,
     );
+    const encodedFileBytes = fs.readFileSync(
+      path.join(repoRoot, "fixtures", "norito_rpc", fixture.encoded_file),
+    );
+    assert.deepEqual(
+      encodedFileBytes,
+      payloadBytes,
+      `${fixture.name}: encoded_file bytes differ from payload_base64`,
+    );
     const payloadFrame = validateNoritoFrame(payloadBytes, {
       context: `${fixture.name}.payload_base64`,
       expectedSchemaHash: transactionPayloadSchemaHash,

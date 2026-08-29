@@ -1,5 +1,7 @@
 //! Telemetry for development rather than production purposes
 use crate::integrity::ChainState;
+#[cfg(unix)]
+use crate::integrity::{TELEMETRY_O_NOFOLLOW_FLAG, process_uid_in_directory};
 use chrono::Utc;
 use eyre::{Result, WrapErr, eyre};
 use iroha_config::parameters::actual::TelemetryIntegrity;
@@ -82,11 +84,15 @@ fn open_dev_output(path: &Path) -> Result<(File, PathBuf)> {
         .wrap_err_with(|| format!("canonicalize dev telemetry directory {}", parent.display()))?;
     let parent_metadata =
         fs::metadata(&canonical_parent).wrap_err("inspect telemetry directory")?;
-    let effective_uid = rustix::process::geteuid().as_raw();
-    if !parent_metadata.is_dir()
-        || parent_metadata.uid() != effective_uid
-        || parent_metadata.mode() & 0o022 != 0
-    {
+    if !parent_metadata.is_dir() || parent_metadata.mode() & 0o022 != 0 {
+        return Err(eyre!(
+            "dev telemetry directory must be owned by the process user and not writable by group or others: {}",
+            canonical_parent.display()
+        ));
+    }
+    let effective_uid =
+        process_uid_in_directory(&canonical_parent).map_err(|message| eyre!(message))?;
+    if parent_metadata.uid() != effective_uid {
         return Err(eyre!(
             "dev telemetry directory must be owned by the process user and not writable by group or others: {}",
             canonical_parent.display()
@@ -98,7 +104,7 @@ fn open_dev_output(path: &Path) -> Result<(File, PathBuf)> {
     let canonical_path = canonical_parent.join(file_name);
     let named_before = match fs::symlink_metadata(&canonical_path) {
         Ok(metadata) => {
-            validate_dev_output_metadata(&canonical_path, &metadata)?;
+            validate_dev_output_metadata(&canonical_path, &metadata, effective_uid)?;
             Some(metadata)
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
@@ -111,17 +117,17 @@ fn open_dev_output(path: &Path) -> Result<(File, PathBuf)> {
         .append(true)
         .create(true)
         .mode(0o600)
-        .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW);
+        .custom_flags(TELEMETRY_O_NOFOLLOW_FLAG);
     let file = options
         .open(&canonical_path)
         .wrap_err_with(|| format!("open dev telemetry output {}", canonical_path.display()))?;
     let opened = file
         .metadata()
         .wrap_err("inspect opened dev telemetry output")?;
-    validate_dev_output_metadata(&canonical_path, &opened)?;
+    validate_dev_output_metadata(&canonical_path, &opened, effective_uid)?;
     let named_after =
         fs::symlink_metadata(&canonical_path).wrap_err("reinspect dev telemetry output")?;
-    validate_dev_output_metadata(&canonical_path, &named_after)?;
+    validate_dev_output_metadata(&canonical_path, &named_after, effective_uid)?;
     if opened.dev() != named_after.dev() || opened.ino() != named_after.ino() {
         return Err(eyre!(
             "dev telemetry output changed while it was being opened"
@@ -152,10 +158,13 @@ fn open_dev_output(path: &Path) -> Result<(File, PathBuf)> {
 }
 
 #[cfg(unix)]
-fn validate_dev_output_metadata(path: &Path, metadata: &std::fs::Metadata) -> Result<()> {
+fn validate_dev_output_metadata(
+    path: &Path,
+    metadata: &std::fs::Metadata,
+    effective_uid: u32,
+) -> Result<()> {
     use std::os::unix::fs::MetadataExt as _;
 
-    let effective_uid = rustix::process::geteuid().as_raw();
     if !metadata.is_file()
         || metadata.file_type().is_symlink()
         || metadata.uid() != effective_uid

@@ -6,12 +6,12 @@ def test_release_inventory_constants_match_current_source_seal(
     """Every release consumer binds the current production and focus seals."""
 
     module = load_checker()
-    assert module._PRODUCTION_LIVENESS_RELEASE_COUNT == 863
+    assert module._PRODUCTION_LIVENESS_RELEASE_COUNT == 864
     assert module._PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 == (
-        "42509872b04f64962dc8edc09ca9f007bafffe402c4e0847255dc937a105888c"
+        "44784c79c489d83ab142bb0db84e89138c3a54b1349926a80597e2c5b21a83df"
     )
     assert module._PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 == (
-        "8eb88b75df56deaf2ff6684425b864a09269b8bb014346c336e5fac515f50c74"
+        "e294395f0bdb4997e396e3ea876fd26f578c51c6afc3845b71779286d46ed494"
     )
     assert module._SUMERAGI_V2_PACKAGE_LAYOUT_GUARD_SHA256 == (
         "e99da2c824b86930b76c741d2f7aa47ab16092c2f84e43550fb6362a36133268"
@@ -19,10 +19,10 @@ def test_release_inventory_constants_match_current_source_seal(
     assert module._SUMERAGI_V2_PACKAGE_LAYOUT_VERIFIER_SHA256 == (
         "42fc1fb789e115df9f54c230ee6bfc1e1c20504a904aa20f945b6369df6d7679"
     )
-    assert module._PRODUCTION_MULTILANE_FOCUS_TEST_COUNT == 518
-    assert module._PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT == 519
+    assert module._PRODUCTION_MULTILANE_FOCUS_TEST_COUNT == 522
+    assert module._PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT == 523
     assert module._PRODUCTION_MULTILANE_FOCUS_INVENTORY_SHA256 == (
-        "3d2c93cab0528cb668d977642eecfe78e9c20378e887a0b7db4198ffd220eb29"
+        "5e8b82b400b438eabb7733adbccae15b5aa212a98a89161a586cbce686e2f6e9"
     )
     assert module._PRODUCTION_LIFECYCLE_INGRESS_PUBLICATION_FENCE_ITEM_SHA256 == {
         "PreparedFairIngressQueueWitness::lock_exact_dequeue_retaining": (
@@ -246,9 +246,9 @@ def test_release_inventory_constants_match_current_source_seal(
     receipt_module = importlib.util.module_from_spec(receipt_spec)
     sys.modules[receipt_spec.name] = receipt_module
     receipt_spec.loader.exec_module(receipt_module)
-    assert receipt_module._PRODUCTION_TEST_COUNT == 863
-    assert receipt_module._G_UNIT_TEST_COUNT == 518
-    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 863
+    assert receipt_module._PRODUCTION_TEST_COUNT == 864
+    assert receipt_module._G_UNIT_TEST_COUNT == 522
+    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 864
     receipt_module_counts = {
         module_name: count
         for _leg_id, module_name, count in receipt_module._PRODUCTION_MODULES
@@ -263,12 +263,13 @@ def test_release_inventory_constants_match_current_source_seal(
     assert receipt_module_counts["sumeragi::v2_certified_serve_payload_store::tests"] == 11
     assert receipt_module_counts["sumeragi::v2_lifecycle_coordinator"] == 42
     assert receipt_module_counts["sumeragi::v2_runner::tests"] == 37
+    assert receipt_module_counts["network::tests"] == 84
     assert receipt_module_counts["sumeragi::v2_runner::lifecycle_height_driver::tests"] == 2
     assert receipt_module_counts["sumeragi::v2_worker::tests"] == 90
     assert "sumeragi::v2_core::network_simulation" not in receipt_module_counts
     assert (
         sum(count for _, _, _, count, _ in receipt_module._G_UNIT_GROUPS)
-        == 518
+        == 522
     )
 
 @pytest.mark.parametrize(
@@ -2145,8 +2146,8 @@ kura.claim_autonomous_lifecycle_process_generation(
             )
         )
     )
-    assert len(production_inventory) == 863
-    assert len(set(production_inventory)) == 863
+    assert len(production_inventory) == 864
+    assert len(set(production_inventory)) == 864
     native_merge_projection_regressions = {
         "sumeragi::v2_lane_work::tests::native_amx_manifest_projects_finality_bound_merge_batch_in_canonical_order",
         "sumeragi::v2_lane_work::tests::native_amx_merge_projection_rejects_multiple_participant_heights_in_one_carrier",
@@ -2198,8 +2199,8 @@ kura.claim_autonomous_lifecycle_process_generation(
     )
     exact_certified_serve_regressions = {
         "sumeragi::v2_lifecycle_coordinator::ingress_position::tests::turn_cut_dequeues_exact_winner_once_and_preserves_ready_rotation",
-        "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_certified_request_cutoff_blocks_later_same_source_serve",
-        "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_certified_request_cutoff_blocks_later_churn",
+        "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_predicate_scan_selects_same_lane_request_without_queue_local_serve_gate",
+        "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_predicate_scan_does_not_create_queue_local_serve_gate",
         "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_occurrence_ordinal_coalesces_and_overflow_closes",
         "sumeragi::v2_certified_serve_payload_store::tests::authenticated_cut_rejects_a_later_valid_payload_from_a_second_store_owner",
         "sumeragi::v2_certified_serve_payload_store::tests::authenticated_cut_rejects_store_directory_symlink_replacement",
@@ -2298,7 +2299,7 @@ kura.claim_autonomous_lifecycle_process_generation(
     assert replica_disposition_regression in production_inventory
     assert replica_disposition_regression in module._PRODUCTION_LIVENESS_NEW_REGRESSIONS
     assert len(module._PRODUCTION_LIVENESS_NEW_REGRESSIONS) == 447
-    assert "readonly expected_production_liveness_test_count=863" in release_source
+    assert "readonly expected_production_liveness_test_count=864" in release_source
     assert (
         "readonly expected_typed_rollover_formal_mutation_count=45"
         in release_source
@@ -2308,7 +2309,7 @@ kura.claim_autonomous_lifecycle_process_generation(
         'root-anchored V3 matrix passed"'
         in release_source
     )
-    assert "_PRODUCTION_TEST_COUNT = 863" in receipt_source
+    assert "_PRODUCTION_TEST_COUNT = 864" in receipt_source
     receipt_spec = importlib.util.spec_from_file_location(
         "sumeragi_v2_release_receipt_inventory",
         ROOT_DIR / "scripts" / "write_sumeragi_v2_release_receipt.py",
@@ -2318,7 +2319,7 @@ kura.claim_autonomous_lifecycle_process_generation(
     receipt_module = importlib.util.module_from_spec(receipt_spec)
     sys.modules[receipt_spec.name] = receipt_module
     receipt_spec.loader.exec_module(receipt_module)
-    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 863
+    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 864
     assert (
         receipt_module._PRODUCTION_MODULES
         == module._PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS
@@ -2574,10 +2575,10 @@ kura.claim_autonomous_lifecycle_process_generation(
     assert "source_manifest_contract_tests=(" in release_source
     assert "pytests/scripts/workspace_source_manifest_test.py" in release_source
     assert "pytests/scripts/seal_workspace_source_test.py" in release_source
-    assert "did not run exactly 78 passing tests" in release_source
-    assert "preflight-source-seal pytest 78" in release_source
+    assert "did not run exactly 80 passing tests" in release_source
+    assert "preflight-source-seal pytest 80" in release_source
     assert (
-        '"preflight-source-seal",\n                "pytest",\n                78,'
+        '"preflight-source-seal",\n                "pytest",\n                80,'
         in receipt_source
     )
     assert "seed_launcher_contract_tests=(" in release_source
@@ -2596,12 +2597,12 @@ kura.claim_autonomous_lifecycle_process_generation(
     assert "preflight-chaos-launcher pytest 5" in release_source
     assert "did not run exactly 75 passing tests" in release_source
     assert "preflight-release-identity pytest 75" in release_source
-    assert "did not run exactly 258 passing tests" in release_source
-    assert "preflight-release-bootstrap pytest 258" in release_source
-    assert "did not run exactly 44 passing tests" in release_source
-    assert "preflight-release-bootstrap-validator pytest 44" in release_source
-    assert "did not run exactly 368 passing tests" in release_source
-    assert "preflight-release-receipt pytest 368" in release_source
+    assert "did not run exactly 261 passing tests" in release_source
+    assert "preflight-release-bootstrap pytest 261" in release_source
+    assert "did not run exactly 50 passing tests" in release_source
+    assert "preflight-release-bootstrap-validator pytest 50" in release_source
+    assert "did not run exactly 362 passing tests" in release_source
+    assert "preflight-release-receipt pytest 362" in release_source
     assert (
         "pytests/scripts/sumeragi_v2_release_receipt_components_test.py"
         in release_source
@@ -2624,21 +2625,21 @@ kura.claim_autonomous_lifecycle_process_generation(
         in receipt_source
     )
     assert (
-        '"preflight-release-bootstrap",\n                "pytest",\n                258,'
+        '"preflight-release-bootstrap",\n                "pytest",\n                261,'
         in receipt_source
     )
     assert (
-        '"preflight-release-bootstrap-validator",\n                "pytest",\n                44,'
+        '"preflight-release-bootstrap-validator",\n                "pytest",\n                50,'
         in receipt_source
     )
     assert (
-        '"preflight-release-receipt",\n                "pytest",\n                368,'
+        '"preflight-release-receipt",\n                "pytest",\n                362,'
         in receipt_source
     )
-    assert "did not run exactly 5513 passing tests" in release_source
-    assert "preflight-proof-fidelity pytest 5513" in release_source
+    assert "did not run exactly 5507 passing tests" in release_source
+    assert "preflight-proof-fidelity pytest 5507" in release_source
     assert (
-        "^5513 passed in [0-9]+([.][0-9]+)?s( "
+        "^5507 passed in [0-9]+([.][0-9]+)?s( "
         r"\([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$"
         in release_source
     )
@@ -2690,7 +2691,8 @@ kura.claim_autonomous_lifecycle_process_generation(
     assert len(proof_fidelity_runner_nodes) == 18
     assert len(set(proof_fidelity_runner_nodes)) == 18
     assert proof_fidelity_runner_nodes == proof_fidelity_receipt_nodes
-    assert "Collection is source-bound as 5,410 ledger/checker cases" in release_source
+    assert "Collection is source-bound as 5,386 ledger/checker cases" in release_source
+    assert "reviewed 13-case post-merge expansion" in release_source
     for selector in (
         "pytests/scripts/sumeragi_v2_multilane_models_test.py::"
         "test_inflight_composed_contract_rejects_legacy_layout_only_claim",
@@ -2720,7 +2722,7 @@ kura.claim_autonomous_lifecycle_process_generation(
         assert selector in release_source
         assert selector in proof_fidelity_receipt_command
     assert (
-        '"preflight-proof-fidelity",\n                "pytest",\n                5513,'
+        '"preflight-proof-fidelity",\n                "pytest",\n                5507,'
         in receipt_source
     )
     assert "did not run exactly 27 passing tests" in release_source
@@ -3509,7 +3511,7 @@ def test_multilane_inventory_checker_rejects_weakened_production_count(
     helper_start = checker_source.index("require_exact_token() {")
     helper_end = checker_source.index("\n}\n", helper_start) + 3
     helper = checker_source[helper_start:helper_end]
-    canonical_declaration = "readonly canonical_production_test_count=863"
+    canonical_declaration = "readonly canonical_production_test_count=864"
     count_guard = (
         "require_exact_token \\\n"
         '  "$release_runner" \\\n'
@@ -3531,7 +3533,7 @@ def test_multilane_inventory_checker_rejects_weakened_production_count(
     bash = shutil.which("bash")
     assert bash is not None
     runner = tmp_path / "run_sumeragi_v2_release_gates.sh"
-    canonical = "readonly expected_production_liveness_test_count=863"
+    canonical = "readonly expected_production_liveness_test_count=864"
     weakened = "readonly expected_production_liveness_test_count=860"
     runner.write_text(f"{canonical}\n", encoding="utf-8")
 
@@ -3583,7 +3585,7 @@ def test_multilane_inventory_checker_rejects_weakened_production_count(
         (
             canonical_declaration,
             "readonly canonical_production_test_count=860",
-            "must seal exactly 863 production tests",
+            "must seal exactly 864 production tests",
         ),
         (
             '    "sumeragi::v2_effects::tests": 66,',
@@ -3606,7 +3608,7 @@ def test_multilane_inventory_checker_rejects_weakened_production_count(
             "changed-module counts must equal the exact reviewed release inventory",
         ),
         (
-            '    "2c27cdd44bc6b62d5e7798c0ed2694f5"',
+            '    "44784c79c489d83ab142bb0db84e8913"',
             '    "00000000000000000000000000000000"',
             "canonical production TSV SHA-256 must equal",
         ),
@@ -3842,7 +3844,7 @@ def test_tla2tools_and_replay_share_the_same_pin() -> None:
     # the shell wrapper delegates and does not duplicate tool identity data.
     assert all("-noGenerateSpecTE" not in source for source in sources[1:])
 
-def test_tlc_entrypoints_use_the_pinned_tlapm_function_library() -> None:
+def test_tlc_entrypoints_use_the_pinned_tlapm_library_closures() -> None:
     direct_source = (
         ROOT_DIR / "scripts" / "formal" / "run_sumeragi_v2_tlc.sh"
     ).read_text(encoding="utf-8")
@@ -3856,9 +3858,29 @@ def test_tlc_entrypoints_use_the_pinned_tlapm_function_library() -> None:
         "aa59063fd600bb640b2ae24dc85ef770277ef5bf7955092b76b8b471790086da",
     ):
         assert expected_hash in collector_source
+    for expected_hash in (
+        "b54ff63b7c76c327525c17c188d5f9f5e53d92f3fd701f5e2ba54f0f54391063",
+        "aa59063fd600bb640b2ae24dc85ef770277ef5bf7955092b76b8b471790086da",
+        "5cc604533e49792c1c3d050a38d845d08d9c209879ca20c86de04975bc4bc563",
+        "484bf0f9ab6a69ef45f7282f7f92dcf1e6ae139e44117b0d5a4427635818e773",
+        "08f52420cdaaf11292ed366782b5ce5b596bb7cbe789526a1cfd8806dbf98624",
+        "6f2f274c2e987d1edcf004d8e37b053f1f82b912e66d6a51bae0af8012ddcbec",
+        "1fdbed9077bba9db329e499535be29f8d2e6fba3a2b338e364c3b0ec56596bf9",
+    ):
+        assert expected_hash in direct_source
     assert '"-DTLA-Library=${tlapm_compat_dir}"' in direct_source
-    assert 'ln -s "${TLAPM_STDLIB}/Functions.tla"' in direct_source
-    assert 'ln -s "${TLAPM_STDLIB}/Folds.tla"' in direct_source
+    assert 'ln -s "${TLAPM_STDLIB}/${module}.tla"' in direct_source
+    assert '"${tlapm_compat_dir}/${module}.tla"' in direct_source
+    for module in (
+        "Functions",
+        "Folds",
+        "TLAPS",
+        "FiniteSetTheorems",
+        "NaturalsInduction",
+        "WellFoundedInduction",
+        "SequenceTheorems",
+    ):
+        assert module in direct_source
     assert 'readonly TLC_MAX_SET_SIZE="1000000"' in direct_source
     assert '-maxSetSize "$TLC_MAX_SET_SIZE"' in direct_source
     assert "TLAPM_MODULES = {" in collector_source
@@ -3901,6 +3923,12 @@ def test_tlapm_corridor_uses_one_pinned_identity() -> None:
 def test_liveness_tlc_ceilings_fit_pinned_evaluator_and_service_budget() -> None:
     source = (
         ROOT_DIR / "formal" / "sumeragi_v2" / "liveness.cfg"
+    ).read_text(encoding="utf-8")
+    model_source = (
+        ROOT_DIR
+        / "formal"
+        / "sumeragi_v2"
+        / "SumeragiV2AsyncNetwork.tla"
     ).read_text(encoding="utf-8")
 
     def natural(name: str) -> int:
@@ -3982,8 +4010,40 @@ def test_liveness_tlc_ceilings_fit_pinned_evaluator_and_service_budget() -> None
     assert "LeaderStarts <- StartsByzantineFirst" in source
     assert "LaneHashes <- LaneHashesOneHeight" in source
     assert "DaHashes <- DaHashesOneHeight" in source
-    assert worst_case_service_budget < maximum_timeout <= 2_147_483_647
-    assert worst_case_service_budget <= maximum_view <= 2_147_483_647
+    assert "AsyncNetworkItems <- FiniteAsyncNetworkItems" in source
+    assert "FiniteAsyncPublishableControlItems ==" in model_source
+    assert "FiniteAsyncNetworkItems ==" in model_source
+    for finite_network_owner in (
+        "asyncSentItems",
+        "asyncRetainedControl",
+        "asyncActiveRequests",
+        "{packet.item: packet \\in asyncTransport}",
+        "FiniteAsyncPublishableControlItems",
+    ):
+        assert finite_network_owner in model_source
+    assert worst_case_service_budget < maximum_timeout == 999_999
+    assert worst_case_service_budget <= maximum_view == 999_999
+    assert re.findall(
+        r"(?m)^PROPERTY ([A-Za-z][A-Za-z0-9_]*)$", source
+    ) == [
+        "PostGstEventuallyAsyncDecision",
+        "ResponsiveDecisionEventuallyApplied",
+        "PostGstEventuallyAsyncApplication",
+        "PostGstEventuallyAsyncHeightCompletion",
+    ]
+    assert (
+        "asyncNextServeIngressOrdinal\n"
+        "       \\in [ValidatorIds ->\n"
+        "             1..(AsyncIngressPhysicalOrdinalMaximum + 1)]"
+        not in model_source
+    )
+    assert (
+        "/\\ DOMAIN asyncNextServeIngressOrdinal = ValidatorIds\n"
+        "  /\\ \\A node \\in ValidatorIds:\n"
+        "       asyncNextServeIngressOrdinal[node]\n"
+        "         \\in 1..(AsyncIngressPhysicalOrdinalMaximum + 1)"
+        in model_source
+    )
 
 
 def test_workspace_excluded_harness_pins_complete_unit_inventory() -> None:
@@ -4110,10 +4170,10 @@ def test_readiness_gate_source_seal_rejects_ci_matrix_drift(
         ),
         (
             Path("scripts/formal/check_sumeragi_v2_replay_trace.sh"),
-            'if ! "$RESOLVED_PYTHON" -B -I -S "$CHECKER" '
+            '"$RESOLVED_PYTHON" -B -I -S "$CHECKER" '
             '"${checker_args[@]}" \\\n',
             "",
-            "the independent receipt-checker invocation",
+            "the independent fail-closed signing-request check",
         ),
         (
             Path("scripts/formal/collect_sumeragi_v2_replay_receipt.py"),
@@ -4750,7 +4810,9 @@ def test_tlapm_source_builder_checks_every_locked_boundary() -> None:
     assert '"$OPAM_BINARY" "$@"' in builder
     assert "--require-checksums" not in builder
     opam_subcommands = re.findall(r"\bopam_command\s+([A-Za-z0-9_-]+)", builder)
-    assert opam_subcommands == ["list", "init", "switch", "var", "install", "install", "exec"]
+    assert opam_subcommands == [
+        "list", "init", "switch", "var", "install", "install", "exec", "exec"
+    ]
     assert (
         'opam_command init --bare --no-setup --disable-sandboxing locked '
         '"$OPAM_REPOSITORY_DIR"'
@@ -4778,19 +4840,32 @@ def test_tlapm_source_builder_checks_every_locked_boundary() -> None:
     assert clean_body == 'clean_command() { "$ENV_BIN" -i HOME="$BUILD_HOME" PATH="$SANITIZED_HOST_PATH" TMPDIR="$BUILD_TMP" XDG_CACHE_HOME="$BUILD_XDG_CACHE" XDG_CONFIG_HOME="$BUILD_XDG_CONFIG" LANG=C LC_ALL=C TZ=UTC GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0 GIT_NO_REPLACE_OBJECTS=1 "$@" }'
     darwin_guard = '\n  [[ "$PLATFORM" == "arm64-darwin" ]] || return 0'
     assert all(f"{name}() {{{darwin_guard}" in builder for name in ("prepare_darwin_conf_boundary", "verify_darwin_depext_capabilities"))
-    darwin_probes = ('clean_command sh -c \'command -v "$1" >/dev/null 2>&1\' sh pkg-config', "conf-*) darwin_conf_packages", "${#darwin_conf_packages[@]} -eq 3", "clean_command g++ -std=c++17 -Wall -Wextra -Werror -pedantic", "static_assert(__cplusplus == 201703L", "std::vector<int>", "std::accumulate(", 'clean_command "$DARWIN_CXX_PREFLIGHT"', "clean_command pkg-config --exists zlib", "strcmp(ZLIB_VERSION, zlibVersion())", "compress2(", "clean_command cc -std=c11 -Wall -Wextra -Werror -pedantic", '-x c - -lz -o "$DARWIN_ZLIB_PREFLIGHT"', 'clean_command "$DARWIN_ZLIB_PREFLIGHT"')
+    darwin_probes = ('DARWIN_CXXFLAGS=""', 'DARWIN_CPLUS_INCLUDE_PATH=""', 'clean_command sh -c \'command -v "$1" >/dev/null 2>&1\' sh pkg-config', "conf-*) darwin_conf_packages", "${#darwin_conf_packages[@]} -eq 3", "[[ -x /usr/bin/xcrun && ! -L /usr/bin/xcrun ]]", "clean_command /usr/bin/xcrun --sdk macosx --show-sdk-path", 'darwin_sdk_root="$(cd -P -- "$darwin_sdk_root" && pwd)"', 'darwin_cxx_include="${darwin_sdk_root}/usr/include/c++/v1"', '! -L "${darwin_cxx_include}/numeric"', 'DARWIN_CXXFLAGS="-isystem ${darwin_cxx_include}"', 'DARWIN_CPLUS_INCLUDE_PATH="$darwin_cxx_include"', 'clean_command "$ENV_BIN" CPLUS_INCLUDE_PATH="$DARWIN_CPLUS_INCLUDE_PATH"', "cc -std=c++17 -Wall -Wextra -Werror -pedantic", '-x c++ -c - -o "$DARWIN_CXX_PREFLIGHT_OBJECT"', '! -L "$DARWIN_CXX_PREFLIGHT_OBJECT"', 'clean_command g++ "$DARWIN_CXX_PREFLIGHT_OBJECT" -o "$DARWIN_CXX_PREFLIGHT"', "static_assert(__cplusplus == 201703L", "std::vector<int>", "std::accumulate(", 'clean_command "$DARWIN_CXX_PREFLIGHT"', "clean_command pkg-config --exists zlib", "strcmp(ZLIB_VERSION, zlibVersion())", "compress2(", "clean_command cc -std=c11 -Wall -Wextra -Werror -pedantic", '-x c - -lz -o "$DARWIN_ZLIB_PREFLIGHT"', 'clean_command "$DARWIN_ZLIB_PREFLIGHT"', 'readonly DARWIN_CXXFLAGS', 'readonly DARWIN_CPLUS_INCLUDE_PATH')
     assert all(fragment in builder for fragment in darwin_probes)
+    assert builder.count('CXXFLAGS="$DARWIN_CXXFLAGS"') == 3
+    assert builder.count('CPLUS_INCLUDE_PATH="$DARWIN_CPLUS_INCLUDE_PATH"') == 4
     assert re.findall(r'darwin_conf_packages\[[0-9]+\]}" == "([^"]+)"', builder) == ["conf-g++.1.0", "conf-pkg-config.5", "conf-zlib.1"]
     assumed_install = 'opam_command install --assume-depexts --switch "$OPAM_SWITCH" --yes "${darwin_conf_packages[@]}" < /dev/null'
     complete_install = 'opam_command install --switch "$OPAM_SWITCH" --yes "${build_packages[@]}" < /dev/null'
     assert normalized.count(assumed_install) == normalized.count(complete_install) == builder.count("--assume-depexts") == 1
     preflight_prefix = builder[:builder.index("\nverify_darwin_depext_capabilities\n")]
     darwin_helper_source = builder[builder.index("prepare_darwin_conf_boundary() {"):builder.index("\ncheckout_exact_tree() {")]
-    assert re.search(r"(?m)^(?:(?:clean_command[ \t]+)?curl\b|(?:clean_command[ \t]+)?git\b[^\n]*\bfetch\b|(?:checkout_exact_tree|download_checked|opam_command)[ \t]+)", preflight_prefix) is None and re.search(r"\b(?:curl|checkout_exact_tree|download_checked|opam_command)\b|\bgit\b[^\n]*\bfetch\b", darwin_helper_source) is None and hashlib.sha256(darwin_helper_source.encode()).hexdigest() == "5674f471244306d795323a6b5497966a596b0dcebfaa368365238c1a93b6da77"
-    depext_order = ('prepare_darwin_conf_boundary readonly -a darwin_conf_packages verify_darwin_depext_capabilities echo "[tlapm] fetching immutable source commit', 'if [[ "$PLATFORM" == "arm64-darwin" ]]; then echo "[tlapm] validating the exact Darwin host capability packages" ' + assumed_install, 'verify_package_set darwin-conf "$DARWIN_INTERMEDIATE_ATOMS"', complete_install, 'verify_package_set complete "$EXPECTED_ATOMS"')
+    assert re.search(r"(?m)^(?:(?:clean_command[ \t]+)?curl\b|(?:clean_command[ \t]+)?git\b[^\n]*\bfetch\b|(?:checkout_exact_tree|download_checked|opam_command)[ \t]+)", preflight_prefix) is None and re.search(r"\b(?:curl|checkout_exact_tree|download_checked|opam_command)\b|\bgit\b[^\n]*\bfetch\b", darwin_helper_source) is None and hashlib.sha256(darwin_helper_source.encode()).hexdigest() == "c09ede2f51ae0c2f848b76c63d14b2599ba463c5981f723fc275707d5898d290"
+    depext_order = ('prepare_darwin_conf_boundary readonly -a darwin_conf_packages verify_darwin_depext_capabilities readonly DARWIN_CXXFLAGS readonly DARWIN_CPLUS_INCLUDE_PATH echo "[tlapm] fetching immutable source commit', 'if [[ "$PLATFORM" == "arm64-darwin" ]]; then echo "[tlapm] validating the exact Darwin host capability packages" ' + assumed_install, 'verify_package_set darwin-conf "$DARWIN_INTERMEDIATE_ATOMS"', complete_install, 'verify_package_set complete "$EXPECTED_ATOMS"')
     assert [normalized.index(fragment) for fragment in depext_order] == sorted(normalized.index(fragment) for fragment in depext_order)
     assert 'clean_command cp "$COMPILER_ATOMS" "$DARWIN_INTERMEDIATE_ATOMS"' in builder and 'printf \'%s\\n\' "${darwin_conf_packages[@]}" >> "$DARWIN_INTERMEDIATE_ATOMS"' in normalized
     assert all(forbidden not in builder for forbidden in ("OPAMASSUMEDEPEXTS", "OPAMDEPEXTS", "opam option depext=false")) and re.search(r"\b(?:brew|sudo)\b", builder) is None
+    clean_projection = (
+        'readonly AUTHENTICATED_DISTRIBUTION_PARENT="${tmp_dir}/authenticated-distribution"',
+        'dune install --root "$SOURCE_DIR" --relocatable',
+        '--prefix "$AUTHENTICATED_DISTRIBUTION"',
+        'clean_command make --jobs=1 -C "$AUTHENTICATED_DISTRIBUTION/lib/tlapm"',
+        'COPYFILE_DISABLE=1',
+        'tar -czf "$BUILT_ARCHIVE" -C "$AUTHENTICATED_DISTRIBUTION_PARENT" tlapm',
+        '--distribution-tree "$AUTHENTICATED_DISTRIBUTION_PARENT"',
+    )
+    assert all(fragment in builder for fragment in clean_projection)
+    assert '--distribution-tree "${SOURCE_DIR}/_build"' not in builder
 
 
 def test_tlapm_publication_is_atomic_no_replace_and_preserves_winner(

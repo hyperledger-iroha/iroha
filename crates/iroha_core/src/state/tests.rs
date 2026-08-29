@@ -1139,6 +1139,32 @@ fn production_state_apply_surface_requires_transient_v2_capability() {
         "live v2 apply must not thread a separately fabricated topology"
     );
 }
+#[test]
+fn queue_plan_carrier_validation_uses_one_generation_coherent_state_view() {
+    let source = include_str!("../state.rs");
+    let validation = source
+        .split_once("    fn validate_queue_plan_admissions_for_carrier(")
+        .and_then(|(_, tail)| {
+            tail.split_once("    pub(crate) fn pending_queue_plan_admission_registry_lookup(")
+        })
+        .map(|(body, _)| body)
+        .expect("QueuePlan carrier validation remains source discoverable");
+    assert_eq!(
+        validation.matches("let state_view = self.view();").count(),
+        1,
+        "QueuePlan history and authority must originate from one State generation",
+    );
+    assert!(validation.contains("validate_live_authority.then_some(&state_view)"));
+    assert!(validation.contains("state_view.block_hashes.get(index).copied()"));
+    assert!(validation.contains(
+        "queue_plan_authoritative_peers_in_view_at_height(\n                        state_view,"
+    ));
+    assert!(
+        !validation.contains("let block_hashes = self.block_hashes.view();")
+            && !validation.contains("&self.view()"),
+        "a nested State view while retaining a block-hash view can deadlock block publication",
+    );
+}
 state_test! { sync merge_write_set_encoder_mentions_every_persisted_world_block_field
     let source = include_str!("../state.rs");
     let_row! { struct_start = source .find("pub struct WorldBlock<'world> {") .expect("WorldBlock declaration must remain discoverable") };

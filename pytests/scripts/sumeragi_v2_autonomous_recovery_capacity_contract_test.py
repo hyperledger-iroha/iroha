@@ -61,6 +61,7 @@ class AutonomousRecoveryCapacityContractTests(unittest.TestCase):
         old: str,
         new: str,
         expected_binding: str,
+        occurrence: int = 1,
     ) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -71,8 +72,10 @@ class AutonomousRecoveryCapacityContractTests(unittest.TestCase):
                 shutil.copyfile(source, target)
             target = root / relative
             source = target.read_text(encoding="utf-8")
-            self.assertIn(old, source)
-            target.write_text(source.replace(old, new, 1), encoding="utf-8")
+            parts = source.split(old)
+            self.assertGreater(len(parts), occurrence)
+            mutated = old.join(parts[:occurrence]) + new + old.join(parts[occurrence:])
+            target.write_text(mutated, encoding="utf-8")
             errors = self.checker.validate_repository(root)
             self.assertTrue(
                 any(expected_binding in error for error in errors),
@@ -277,15 +280,39 @@ class AutonomousRecoveryCapacityContractTests(unittest.TestCase):
     def test_startup_repair_cannot_move_before_carrier_envelope_rebuild(self) -> None:
         self.assert_source_mutation_rejected(
             "crates/iroha_core/src/kura.rs",
-            "            kura.rebuild_post_wsv_lane_artifact_budget_reservations_on_startup()?;\n"
-            "            kura.rebuild_certified_bundle_capacity_reservations_on_startup()?;\n"
-            "            kura.repair_lane_merge_application_frontiers_on_startup()?;\n"
-            "            kura.rebuild_autonomous_lane_route_latest_attempt_indexes_on_startup()?;",
-            "            kura.repair_lane_merge_application_frontiers_on_startup()?;\n"
-            "            kura.rebuild_autonomous_lane_route_latest_attempt_indexes_on_startup()?;\n"
-            "            kura.rebuild_certified_bundle_capacity_reservations_on_startup()?;\n"
-            "            kura.rebuild_post_wsv_lane_artifact_budget_reservations_on_startup()?;",
+            "                kura.rebuild_post_wsv_lane_artifact_budget_reservations_on_startup()?;\n"
+            "                kura.rebuild_certified_bundle_capacity_reservations_on_startup()?;\n"
+            "                kura.repair_lane_merge_application_frontiers_on_startup()?;\n"
+            "                kura.rebuild_autonomous_lane_route_latest_attempt_indexes_on_startup()?;",
+            "                kura.repair_lane_merge_application_frontiers_on_startup()?;\n"
+            "                kura.rebuild_autonomous_lane_route_latest_attempt_indexes_on_startup()?;\n"
+            "                kura.rebuild_certified_bundle_capacity_reservations_on_startup()?;\n"
+            "                kura.rebuild_post_wsv_lane_artifact_budget_reservations_on_startup()?;",
             "startup_carrier_envelope_reconstruction_order",
+        )
+
+        self.assert_source_mutation_rejected(
+            "crates/iroha_core/src/kura/autonomous_terminal_capacity.rs",
+            "            let (used, total) = self.kura_disk_usage_bytes_with_total()?;",
+            "            let _duplicate = self.kura_disk_usage_bytes_with_total();\n"
+            "            let (used, total) = self.kura_disk_usage_bytes_with_total()?;",
+            "debug_append_startup_accounting_publish",
+        )
+        self.assert_source_mutation_rejected(
+            "crates/iroha_core/src/kura/autonomous_terminal_capacity.rs",
+            "                self.invalidate_durable_budget_snapshot();",
+            "                // Leave stale cache state visible after a rejected publication.",
+            "debug_append_startup_accounting_publish",
+        )
+        self.assert_source_mutation_rejected(
+            "crates/iroha_core/src/kura.rs",
+            "        self.validate_and_publish_configured_kura_capacity_after_startup_recovery(true)?;\n"
+            "        Ok(())",
+            "        let _ = self\n"
+            "            .validate_and_publish_configured_kura_capacity_after_startup_recovery(true);\n"
+            "        Ok(())",
+            "geometry_restore_combined_capacity_publish",
+            2,
         )
 
     def test_certified_bundle_cannot_bypass_admission_before_first_write(self) -> None:
@@ -343,7 +370,7 @@ class AutonomousRecoveryCapacityContractTests(unittest.TestCase):
     def test_lane_history_compaction_cannot_count_recovered_temp_twice(self) -> None:
         self.assert_source_mutation_rejected(
             "crates/iroha_core/src/kura/lane_history_compaction.rs",
-            "            let before = Self::sidecar_tracked_bytes(&data_path, &index_path, None)?;",
+            "            let before = Self::sidecar_tracked_bytes(&data_path, &index_path)?;",
             "            let before = before_recovery;",
             "lane_history_compaction_recovery_before_capacity",
         )
@@ -381,15 +408,23 @@ class AutonomousRecoveryCapacityContractTests(unittest.TestCase):
             "        if let Some(intent) = prune_intent.as_ref() {\n"
             "            kura.preflight_recovered_prune_capacity_before_mutation(intent)?;\n"
             "        }\n"
-            "        kura.audit_retained_autonomous_lifecycle_cursor_generations()?;\n"
+            "        if config.init_mode == InitMode::Strict {\n"
+            "            kura.audit_retained_autonomous_lifecycle_cursor_generations()?;\n"
+            "        }\n"
             "        if !provisional_open {\n"
-            "            kura.recover_retained_block_rewrite_stage_on_startup(&blocks_root)?;",
-            "        kura.audit_retained_autonomous_lifecycle_cursor_generations()?;\n"
+            "            if config.init_mode == InitMode::Strict {\n"
+            "                kura.seal_completed_autonomous_lifecycle_replica_claims_on_startup()?;\n"
+            "                kura.recover_retained_block_rewrite_stage_on_startup(&blocks_root)?;",
+            "        if config.init_mode == InitMode::Strict {\n"
+            "            kura.audit_retained_autonomous_lifecycle_cursor_generations()?;\n"
+            "        }\n"
             "        if !provisional_open {\n"
-            "            kura.recover_retained_block_rewrite_stage_on_startup(&blocks_root)?;\n"
-            "            if let Some(intent) = prune_intent.as_ref() {\n"
-            "                kura.preflight_recovered_prune_capacity_before_mutation(intent)?;\n"
-            "            }",
+            "            if config.init_mode == InitMode::Strict {\n"
+            "                kura.seal_completed_autonomous_lifecycle_replica_claims_on_startup()?;\n"
+            "                kura.recover_retained_block_rewrite_stage_on_startup(&blocks_root)?;\n"
+            "                if let Some(intent) = prune_intent.as_ref() {\n"
+            "                    kura.preflight_recovered_prune_capacity_before_mutation(intent)?;\n"
+            "                }",
             "prune_startup_capacity_before_repair",
         )
 

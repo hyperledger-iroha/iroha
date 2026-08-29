@@ -1,5 +1,5 @@
 <!--
-  Norito binding regeneration playbook covering Python, Java, Android, and Swift SDKs.
+  Norito binding regeneration playbook covering all first-release SDK consumers.
 -->
 
 # Norito Binding Regeneration Playbook
@@ -21,7 +21,9 @@ Apply the reviewed identity-relative patch from either sealed root, then run
 `norito-rpc-verify` and the consumer checks.
 
 Python and Swift receive descriptor-only mirrors. Java receives a generated
-descriptor-and-blob mirror. None of those SDK directories is an input or an
+descriptor-and-blob mirror. Kotlin and JavaScript read the canonical root
+directly, while C# links the canonical descriptors and blobs into its test
+output. None of those SDK directories or build outputs is an input or an
 independent fixture owner.
 
 - **Cadence:** Follow the twice-weekly Tuesday & Friday (09:00 UTC) rotations
@@ -150,6 +152,35 @@ there. Never use this directory as a regeneration input.
 4. Update `java/norito_java/CHANGELOG.md` with a short note describing the sync
    point so `scripts/check_norito_bindings_sync.py` records the refresh.
 
+## Kotlin/JVM (`kotlin/core-jvm`)
+
+Kotlin keeps no local transaction-fixture copy. `AndroidFixtureSupport` resolves
+the descriptors and all 27 canonical `.norito` blobs from
+`fixtures/norito_rpc/`. The same owner publication writes the identical corpus
+to `java/iroha_android/src/test/resources/` for Java's classpath-based tests;
+that Java resource tree is a generated sibling consumer, not a Kotlin input.
+
+1. Run the two-root canonical owner procedure and review the Java mirror in the
+   same identity-relative patch.
+2. Run `norito-rpc-verify`.
+3. From `kotlin/`, run `./gradlew :core-jvm:test --console=plain` so Kotlin
+   validates the canonical root independently of the Java resource mirror.
+
+## Direct canonical-root consumers (JavaScript and C#)
+
+JavaScript opens `fixtures/norito_rpc/transaction_fixtures.manifest.json` and
+compares every manifest `encoded_file` with its canonical Base64 payload. C#
+uses MSBuild links to copy the canonical descriptors and all 27 `.norito` blobs
+into its test output; it does not own a fixture tree. Its closed-schema suite
+also consumes `fixtures/kotodama/entrypoint_argument_record_v1.json` through the
+production contract-call boundary.
+
+1. Do not copy either consumer's build output back into the canonical root.
+2. After `norito-rpc-verify`, run the JavaScript transaction-fixture parity
+   suite from `javascript/iroha_js/`.
+3. Build and run `Hyperledger.Iroha.Sdk.Tests.NoritoRpcFixtureParityTests` from
+   `csharp/` with the pinned .NET SDK.
+
 ## Final Checklist
 
 Before merging a Norito change that impacts SDK bindings:
@@ -157,7 +188,8 @@ Before merging a Norito change that impacts SDK bindings:
 1. ✅ Run `scripts/check_norito_bindings_sync.sh` and ensure it passes locally.
 2. ✅ Run `cargo run --locked -p xtask --features dev-tools --bin xtask -- norito-rpc-fixtures --output-root /path/to/first-new-norito-rpc-publication`, then repeat with a second absent root. Require identical exact path sets, entry types, modes, completion manifests, and every file byte before applying the reviewed identity-relative patch to the canonical, Java, Python, and Swift tracked paths.
 3. ✅ Verify the Python and Swift descriptor-only mirrors, the Java generated
-   mirror, and the canonical Norito RPC publication; run the SDK test suites.
+   mirror, and the canonical Norito RPC publication. Then run the Kotlin,
+   JavaScript, C#, and other SDK consumer suites against those exact bytes.
 4. ✅ Rebuild/test `java/norito_java` (and `java/iroha_android` when applicable)
    so Java bindings capture the Rust codec delta.
 5. ✅ Ensure CI jobs (`ci/check_norito_bindings_sync.sh`,

@@ -202,9 +202,8 @@ fn fair_v2_ingress_queue_gate_verdict(
     let leader_wire_barrier = leader.selected_barrier.as_ref();
     let leader_wire_body_dependency = leader.body_dependency;
     let leader_wire_control_barrier = leader.control_barrier;
-    let leader_wire_chunk_barrier = leader_wire_barrier.is_some_and(|owner| {
-        owner.token.source_class == FairV2IngressLeaderWireSourceClass::Chunk
-    });
+    let leader_wire_chunk_barrier = leader_wire_barrier
+        .is_some_and(|owner| owner.token.source_class == FairV2IngressLeaderWireSourceClass::Chunk);
     // A control occurrence may wait for downstream capacity, but a later view
     // or conflicting carrier in the same semantic slot cannot replace it.
     let has_live_control_predecessor = lane
@@ -244,11 +243,25 @@ fn fair_v2_ingress_queue_gate_verdict(
         && leader_wire_barrier.is_some_and(|owner| {
             fair_v2_ingress_certified_fence_escape_advances_owner(&owner.token, &entry.inbound)
         });
+    // A blocked local owner must not hide the authenticated historical request
+    // which lets another replica recover that owner's predecessor. The strict
+    // pass still wins whenever the owner itself is drainable; this dependency
+    // neither retires the owner nor spends certified-fence capacity.
+    let historical_replica_release_dependency = leader_wire_barrier.is_some_and(|owner| {
+        entry.history_serve_request.is_some_and(|request| {
+            let height = request.height();
+            height != 0 && height < owner.token.identity.height
+        }) && entry.inbound.reply_routes().is_some_and(|routes| {
+            !routes.is_empty()
+                && routes.semantic_target() == entry.inbound.sender()
+                && routes.iter().any(NetworkReplyRoute::is_reply_writable)
+        })
+    });
     let dependency_bypass = !ingress_barrier_allows
         && ((leader_wire_control_barrier && earlier_dependency)
             || timeout_control_dependency
             || ((leader_wire_control_barrier || leader_wire_chunk_barrier)
-                && certified_fence_escape_dependency));
+                && (certified_fence_escape_dependency || historical_replica_release_dependency)));
     if has_live_control_predecessor || (!ingress_barrier_allows && !dependency_bypass) {
         FairV2IngressQueueGateVerdict::Blocked
     } else if dependency_bypass {

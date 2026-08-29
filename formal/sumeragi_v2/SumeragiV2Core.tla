@@ -429,11 +429,26 @@ SigningNodes ==
     \cup {request.node: request \in signTimeouts}
 
 (***************************************************************************
-State-derived action domains.  Quantifying over the values already present in
-authenticated ingress or durable state is behaviorally equivalent to ranging
-over the full record universe and then testing membership in an action guard.
-It also prevents TLC from materializing the powerset in TcRecordSet.
+The production Byzantine-proposal domain is the full certificate/PrepareQC
+Cartesian carrier.  Finite counterexample searches replace it with the
+no-certificate pair plus exact pairs already present in authenticated
+installed-TC state; those classes include every pair which ProposalJustified
+can accept.  This avoids materializing the powerset in TcRecordSet without
+narrowing the production/TLAPS relation.  The following ingress and durable
+action domains are likewise state-derived where their guards require an
+already-present value.
 ***************************************************************************)
+ByzantineProposalJustificationDomain ==
+  [timeoutCertificate: TimeoutCertificateOptionSet,
+   highestPrepareQc: PrepareQcOptionSet]
+
+FiniteByzantineProposalJustificationDomain ==
+  {[timeoutCertificate |-> NoTimeoutCertificate,
+    highestPrepareQc |-> NoPrepareQC]}
+    \cup {[timeoutCertificate |-> installed.tc,
+            highestPrepareQc |-> installed.tc.highestPrepareQc]:
+           installed \in installedTCs}
+
 SeenProposalValues == {entry.proposal: entry \in seenProposals}
 ReceivedQcValues == {entry.qc: entry \in receivedQCs}
 \* A certificate's global authenticity ghost is not local reducer knowledge.
@@ -2383,10 +2398,11 @@ Next ==
   \/ \E request \in signProposals: CompleteProposalSignature(request)
   \/ \E signer \in ValidatorIds, roundView \in Views,
        subject \in Subjects,
-       timeoutCertificate \in TimeoutCertificateOptionSet,
-       highestPrepare \in PrepareQcOptionSet:
-       ByzantineBroadcastProposal(signer, roundView, subject,
-                                  timeoutCertificate, highestPrepare)
+       justification \in ByzantineProposalJustificationDomain:
+       ByzantineBroadcastProposal(
+         signer, roundView, subject,
+         justification.timeoutCertificate,
+         justification.highestPrepareQc)
   \/ \E envelope \in proposalNetwork: DeliverProposal(envelope)
   \/ \E node \in ValidatorIds, proposal \in SeenProposalValues:
        FetchBody(node, proposal) \/ RebindRetainedBody(node, proposal)

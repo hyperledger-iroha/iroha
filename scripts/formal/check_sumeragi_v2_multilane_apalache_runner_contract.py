@@ -91,6 +91,12 @@ def main() -> int:
     )
     _must_reject(
         source,
+        "multilane_autonomous_reservation_carrier_fixed.cfg \\\n  12 \\",
+        "multilane_autonomous_reservation_carrier_fixed.cfg \\\n  10 \\",
+        "recreated-incarnation recovery bound reduction",
+    )
+    _must_reject(
+        source,
         "NativeLegacyDenseRejectedInvariant, NativePruneJournalInvariant",
         "NativeLegacyDenseRejectedInvariant",
         "Native prune-journal invariant removal",
@@ -100,6 +106,12 @@ def main() -> int:
         "multilane_queue_plan_admission_registry_fixed.cfg \\\n  8 \\",
         "multilane_queue_plan_admission_registry_fixed.cfg \\\n  7 \\",
         "queue-plan admission bound reduction",
+    )
+    _must_reject(
+        source,
+        "MLExecutionRequiresExactBinding, MLQueuePlanExecutionAutonomousOnly, MLQueueEligibilityExact",
+        "MLExecutionRequiresExactBinding, MLQueueEligibilityExact",
+        "QueuePlan autonomous-only invariant removal",
     )
     _must_reject(
         source,
@@ -160,7 +172,7 @@ def main() -> int:
         raise AssertionError("runner contract accepted a length override")
 
     print(
-        "Sumeragi v2 multilane Apalache runner contract passed 21 "
+        "Sumeragi v2 multilane Apalache runner contract passed 22 "
         "fail-closed negative controls"
     )
     return 0

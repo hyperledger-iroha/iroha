@@ -7,6 +7,8 @@ import shutil
 import sys
 from pathlib import Path
 
+import pytest
+
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT_DIR / "scripts" / "formal" / "check_sumeragi_v2_proof_ledger.py"
@@ -40,14 +42,20 @@ def copy_durable_validate_lifecycle_fixture(
     relative_files = (
         module.DURABLE_VALIDATE_LIFECYCLE_MUTATION_RUNNER,
         "ci/check_sumeragi_formal.sh",
+        "crates/iroha_core/src/sumeragi/v2_effects.rs",
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_schema.rs",
         "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
         "crates/iroha_core/src/sumeragi/v2_worker_completion.rs",
         "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs",
         "crates/iroha_core/src/sumeragi/v2_lifecycle_validate_sidecar.rs",
         "crates/iroha_core/src/sumeragi/"
+        "v2_lifecycle_work_registry_validate_recovery.rs",
+        "crates/iroha_core/src/sumeragi/"
         "v2_lifecycle_work_registry_validate_recovery_registry_impl.rs",
         "crates/iroha_core/src/sumeragi/"
         "v2_lifecycle_work_registry_validate_recovery_registry_tail_impl.rs",
+        "crates/iroha_core/src/sumeragi/"
+        "v2_lifecycle_work_registry_validate_recovery_census_impl.rs",
         "crates/iroha_core/src/sumeragi/"
         "v2_lifecycle_work_registry_pre_admission.rs",
         "crates/iroha_core/src/sumeragi/"
@@ -201,9 +209,62 @@ def test_durable_validate_lifecycle_retires_only_after_successor_retention(
         )
     )
     assert any(
-        "validated output must retain its exact Ready successor" in error
+        "a validated owner must install its exact durable successor before "
+        "retiring the guard" in error
         for error in errors
     ), errors
+
+
+@pytest.mark.parametrize(
+    ("relative", "before", "after", "expected_error"),
+    (
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_schema.rs",
+            "Self { digest, ..self }",
+            "Self { ..self }",
+            "rebind only the carrier digest",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/"
+            "v2_lifecycle_work_registry_validate_recovery.rs",
+            "Some(key.with_carrier_digest(location.incumbent_digest))",
+            "None",
+            "authenticate the exact incumbent digest",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
+            "dispatch_key,\n                incumbent_dispatch_key,\n                round,",
+            "dispatch_key,\n                None,\n                round,",
+            "carry the authenticated incumbent key",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "incumbent_dispatch_key == Some(existing.dispatch_key)",
+            "incumbent_dispatch_key.is_some()",
+            "replace only the exact apply-authorized incumbent",
+        ),
+    ),
+)
+def test_durable_validate_lifecycle_rejects_incumbent_rebinding_drift(
+    tmp_path: Path,
+    relative: str,
+    before: str,
+    after: str,
+    expected_error: str,
+) -> None:
+    """Durable completion cannot weaken exact incumbent replacement authority."""
+
+    module = load_checker()
+    repo_root, _ = copy_durable_validate_lifecycle_fixture(tmp_path, module)
+    path = repo_root / relative
+    source = path.read_text(encoding="utf-8")
+    assert source.count(before) >= 1
+    path.write_text(source.replace(before, after, 1), encoding="utf-8")
+
+    errors = module._durable_validate_lifecycle_production_source_fidelity_errors(
+        repo_root
+    )
+    assert any(expected_error in error for error in errors), errors
 
 
 def test_durable_validate_lifecycle_source_seal_rejects_sixth_prepared_owner(

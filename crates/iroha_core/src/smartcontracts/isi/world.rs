@@ -11162,7 +11162,7 @@ pub mod isi {
                 "SCCP destination artifact failed exact governed request, key, pairing, finality, proof, or material validation",
             )
         })?;
-        if record.recorded_at_height != artifact.public_inputs.finality_height {
+        if record.recorded_at_height != artifact.public_inputs().finality_height {
             return Err(invalid_bridge_proof(
                 "SCCP destination proof finality height differs from the authoritative outbound record height",
             ));
@@ -11172,7 +11172,7 @@ pub mod isi {
             payload_hash: record.payload_hash,
             destination_binding_hash: record.destination_binding_hash,
             route_configuration_hash: record.route_configuration_hash,
-            finality_height: artifact.public_inputs.finality_height,
+            finality_height: artifact.public_inputs().finality_height,
             commitment_index: record.commitment_index,
             finality_block_hash: artifact.public_inputs.finality_block_hash,
         })
@@ -23706,14 +23706,24 @@ pub mod isi {
             proof_seed: u8,
         }
         impl core::ops::Deref for SccpReceiptArtifactFixture {
-            type Target = iroha_sccp::SccpVerifiedDestinationMaterialV1;
+            type Target = iroha_sccp::SccpVerifiedBn254DestinationMaterialV1;
             fn deref(&self) -> &Self::Target {
-                &self.material
+                let iroha_sccp::SccpVerifiedDestinationMaterialV1::EvmOrTron(material) =
+                    &self.material
+                else {
+                    panic!("EVM receipt fixture produced non-BN254 material")
+                };
+                material
             }
         }
         impl core::ops::DerefMut for SccpReceiptArtifactFixture {
             fn deref_mut(&mut self) -> &mut Self::Target {
-                &mut self.material
+                let iroha_sccp::SccpVerifiedDestinationMaterialV1::EvmOrTron(material) =
+                    &mut self.material
+                else {
+                    panic!("EVM receipt fixture produced non-BN254 material")
+                };
+                material
             }
         }
         fn sccp_transfer_payload_for_receipt_test(nonce: u64) -> iroha_sccp::SccpPayloadV1 {

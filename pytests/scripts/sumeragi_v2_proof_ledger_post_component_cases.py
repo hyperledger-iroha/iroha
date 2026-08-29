@@ -550,6 +550,7 @@ def copy_async_source_fidelity_fixture(
         Path("crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_lifecycle_launch_tests.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_lifecycle_preactivation.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_runner/lifecycle_height_driver.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_runner/ordinary_ingress_consumer.rs"),
@@ -1760,6 +1761,17 @@ def test_total_checked_gate_rejects_in_flight_token_contract_weakening(
         assert item.source.count(old) == 1
         mutated = item.source.replace(old, new, 1)
     elif mutation.startswith("in_flight_constructor_"):
+        path = (
+            tmp_path
+            / "crates"
+            / "iroha_core"
+            / "src"
+            / "sumeragi"
+            / "v2_core"
+            / "refinement"
+            / "post_carrier_transition.rs"
+        )
+        source = path.read_text(encoding="utf-8")
         item = module.rust_items(
             source, "check_production_in_flight_reservation_transition"
         )[0]

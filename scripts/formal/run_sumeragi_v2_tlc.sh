@@ -7,6 +7,11 @@ readonly TLC_MAX_SET_SIZE="1000000"
 readonly TLAPM_COMMIT="3ab43c7ff31db4ced850619d4746fa4c841a7681"
 readonly TLAPM_FUNCTIONS_SHA256="b54ff63b7c76c327525c17c188d5f9f5e53d92f3fd701f5e2ba54f0f54391063"
 readonly TLAPM_FOLDS_SHA256="aa59063fd600bb640b2ae24dc85ef770277ef5bf7955092b76b8b471790086da"
+readonly TLAPM_TLAPS_SHA256="5cc604533e49792c1c3d050a38d845d08d9c209879ca20c86de04975bc4bc563"
+readonly TLAPM_FINITE_SET_THEOREMS_SHA256="484bf0f9ab6a69ef45f7282f7f92dcf1e6ae139e44117b0d5a4427635818e773"
+readonly TLAPM_NATURALS_INDUCTION_SHA256="08f52420cdaaf11292ed366782b5ce5b596bb7cbe789526a1cfd8806dbf98624"
+readonly TLAPM_WELL_FOUNDED_INDUCTION_SHA256="6f2f274c2e987d1edcf004d8e37b053f1f82b912e66d6a51bae0af8012ddcbec"
+readonly TLAPM_SEQUENCE_THEOREMS_SHA256="1fdbed9077bba9db329e499535be29f8d2e6fba3a2b338e364c3b0ec56596bf9"
 readonly TLC_FINISHED_PATTERN='^Finished in (([0-9]+d )?([0-9]+h )?([0-9]+min )?[0-9]+(ms|s)|([0-9]+d )?([0-9]+h )?[0-9]+min|([0-9]+d )?[0-9]+h|[0-9]+d) at \([0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}\)$'
 readonly REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "${REPO_ROOT}/scripts/formal/sumeragi_v2_tlc_result_contract.sh"
@@ -58,7 +63,14 @@ fi
   echo "a working Java runtime is required for TLC" >&2
   exit 1
 }
-for module in Functions Folds; do
+for module in \
+  Functions \
+  Folds \
+  TLAPS \
+  FiniteSetTheorems \
+  NaturalsInduction \
+  WellFoundedInduction \
+  SequenceTheorems; do
   [[ -f "${TLAPM_STDLIB}/${module}.tla" ]] || {
     echo "pinned TLAPM ${TLAPM_COMMIT} standard library is required at ${TLAPM_STDLIB}" >&2
     echo "run scripts/formal/install_sumeragi_v2_tlapm.sh first" >&2
@@ -67,7 +79,12 @@ for module in Functions Folds; do
 done
 for module_and_hash in \
   "Functions:${TLAPM_FUNCTIONS_SHA256}" \
-  "Folds:${TLAPM_FOLDS_SHA256}"; do
+  "Folds:${TLAPM_FOLDS_SHA256}" \
+  "TLAPS:${TLAPM_TLAPS_SHA256}" \
+  "FiniteSetTheorems:${TLAPM_FINITE_SET_THEOREMS_SHA256}" \
+  "NaturalsInduction:${TLAPM_NATURALS_INDUCTION_SHA256}" \
+  "WellFoundedInduction:${TLAPM_WELL_FOUNDED_INDUCTION_SHA256}" \
+  "SequenceTheorems:${TLAPM_SEQUENCE_THEOREMS_SHA256}"; do
   module="${module_and_hash%%:*}"
   expected_sha256="${module_and_hash#*:}"
   actual_sha256="$(hash_file "${TLAPM_STDLIB}/${module}.tla")"
@@ -137,8 +154,19 @@ run_dir="$(mktemp -d "${TMPDIR:-/tmp}/sumeragi-v2-tlc.XXXXXX")"
 trap 'rm -rf -- "$run_dir"' EXIT
 tlapm_compat_dir="${run_dir}/tlapm-stdlib"
 mkdir -p "$tlapm_compat_dir"
-ln -s "${TLAPM_STDLIB}/Functions.tla" "${tlapm_compat_dir}/Functions.tla"
-ln -s "${TLAPM_STDLIB}/Folds.tla" "${tlapm_compat_dir}/Folds.tla"
+# Publish only the authenticated theorem-library closure imported by the TLC
+# specifications.  This execution-only closure is deliberately separate from
+# the finalizer's read-only two-file Functions/Folds release projection.
+for module in \
+  Functions \
+  Folds \
+  TLAPS \
+  FiniteSetTheorems \
+  NaturalsInduction \
+  WellFoundedInduction \
+  SequenceTheorems; do
+  ln -s "${TLAPM_STDLIB}/${module}.tla" "${tlapm_compat_dir}/${module}.tla"
+done
 seed=424242
 for config in "${configs[@]}"; do
   case "$config" in

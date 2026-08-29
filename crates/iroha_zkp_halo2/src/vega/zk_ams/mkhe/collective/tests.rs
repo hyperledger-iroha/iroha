@@ -376,11 +376,11 @@ fn decrypt_level_one(
     let secret = secret.as_rns(profile).unwrap();
     let secret_square = secret.mul(&secret, profile).unwrap();
     let value = ciphertext
-        .constant
-        .add(&ciphertext.linear.mul(&secret, profile).unwrap(), profile)
+        .constant()
+        .add(&ciphertext.linear().mul(&secret, profile).unwrap(), profile)
         .unwrap()
         .add(
-            &ciphertext.quadratic.mul(&secret_square, profile).unwrap(),
+            &ciphertext.quadratic().mul(&secret_square, profile).unwrap(),
             profile,
         )
         .unwrap();

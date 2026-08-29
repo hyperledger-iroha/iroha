@@ -47047,12 +47047,6 @@ impl<'state> StateBlock<'state> {
         }
         Ok(required)
     }
-    pub(crate) fn queue_plan_pending_binding_for_entrypoint(
-        &self,
-        entrypoint_hash: HashOf<TransactionEntrypoint>,
-    ) -> Result<Option<crate::torii_proxy::QueuePlanAdmissionBindingV1>, String> {
-        State::queue_plan_pending_binding_in_view(self, entrypoint_hash)
-    }
     pub(crate) fn require_queue_plan_admission_intents_from_block(
         &self,
         block: &SignedBlock,

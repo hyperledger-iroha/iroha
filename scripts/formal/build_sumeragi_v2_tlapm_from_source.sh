@@ -185,7 +185,10 @@ readonly EXPECTED_ATOMS="${tmp_dir}/expected-package-atoms.txt"
 readonly DARWIN_CONF_ATOMS="${tmp_dir}/darwin-conf-package-atoms.txt"
 readonly DARWIN_INTERMEDIATE_ATOMS="${tmp_dir}/darwin-intermediate-package-atoms.txt"
 readonly DARWIN_CXX_PREFLIGHT="${tmp_dir}/darwin-cxx-preflight"
+readonly DARWIN_CXX_PREFLIGHT_OBJECT="${tmp_dir}/darwin-cxx-preflight.o"
 readonly DARWIN_ZLIB_PREFLIGHT="${tmp_dir}/darwin-zlib-preflight"
+DARWIN_CXXFLAGS=""
+DARWIN_CPLUS_INCLUDE_PATH=""
 readonly EXPECTED_PACKAGE_TABLE="${tmp_dir}/expected-package-table.tsv"
 readonly BACKEND_TABLE="${tmp_dir}/backend-downloads.tsv"
 /bin/mkdir -m 0700 "$BUILD_HOME" "$BUILD_TMP" "$BUILD_XDG_CACHE" \
@@ -264,16 +267,46 @@ prepare_darwin_conf_boundary() {
 verify_darwin_depext_capabilities() {
   [[ "$PLATFORM" == "arm64-darwin" ]] || return 0
 
+  local darwin_sdk_root darwin_cxx_include
+  [[ -x /usr/bin/xcrun && ! -L /usr/bin/xcrun ]] || {
+    echo "xcrun is required for the Darwin TLAPM source build" >&2
+    return 1
+  }
+  darwin_sdk_root="$(clean_command /usr/bin/xcrun --sdk macosx --show-sdk-path)" || {
+    echo "xcrun cannot resolve the Darwin SDK" >&2
+    return 1
+  }
+  [[ "$darwin_sdk_root" == /* && -d "$darwin_sdk_root" ]] || {
+    echo "xcrun returned an invalid Darwin SDK root" >&2
+    return 1
+  }
+  darwin_sdk_root="$(cd -P -- "$darwin_sdk_root" && pwd)" || {
+    echo "the Darwin SDK root is not canonical" >&2
+    return 1
+  }
+  darwin_cxx_include="${darwin_sdk_root}/usr/include/c++/v1"
+  [[ -d "$darwin_cxx_include" && ! -L "$darwin_cxx_include" \
+    && -f "${darwin_cxx_include}/numeric" \
+    && ! -L "${darwin_cxx_include}/numeric" ]] || {
+    echo "the Darwin SDK lacks its canonical libc++ headers" >&2
+    return 1
+  }
+  DARWIN_CXXFLAGS="-isystem ${darwin_cxx_include}"
+  DARWIN_CPLUS_INCLUDE_PATH="$darwin_cxx_include"
+
   clean_command sh -c 'command -v "$1" >/dev/null 2>&1' sh pkg-config || {
     echo "pkg-config is required for the Darwin TLAPM source build" >&2
     return 1
   }
-  [[ ! -e "$DARWIN_CXX_PREFLIGHT" && ! -L "$DARWIN_CXX_PREFLIGHT" ]] || {
+  [[ ! -e "$DARWIN_CXX_PREFLIGHT" && ! -L "$DARWIN_CXX_PREFLIGHT" \
+    && ! -e "$DARWIN_CXX_PREFLIGHT_OBJECT" \
+    && ! -L "$DARWIN_CXX_PREFLIGHT_OBJECT" ]] || {
     echo "Darwin C++ capability preflight destination already exists" >&2
     return 1
   }
-  clean_command g++ -std=c++17 -Wall -Wextra -Werror -pedantic \
-    -x c++ - -o "$DARWIN_CXX_PREFLIGHT" <<'CPP'
+  clean_command "$ENV_BIN" CPLUS_INCLUDE_PATH="$DARWIN_CPLUS_INCLUDE_PATH" \
+    cc -std=c++17 -Wall -Wextra -Werror -pedantic \
+    -x c++ -c - -o "$DARWIN_CXX_PREFLIGHT_OBJECT" <<'CPP'
 #include <numeric>
 #include <vector>
 
@@ -284,6 +317,12 @@ int main() {
   return std::accumulate(values.begin(), values.end(), 0) == 6 ? 0 : 1;
 }
 CPP
+  [[ -f "$DARWIN_CXX_PREFLIGHT_OBJECT" \
+    && ! -L "$DARWIN_CXX_PREFLIGHT_OBJECT" ]] || {
+    echo "Darwin C++ capability preflight did not produce one object" >&2
+    return 1
+  }
+  clean_command g++ "$DARWIN_CXX_PREFLIGHT_OBJECT" -o "$DARWIN_CXX_PREFLIGHT"
   [[ -f "$DARWIN_CXX_PREFLIGHT" && ! -L "$DARWIN_CXX_PREFLIGHT" \
     && -x "$DARWIN_CXX_PREFLIGHT" ]] || {
     echo "Darwin C++ capability preflight did not produce one executable" >&2
@@ -489,7 +528,7 @@ download_curl_attempt() {
 
 download_curl_status_is_transient() {
   case "$1" in
-    18|28|52|55|56) return 0 ;;
+    18|28|35|52|55|56) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -619,6 +658,8 @@ verify_checked_file() {
 prepare_darwin_conf_boundary
 readonly -a darwin_conf_packages
 verify_darwin_depext_capabilities
+readonly DARWIN_CXXFLAGS
+readonly DARWIN_CPLUS_INCLUDE_PATH
 
 echo "[tlapm] fetching immutable source commit ${TLAPM_SOURCE_COMMIT}"
 checkout_exact_tree "TLAPM source" "$TLAPM_SOURCE_REPOSITORY_URL" \
@@ -691,6 +732,8 @@ opam_command() {
     OPAMROOT="$OPAM_ROOT" OPAMYES=1 OPAMCOLOR=never OPAMNOSELFUPGRADE=1 \
     OPAMDOWNLOADJOBS=1 OPAMJOBS="$BUILD_JOBS" OPAMPRECISETRACKING=1 \
     OPAMREQUIRECHECKSUMS=true \
+    CXXFLAGS="$DARWIN_CXXFLAGS" \
+    CPLUS_INCLUDE_PATH="$DARWIN_CPLUS_INCLUDE_PATH" \
     GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
     GIT_TERMINAL_PROMPT=0 GIT_NO_REPLACE_OBJECTS=1 \
     "$OPAM_BINARY" "$@"
@@ -764,6 +807,8 @@ opam_command exec --switch "$OPAM_SWITCH" -- \
     TMPDIR="$BUILD_TMP" XDG_CACHE_HOME="$BUILD_XDG_CACHE" \
     XDG_CONFIG_HOME="$BUILD_XDG_CONFIG" LANG=C LC_ALL=C TZ=UTC \
     MAKEFLAGS= MFLAGS= GNUMAKEFLAGS= DUNE_CACHE=disabled \
+    CXXFLAGS="$DARWIN_CXXFLAGS" \
+    CPLUS_INCLUDE_PATH="$DARWIN_CPLUS_INCLUDE_PATH" \
     SOURCE_DATE_EPOCH="$TLAPM_SOURCE_DATE_EPOCH" \
     TLAPM_LOCKED_WGET_PYTHON="$LOCK_PYTHON" \
     TLAPM_LOCKED_WGET_HELPER="$LOCK_HELPER" \
@@ -785,13 +830,14 @@ while IFS=$'\t' read -r backend_name _backend_url backend_sha256 \
     "${BACKEND_CACHE}/${backend_destination}"
 done < "$BACKEND_TABLE"
 
-readonly BUILT_ARCHIVE="${SOURCE_DIR}/_build/tlapm-${TLAPM_SOURCE_VERSION}-${PLATFORM}.tar.gz"
-readonly BUILT_BINARY="${SOURCE_DIR}/_build/tlapm/bin/tlapm"
-[[ -f "$BUILT_ARCHIVE" && ! -L "$BUILT_ARCHIVE" && -x "$BUILT_BINARY" ]] || {
+readonly UPSTREAM_ARCHIVE="${SOURCE_DIR}/_build/tlapm-${TLAPM_SOURCE_VERSION}-${PLATFORM}.tar.gz"
+readonly UPSTREAM_BINARY="${SOURCE_DIR}/_build/tlapm/bin/tlapm"
+[[ -f "$UPSTREAM_ARCHIVE" && ! -L "$UPSTREAM_ARCHIVE" \
+  && -x "$UPSTREAM_BINARY" ]] || {
   echo "TLAPM source build did not produce the locked release layout" >&2
   exit 1
 }
-if ! built_version="$(clean_command "$BUILT_BINARY" --version 2>&1)"; then
+if ! built_version="$(clean_command "$UPSTREAM_BINARY" --version 2>&1)"; then
   echo "source-built TLAPM cannot report its identity" >&2
   echo "actual:   ${built_version}" >&2
   exit 1
@@ -800,6 +846,66 @@ fi
   echo "source-built TLAPM does not identify commit ${TLAPM_SOURCE_COMMIT}" >&2
   echo "expected: ${TLAPM_SOURCE_COMMIT:0:7}" >&2
   echo "actual:   ${built_version}" >&2
+  exit 1
+}
+
+echo "[tlapm] projecting the tested build into a clean release tree"
+readonly AUTHENTICATED_DISTRIBUTION_PARENT="${tmp_dir}/authenticated-distribution"
+readonly AUTHENTICATED_DISTRIBUTION="${AUTHENTICATED_DISTRIBUTION_PARENT}/tlapm"
+mkdir -m 0700 "$AUTHENTICATED_DISTRIBUTION_PARENT"
+opam_command exec --switch "$OPAM_SWITCH" -- \
+  "$ENV_BIN" -i \
+    HOME="$BUILD_HOME" \
+    PATH="${OPAM_SWITCH_PREFIX_PATH}/bin:${SANITIZED_HOST_PATH}" \
+    TMPDIR="$BUILD_TMP" XDG_CACHE_HOME="$BUILD_XDG_CACHE" \
+    XDG_CONFIG_HOME="$BUILD_XDG_CONFIG" LANG=C LC_ALL=C TZ=UTC \
+    CXXFLAGS="$DARWIN_CXXFLAGS" \
+    CPLUS_INCLUDE_PATH="$DARWIN_CPLUS_INCLUDE_PATH" \
+    dune install --root "$SOURCE_DIR" --relocatable \
+      --prefix "$AUTHENTICATED_DISTRIBUTION"
+readonly BUILT_ISABELLE="${SOURCE_DIR}/_build/default/deps/isabelle/Isabelle"
+readonly BUILT_ISABELLE_EXEC_FILES="${SOURCE_DIR}/_build/default/deps/isabelle/Isabelle.exec-files"
+readonly PROJECTED_ISABELLE="${AUTHENTICATED_DISTRIBUTION}/lib/tlapm/backends/Isabelle"
+readonly PROJECTED_ISABELLE_EXEC_FILES="${AUTHENTICATED_DISTRIBUTION}/lib/tlapm/backends/Isabelle.exec-files"
+[[ -d "$BUILT_ISABELLE" && ! -L "$BUILT_ISABELLE" \
+  && -f "$BUILT_ISABELLE_EXEC_FILES" \
+  && ! -L "$BUILT_ISABELLE_EXEC_FILES" \
+  && -d "$PROJECTED_ISABELLE" && ! -L "$PROJECTED_ISABELLE" \
+  && -f "$PROJECTED_ISABELLE_EXEC_FILES" \
+  && ! -L "$PROJECTED_ISABELLE_EXEC_FILES" ]] || {
+  echo "clean TLAPM release projection lacks its Isabelle derivation" >&2
+  exit 1
+}
+# Dune's directory installation may materialize symlink leaves on Darwin. Keep
+# the package byte-derived from the tested build tree by projecting the locked
+# Isabelle output explicitly; the post-install rule below restores only the
+# reviewed executable set recorded alongside that output.
+/bin/rm -rf -- "$PROJECTED_ISABELLE"
+/bin/cp -R "$BUILT_ISABELLE" "$PROJECTED_ISABELLE"
+/bin/cp -p "$BUILT_ISABELLE_EXEC_FILES" "$PROJECTED_ISABELLE_EXEC_FILES"
+clean_command make --jobs=1 -C "$AUTHENTICATED_DISTRIBUTION/lib/tlapm" \
+  -f Makefile.post-install
+readonly BUILT_BINARY="${AUTHENTICATED_DISTRIBUTION}/bin/tlapm"
+[[ -x "$BUILT_BINARY" ]] || {
+  echo "clean TLAPM release projection lacks its executable" >&2
+  exit 1
+}
+if ! projected_version="$(clean_command "$BUILT_BINARY" --version 2>&1)"; then
+  echo "clean TLAPM release projection cannot report its identity" >&2
+  echo "actual:   ${projected_version}" >&2
+  exit 1
+fi
+[[ "$projected_version" == "${TLAPM_SOURCE_COMMIT:0:7}" ]] || {
+  echo "clean TLAPM release projection has an invalid identity" >&2
+  echo "expected: ${TLAPM_SOURCE_COMMIT:0:7}" >&2
+  echo "actual:   ${projected_version}" >&2
+  exit 1
+}
+readonly BUILT_ARCHIVE="${tmp_dir}/tlapm-${TLAPM_SOURCE_VERSION}-${PLATFORM}.tar.gz"
+clean_command "$ENV_BIN" COPYFILE_DISABLE=1 \
+  tar -czf "$BUILT_ARCHIVE" -C "$AUTHENTICATED_DISTRIBUTION_PARENT" tlapm
+[[ -f "$BUILT_ARCHIVE" && ! -L "$BUILT_ARCHIVE" ]] || {
+  echo "clean TLAPM release projection did not produce one archive" >&2
   exit 1
 }
 
@@ -829,7 +935,8 @@ readonly ATTESTATION="${tmp_dir}/source-build-attestation.json"
 "$LOCK_PYTHON" -I -S "$LOCK_HELPER" \
   --lock "$LOCK_MANIFEST" --platform "$PLATFORM" write-attestation \
   --archive "$BUILT_ARCHIVE" --build-tree "$SOURCE_DIR" \
-  --distribution-tree "${SOURCE_DIR}/_build" --locked-wget "$LOCKED_WGET" \
+  --distribution-tree "$AUTHENTICATED_DISTRIBUTION_PARENT" \
+  --locked-wget "$LOCKED_WGET" \
   --source-builder "$SOURCE_BUILDER" \
   --output "$ATTESTATION"
 "$LOCK_PYTHON" -I -S "$LOCK_HELPER" \

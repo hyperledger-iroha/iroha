@@ -200,7 +200,7 @@ impl ValidatedTleKeySessionV1 {
     ) -> Result<Self, TleReleaseAdapterError> {
         let parameters = AdaptiveThresholdBlsParameters::derive(&session)?;
         let transcript = AdaptiveThresholdBlsPublicTranscript::from_qualified_dealers(
-            parameters,
+            &parameters,
             validated_dealers,
             qualified_dealers,
             dkg_event_hash,
@@ -280,7 +280,7 @@ impl ValidatedTleKeySessionV1 {
             })
             .collect::<Result<Vec<_>, _>>()?;
         let transcript = AdaptiveThresholdBlsPublicTranscript::from_qualified_dealers(
-            parameters,
+            &parameters,
             &validated_dealers,
             &state.qualified_dealers,
             state.dkg_event_hash,

@@ -1,5 +1,95 @@
 # Executed lexically in sumeragi_v2_proof_ledger_test.py; do not collect directly.
 
+def test_merge_execution_validation_cache_semantics_survive_digest_refresh(tmp_path: Path) -> None:
+    """Resealing cannot hide weakened merge-execution cache authority."""
+
+    module = load_checker()
+    original_seals = dict(module._PRODUCTION_MERGE_EXECUTION_CACHE_ITEM_SHA256)
+    mutations = (
+        (
+            "merge_execution_candidate_validation_memo",
+            "state_view_generation,\n            canonical_candidate_bytes,",
+            "state_view_generation: state_view_generation.saturating_add(2),\n"
+            "            canonical_candidate_bytes,",
+            "merge execution cache identity must bind the exact height",
+        ),
+        (
+            "merge_parent_frontier_is_exact_at_generation",
+            "&& self.merge_parent_frontier_is_exact()\n"
+            "            && self.state.state_view_generation() == state_view_generation",
+            "&& self.state.state_view_generation() == state_view_generation",
+            "merge execution cache reuse must bracket an exact durable parent frontier",
+        ),
+        (
+            "validate_merge_candidate_for_active_round",
+            "if candidate.execution_batch.is_none() {",
+            "if candidate.execution_batch.is_some() {",
+            "relay and drain candidates must retain full live production validation",
+        ),
+        (
+            "build_and_memoize_merge_execution_candidate",
+            "&& self.merge_parent_frontier_is_exact_at_generation(state_view_generation)",
+            "&& state_view_generation % 2 == 0",
+            "only State's validating builder may seed a memo",
+        ),
+        (
+            "mark_global_body_locked",
+            "self.validated_merge_execution_candidate = None;",
+            "let _ = &self.validated_merge_execution_candidate;",
+            "global body lock must invalidate merge execution validation authority",
+        ),
+    )
+    try:
+        for index, (item_name, old, new, expected_error) in enumerate(mutations):
+            fixture_root = tmp_path / f"merge-execution-cache-{index}"
+            lane_path = (
+                fixture_root
+                / "crates/iroha_core/src/sumeragi/v2_lane_work.rs"
+            )
+            lane_path.parent.mkdir(parents=True)
+            shutil.copy2(
+                ROOT_DIR / "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+                lane_path,
+            )
+            mutate_rust_item_source_in_context(
+                module,
+                lane_path,
+                item_name,
+                (("impl", "V2LaneWorkAdapter"),),
+                old,
+                new,
+            )
+            item = next(
+                candidate
+                for candidate in module.rust_items(
+                    lane_path.read_text(encoding="utf-8"), item_name
+                )
+                if candidate.brace_context
+                == (("impl", "V2LaneWorkAdapter"),)
+            )
+            qualified_name = f"V2LaneWorkAdapter::{item_name}"
+            module._PRODUCTION_MERGE_EXECUTION_CACHE_ITEM_SHA256[
+                qualified_name
+            ] = module._rust_item_token_sha256(item)
+            errors: list[str] = []
+            module._require_merge_execution_validation_cache_contract(
+                lane_path,
+                lane_path.read_text(encoding="utf-8"),
+                errors,
+            )
+            assert any(
+                expected_error in error
+                and "exact reviewed token digest" not in error
+                for error in errors
+            ), errors
+            module._PRODUCTION_MERGE_EXECUTION_CACHE_ITEM_SHA256.clear()
+            module._PRODUCTION_MERGE_EXECUTION_CACHE_ITEM_SHA256.update(
+                original_seals
+            )
+    finally:
+        module._PRODUCTION_MERGE_EXECUTION_CACHE_ITEM_SHA256.clear()
+        module._PRODUCTION_MERGE_EXECUTION_CACHE_ITEM_SHA256.update(original_seals)
+
 @pytest.mark.parametrize(
     ("relative_path", "region_marker", "old", "new", "error_fragment"),
     (
@@ -2282,7 +2372,6 @@ def test_exact_output_production_source_mutations_fail_closed(
         for expected_error in expected_errors
     ), errors
 
-
 def _apply_exact_output_non_runtime_extended_mutations(
     tmp_path: Path, module, monkeypatch: pytest.MonkeyPatch
 ) -> list[str]:
@@ -2698,7 +2787,6 @@ def _apply_exact_output_non_runtime_extended_mutations(
     monkeypatch.setattr(module, "_require_rust_item_token_sha256", lambda *args: None)
     return diagnostics
 
-
 @pytest.mark.parametrize(
     ("item_name", "old", "new", "expected_error"),
     (
@@ -2826,7 +2914,6 @@ def test_lane_predecessor_ordering_mutations_survive_digest_refresh(
         item_name in error and "exact reviewed token digest" in error
         for error in errors
     ), errors
-
 
 @pytest.mark.parametrize(
     ("owner", "old", "new", "expected_error"),

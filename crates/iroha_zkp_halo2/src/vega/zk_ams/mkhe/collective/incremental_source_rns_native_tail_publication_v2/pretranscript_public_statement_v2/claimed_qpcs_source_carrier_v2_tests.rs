@@ -349,10 +349,144 @@ fn exact_stage_wrapper_has_only_purpose_specific_forward_transitions() {
         "verify_global_membership_v2",
         "verify_direct_global_membership_handoff_v2",
         "verify_source_packing_same_opening_v2",
+        "verify_composite_v2",
     ] {
         assert!(source.contains(transition), "missing {transition}");
     }
     assert!(!source.contains("fn map_stage"));
     assert!(!source.contains("fn into_parts"));
     assert!(!source.contains("fn retained_publication"));
+}
+
+#[test]
+fn final_claimed_qpcs_owner_consumes_the_context_directly_into_atomic_verification() {
+    let source = include_str!("claimed_qpcs_source_carrier_v2.rs");
+    let terminal = source
+        .split_once("fn verify_composite_v2<'envelope>")
+        .expect("consuming composite terminal seam")
+        .1
+        .split_once("impl<'proof, Stage>")
+        .expect("terminal seam boundary")
+        .0;
+
+    let split_owner = terminal
+        .find("let Self { retained, stage } = self")
+        .unwrap();
+    let retain_authority = terminal
+        .find("RnsNativeQpcsCompositeAuthorityV2 { retained, envelope }")
+        .unwrap();
+    let mint_context = terminal.find(".into_composite_context_v2(").unwrap();
+    let map_handoff = terminal
+        .find("RnsNativeClaimedQpcsCompositeVerificationErrorV2::Handoff")
+        .unwrap();
+    let verify = terminal
+        .find("verify_zk_ams_mkhe_rns_native_composite_from_source_chain_v2(input)")
+        .unwrap();
+    let map_verification = terminal
+        .find("RnsNativeClaimedQpcsCompositeVerificationErrorV2::CompositeVerification")
+        .unwrap();
+
+    assert!(split_owner < retain_authority);
+    assert!(retain_authority < mint_context);
+    assert!(mint_context < map_handoff);
+    assert!(map_handoff < verify);
+    assert!(verify < map_verification);
+    assert_eq!(terminal.matches(".into_composite_context_v2(").count(), 1);
+    assert_eq!(
+        terminal
+            .matches("verify_zk_ams_mkhe_rns_native_composite_from_source_chain_v2(input)")
+            .count(),
+        1
+    );
+    assert!(terminal.contains("ZkAmsMkheRnsNativeCompositeCandidateReceiptV1"));
+    assert!(terminal.contains("RnsNativeClaimedQpcsCompositeVerificationErrorV2"));
+    assert!(!source.contains("RnsNativeCrossFieldRlweCompositeInputV2"));
+    assert!(!source.contains("fn into_parts"));
+}
+
+fn assert_exact_composite_transition_error_v2(
+    error: RnsNativeDirectGlobalMembershipCompositeTransitionErrorV2,
+) {
+    match error {
+        RnsNativeDirectGlobalMembershipCompositeTransitionErrorV2::SourcePacking(_) => {}
+        RnsNativeDirectGlobalMembershipCompositeTransitionErrorV2::CompositeContext(_) => {}
+    }
+}
+
+#[test]
+fn composite_terminal_error_keeps_exact_transition_and_verification_failures_distinct() {
+    let source_packing_transition = RnsNativeDirectGlobalMembershipCompositeTransitionErrorV2::from(
+        RnsNativeSourcePackingSameOpeningErrorV1::InvalidContext,
+    );
+    let composite_context_transition =
+        RnsNativeDirectGlobalMembershipCompositeTransitionErrorV2::from(
+            RnsNativeCrossFieldRlweDirectErrorV1::InvalidContext,
+        );
+    assert_exact_composite_transition_error_v2(source_packing_transition);
+    assert_exact_composite_transition_error_v2(composite_context_transition);
+
+    let source_packing =
+        RnsNativeClaimedQpcsCompositeVerificationErrorV2::Handoff(source_packing_transition);
+    let composite_context =
+        RnsNativeClaimedQpcsCompositeVerificationErrorV2::Handoff(composite_context_transition);
+    let verification = RnsNativeClaimedQpcsCompositeVerificationErrorV2::CompositeVerification(
+        ZkAmsMkheRnsNativeCompositeVerificationErrorV1::InvalidTranscript,
+    );
+
+    assert_eq!(
+        source_packing,
+        RnsNativeClaimedQpcsCompositeVerificationErrorV2::Handoff(
+            RnsNativeDirectGlobalMembershipCompositeTransitionErrorV2::SourcePacking(
+                RnsNativeSourcePackingSameOpeningErrorV1::InvalidContext,
+            ),
+        )
+    );
+    assert_eq!(
+        composite_context,
+        RnsNativeClaimedQpcsCompositeVerificationErrorV2::Handoff(
+            RnsNativeDirectGlobalMembershipCompositeTransitionErrorV2::CompositeContext(
+                RnsNativeCrossFieldRlweDirectErrorV1::InvalidContext,
+            ),
+        )
+    );
+    assert_eq!(
+        verification,
+        RnsNativeClaimedQpcsCompositeVerificationErrorV2::CompositeVerification(
+            ZkAmsMkheRnsNativeCompositeVerificationErrorV1::InvalidTranscript,
+        )
+    );
+    assert_ne!(source_packing, composite_context);
+    assert_ne!(source_packing, verification);
+    assert_ne!(composite_context, verification);
+}
+
+#[test]
+fn final_composite_transition_type_excludes_earlier_root_failures() {
+    let carrier = include_str!("claimed_qpcs_source_carrier_v2.rs");
+    let terminal_error = carrier
+        .split_once("enum RnsNativeClaimedQpcsCompositeVerificationErrorV2")
+        .and_then(|(_, suffix)| suffix.split_once("impl fmt::Display"))
+        .map(|(terminal_error, _)| terminal_error)
+        .expect("terminal error declaration");
+    assert!(terminal_error.contains("RnsNativeDirectGlobalMembershipCompositeTransitionErrorV2"));
+    assert!(!terminal_error.contains("RnsNativeDirectGlobalMembershipHandoffErrorV1"));
+
+    let handoff = include_str!("../../../rns_native_direct_global_membership_handoff.rs");
+    let transition = handoff
+        .split_once("RnsNativeSourcePackingCompositeTransitionV2<'proof, 'envelope>")
+        .and_then(|(_, suffix)| suffix.split_once("fn map_source_replay_error_v2"))
+        .map(|(transition, _)| transition)
+        .expect("concrete final composite transition");
+    assert!(
+        transition
+            .contains("type Error = RnsNativeDirectGlobalMembershipCompositeTransitionErrorV2")
+    );
+    assert_eq!(
+        transition
+            .matches("RnsNativeDirectGlobalMembershipCompositeTransitionErrorV2::from")
+            .count(),
+        2
+    );
+    assert!(!transition.contains("GlobalLookupRoot"));
+    assert!(!transition.contains("ZeroPaddingRoot"));
 }

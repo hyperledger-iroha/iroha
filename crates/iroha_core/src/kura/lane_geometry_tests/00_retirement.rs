@@ -219,7 +219,9 @@ fn wait_for_total_usage_scan_pause(kura: &Kura) {
     }
 }
 fn kura_config(root: &Path) -> KuraConfig {
-    KuraConfig { init_mode: iroha_config::kura::InitMode::Strict, store_dir: WithOrigin::inline(root.to_path_buf()),
+    KuraConfig {
+        init_mode: iroha_config::kura::InitMode::Strict,
+        store_dir: WithOrigin::inline(root.to_path_buf()),
         max_disk_usage_bytes: MAX_DISK_USAGE_BYTES,
         blocks_in_memory: BLOCKS_IN_MEMORY,
         debug_output_new_blocks: false,
@@ -974,6 +976,218 @@ fn checkpoint_retired_geometry(
         Vec::new(),
     )
 }
+fn lifecycle_bound_autonomous_retirement_payload(
+    template: &crate::lane_consensus::LaneExecutablePayloadV1,
+    height_context_id: HeightContextId,
+    signer: &KeyPair,
+) -> crate::lane_consensus::LaneExecutablePayloadV1 {
+    let local_peer = PeerId::new(signer.public_key().clone());
+    let (reservation_owner_hash, proposal_identity_hash) =
+        crate::sumeragi::lane_planner::autonomous_lane_reservation_identity_hashes_for_proposal(
+            template.network_id,
+            height_context_id,
+            template.epoch,
+            &template.origin_proposal,
+            &local_peer,
+        )
+        .expect("derive geometry-retirement lifecycle reservation identities");
+    let mut reservation_keys = template.reservation_keys.clone();
+    for reservation in &mut reservation_keys {
+        reservation.reservation_owner_hash = reservation_owner_hash;
+        reservation.proposal_identity_hash = proposal_identity_hash;
+    }
+    crate::lane_consensus::LaneExecutablePayloadV1::new_signed_with_reservations(
+        template.network_id,
+        template.epoch,
+        template.origin_proposal.clone(),
+        template.entrypoints.clone(),
+        reservation_keys,
+        template.routing_plans.clone(),
+        template.native_amx_receipts.clone(),
+        local_peer,
+        signer.private_key(),
+    )
+    .expect("construct lifecycle-bound geometry-retirement payload")
+}
+fn sign_geometry_retirement_lifecycle_cursor(
+    sequence: u64,
+    previous_cursor_hash: Option<Hash>,
+    binding: &AutonomousLifecycleAttemptBindingV1,
+    phase: AutonomousLifecycleCursorPhaseV1,
+    signer: &KeyPair,
+    payload: &crate::lane_consensus::LaneExecutablePayloadV1,
+) -> AutonomousLifecycleCursorV1 {
+    let unsigned = AutonomousLifecycleCursorUnsignedV1::new(
+        sequence,
+        previous_cursor_hash,
+        binding.clone(),
+        phase,
+        PeerId::new(signer.public_key().clone()),
+    )
+    .expect("construct geometry-retirement lifecycle cursor");
+    let signature = Signature::try_new(
+        signer.private_key(),
+        &unsigned
+            .signing_preimage()
+            .expect("encode geometry-retirement lifecycle cursor preimage"),
+    )
+    .expect("sign geometry-retirement lifecycle cursor");
+    unsigned
+        .finalize(
+            <[u8; 96]>::try_from(signature.payload())
+                .expect("BLS-normal geometry-retirement signature is exactly 96 bytes"),
+            &payload.origin_proposal.descriptor.validator_set,
+        )
+        .expect("finalize geometry-retirement lifecycle cursor")
+}
+fn install_initial_geometry_retirement_lifecycle_cursor(
+    kura: &Kura,
+    generation: &AutonomousLifecycleProcessGenerationClaim,
+    payload: &crate::lane_consensus::LaneExecutablePayloadV1,
+    binding: &AutonomousLifecycleAttemptBindingV1,
+    projection: crate::sumeragi::v2_core::ProductionInFlightFirstReleaseStateProjection,
+    signer: &KeyPair,
+) -> AutonomousLifecycleCursorV1 {
+    let cursor = sign_geometry_retirement_lifecycle_cursor(
+        1,
+        None,
+        binding,
+        AutonomousLifecycleCursorPhaseV1::live(generation.generation(), projection)
+            .expect("construct initial geometry-retirement Live phase"),
+        signer,
+        payload,
+    );
+    let read = kura
+        .read_autonomous_lifecycle_cursor(payload, binding, generation)
+        .expect("read absent geometry-retirement lifecycle cursor");
+    assert!(read.cursor().is_none());
+    let (_, lease) = read.into_parts();
+    assert_eq!(
+        kura.compare_and_swap_autonomous_lifecycle_cursor(lease, cursor.clone())
+            .expect("persist initial geometry-retirement lifecycle cursor")
+            .cursor(),
+        Some(&cursor),
+    );
+    cursor
+}
+fn append_geometry_retirement_lifecycle_phase(
+    kura: &Kura,
+    generation: &AutonomousLifecycleProcessGenerationClaim,
+    payload: &crate::lane_consensus::LaneExecutablePayloadV1,
+    binding: &AutonomousLifecycleAttemptBindingV1,
+    current: &AutonomousLifecycleCursorV1,
+    phase: AutonomousLifecycleCursorPhaseV1,
+    signer: &KeyPair,
+) -> AutonomousLifecycleCursorV1 {
+    let cursor = sign_geometry_retirement_lifecycle_cursor(
+        current
+            .sequence()
+            .checked_add(1)
+            .expect("geometry-retirement lifecycle sequence remains in range"),
+        Some(current.cursor_hash()),
+        binding,
+        phase,
+        signer,
+        payload,
+    );
+    let read = kura
+        .read_autonomous_lifecycle_cursor(payload, binding, generation)
+        .expect("read current geometry-retirement lifecycle cursor");
+    assert_eq!(read.cursor(), Some(current));
+    let (_, lease) = read.into_parts();
+    assert_eq!(
+        kura.compare_and_swap_autonomous_lifecycle_cursor(lease, cursor.clone())
+            .expect("append geometry-retirement lifecycle cursor")
+            .cursor(),
+        Some(&cursor),
+    );
+    cursor
+}
+fn append_geometry_retirement_lifecycle_transition(
+    kura: &Kura,
+    generation: &AutonomousLifecycleProcessGenerationClaim,
+    payload: &crate::lane_consensus::LaneExecutablePayloadV1,
+    binding: &AutonomousLifecycleAttemptBindingV1,
+    current: &AutonomousLifecycleCursorV1,
+    transition: ProductionInFlightFirstReleaseTransitionProjection,
+    signer: &KeyPair,
+) -> AutonomousLifecycleCursorV1 {
+    let prepared = append_geometry_retirement_lifecycle_phase(
+        kura,
+        generation,
+        payload,
+        binding,
+        current,
+        AutonomousLifecycleCursorPhaseV1::prepared(generation.generation(), transition)
+            .expect("construct geometry-retirement Prepared phase"),
+        signer,
+    );
+    append_geometry_retirement_lifecycle_phase(
+        kura,
+        generation,
+        payload,
+        binding,
+        &prepared,
+        AutonomousLifecycleCursorPhaseV1::live(generation.generation(), transition.after)
+            .expect("construct geometry-retirement successor Live phase"),
+        signer,
+    )
+}
+fn geometry_canonical_merge_terminal_projection(
+    reservation_group: LaneQueueReservationGroupBindingV1,
+) -> ProductionInFlightFirstReleaseStateProjection {
+    let binding_a = canonical_lane_queue_reservation_group_identity_projection(reservation_group);
+    let projection = ProductionInFlightFirstReleaseStateProjection {
+        validator_count: 1,
+        producer: 1,
+        producer_selected_owner: 1,
+        replicated_carrier_owners: 0,
+        payload_binding_a: 1,
+        binding_a,
+        queue: ProductionInFlightFirstReleaseQueueProjection {
+            plan_state: IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_TOMBSTONED,
+            selected_count: reservation_group.reservation_count,
+            reservation_state: IN_FLIGHT_FIRST_RELEASE_RESERVATION_COMMIT_FORGOTTEN,
+        },
+        carrier: ProductionInFlightFirstReleaseCarrierProjection {
+            kura_active: 1,
+            execution_input_durable: 1,
+            ready_qc_durable: true,
+        },
+        session: ProductionInFlightFirstReleaseSessionProjection {
+            bodies: 1,
+            ready_authorized: 1,
+            producer_alive: true,
+            ..ProductionInFlightFirstReleaseSessionProjection::default()
+        },
+        history: ProductionInFlightFirstReleaseHistoryProjection {
+            ever_queue_plan_v1: true,
+            ever_reservation_v1: true,
+            ever_execution_input_durable: 1,
+            ever_ready_authorized: 1,
+            ready_signed: 1,
+            ever_ready_qc_durable: true,
+            reservation_committed_prefix: reservation_group.reservation_count,
+            queue_plan_tombstoned_prefix: reservation_group.reservation_count,
+            reservation_commit_forgotten_prefix: reservation_group.reservation_count,
+            ..ProductionInFlightFirstReleaseHistoryProjection::default()
+        },
+        decision: ProductionInFlightFirstReleaseDecisionProjection {
+            lane_commit_scope: binding_a,
+            lane_commit_owner: 1,
+            wsv_committed: true,
+            application_count: 1,
+            applied_by: 1,
+            ..ProductionInFlightFirstReleaseDecisionProjection::default()
+        },
+        release: ProductionInFlightFirstReleaseReleaseProjection::default(),
+    };
+    assert!(
+        production_in_flight_first_release_state_kernel(projection),
+        "geometry canonical merge terminal projection must satisfy the production kernel"
+    );
+    projection
+}
 fn prepare_tombstoned_autonomous_archive(
     root: &Path,
 ) -> (Arc<Kura>, TombstonedAutonomousArchiveFixture) {
@@ -996,7 +1210,7 @@ fn prepare_tombstoned_autonomous_archive(
     let retiring_entry = extended.entry(retiring_lane).expect("retiring lane");
     let retiring_incarnation = extended_incarnations[&retiring_lane];
     let producer = crate::kura::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-    let (network_id, epoch, payload) = autonomous_retirement_payload_for_routes(
+    let (network_id, epoch, payload_template) = autonomous_retirement_payload_for_routes(
         retiring_lane,
         retiring_entry.dataspace_id,
         retiring_incarnation,
@@ -1005,9 +1219,119 @@ fn prepare_tombstoned_autonomous_archive(
         Hash::new(b"tombstoned-autonomous-unrelated-participant"),
         &producer,
     );
+    let height_context_id = HeightContextId(HashOf::<HeightContext>::from_untyped_unchecked(
+        Hash::new(b"geometry-retirement-lifecycle-height-context"),
+    ));
+    let payload = lifecycle_bound_autonomous_retirement_payload(
+        &payload_template,
+        height_context_id,
+        &producer,
+    );
+    let local_peer = PeerId::new(producer.public_key().clone());
+    kura.bind_local_peer_id(local_peer.clone())
+        .expect("bind geometry-retirement lifecycle signer");
+    let generation = kura
+        .claim_autonomous_lifecycle_process_generation(network_id, &local_peer)
+        .expect("claim geometry-retirement lifecycle process generation");
     let lane_block_height = payload.origin_proposal.descriptor.lane_block_height;
     kura.persist_lane_executable_payload(&payload, network_id, epoch)
         .expect("persist autonomous payload before terminal retirement");
+    let reservation_group =
+        lane_queue_reservation_group_binding_from_ordered_keys(payload.reservation_keys.iter())
+            .expect("bind geometry-retirement reservation group");
+    let binding = AutonomousLifecycleAttemptBindingV1::from_payload(
+        height_context_id,
+        lane_block_height,
+        &payload,
+        reservation_group,
+        &local_peer,
+    )
+    .expect("bind geometry-retirement lifecycle attempt");
+    let retirement = crate::kura::AutonomousLaneSlotRetirementV1::from_payload(&payload);
+    let barrier = retirement
+        .queue_release_barrier()
+        .expect("derive geometry-retirement Queue barrier");
+    let view_state_path = Kura::autonomous_lane_block_attempt_view_state_path_for_entry(
+        retiring_entry,
+        root,
+        lane_block_height,
+        payload.origin_proposal.descriptor.proposal_height,
+    );
+    let retirement_projection = kura
+        .authorize_autonomous_lane_slot_retirement_persistence(
+            &payload,
+            &retirement,
+            &view_state_path,
+        )
+        .expect("authorize geometry-retirement persistence")
+        .consume_for_persistence(&payload, &retirement, &view_state_path)
+        .expect("consume exact geometry-retirement persistence authority");
+    let release_context =
+        AutonomousLaneReleaseProjectionContext::from_payload(&kura, &payload, &retirement)
+            .expect("construct geometry-retirement release context");
+    let entrypoint_hash = *payload
+        .entrypoint_hashes
+        .first()
+        .expect("geometry-retirement payload has one entrypoint");
+    assert_eq!(payload.entrypoint_hashes.len(), 1);
+    let claim_path =
+        Kura::autonomous_lane_entrypoint_claim_path(root, &payload.network_id, &entrypoint_hash);
+    let retirement_hash = retirement
+        .digest()
+        .expect("hash geometry-retirement retirement");
+    let pending_claim = AutonomousLaneEntrypointClaimV1::release_pending_for_payload(
+        &payload,
+        entrypoint_hash,
+        retirement_hash,
+    );
+    let pending_projection = release_context
+        .claim_transition_authorization(
+            &claim_path,
+            &pending_claim,
+            false,
+            AutonomousLaneClaimReleaseAuthorizationMode::QueuePrepared,
+            0,
+            AutonomousLaneReleasedClaimDisposition::QueueReleasePrepared,
+        )
+        .expect("authorize geometry-retirement ReleasePending claim")
+        .consume_for_persistence(&claim_path, &pending_claim)
+        .expect("consume geometry-retirement ReleasePending authority");
+    let (queue_preparation_projection, claims_fully_released) = release_context
+        .queue_preparation_authorization(&retirement, &barrier, false)
+        .expect("authorize geometry-retirement Queue preparation")
+        .consume_for_queue(&barrier)
+        .expect("consume geometry-retirement Queue preparation authority");
+    assert!(!claims_fully_released);
+    let released_claim = AutonomousLaneEntrypointClaimV1::released_for_payload(
+        &payload,
+        entrypoint_hash,
+        retirement_hash,
+    );
+    let released_projection = release_context
+        .claim_transition_authorization(
+            &claim_path,
+            &released_claim,
+            true,
+            AutonomousLaneClaimReleaseAuthorizationMode::QueuePrepared,
+            0,
+            AutonomousLaneReleasedClaimDisposition::QueueReleasePrepared,
+        )
+        .expect("authorize geometry-retirement Released claim")
+        .consume_for_persistence(&claim_path, &released_claim)
+        .expect("consume geometry-retirement Released authority");
+    let queue_finalization_projections = release_context
+        .queue_finalization_authorization(&retirement, &barrier)
+        .expect("authorize geometry-retirement Queue finalization")
+        .consume_for_queue(&barrier)
+        .expect("consume geometry-retirement Queue finalization authority");
+    let mut lifecycle_cursor = install_initial_geometry_retirement_lifecycle_cursor(
+        &kura,
+        &generation,
+        &payload,
+        &binding,
+        retirement_projection.before,
+        &producer,
+    );
     let pending_error = kura
         .first_release_lane_retirement_admissible_for_test(
             retiring_lane,
@@ -1018,11 +1342,79 @@ fn prepare_tombstoned_autonomous_archive(
     assert_geometry_io_error(
         &pending_error,
         ErrorKind::WouldBlock,
-        "pending autonomous payload targets a retiring lane incarnation",
+        "lane attempt cannot archive before its slot retirement is durable",
     );
-    let retirement = crate::kura::AutonomousLaneSlotRetirementV1::from_payload(&payload);
+    lifecycle_cursor = append_geometry_retirement_lifecycle_phase(
+        &kura,
+        &generation,
+        &payload,
+        &binding,
+        &lifecycle_cursor,
+        AutonomousLifecycleCursorPhaseV1::prepared(generation.generation(), retirement_projection)
+            .expect("prepare geometry-retirement persistence"),
+        &producer,
+    );
     kura.persist_autonomous_lane_slot_retirement(&retirement, network_id, epoch)
         .expect("persist exact autonomous slot retirement");
+    lifecycle_cursor = append_geometry_retirement_lifecycle_phase(
+        &kura,
+        &generation,
+        &payload,
+        &binding,
+        &lifecycle_cursor,
+        AutonomousLifecycleCursorPhaseV1::live(
+            generation.generation(),
+            retirement_projection.after,
+        )
+        .expect("complete geometry-retirement persistence"),
+        &producer,
+    );
+    for transition in [pending_projection, queue_preparation_projection] {
+        lifecycle_cursor = append_geometry_retirement_lifecycle_transition(
+            &kura,
+            &generation,
+            &payload,
+            &binding,
+            &lifecycle_cursor,
+            transition,
+            &producer,
+        );
+    }
+    kura.finalize_autonomous_lane_slot_release(&retirement, &barrier, network_id, epoch)
+        .expect("finalize geometry-retirement Released claim");
+    lifecycle_cursor = append_geometry_retirement_lifecycle_transition(
+        &kura,
+        &generation,
+        &payload,
+        &binding,
+        &lifecycle_cursor,
+        released_projection,
+        &producer,
+    );
+    for transition in queue_finalization_projections {
+        lifecycle_cursor = append_geometry_retirement_lifecycle_transition(
+            &kura,
+            &generation,
+            &payload,
+            &binding,
+            &lifecycle_cursor,
+            transition,
+            &producer,
+        );
+    }
+    let terminal_projection = queue_finalization_projections[2].after;
+    let _terminal_cursor = append_geometry_retirement_lifecycle_phase(
+        &kura,
+        &generation,
+        &payload,
+        &binding,
+        &lifecycle_cursor,
+        AutonomousLifecycleCursorPhaseV1::Terminal {
+            owner_generation: generation.generation(),
+            projection: AutonomousLifecycleStableStateV1::from_production(terminal_projection),
+        },
+        &producer,
+    );
     kura.first_release_lane_retirement_admissible_for_test(
         retiring_lane,
         retiring_entry.dataspace_id,
@@ -1465,11 +1857,14 @@ fn durable_geometry_snapshot_identity(kura: &Kura, height: u64) -> (HashOf<Block
     while u64::try_from(kura.exact_durable_blocks_count().unwrap()).expect("block count fits u64")
         < height
     {
-        let block: SignedBlock = BlockBuilder::new(Vec::<AcceptedTransaction<'static>>::new())
+        let mut block: SignedBlock = BlockBuilder::new(Vec::<AcceptedTransaction<'static>>::new())
             .chain(0, previous.as_deref())
             .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key())
             .unpack(|_| {})
             .into();
+        block
+            .set_transaction_results(Vec::new(), &[], Vec::new())
+            .expect("attach canonical empty results to durable geometry proof block");
         let block = Arc::new(block);
         kura.store_block(Arc::clone(&block))
             .expect("store durable geometry proof block");
@@ -1573,6 +1968,96 @@ fn certified_geometry_lane_block_for_proposal(
         BTreeMap::from([(keypair.public_key().clone(), signer_pop)]),
     )
 }
+fn certified_geometry_autonomous_lane_block(
+    payload: &crate::lane_consensus::LaneExecutablePayloadV1,
+    keypair: &iroha_crypto::KeyPair,
+) -> (CertifiedLaneBlockArtifact, AutonomousLaneMergeBundleV1) {
+    let proposal = payload.origin_proposal.clone();
+    let signer = PeerId::new(keypair.public_key().clone());
+    let signer_pop =
+        bls_normal_pop_prove(keypair.private_key()).expect("geometry autonomous merge signer PoP");
+    let validator_set = proposal.descriptor.validator_set.clone();
+    assert_eq!(
+        validator_set,
+        vec![signer.clone()],
+        "geometry autonomous merge fixture uses its signing peer as the only validator"
+    );
+    let availability_body = crate::lane_consensus::lane_payload_availability_body(
+        payload,
+        &proposal,
+        payload.network_id,
+        payload.epoch,
+    )
+    .expect("geometry autonomous merge availability body");
+    let availability_vote = crate::lane_consensus::LanePayloadAvailabilityVoteV1::new_signed(
+        availability_body,
+        signer.clone(),
+        vec![signer_pop.clone()],
+        keypair.private_key(),
+    )
+    .expect("geometry autonomous merge availability vote");
+    let prepare_body = proposal.vote_body(CertPhase::Prepare);
+    let prepare_vote = LaneBlockVoteV1 {
+        bls_signature: Signature::try_new(
+            keypair.private_key(),
+            &prepare_body.signature_preimage(),
+        )
+        .expect("geometry autonomous merge prepare signature")
+        .payload()
+        .to_vec(),
+        body: prepare_body,
+        signer: signer.clone(),
+        payload_availability_vote: Some(availability_vote),
+    };
+    let prepare_qc = aggregate_lane_block_votes_to_qc(
+        prepare_vote.body.clone(),
+        validator_set.clone(),
+        std::slice::from_ref(&prepare_vote),
+    )
+    .expect("geometry autonomous merge prepare QC");
+    let commit_body = proposal.vote_body(CertPhase::Commit);
+    let commit_vote = LaneBlockVoteV1 {
+        bls_signature: Signature::try_new(keypair.private_key(), &commit_body.signature_preimage())
+            .expect("geometry autonomous merge commit signature")
+            .payload()
+            .to_vec(),
+        body: commit_body,
+        signer,
+        payload_availability_vote: None,
+    };
+    let commit_qc = aggregate_lane_block_votes_to_qc(
+        commit_vote.body.clone(),
+        validator_set,
+        std::slice::from_ref(&commit_vote),
+    )
+    .expect("geometry autonomous merge commit QC");
+    let certified = CertifiedLaneBlockArtifact::new(
+        CommittedLaneBlockSession {
+            proposal,
+            prepare_qc: prepare_qc.clone(),
+            commit_qc,
+        },
+        BTreeMap::from([(keypair.public_key().clone(), signer_pop)]),
+    );
+    let bundle = AutonomousLaneMergeBundleV1 {
+        version: AutonomousLaneMergeBundleV1::VERSION,
+        autonomous: AutonomousLaneBlockArtifact {
+            format: crate::kura::AutonomousLaneBlockArtifactFormat::Current,
+            executable_payload: payload.clone(),
+            availability_certificate: Some(
+                crate::lane_consensus::DurableLanePayloadAvailabilityCertificateV1 {
+                    certificate: prepare_qc,
+                },
+            ),
+            view_checkpoint: None,
+            new_view_certificates: Vec::new(),
+        },
+        certified: certified.clone(),
+    };
+    Kura::validate_autonomous_lane_merge_bundle(&bundle, payload.network_id, payload.epoch)
+        .expect("validate geometry autonomous merge bundle");
+    (certified, bundle)
+}
 struct MergeAppliedRetirementWork {
     certified: CertifiedLaneBlockArtifact,
     ownership: SumeragiLanePayloadOwnership,
@@ -1587,8 +2072,10 @@ fn install_merge_applied_retirement_work(
     let lane_id = LaneId::new(1);
     let dataspace_id = DataSpaceId::new(8);
     let producer = crate::kura::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+    let network_id = crate::sumeragi::synthetic_network_id("geometry-durability-merge");
+    let epoch = 1;
     let transaction = TransactionBuilder::new(
-        crate::sumeragi::synthetic_network_id("geometry-durability-merge"),
+        network_id,
         (*SAMPLE_GENESIS_ACCOUNT_ID).clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -1596,6 +2083,9 @@ fn install_merge_applied_retirement_work(
         Level::INFO,
         "geometry durability merge execution".to_owned(),
     )])
+    .with_admission_intent(
+        iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
+    )
     .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
     let entrypoint = TransactionEntrypoint::External(transaction);
     let entrypoint_hash = entrypoint.hash();
@@ -1610,14 +2100,105 @@ fn install_merge_applied_retirement_work(
         Hash::from(entrypoint_hash),
         &producer,
     );
-    let certified = certified_geometry_lane_block_for_proposal(proposal.clone(), &producer);
-    kura.write_certified_lane_block_artifact(&certified)
-        .expect("persist merge-applied retirement certificate");
-    let genesis: SignedBlock = BlockBuilder::new(Vec::<AcceptedTransaction<'static>>::new())
+    let height_context_id = HeightContextId(HashOf::<HeightContext>::from_untyped_unchecked(
+        Hash::new(b"geometry-durability-merge-height-context"),
+    ));
+    let local_peer = PeerId::new(producer.public_key().clone());
+    let (reservation_owner_hash, proposal_identity_hash) =
+        crate::sumeragi::lane_planner::autonomous_lane_reservation_identity_hashes_for_proposal(
+            network_id,
+            height_context_id,
+            epoch,
+            &proposal,
+            &local_peer,
+        )
+        .expect("derive geometry merge lifecycle reservation identities");
+    let routing_plan = crate::queue::RoutingPlan::single(crate::queue::RoutingDecision::new(
+        lane_id,
+        dataspace_id,
+    ));
+    let reservation = crate::queue::LaneQueueReservationKeyV1 {
+        version: crate::queue::LaneQueueReservationKeyV1::VERSION,
+        entrypoint_hash,
+        queue_plan_admission_binding_hash: Hash::new(
+            b"geometry-durability-merge-queue-plan-binding",
+        ),
+        routing_plan_digest: routing_plan.digest(),
+        coordinator_leg: routing_plan.coordinator_leg(),
+        lane_id,
+        dataspace_id,
+        lane_incarnation,
+        proposal_height: proposal.descriptor.proposal_height,
+        lane_block_height: proposal.descriptor.lane_block_height,
+        lane_block_view: proposal.descriptor.lane_block_view,
+        reservation_owner_hash,
+        proposal_identity_hash,
+    };
+    let payload = crate::lane_consensus::LaneExecutablePayloadV1::new_signed_with_reservations(
+        network_id,
+        epoch,
+        proposal.clone(),
+        vec![entrypoint],
+        vec![reservation],
+        vec![routing_plan],
+        vec![None],
+        local_peer.clone(),
+        producer.private_key(),
+    )
+    .expect("construct geometry autonomous merge payload");
+    kura.bind_local_peer_id(local_peer.clone())
+        .expect("bind geometry merge lifecycle signer");
+    let generation = kura
+        .claim_autonomous_lifecycle_process_generation(network_id, &local_peer)
+        .expect("claim geometry merge lifecycle process generation");
+    let (certified, bundle) = certified_geometry_autonomous_lane_block(&payload, &producer);
+    kura.persist_lane_executable_payload(&payload, network_id, epoch)
+        .expect("persist merge-applied retirement executable payload");
+    let recovered = kura
+        .recover_autonomous_lane_block_payload(&proposal, network_id, epoch)
+        .expect("recover merge-applied retirement execution input");
+    kura.persist_lane_block_execution_input(&recovered)
+        .expect("persist merge-applied retirement execution input");
+    let availability = bundle
+        .autonomous
+        .availability_certificate
+        .clone()
+        .expect("geometry autonomous merge bundle has READY evidence");
+    kura.persist_lane_payload_availability_certificate(
+        lane_id,
+        proposal.descriptor.lane_block_height,
+        availability,
+        network_id,
+        epoch,
+    )
+    .expect("persist merge-applied retirement READY certificate");
+    let session = CommittedLaneBlockSession {
+        proposal: certified.proposal.clone(),
+        prepare_qc: certified.prepare_qc.clone(),
+        commit_qc: certified.commit_qc.clone(),
+    };
+    kura.persist_committed_lane_block_session(&session, &certified.signer_pops)
+        .expect("persist merge-applied retirement certified source");
+    let durable_source = kura
+        .durable_autonomous_lane_merge_source(
+            lane_id,
+            proposal.descriptor.lane_block_height,
+            network_id,
+            epoch,
+        )
+        .expect("read merge-applied retirement durable source");
+    assert_eq!(
+        durable_source.bundle, bundle,
+        "durable merge source must preserve the exact authenticated fixture bundle"
+    );
+    let mut genesis: SignedBlock = BlockBuilder::new(Vec::<AcceptedTransaction<'static>>::new())
         .chain(0, None)
         .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key())
         .unpack(|_| {})
         .into();
+    genesis
+        .set_transaction_results(Vec::new(), &[], Vec::new())
+        .expect("attach canonical empty results to merge-retirement genesis");
     let genesis = Arc::new(genesis);
     kura.store_block(Arc::clone(&genesis))
         .expect("store merge-applied retirement genesis");
@@ -1639,14 +2220,13 @@ fn install_merge_applied_retirement_work(
     };
     let settlement_hash = iroha_data_model::nexus::compute_settlement_hash(&settlement)
         .expect("merge-applied retirement settlement hash");
-    let source_bundle = certified
-        .encode_framed()
-        .expect("encode merge-applied retirement source bundle");
+    let source_bundle = durable_source.source_bundle;
+    let source_bundle_hash = durable_source.bundle_hash;
     let execution = MergeLaneExecution {
-        source_bundle_hash: Hash::new(&source_bundle),
+        source_bundle_hash,
         source_bundle,
         proposal: proposal.clone(),
-        origin_proposal: proposal,
+        origin_proposal: proposal.clone(),
         prepare_qc: certified.prepare_qc.clone(),
         commit_qc: certified.commit_qc.clone(),
         signer_proofs: certified
@@ -1657,16 +2237,28 @@ fn install_merge_applied_retirement_work(
                 proof_of_possession: proof_of_possession.clone(),
             })
             .collect(),
-        autonomous_network_id: crate::sumeragi::synthetic_network_id(
-            "geometry-durability-merge-genesis",
-        ),
-        autonomous_epoch: 1,
-        autonomous_payload_hash: Hash::new(b"geometry-durability-merge-payload"),
-        entrypoint_hashes: vec![Hash::from(entrypoint_hash)],
-        entrypoints: vec![entrypoint],
-        reservation_keys: vec![vec![1]],
-        routing_plans: vec![vec![2]],
-        native_amx_receipts: vec![None],
+        autonomous_network_id: network_id,
+        autonomous_epoch: epoch,
+        autonomous_payload_hash: payload.payload_hash,
+        entrypoint_hashes: payload.entrypoint_hashes.clone(),
+        entrypoints: payload.entrypoints.clone(),
+        reservation_keys: payload
+            .reservation_keys
+            .iter()
+            .map(|reservation| {
+                norito::encode_canonical(reservation)
+                    .expect("encode merge-applied retirement reservation key")
+            })
+            .collect(),
+        routing_plans: payload
+            .routing_plans
+            .iter()
+            .map(|routing_plan| {
+                norito::encode_canonical(routing_plan)
+                    .expect("encode merge-applied retirement routing plan")
+            })
+            .collect(),
+        native_amx_receipts: payload.native_amx_receipts.clone(),
         result_hashes: vec![Hash::from(result.hash())],
         results: vec![result],
         settlement_commitment: settlement,
@@ -1714,7 +2306,7 @@ fn install_merge_applied_retirement_work(
         incarnation: lane_incarnation,
         activation_height: 1,
     }];
-    let entry = MergeLedgerEntry {
+    let mut entry = MergeLedgerEntry {
         version: MergeLedgerEntry::VERSION,
         epoch_id: 1,
         lane_catalog_hash: Hash::new(b"geometry-durability-merge-catalog"),
@@ -1747,6 +2339,13 @@ fn install_merge_applied_retirement_work(
         .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key())
         .unpack(|_| {})
         .into();
+    let execution_batch = entry
+        .execution_batch
+        .as_mut()
+        .expect("merge-applied retirement batch");
+    execution_batch.application_block_header =
+        crate::merge::merge_application_header_from_carrier(&carrier.header());
+    execution_batch.batch_hash = crate::merge::merge_execution_batch_hash(execution_batch);
     carrier.set_execution_context(Some(
         BlockExecutionContextBundle::new(Vec::new())
             .with_merge_entry(CertifiedMergeLedgerReference::new(&entry)),
@@ -1762,7 +2361,22 @@ fn install_merge_applied_retirement_work(
     );
     kura.store_block_with_merge_entry(Arc::clone(&carrier), &entry)
         .expect("store merge-applied retirement carrier");
-    let _ = crate::kura::tests::persist_v2_finality_chain_through(kura, nonzero!(2_usize));
+    let finality_chain =
+        crate::kura::tests::persist_v2_finality_chain_through(kura, nonzero!(2_usize));
+    assert_eq!(
+        finality_chain
+            .last()
+            .expect("merge carrier finality")
+            .commit_qc
+            .execution_commitment
+            .merge_carrier,
+        Some(
+            iroha_data_model::block::consensus_v2::MergeCarrierCommitmentV1::new(
+                entry.canonical_hash(),
+            ),
+        ),
+        "merge carrier finality must authenticate the exact durable entry"
+    );
     kura.persist_merge_lane_block_application_receipts(
         &entry,
         carrier.header().height().get(),
@@ -1797,6 +2411,66 @@ fn install_merge_applied_retirement_work(
             geometry_merge_marker_set_root(&marker_set),
         )
         .expect("derive merge-applied retirement release");
+    let reservation_group =
+        lane_queue_reservation_group_binding_from_ordered_keys(payload.reservation_keys.iter())
+            .expect("bind geometry merge lifecycle reservation group");
+    let binding = AutonomousLifecycleAttemptBindingV1::from_payload(
+        height_context_id,
+        proposal.descriptor.lane_block_height,
+        &payload,
+        reservation_group,
+        &local_peer,
+    )
+    .expect("bind geometry merge lifecycle attempt");
+    let terminal_projection = geometry_canonical_merge_terminal_projection(reservation_group);
+    let live_cursor = install_initial_geometry_retirement_lifecycle_cursor(
+        kura,
+        &generation,
+        &payload,
+        &binding,
+        terminal_projection,
+        &producer,
+    );
+    let _terminal_cursor = append_geometry_retirement_lifecycle_phase(
+        kura,
+        &generation,
+        &payload,
+        &binding,
+        &live_cursor,
+        AutonomousLifecycleCursorPhaseV1::Terminal {
+            owner_generation: generation.generation(),
+            projection: AutonomousLifecycleStableStateV1::from_production(terminal_projection),
+        },
+        &producer,
+    );
+    let source_publication = kura
+        .persist_autonomous_lifecycle_canonical_terminal_outcomes_pending(&entry)
+        .expect("persist merge-applied canonical terminal source outcome")
+        .expect("merge-applied execution batch publishes a canonical terminal source outcome");
+    let mut source_authorizations = source_publication
+        .consume_for_v2_apply(&entry)
+        .expect("consume exact merge-applied canonical source publication");
+    assert_eq!(
+        source_authorizations.len(),
+        1,
+        "single-lane merge fixture must publish one terminal source outcome"
+    );
+    let (published_group, source_authorization) = source_authorizations
+        .pop()
+        .expect("single-lane canonical terminal source authorization");
+    let (authorized_group, ordered_keys, pending_outcome_hash) = source_authorization
+        .consume_for_queue()
+        .expect("consume exact canonical Queue source authorization");
+    assert_eq!(published_group, reservation_group);
+    assert_eq!(authorized_group, reservation_group);
+    assert_eq!(ordered_keys, payload.reservation_keys);
+    kura.complete_autonomous_lifecycle_terminal_outcome(
+        reservation_group,
+        terminal_projection,
+        true,
+        pending_outcome_hash,
+    )
+    .expect("complete merge-applied canonical terminal source outcome");
     MergeAppliedRetirementWork {
         certified,
         ownership,
@@ -2040,6 +2714,9 @@ fn autonomous_retirement_payload_for_routes(
         Level::INFO,
         "geometry retirement payload".to_owned(),
     )])
+    .with_admission_intent(
+        iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
+    )
     .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
     let entrypoint = TransactionEntrypoint::External(transaction);
     let entrypoint_hash = entrypoint.hash();

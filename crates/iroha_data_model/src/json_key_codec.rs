@@ -451,7 +451,6 @@ impl JsonKeyCodec for crate::bridge::SccpRouteKeyV1 {
         );
         json::write_json_string(&encoded, out);
     }
-
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         const PREFIX: &str = "sccp-route-v1";
         if encoded.len() > SCCP_ROUTE_JSON_MAP_KEY_MAX_BYTES {
@@ -920,7 +919,7 @@ mod tests {
     }
 
     #[test]
-    fn sccp_ethereum_route_json_key_codec_is_canonical() {
+    fn sccp_ethereum_route_json_key_codec_is_canonical_and_collision_free() {
         let key = SccpRouteKeyV1::new(
             SccpLaneIdV1 {
                 source: SccpNetworkV1::EthereumMainnet,
@@ -943,15 +942,27 @@ mod tests {
             SccpRouteKeyV1::decode_json_key(&raw_key).expect("decode canonical SCCP route key"),
             key
         );
+
+        let left = SccpRouteKeyV1::new(key.lane_id, "ab".to_owned(), "c".to_owned(), key.revision)
+            .expect("valid left collision fixture");
+        let right = SccpRouteKeyV1::new(key.lane_id, "a".to_owned(), "bc".to_owned(), key.revision)
+            .expect("valid right collision fixture");
+        let mut left_encoded = String::new();
+        let mut right_encoded = String::new();
+        left.encode_json_key(&mut left_encoded);
+        right.encode_json_key(&mut right_encoded);
+        assert_ne!(left_encoded, right_encoded);
     }
 
     #[test]
-    fn sccp_route_and_replay_accumulator_json_keys_reject_malleability() {
+    fn sccp_route_and_replay_accumulator_json_keys_reject_aliases_and_malleability() {
         for encoded in [
             "ethereum-mainnet:sora-taira:taira_eth_xor:xor:12",
             "SCCP-ROUTE-V1:ton-mainnet:sora-taira:taira_ton_xor:xor:7",
             "sccp-route-v1:ton_mainnet:sora-taira:taira_ton_xor:xor:7",
             "sccp-route-v1:eth-mainnet:sora-taira:taira_eth_xor:xor:12",
+            "sccp-route-v1:unknown:sora-taira:taira_eth_xor:xor:12",
+            "sccp-route-v1:ethereum-mainnet:sora:taira_eth_xor:xor:12",
             "sccp-route-v1:ethereum-mainnet:sora_taira:taira_eth_xor:xor:12",
             "sccp-route-v1:sora-taira:ton-mainnet:taira_ton_xor:xor:7",
             "sccp-route-v1:ethereum-mainnet:bsc-mainnet:taira_eth_xor:xor:12",
@@ -961,11 +972,16 @@ mod tests {
             "sccp-route-v1:ton-mainnet:sora-taira:taira_ton_xor::7",
             "sccp-route-v1:ethereum-mainnet:sora-taira:taira_eth_xor:XOR:12",
             "sccp-route-v1:ton-mainnet:sora-taira:taira_ton_xor:xor:07",
+            "sccp-route-v1:ethereum-mainnet:sora-taira:taira_eth_xor:xor-:12",
+            "sccp-route-v1:ethereum-mainnet:sora-taira:taira:eth:xor:12",
+            "sccp-route-v1:ethereum-mainnet:sora-taira:taira_eth_xor:xor:012",
             "sccp-route-v1:ethereum-mainnet:sora-taira:taira_eth_xor:xor:+12",
             "sccp-route-v1:ethereum-mainnet:sora-taira:taira_eth_xor:xor: 12",
             "sccp-route-v1:ton-mainnet:sora-taira:taira_ton_xor:xor:0",
             "sccp-route-v1:ton-mainnet:sora-taira:taira_ton_xor:xor:4294967296",
             "sccp-route-v1:ton-mainnet:sora-taira:taira_ton_xor:xor:7:tail",
+            "sccp-route-v1:ethereum-mainnet:sora-taira:taira_eth_xor:xor:",
+            "sccp-route-v1:ethereum-mainnet:sora-taira:taira_eth_xor",
             r#"{"lane_id":{"source":"ethereum_mainnet","target":"sora_taira"},"route_id":"taira_eth_xor","asset_key":"xor","revision":12}"#,
             "",
         ] {

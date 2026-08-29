@@ -108,6 +108,51 @@ REQUIRED_TLC_CONFIG_HEADERS = {
     "resume_locked_commit_witness.cfg": "SPECIFICATION CoreSpec",
 }
 
+# Every finite projection of the unbounded production core must replace the
+# four operators which otherwise compare an enumerable finite view set with
+# the built-in infinite Nat set or eagerly enumerate the structurally valid
+# timeout-certificate powerset.  The fourth substitution retains exactly the
+# no/no view-zero justification and every installed-TC/highest-Prepare pair;
+# the production/TLAPS carrier remains the full Cartesian product.  Keep this
+# as an exact inventory so a new finite release config cannot silently inherit
+# the unbounded operators.
+_FINITE_TLC_OPERATOR_OVERRIDE_CONFIGS = (
+    "quorum_count.cfg",
+    "quorum_stake.cfg",
+    "safety_count.cfg",
+    "safety_stake.cfg",
+    "chain_epoch.cfg",
+    "liveness.cfg",
+    "resume_locked_commit_witness.cfg",
+)
+_FINITE_TLC_OPERATOR_OVERRIDES = (
+    "  Generations <- FiniteGenerations\n",
+    "  GenerationCanIncrement <- FiniteGenerationCanIncrement\n",
+    "  ModelConfiguration <- FiniteModelConfiguration\n",
+    "  ByzantineProposalJustificationDomain <- FiniteByzantineProposalJustificationDomain\n",
+)
+
+_FINITE_TLC_ASYNC_OVERRIDES = (
+    "  AsyncIngressPhysicalOrdinalMaximum <- FiniteAsyncIngressPhysicalOrdinalMaximum\n",
+    "  AsyncNetworkItems <- FiniteAsyncNetworkItems\n",
+)
+
+_FINITE_ASYNC_NETWORK_OPERATOR_BODIES = {
+    "FiniteAsyncPublishableControlItems": (
+        "(UNION {ProposalOutbox(request): request \\in signProposals}) \\cup "
+        "(UNION {VoteOutbox(request): request \\in signVotes}) \\cup "
+        "(UNION {TimeoutOutbox(request): request \\in signTimeouts}) \\cup "
+        "(UNION { QcOutbox( node, QC(context, roundView, \"Prepare\", subject, "
+        "ProjectedVoteSignersAt( node, roundView, \"Prepare\", subject))): "
+        "node \\in ValidatorIds, roundView \\in Views, subject \\in Subjects})"
+    ),
+    "FiniteAsyncNetworkItems": (
+        "asyncSentItems \\cup asyncRetainedControl \\cup asyncActiveRequests "
+        "\\cup {packet.item: packet \\in asyncTransport} \\cup "
+        "FiniteAsyncPublishableControlItems"
+    ),
+}
+
 _REPLY_ROUTE_FORMAL_SOURCE_SHA256 = {
     "SumeragiV2TemporalLemmas.tla": (
         "7ee323b1fb76922eca0addfc373bdd666723ad5380ce8b2c7800936af7a50eb3"

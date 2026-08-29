@@ -149,7 +149,7 @@ fn startup_capacity_counts_pending_before_geometry_and_rejects_without_mutation(
         .expect("startup capacity Kura remains exclusive")
         .max_disk_usage_bytes = exact_limit - 1;
     assert!(matches!(
-        kura.validate_configured_kura_capacity_after_startup_recovery(),
+        kura.validate_and_publish_configured_kura_capacity_after_startup_recovery(true),
         Err(Error::StorageBudgetExceeded { required, .. }) if required == exact_limit
     ));
     assert_eq!(
@@ -162,6 +162,9 @@ fn startup_capacity_counts_pending_before_geometry_and_rejects_without_mutation(
         kura.disk_usage_total.load(Ordering::Relaxed),
         total_disk_usage_before,
     );
+    assert!(!kura.disk_usage_initialized.load(Ordering::Relaxed));
+    assert!(!kura.disk_usage_total_initialized.load(Ordering::Relaxed));
+    assert!(kura.durable_budget_snapshot().is_none());
     assert_eq!(
         *kura.post_wsv_lane_artifact_budget_reservations.lock(),
         reservations_before,
@@ -176,7 +179,10 @@ fn startup_capacity_counts_pending_before_geometry_and_rejects_without_mutation(
     let (done_tx, done_rx) = std::sync::mpsc::sync_channel(1);
     let worker = thread::spawn(move || {
         done_tx
-            .send(worker_kura.validate_configured_kura_capacity_after_startup_recovery())
+            .send(
+                worker_kura
+                    .validate_and_publish_configured_kura_capacity_after_startup_recovery(true),
+            )
             .expect("report startup capacity result");
     });
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -198,4 +204,30 @@ fn startup_capacity_counts_pending_before_geometry_and_rejects_without_mutation(
         .expect("startup validation completes after geometry release")
         .expect("the exact startup capacity succeeds");
     worker.join().expect("join startup capacity validator");
+    let (exact_enforced, exact_total) = kura
+        .kura_disk_usage_bytes_with_total()
+        .expect("rescan exact startup usage");
+    assert_eq!(kura.disk_usage.load(Ordering::Relaxed), exact_enforced);
+    assert_eq!(kura.disk_usage_total.load(Ordering::Relaxed), exact_total);
+    assert!(kura.disk_usage_initialized.load(Ordering::Relaxed));
+    assert!(kura.disk_usage_total_initialized.load(Ordering::Relaxed));
+}
+#[test]
+fn startup_combined_scan_error_is_propagated_without_partial_cache_publication() {
+    let (_temp_dir, kura) = pending_canonical_capacity_fixture();
+    kura.validate_and_publish_configured_kura_capacity_after_startup_recovery(true)
+        .expect("establish exact startup accounting");
+    let enforced_before = kura.disk_usage.load(Ordering::Relaxed);
+    let total_before = kura.disk_usage_total.load(Ordering::Relaxed);
+    let blocks_dir = kura.active_blocks_dir.lock().clone();
+    let invalid_total_only_directory = Kura::retained_block_rewrite_staging_dir_for(&blocks_dir);
+    std::fs::write(&invalid_total_only_directory, b"not a directory")
+        .expect("plant invalid total-only directory path");
+    kura.validate_and_publish_configured_kura_capacity_after_startup_recovery(true)
+        .expect_err("the authenticated combined scan must fail closed");
+    assert!(!kura.disk_usage_initialized.load(Ordering::Relaxed));
+    assert!(!kura.disk_usage_total_initialized.load(Ordering::Relaxed));
+    assert!(kura.durable_budget_snapshot().is_none());
+    assert_eq!(kura.disk_usage.load(Ordering::Relaxed), enforced_before);
+    assert_eq!(kura.disk_usage_total.load(Ordering::Relaxed), total_before);
 }

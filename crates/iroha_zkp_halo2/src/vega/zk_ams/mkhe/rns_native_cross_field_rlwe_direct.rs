@@ -80,8 +80,9 @@ use core::{fmt, marker::PhantomData};
 use std::sync::OnceLock;
 
 use super::{
-    collective::RnsNativeClaimedDirectNumericOriginV2,
+    collective::{RnsNativeClaimedDirectNumericOriginV2, RnsNativeQpcsCompositeAuthorityV2},
     rns_native_claimed_successor::RnsNativeClaimedSuccessorV1,
+    rns_native_composite_verifier::RnsNativeCrossFieldRlweCompositeInputV2,
     rns_native_cross_field_inventory::{
         RNS_NATIVE_CROSS_FIELD_INVENTORY_CONTINUATION_MAX_BYTES_V1,
         RnsNativeCrossFieldInventoryPrerequisiteV1,
@@ -98,16 +99,25 @@ use super::{
     rns_native_qpcs_fri_complete::{
         RnsNativeAuthenticatedClaimedQpcsOriginV2, RnsNativeQpcsAuthenticatedNumericTailV1,
         RnsNativeQpcsCompletedLineageV1, RnsNativeQpcsFriCompleteErrorV1,
+        RnsNativeQpcsFriCompleteStageV1,
     },
     rns_native_qpcs_prefix::RnsNativeQpcsRelationScheduleV1,
-    rns_native_source::ZkAmsMkheRnsNativeSourceSnapshotV1,
+    rns_native_source::{
+        ZkAmsMkheRnsNativeRepeatableSourceSnapshotV1, ZkAmsMkheRnsNativeSourceArenaV1,
+        ZkAmsMkheRnsNativeSourceErrorV1, ZkAmsMkheRnsNativeSourceLayoutV1,
+        ZkAmsMkheRnsNativeSourceSnapshotV1,
+    },
+    rns_native_source_packing_same_opening::RnsNativeSourcePackingCompositeAuthorityV2,
+    rns_native_terminal_cross_basis::RnsNativeTerminalCrossBasisKernelPrerequisiteV1,
     rns_native_transcript::{
-        ZkAmsMkheRnsNativeAllTerminalRootsEqualV1, ZkAmsMkheRnsNativeCrossFieldBoundTranscriptV1,
+        ZkAmsMkheRnsNativeAllTerminalRootsEqualV1, ZkAmsMkheRnsNativeChallengeSeedsV1,
+        ZkAmsMkheRnsNativeCrossFieldBoundTranscriptV1,
         ZkAmsMkheRnsNativeCrossFieldRootEqualityObligationV1,
         ZkAmsMkheRnsNativeGlobalLookupRootEqualityPendingV1,
         ZkAmsMkheRnsNativePreGlobalLookupCapabilityV1,
         ZkAmsMkheRnsNativeProvisionalTerminalChronologyV1, ZkAmsMkheRnsNativeTerminalRootsV1,
     },
+    rns_native_wire::{ZkAmsMkheRnsNativeProofEnvelopeV1, ZkAmsMkheRnsNativeProofSectionKindV1},
 };
 use crate::{
     generalized_bulletproof::{
@@ -225,6 +235,8 @@ const Q_MASK_ROOT_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-cross-field-rlwe-direct.pre-qpcs-s-root";
 const DIRECT_SCHEDULE_BINDING_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-cross-field-rlwe-direct.schedule-binding";
+const CLAIMED_SOURCE_NUMERIC_BINDING_DOMAIN_V1: &[u8] =
+    b"iroha.zk-ams.v1.mkhe.rns-native-qpcs.claimed-source-numeric-binding";
 const AGGREGATION_CHALLENGE_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-rlwe-source.aggregation-challenge";
 const NUMERIC_ROOT_DOMAIN_V1: &[u8] =
@@ -1666,6 +1678,93 @@ fn derive_relation_schedule_v1(
     })
 }
 
+fn claimed_source_numeric_binding_digest_from_parts_v1(
+    digest_axes: &[[u8; DIGEST_BYTES_V1]; 13],
+    numeric_tail_values: impl IntoIterator<Item = (u64, u64, u64)>,
+) -> Result<[u8; DIGEST_BYTES_V1], RnsNativeCrossFieldRlweDirectErrorV1> {
+    if digest_axes.contains(&[0; DIGEST_BYTES_V1]) {
+        return Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidContext);
+    }
+    let mut hash = Keccak256::new();
+    hash.update(CLAIMED_SOURCE_NUMERIC_BINDING_DOMAIN_V1);
+    hash.update(&[VERSION_V1]);
+    for digest in digest_axes {
+        hash.update(digest);
+    }
+    let mut count = 0_usize;
+    for (point, product, opening_quotient) in numeric_tail_values {
+        hash.update(&point.to_be_bytes());
+        hash.update(&product.to_be_bytes());
+        hash.update(&opening_quotient.to_be_bytes());
+        count = count
+            .checked_add(1)
+            .ok_or(RnsNativeCrossFieldRlweDirectErrorV1::ArithmeticOverflow)?;
+    }
+    if count != EVALUATIONS_V1 {
+        return Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidGeometry);
+    }
+    let digest = hash.finalize();
+    if digest == [0; DIGEST_BYTES_V1] {
+        return Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidIntegrity);
+    }
+    Ok(digest)
+}
+
+fn validate_claimed_source_numeric_binding_from_parts_v1(
+    claimed_binding_digest: [u8; DIGEST_BYTES_V1],
+    digest_axes: &[[u8; DIGEST_BYTES_V1]; 13],
+    numeric_tail_values: impl IntoIterator<Item = (u64, u64, u64)>,
+) -> Result<(), RnsNativeCrossFieldRlweDirectErrorV1> {
+    let expected =
+        claimed_source_numeric_binding_digest_from_parts_v1(digest_axes, numeric_tail_values)?;
+    if claimed_binding_digest == [0; DIGEST_BYTES_V1] || claimed_binding_digest != expected {
+        return Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidContext);
+    }
+    Ok(())
+}
+
+/// Recompute the claimed-qPCS/source binding from the owners that are about
+/// to enter the direct chronology. This intentionally duplicates the qPCS
+/// leaf's final binding transcript at a different ownership boundary: merely
+/// carrying its digest forward would allow a recombined claimed-source token
+/// to survive until the numeric cursor was created.
+fn validate_claimed_source_numeric_lineage_v1<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
+    inventory: &RnsNativeCrossFieldInventoryPrerequisiteV1<'_, '_, S>,
+    completed_qpcs: &RnsNativeQpcsCompletedLineageV1,
+    terminal_chronology: &ZkAmsMkheRnsNativeProvisionalTerminalChronologyV1,
+    numeric_tails: &[RnsNativeQpcsAuthenticatedNumericTailV1; EVALUATIONS_V1],
+    claimed_binding_digest: [u8; DIGEST_BYTES_V1],
+) -> Result<(), RnsNativeCrossFieldRlweDirectErrorV1> {
+    let source = inventory.linked().source();
+    let schedule = completed_qpcs.relation_schedule_v1();
+    let final_transcript = terminal_chronology.final_challenge_seeds_v1();
+    if source.snapshot().layout().source_binding_digest()
+        != final_transcript.source_binding_digest()
+    {
+        return Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidContext);
+    }
+    let digest_axes = [
+        source.statement_anchor_digest(),
+        source.preflight_statement_digest(),
+        source.public_bundle_digest(),
+        source.qpcs().parameter_digest(),
+        source.qpcs().transcript_digest(),
+        source.qpcs().schedule_digest(),
+        source.qpcs().evaluation_binding_digest(),
+        source.qpcs().residual_digest(),
+        schedule.parameter_digest(),
+        schedule.q_mask_s_root(),
+        schedule.qpcs_pre_relation_transcript_digest(),
+        schedule.relation_seed(),
+        final_transcript.transcript_digest(),
+    ];
+    validate_claimed_source_numeric_binding_from_parts_v1(
+        claimed_binding_digest,
+        &digest_axes,
+        numeric_tails.iter().copied().map(|tail| tail.values_v1()),
+    )
+}
+
 /// Atomically convert the opaque authenticated claimed-qPCS input and the
 /// bound pre-direct inventory into the direct claimed relation. The q-mask
 /// root is recomputed from that authenticated inventory, the transcript-empty
@@ -1706,6 +1805,13 @@ pub(super) fn bind_authenticated_claimed_qpcs_inventory_direct_v2<
                 permit: existing_radix_validation_permit,
             },
     } = pre_direct_nested;
+    validate_claimed_source_numeric_lineage_v1(
+        &inventory,
+        &completed_qpcs,
+        &terminal_chronology,
+        &numeric_tails,
+        source_binding_digest,
+    )?;
     let final_transcript = terminal_chronology.final_challenge_seeds_v1();
     let linked = inventory.linked();
     let axes = RnsNativeCrossFieldRlweFixedAxesV1 {
@@ -4201,6 +4307,232 @@ pub(super) struct RnsNativeCrossFieldRlweAllRootsVerifiedV2<
     _numeric_sidecar: RnsNativeCrossFieldRlweNumericSidecarV2,
 }
 
+/// Sole source owner moved from the fully root-verified direct lineage into
+/// composite verification.
+///
+/// This type deliberately retains the original inventory and therefore the
+/// original confidential snapshot.  It exposes that snapshot only through
+/// the source trait; no root, digest, proof slice, radix alias, numeric
+/// sidecar, or raw-parts transition is available to a composite caller.
+#[allow(
+    dead_code,
+    missing_copy_implementations,
+    reason = "the authenticated source lineage must move into composite verification exactly once"
+)]
+#[must_use = "the authenticated source owner must remain live through atomic composite verification"]
+pub(super) struct RnsNativeCrossFieldRlweCompositeSourceOwnerV2<
+    'source,
+    'proof,
+    S: ZkAmsMkheRnsNativeSourceSnapshotV1,
+> {
+    _direct: RnsNativeCrossFieldRlweTerminalBoundVerifiedV1<'proof>,
+    inventory: RnsNativeCrossFieldInventoryPrerequisiteV1<'source, 'proof, S>,
+    _existing_radix: RnsNativeExistingRadixDirectAliasV1<'proof>,
+    _numeric_sidecar: RnsNativeCrossFieldRlweNumericSidecarV2,
+}
+
+impl<'source, 'proof, S: ZkAmsMkheRnsNativeSourceSnapshotV1> ZkAmsMkheRnsNativeSourceSnapshotV1
+    for RnsNativeCrossFieldRlweCompositeSourceOwnerV2<'source, 'proof, S>
+{
+    type Chunk = S::Chunk;
+
+    fn layout(&self) -> ZkAmsMkheRnsNativeSourceLayoutV1 {
+        self.inventory.linked().source().snapshot().layout()
+    }
+
+    fn snapshot_digest(&self, arena: ZkAmsMkheRnsNativeSourceArenaV1) -> [u8; DIGEST_BYTES_V1] {
+        self.inventory
+            .linked()
+            .source()
+            .snapshot()
+            .snapshot_digest(arena)
+    }
+
+    fn read_slot(
+        &mut self,
+        arena: ZkAmsMkheRnsNativeSourceArenaV1,
+        slot: u64,
+    ) -> Result<Self::Chunk, ZkAmsMkheRnsNativeSourceErrorV1> {
+        self.inventory
+            .source_packing_snapshot_mut_v2()
+            .read_slot(arena, slot)
+    }
+}
+
+impl<'source, 'proof, S: ZkAmsMkheRnsNativeRepeatableSourceSnapshotV1>
+    ZkAmsMkheRnsNativeRepeatableSourceSnapshotV1
+    for RnsNativeCrossFieldRlweCompositeSourceOwnerV2<'source, 'proof, S>
+{
+}
+
+impl<'source, 'proof, S: ZkAmsMkheRnsNativeSourceSnapshotV1>
+    RnsNativeCrossFieldRlweCompositeSourceOwnerV2<'source, 'proof, S>
+{
+    /// Authenticate a freshly decoded terminal candidate against the exact
+    /// terminal prerequisite recursively retained by this source owner.
+    pub(super) fn authenticate_terminal_candidate_v2(
+        &self,
+        source_packing_authority: &RnsNativeSourcePackingCompositeAuthorityV2<'_>,
+        envelope: &ZkAmsMkheRnsNativeProofEnvelopeV1,
+        transcript: &ZkAmsMkheRnsNativeChallengeSeedsV1,
+        candidate: &RnsNativeTerminalCrossBasisKernelPrerequisiteV1,
+    ) -> Result<(), RnsNativeCrossFieldRlweDirectErrorV1> {
+        source_packing_authority
+            .validate_composite_context_v2(envelope, transcript)
+            .map_err(|_| RnsNativeCrossFieldRlweDirectErrorV1::InvalidContext)?;
+        let original = self.inventory.linked().terminal();
+        original
+            .validate_context_v1(transcript)
+            .map_err(|_| RnsNativeCrossFieldRlweDirectErrorV1::InvalidContext)?;
+        candidate
+            .validate_context_v1(transcript)
+            .map_err(|_| RnsNativeCrossFieldRlweDirectErrorV1::InvalidContext)?;
+        if candidate.binding_digest() != original.binding_digest()
+            || candidate.hyrax_digest() != original.hyrax_digest()
+            || candidate.bp_digest() != original.bp_digest()
+            || candidate.bridge_root() != original.bridge_root()
+            || candidate.hyrax_commitments() != original.hyrax_commitments()
+            || candidate.bp_commitments() != original.bp_commitments()
+        {
+            return Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidContext);
+        }
+        Ok(())
+    }
+
+    /// Authenticate a freshly decoded qPCS candidate against the exact qPCS
+    /// stage and proof allocation recursively retained by this source owner.
+    pub(super) fn authenticate_qpcs_candidate_v2(
+        &self,
+        qpcs_authority: &RnsNativeQpcsCompositeAuthorityV2<'_>,
+        envelope: &ZkAmsMkheRnsNativeProofEnvelopeV1,
+        transcript: &ZkAmsMkheRnsNativeChallengeSeedsV1,
+        candidate: &RnsNativeQpcsFriCompleteStageV1<'_>,
+    ) -> Result<(), RnsNativeCrossFieldRlweDirectErrorV1> {
+        qpcs_authority
+            .validate_composite_context_v2(envelope, transcript)
+            .map_err(|_| RnsNativeCrossFieldRlweDirectErrorV1::InvalidContext)?;
+        let original = self.inventory.linked().source().qpcs();
+        if candidate.parameter_digest() != original.parameter_digest()
+            || candidate.transcript_digest() != original.transcript_digest()
+            || candidate.query_seed() != original.query_seed()
+            || candidate.section_binding_digest() != original.section_binding_digest()
+            || candidate.schedule_digest() != original.schedule_digest()
+            || candidate.evaluation_binding_digest() != original.evaluation_binding_digest()
+            || candidate.residual_digest() != original.residual_digest()
+            || !same_borrowed_slice_identity_v1(candidate.evaluations(), original.evaluations())
+            || !same_borrowed_slice_identity_v1(
+                candidate.rlwe_source_residual(),
+                original.rlwe_source_residual(),
+            )
+            || candidate.transcript_digest() != transcript.transcript_digest()
+            || candidate.query_seed() != transcript.qpcs_query_challenge_seed()
+        {
+            return Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidContext);
+        }
+        Ok(())
+    }
+}
+
+fn validate_composite_envelope_allocation_v2<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
+    inventory: &RnsNativeCrossFieldInventoryPrerequisiteV1<'_, '_, S>,
+    envelope: &ZkAmsMkheRnsNativeProofEnvelopeV1,
+) -> Result<(), RnsNativeCrossFieldRlweDirectErrorV1> {
+    let cross_kind = ZkAmsMkheRnsNativeProofSectionKindV1::CrossFieldGlobalLookup;
+    let cross_section = envelope.section(cross_kind);
+    if relative_slice_offset_v1(cross_section, inventory.continuation()).is_none()
+        || envelope.proof_digest() == [0; DIGEST_BYTES_V1]
+    {
+        return Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidContext);
+    }
+
+    let mut section_digests = [[0; DIGEST_BYTES_V1]; 2];
+    for (index, kind) in [
+        cross_kind,
+        ZkAmsMkheRnsNativeProofSectionKindV1::ZeroPadding,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut matches = envelope
+            .descriptors()
+            .iter()
+            .copied()
+            .filter(|descriptor| descriptor.kind() == kind);
+        let descriptor = matches
+            .next()
+            .ok_or(RnsNativeCrossFieldRlweDirectErrorV1::InvalidContext)?;
+        let section = envelope.section(kind);
+        if matches.next().is_some()
+            || section.is_empty()
+            || descriptor.max_bytes() != kind.max_bytes()
+            || usize::try_from(descriptor.encoded_bytes()).ok() != Some(section.len())
+            || descriptor.section_digest() == [0; DIGEST_BYTES_V1]
+        {
+            return Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidContext);
+        }
+        section_digests[index] = descriptor.section_digest();
+    }
+    if section_digests[0] == section_digests[1]
+        || section_digests.contains(&envelope.proof_digest())
+    {
+        return Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidContext);
+    }
+    Ok(())
+}
+
+fn validate_composite_source_context_v2<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
+    inventory: &RnsNativeCrossFieldInventoryPrerequisiteV1<'_, '_, S>,
+    final_challenge_seeds: &ZkAmsMkheRnsNativeChallengeSeedsV1,
+    envelope: &ZkAmsMkheRnsNativeProofEnvelopeV1,
+) -> Result<(), RnsNativeCrossFieldRlweDirectErrorV1> {
+    let linked = inventory.linked();
+    let source = linked.source();
+    let snapshot = source.snapshot();
+    let layout = snapshot.layout();
+    layout
+        .validate()
+        .map_err(|_| RnsNativeCrossFieldRlweDirectErrorV1::InvalidContext)?;
+    let receipt = snapshot
+        .structural_receipt()
+        .map_err(|_| RnsNativeCrossFieldRlweDirectErrorV1::InvalidContext)?;
+    receipt
+        .validate(layout)
+        .map_err(|_| RnsNativeCrossFieldRlweDirectErrorV1::InvalidContext)?;
+
+    if envelope.profile_manifest_digest() != final_challenge_seeds.profile_manifest_digest()
+        || envelope.topology_digest() != final_challenge_seeds.topology_digest()
+        || envelope.release_candidate_digest() != final_challenge_seeds.release_candidate_digest()
+        || envelope.statement_digest() != final_challenge_seeds.statement_digest()
+        || envelope.operational_context_digest()
+            != final_challenge_seeds.operational_context_digest()
+        || envelope.source_receipt_digest() != final_challenge_seeds.source_receipt_digest()
+        || layout.profile_digest() != final_challenge_seeds.profile_digest()
+        || layout.topology_digest() != final_challenge_seeds.topology_digest()
+        || layout.release_candidate_digest() != final_challenge_seeds.release_candidate_digest()
+        || layout.statement_digest() != final_challenge_seeds.statement_digest()
+        || layout.operational_context_digest() != final_challenge_seeds.operational_context_digest()
+        || layout.source_binding_digest() != final_challenge_seeds.source_binding_digest()
+        || receipt.source_binding_digest != final_challenge_seeds.source_binding_digest()
+        || receipt.main_snapshot_digest != final_challenge_seeds.main_snapshot_digest()
+        || receipt.nonce_snapshot_digest != final_challenge_seeds.nonce_snapshot_digest()
+        || receipt.receipt_digest != final_challenge_seeds.source_receipt_digest()
+        || source.public_bundle_digest() != final_challenge_seeds.public_ciphertext_digest()
+        || source.qpcs().transcript_digest() != final_challenge_seeds.transcript_digest()
+        || inventory.terminal_transcript_digest_v1() != final_challenge_seeds.transcript_digest()
+    {
+        return Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidContext);
+    }
+    linked
+        .terminal()
+        .validate_context_v1(final_challenge_seeds)
+        .map_err(|_| RnsNativeCrossFieldRlweDirectErrorV1::InvalidContext)?;
+    linked
+        .zero_padding()
+        .validate_context_v1(final_challenge_seeds)
+        .map_err(|_| RnsNativeCrossFieldRlweDirectErrorV1::InvalidContext)?;
+    Ok(())
+}
+
 impl<'source, 'proof, S: ZkAmsMkheRnsNativeSourceSnapshotV1>
     RnsNativeCrossFieldRlweAtomicVerifiedV2<'source, 'proof, S>
 {
@@ -4237,6 +4569,58 @@ impl<'source, 'proof, S: ZkAmsMkheRnsNativeSourceSnapshotV1>
 impl<'source, 'proof, S: ZkAmsMkheRnsNativeSourceSnapshotV1>
     RnsNativeCrossFieldRlweAllRootsVerifiedV2<'source, 'proof, S>
 {
+    /// Consume the fully root-verified direct lineage into the sole
+    /// source-bound composite input.
+    ///
+    /// Pointer containment is checked before the terminal chronology is
+    /// opened: the retained inventory continuation must be borrowed from the
+    /// supplied envelope's exact cross/global allocation.  The transition
+    /// then moves, rather than copies or reconstructs, both the original
+    /// source snapshot and the final challenge owner after revalidating every
+    /// envelope, source-layout, structural-receipt, public-statement, and
+    /// terminal-transcript identity.
+    pub(super) fn into_composite_context_v2<'envelope>(
+        self,
+        envelope: &'envelope ZkAmsMkheRnsNativeProofEnvelopeV1,
+        source_packing_authority: RnsNativeSourcePackingCompositeAuthorityV2<'envelope>,
+        qpcs_authority: RnsNativeQpcsCompositeAuthorityV2<'envelope>,
+    ) -> Result<
+        RnsNativeCrossFieldRlweCompositeInputV2<'source, 'proof, 'envelope, S>,
+        RnsNativeCrossFieldRlweDirectErrorV1,
+    > {
+        validate_composite_envelope_allocation_v2(&self.inventory, envelope)?;
+        let Self {
+            direct,
+            inventory,
+            existing_radix,
+            _terminal_roots_equal,
+            _numeric_sidecar,
+        } = self;
+        let final_challenge_seeds = _terminal_roots_equal.into_final_challenge_seeds_v1();
+        validate_composite_source_context_v2(&inventory, &final_challenge_seeds, envelope)?;
+        source_packing_authority
+            .validate_composite_context_v2(envelope, &final_challenge_seeds)
+            .map_err(|_| RnsNativeCrossFieldRlweDirectErrorV1::InvalidContext)?;
+        qpcs_authority
+            .validate_composite_context_v2(envelope, &final_challenge_seeds)
+            .map_err(|_| RnsNativeCrossFieldRlweDirectErrorV1::InvalidContext)?;
+        let source_owner = RnsNativeCrossFieldRlweCompositeSourceOwnerV2 {
+            _direct: direct,
+            inventory,
+            _existing_radix: existing_radix,
+            _numeric_sidecar,
+        };
+        Ok(
+            RnsNativeCrossFieldRlweCompositeInputV2::from_authenticated_parts_v2(
+                source_owner,
+                final_challenge_seeds,
+                envelope,
+                source_packing_authority,
+                qpcs_authority,
+            ),
+        )
+    }
+
     pub(super) const fn direct(&self) -> &RnsNativeCrossFieldRlweTerminalBoundVerifiedV1<'proof> {
         &self.direct
     }

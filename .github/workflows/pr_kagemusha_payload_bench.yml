@@ -427,7 +427,6 @@ on:
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/address/AccountAddress.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/address/AccountAddressErrorCode.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/address/AccountAddressException.kt"
-      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/address/AccountAddressFormat.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/address/CurveSupportConfig.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/address/PublicKeyCodec.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/CanonicalRequestSigner.kt"

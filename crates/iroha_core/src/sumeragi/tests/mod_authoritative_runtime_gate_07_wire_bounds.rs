@@ -6,7 +6,16 @@ fn fair_v2_ingress_maximum_merge_sidecar_chunk_frame_matches_canonical_wire() {
         CertifiedMergeSidecarServiceGenerationV1, CertifiedMergeSidecarStreamEpochV1,
         MAX_CERTIFIED_MERGE_CHUNK_BYTES,
     };
-    let peers = validator_peers(2);
+    let peers = (1_u8..=2)
+        .map(|seed| {
+            PeerId::new(
+                KeyPair::try_from_seed(vec![seed; 32], iroha_crypto::Algorithm::BlsNormal)
+                    .expect("deterministic relay-node BLS key")
+                    .public_key()
+                    .clone(),
+            )
+        })
+        .collect::<Vec<_>>();
     let requester = peers.first().expect("requester fixture").clone();
     let responder = peers.get(1).expect("responder fixture").clone();
     let (_, requester_key_bytes) = requester
@@ -63,9 +72,10 @@ fn fair_v2_ingress_maximum_merge_sidecar_chunk_frame_matches_canonical_wire() {
         exact_frame,
         "allocation-free P2P geometry must equal the encoded fixture frame"
     );
+    let maximum_frame = super::fair_v2_ingress_required_merge_sidecar_chunk_p2p_frame_bytes();
     assert!(
-        super::fair_v2_ingress_required_merge_sidecar_chunk_p2p_frame_bytes() >= exact_frame,
-        "feature-independent maximum-key geometry must cover the concrete fixture"
+        maximum_frame >= exact_frame,
+        "feature-independent maximum-key geometry must cover the concrete fixture: maximum={maximum_frame}, concrete={exact_frame}"
     );
 }
 #[test]

@@ -83,6 +83,10 @@ const NATIVE_MESSAGE_PROOF_NORITO_TYPE =
   "iroha_sccp::native_admission::SccpNativeInboundMessageProofV1";
 const REPLAY_WITNESS_NORITO_TYPE =
   "iroha_data_model::bridge::sccp_replay::SccpSparseMerkleWitnessV1";
+const SUBMIT_BRIDGE_PROOF_NORITO_TYPE =
+  "iroha_data_model::isi::bridge::SubmitBridgeProof";
+const SUBMIT_BRIDGE_PROOF_WIRE_ID =
+  "iroha.instruction.v1::bridge::SubmitBridgeProof";
 const MAX_REPLAY_WITNESS_BYTES = 16 * 1024;
 const MAX_U64 = 0xffff_ffff_ffff_ffffn;
 const MAX_U128 = 0xffff_ffff_ffff_ffff_ffff_ffff_ffff_ffffn;
@@ -4131,7 +4135,343 @@ function normalizeSccpFeePayment(value, label) {
   return { payer: record.payer, value: normalizedBody };
 }
 
-function detachedSigningState(record, label, creationTime) {
+class SccpCompactCursor {
+  constructor(value, label) {
+    this.value = Buffer.from(value);
+    this.label = label;
+    this.offset = 0;
+  }
+
+  get finished() {
+    return this.offset === this.value.length;
+  }
+
+  takeExact(length, field) {
+    if (!Number.isSafeInteger(length) || length < 0 || this.offset > this.value.length - length) {
+      throw new TypeError(`${field} is truncated`);
+    }
+    const result = this.value.subarray(this.offset, this.offset + length);
+    this.offset += length;
+    return result;
+  }
+
+  takeByte(field) {
+    return this.takeExact(1, field)[0];
+  }
+
+  takeU32(field) {
+    return this.takeExact(4, field).readUInt32LE(0);
+  }
+
+  takeU64(field) {
+    return this.takeExact(8, field).readBigUInt64LE(0);
+  }
+
+  takeCompactLength(field) {
+    let result = 0n;
+    let shift = 0n;
+    while (true) {
+      const value = this.takeByte(field);
+      const chunk = BigInt(value & 0x7f);
+      result |= chunk << shift;
+      if ((value & 0x80) === 0) {
+        if (shift !== 0n && chunk === 0n) {
+          throw new TypeError(`${field} compact length is overlong`);
+        }
+        if (result > BigInt(Number.MAX_SAFE_INTEGER)) {
+          throw new TypeError(`${field} compact length exceeds the runtime bound`);
+        }
+        return Number(result);
+      }
+      shift += 7n;
+      if (shift >= 64n) {
+        throw new TypeError(`${field} compact length exceeds u64`);
+      }
+    }
+  }
+
+  takeField(field) {
+    return this.takeExact(this.takeCompactLength(field), field);
+  }
+}
+
+function requireFinished(cursor, label) {
+  if (!cursor.finished) throw new TypeError(`${label} contains trailing bytes`);
+}
+
+function decodeCompactString(payload, label) {
+  const cursor = new SccpCompactCursor(payload, label);
+  const bytes = cursor.takeExact(cursor.takeCompactLength(label), label);
+  requireFinished(cursor, label);
+  let value;
+  try {
+    value = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch (error) {
+    throw new TypeError(`${label} is not strict UTF-8`, { cause: error });
+  }
+  if (new TextEncoder().encode(value).length !== bytes.length) {
+    throw new TypeError(`${label} is not canonical UTF-8`);
+  }
+  return value;
+}
+
+function decodeRawByteVector(payload, label) {
+  const cursor = new SccpCompactCursor(payload, label);
+  const length = cursor.takeU64(`${label}.length`);
+  if (length === 0n || length > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new TypeError(`${label} length is invalid`);
+  }
+  const result = cursor.takeExact(Number(length), label);
+  requireFinished(cursor, label);
+  return result;
+}
+
+function exactFramePayload(archive, label, expectedTypeName) {
+  const frame = validateNoritoFrame(archive, {
+    context: label,
+    expectedTypeName,
+    expectedPaddingLength: 0,
+    requireNonEmptyPayload: true,
+  });
+  if (frame.flags !== 0x02) {
+    throw new TypeError(`${label} must use the canonical compact Norito layout`);
+  }
+  return frame.payload;
+}
+
+function validateCanonicalReplayWitnessArchive(archive, label) {
+  const payload = exactFramePayload(archive, label, REPLAY_WITNESS_NORITO_TYPE);
+  const cursor = new SccpCompactCursor(payload, label);
+  const expectedRoot = cursor.takeField(`${label}.expected_shard_root`);
+  const priorRecordDigest = cursor.takeField(`${label}.prior_record_digest`);
+  const siblingBitmap = cursor.takeField(`${label}.sibling_bitmap`);
+  const siblingSequence = new SccpCompactCursor(
+    cursor.takeField(`${label}.siblings`),
+    `${label}.siblings`,
+  );
+  requireFinished(cursor, label);
+  const siblingCount = siblingSequence.takeU64(`${label}.siblings.count`);
+  if (siblingCount > 248n) throw new TypeError(`${label} contains too many siblings`);
+  const siblings = [];
+  for (let index = 0n; index < siblingCount; index += 1n) {
+    siblings.push(siblingSequence.takeField(`${label}.siblings[${index}]`));
+  }
+  requireFinished(siblingSequence, `${label}.siblings`);
+  if (priorRecordDigest.length !== 32 || priorRecordDigest.some((byte) => byte !== 0)) {
+    throw new TypeError(`${label} must prove non-membership with an all-zero prior digest`);
+  }
+  sccpReplayRootFromWitnessV1(`0x${"01".repeat(32)}`, null, {
+    expectedShardRoot: `0x${expectedRoot.toString("hex")}`,
+    priorRecordDigest: `0x${priorRecordDigest.toString("hex")}`,
+    siblingBitmap: `0x${siblingBitmap.toString("hex")}`,
+    siblings: siblings.map((sibling) => `0x${sibling.toString("hex")}`),
+  });
+  return payload;
+}
+
+function inspectCanonicalSubmitBridgeProof(
+  archive,
+  { expectedProof, expectedReplayWitness, expectedDestination },
+) {
+  const payload = exactFramePayload(
+    archive,
+    "SubmitBridgeProof",
+    SUBMIT_BRIDGE_PROOF_NORITO_TYPE,
+  );
+  const submit = new SccpCompactCursor(payload, "SubmitBridgeProof");
+  const proof = new SccpCompactCursor(
+    submit.takeField("SubmitBridgeProof.proof"),
+    "SubmitBridgeProof.proof",
+  );
+  const replayOption = submit.takeField("SubmitBridgeProof.replay_witness");
+  requireFinished(submit, "SubmitBridgeProof");
+
+  const range = new SccpCompactCursor(
+    proof.takeField("SubmitBridgeProof.proof.range"),
+    "SubmitBridgeProof.proof.range",
+  );
+  const startField = range.takeField("SubmitBridgeProof.proof.range.start");
+  const endField = range.takeField("SubmitBridgeProof.proof.range.end");
+  if (startField.length !== 8 || endField.length !== 8) {
+    throw new TypeError("SubmitBridgeProof range is not canonical u64");
+  }
+  const start = startField.readBigUInt64LE(0);
+  const end = endField.readBigUInt64LE(0);
+  requireFinished(range, "SubmitBridgeProof.proof.range");
+  if (start === 0n || end < start) throw new TypeError("SubmitBridgeProof range is invalid");
+
+  const bridgePayload = new SccpCompactCursor(
+    proof.takeField("SubmitBridgeProof.proof.payload"),
+    "SubmitBridgeProof.proof.payload",
+  );
+  const kind = bridgePayload.takeU32("SubmitBridgeProof.proof.payload.kind");
+  const variant = new SccpCompactCursor(
+    bridgePayload.takeField("SubmitBridgeProof.proof.payload.value"),
+    "SubmitBridgeProof.proof.payload.value",
+  );
+  requireFinished(bridgePayload, "SubmitBridgeProof.proof.payload");
+  requireFinished(proof, "SubmitBridgeProof.proof");
+  const backendTagField = variant.takeField("SubmitBridgeProof.backend");
+  if (backendTagField.length !== 4) throw new TypeError("SubmitBridgeProof backend is malformed");
+  const backendTag = backendTagField.readUInt32LE(0);
+  const routeHash = variant.takeField("SubmitBridgeProof.route_configuration_hash");
+  if (routeHash.length !== 32 || routeHash.every((byte) => byte === 0)) {
+    throw new TypeError("SubmitBridgeProof route-configuration binding is invalid");
+  }
+  const embeddedProof = decodeRawByteVector(
+    variant.takeField("SubmitBridgeProof.encoded_proof"),
+    "SubmitBridgeProof.encoded_proof",
+  );
+  requireFinished(variant, "SubmitBridgeProof proof container");
+  if (expectedProof !== undefined && !Buffer.from(embeddedProof).equals(Buffer.from(expectedProof))) {
+    throw new TypeError("SubmitBridgeProof proof does not match the submitted artifact");
+  }
+
+  let backend;
+  let destination;
+  if (kind === 2) {
+    destination = false;
+    backend = [
+      "bridge/sccp/native/ethereum-beacon-v1",
+      "bridge/sccp/native/bsc-parlia-v1",
+      "bridge/sccp/native/tron-dpos-v1",
+      "bridge/sccp/native/ton-masterchain-v1",
+    ][backendTag];
+  } else if (kind === 3) {
+    destination = true;
+    backend = [
+      "evm-groth16-bn254-v1",
+      "tron-groth16-bn254-v1",
+      "ton-groth16-bls12381-v1",
+    ][backendTag];
+  } else {
+    throw new TypeError("SCCP SubmitBridgeProof uses a generic or unknown bridge payload");
+  }
+  if (backend === undefined || (expectedDestination !== undefined && destination !== expectedDestination)) {
+    throw new TypeError("SubmitBridgeProof backend or proof family is invalid");
+  }
+
+  const option = new SccpCompactCursor(replayOption, "SubmitBridgeProof.replay_witness");
+  const tag = option.takeByte("SubmitBridgeProof.replay_witness.tag");
+  if (destination) {
+    if (tag !== 0 || !option.finished || expectedReplayWitness !== undefined) {
+      throw new TypeError("Destination SubmitBridgeProof must carry no replay witness");
+    }
+  } else {
+    if (tag !== 1) throw new TypeError("Native SubmitBridgeProof requires a replay witness");
+    const witnessPayload = option.takeField("SubmitBridgeProof.replay_witness.value");
+    requireFinished(option, "SubmitBridgeProof.replay_witness");
+    if (expectedReplayWitness !== undefined) {
+      const expectedPayload = validateCanonicalReplayWitnessArchive(
+        expectedReplayWitness,
+        "replay_witness_b64",
+      );
+      if (!Buffer.from(witnessPayload).equals(Buffer.from(expectedPayload))) {
+        throw new TypeError("SubmitBridgeProof replay witness does not match replay_witness_b64");
+      }
+    } else {
+      const witness = new SccpCompactCursor(witnessPayload, "SubmitBridgeProof.replay_witness.value");
+      const expectedRoot = witness.takeField("replay_witness.expected_shard_root");
+      const prior = witness.takeField("replay_witness.prior_record_digest");
+      const bitmap = witness.takeField("replay_witness.sibling_bitmap");
+      const siblingsField = witness.takeField("replay_witness.siblings");
+      requireFinished(witness, "SubmitBridgeProof.replay_witness.value");
+      const siblingsCursor = new SccpCompactCursor(siblingsField, "replay_witness.siblings");
+      const count = siblingsCursor.takeU64("replay_witness.siblings.count");
+      if (count > 248n) throw new TypeError("Replay witness contains too many siblings");
+      const siblings = [];
+      for (let index = 0n; index < count; index += 1n) {
+        siblings.push(siblingsCursor.takeField(`replay_witness.siblings[${index}]`));
+      }
+      requireFinished(siblingsCursor, "replay_witness.siblings");
+      if (prior.length !== 32 || prior.some((byte) => byte !== 0)) {
+        throw new TypeError("Replay witness must prove non-membership");
+      }
+      sccpReplayRootFromWitnessV1(`0x${"01".repeat(32)}`, null, {
+        expectedShardRoot: `0x${expectedRoot.toString("hex")}`,
+        priorRecordDigest: `0x${prior.toString("hex")}`,
+        siblingBitmap: `0x${bitmap.toString("hex")}`,
+        siblings: siblings.map((sibling) => `0x${sibling.toString("hex")}`),
+      });
+    }
+  }
+  return Object.freeze({
+    backend,
+    routeConfigurationHash: routeHash.toString("hex"),
+    rangeStartHeight: start,
+    rangeEndHeight: end,
+    destination,
+  });
+}
+
+function inspectCanonicalSccpTransaction(
+  payload,
+  creationTime,
+  expectedProof,
+  expectedReplayWitness,
+  expectedDestination,
+) {
+  const transaction = new SccpCompactCursor(payload, "transaction_payload_b64");
+  transaction.takeField("chain_id");
+  transaction.takeField("authority");
+  const creation = transaction.takeField("creation_time_ms");
+  const executable = new SccpCompactCursor(
+    transaction.takeField("executable"),
+    "executable",
+  );
+  transaction.takeField("time_to_live_ms");
+  transaction.takeField("nonce");
+  transaction.takeField("fee_payment");
+  transaction.takeField("admission_intent");
+  transaction.takeField("metadata");
+  transaction.takeField("attachments");
+  requireFinished(transaction, "transaction_payload_b64");
+  if (creation.length !== 8 || creation.readBigUInt64LE(0) !== BigInt(creationTime)) {
+    throw new TypeError("transaction_payload_b64 does not match creation_time_ms");
+  }
+  if (executable.takeU32("executable.kind") !== 0) {
+    throw new TypeError("SCCP transaction executable must contain instructions");
+  }
+  const instructions = new SccpCompactCursor(
+    executable.takeField("executable.instructions"),
+    "executable.instructions",
+  );
+  requireFinished(executable, "executable");
+  if (instructions.takeU64("executable.instructions.count") !== 1n) {
+    throw new TypeError("SCCP transaction must contain exactly one instruction");
+  }
+  const instruction = new SccpCompactCursor(
+    instructions.takeField("executable.instruction"),
+    "executable.instruction",
+  );
+  requireFinished(instructions, "executable.instructions");
+  const wireName = decodeCompactString(
+    instruction.takeField("executable.instruction.wire_name"),
+    "executable.instruction.wire_name",
+  );
+  const archive = decodeRawByteVector(
+    instruction.takeField("executable.instruction.payload"),
+    "executable.instruction.payload",
+  );
+  requireFinished(instruction, "executable.instruction");
+  if (wireName !== SUBMIT_BRIDGE_PROOF_WIRE_ID) {
+    throw new TypeError("SCCP transaction instruction must be exactly SubmitBridgeProof");
+  }
+  return inspectCanonicalSubmitBridgeProof(archive, {
+    expectedProof,
+    expectedReplayWitness,
+    expectedDestination,
+  });
+}
+
+function detachedSigningState(
+  record,
+  label,
+  creationTime,
+  expectedProof,
+  expectedReplayWitness,
+  expectedDestination,
+) {
   const hasSignature = record.signature_b64 !== undefined;
   const hasTransactionPayload = record.transaction_payload_b64 !== undefined;
   if (hasSignature !== hasTransactionPayload) {
@@ -4146,7 +4486,17 @@ function detachedSigningState(record, label, creationTime) {
   canonicalBase64(record.signature_b64, `${label}.signature_b64`, {
     maximumBytes: 16 * 1024,
   });
-  canonicalBase64(record.transaction_payload_b64, `${label}.transaction_payload_b64`);
+  const transaction = canonicalBase64(
+    record.transaction_payload_b64,
+    `${label}.transaction_payload_b64`,
+  );
+  inspectCanonicalSccpTransaction(
+    transaction,
+    creationTime,
+    expectedProof,
+    expectedReplayWitness,
+    expectedDestination,
+  );
   return {
     signature_b64: record.signature_b64,
     transaction_payload_b64: record.transaction_payload_b64,
@@ -4168,7 +4518,7 @@ export function normalizeBridgeProofSubmitPayload(value) {
     "bridge proof submit",
     new Set(["authority", "fee_payment", "destination_proof_b64"]),
   );
-  canonicalNoritoBase64(
+  const destinationProof = canonicalNoritoBase64(
     record.destination_proof_b64,
     "bridge proof submit.destination_proof_b64",
     DESTINATION_PROOF_NORITO_TYPE,
@@ -4188,7 +4538,14 @@ export function normalizeBridgeProofSubmitPayload(value) {
       record.fee_payment,
       "bridge proof submit.fee_payment",
     ),
-    ...detachedSigningState(record, "bridge proof submit", creationTime),
+    ...detachedSigningState(
+      record,
+      "bridge proof submit",
+      creationTime,
+      destinationProof,
+      undefined,
+      true,
+    ),
     destination_proof_b64: record.destination_proof_b64,
   };
   if (creationTime !== undefined) result.creation_time_ms = creationTime;
@@ -4211,17 +4568,21 @@ export function normalizeBridgeMessageSubmitPayload(value) {
     "bridge message submit",
     new Set(["authority", "fee_payment", "native_proof_b64", "replay_witness_b64"]),
   );
-  canonicalNoritoBase64(
+  const nativeProof = canonicalNoritoBase64(
     record.native_proof_b64,
     "bridge message submit.native_proof_b64",
     NATIVE_MESSAGE_PROOF_NORITO_TYPE,
     MAX_WIRE_BYTES,
   );
-  canonicalNoritoBase64(
+  const replayWitness = canonicalNoritoBase64(
     record.replay_witness_b64,
     "bridge message submit.replay_witness_b64",
     REPLAY_WITNESS_NORITO_TYPE,
     MAX_REPLAY_WITNESS_BYTES,
+  );
+  validateCanonicalReplayWitnessArchive(
+    replayWitness,
+    "bridge message submit.replay_witness_b64",
   );
   const creationTime =
     record.creation_time_ms === undefined
@@ -4237,7 +4598,14 @@ export function normalizeBridgeMessageSubmitPayload(value) {
       record.fee_payment,
       "bridge message submit.fee_payment",
     ),
-    ...detachedSigningState(record, "bridge message submit", creationTime),
+    ...detachedSigningState(
+      record,
+      "bridge message submit",
+      creationTime,
+      nativeProof,
+      replayWitness,
+      false,
+    ),
     native_proof_b64: record.native_proof_b64,
     replay_witness_b64: record.replay_witness_b64,
   };
@@ -4266,7 +4634,7 @@ export function normalizeSccpBridgeSubmitResponse(value, expectations = {}) {
     record.counterparty_domain,
     "bridge submit response.counterparty_domain",
     1,
-    5,
+    4,
   );
   if (counterparty.sora || counterparty.domain !== domain) {
     throw new TypeError("bridge submit response counterparty profile/domain disagree");
@@ -4349,7 +4717,13 @@ export function normalizeSccpBridgeSubmitResponse(value, expectations = {}) {
   });
   const expected = exactFields(
     expectations,
-    new Set(["submitted", "creation_time_ms"]),
+    new Set([
+      "submitted",
+      "creation_time_ms",
+      "proof_b64",
+      "replay_witness_b64",
+      "destination",
+    ]),
     "bridge response expectations",
     new Set(),
   );
@@ -4363,6 +4737,33 @@ export function normalizeSccpBridgeSubmitResponse(value, expectations = {}) {
     boolean(expected.submitted, "bridge response expectations.submitted");
     if (result.submitted !== expected.submitted) {
       throw new TypeError("bridge submit response.submitted does not match the request signing state");
+    }
+  }
+  if (!submitted) {
+    const expectedProof = expected.proof_b64 === undefined
+      ? undefined
+      : canonicalBase64(expected.proof_b64, "bridge response expectations.proof_b64");
+    const expectedReplayWitness = expected.replay_witness_b64 === undefined
+      ? undefined
+      : canonicalBase64(
+          expected.replay_witness_b64,
+          "bridge response expectations.replay_witness_b64",
+          { maximumBytes: MAX_REPLAY_WITNESS_BYTES },
+        );
+    const binding = inspectCanonicalSccpTransaction(
+      transaction,
+      creationTime,
+      expectedProof,
+      expectedReplayWitness,
+      expected.destination,
+    );
+    if (
+      binding.backend !== backend ||
+      binding.routeConfigurationHash !== result.route_configuration_hash_hex ||
+      binding.rangeStartHeight !== BigInt(rangeStart) ||
+      binding.rangeEndHeight !== BigInt(rangeEnd)
+    ) {
+      throw new TypeError("prepared transaction contradicts the SCCP response binding");
     }
   }
   return result;

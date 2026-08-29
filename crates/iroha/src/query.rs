@@ -484,18 +484,18 @@ mod tests {
     }
 }
 impl Client {
-    /// Fetch the exact successful committed transaction selected by its entrypoint hash.
+    /// Fetch the exact committed transaction selected by its entrypoint hash.
     ///
     /// This uses the dedicated authenticated transaction-details route with the one canonical
     /// `FindTransactions` equality predicate accepted by Torii. The response must be canonical
     /// bounded Norito and must repeat the requested entrypoint hash, a self-consistent entrypoint
-    /// and result hash, and a successful execution result.
+    /// and result hash. Both successful and rejected transaction results are returned unchanged.
     ///
     /// # Errors
     ///
     /// Returns an error if request binding or signing fails, Torii rejects the query, the response
     /// violates the strict transport/codec contract, or any requested hash/result binding differs.
-    pub fn get_successful_transaction_details(
+    pub fn get_transaction_details(
         &self,
         entrypoint_hash: HashOf<TransactionEntrypoint>,
     ) -> Result<PipelineTransactionDetailsResponse, QueryError> {
@@ -541,7 +541,25 @@ impl Client {
                 "transaction-details response does not match the requested entrypoint/result hash"
             )));
         }
-        if transaction.result().is_err() {
+        Ok(details)
+    }
+
+    /// Fetch the exact successful committed transaction selected by its entrypoint hash.
+    ///
+    /// This preserves the success-only contract used by readers which must not accept a committed
+    /// rejection. Call [`Self::get_transaction_details`] when the authenticated rejection result is
+    /// itself required.
+    ///
+    /// # Errors
+    ///
+    /// Returns any authenticated transaction-details lookup error, or an error when the exact
+    /// committed result is a rejection.
+    pub fn get_successful_transaction_details(
+        &self,
+        entrypoint_hash: HashOf<TransactionEntrypoint>,
+    ) -> Result<PipelineTransactionDetailsResponse, QueryError> {
+        let details = self.get_transaction_details(entrypoint_hash)?;
+        if details.transaction.result().is_err() {
             return Err(QueryError::Other(eyre!(
                 "transaction-details response contains a rejected transaction result"
             )));
@@ -1162,14 +1180,14 @@ mod query_errors_handling {
             wire_format_preference: crate::client::WireFormatPreference::default(),
         }
     }
-    fn successful_transaction_details_fixture() -> (
+    fn transaction_details_fixture(
+        result: iroha_data_model::transaction::TransactionResult,
+    ) -> (
         HashOf<TransactionEntrypoint>,
         PipelineTransactionDetailsResponse,
     ) {
         use crate::crypto::MerkleProof;
-        use iroha_data_model::transaction::{
-            DataTriggerSequence, TransactionBuilder, TransactionResult,
-        };
+        use iroha_data_model::transaction::TransactionBuilder;
         let (authority, key_pair) = gen_account_in("wonderland");
         let signed = TransactionBuilder::new(
             crate::client::test_network_id(),
@@ -1180,7 +1198,6 @@ mod query_errors_handling {
         .expect("sign transaction-details fixture");
         let entrypoint = TransactionEntrypoint::External(signed);
         let entrypoint_hash = entrypoint.hash();
-        let result = TransactionResult::new(Ok(DataTriggerSequence::default()));
         let transaction = CommittedTransaction {
             block_hash: HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed(
                 [0x77; iroha_crypto::Hash::LENGTH],
@@ -1201,6 +1218,31 @@ mod query_errors_handling {
                 trigger_completions: Vec::new(),
             },
         )
+    }
+    fn successful_transaction_details_fixture() -> (
+        HashOf<TransactionEntrypoint>,
+        PipelineTransactionDetailsResponse,
+    ) {
+        use iroha_data_model::transaction::{DataTriggerSequence, TransactionResult};
+        transaction_details_fixture(TransactionResult::new(Ok(DataTriggerSequence::default())))
+    }
+    fn rejected_transaction_details_fixture() -> (
+        HashOf<TransactionEntrypoint>,
+        PipelineTransactionDetailsResponse,
+        iroha_data_model::transaction::error::TransactionRejectionReason,
+    ) {
+        use iroha_data_model::{
+            isi::error::{InstructionExecutionError, InvalidParameterError},
+            transaction::{TransactionResult, error::TransactionRejectionReason},
+        };
+        let reason = TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                "privacy activation at 306 is too early after height 7; earliest is 307".to_owned(),
+            )),
+        ));
+        let (entrypoint_hash, details) =
+            transaction_details_fixture(TransactionResult::new(Err(reason.clone())));
+        (entrypoint_hash, details, reason)
     }
     fn assert_exact_transaction_details_query(
         query: &QueryWithParams,
@@ -1278,6 +1320,56 @@ mod query_errors_handling {
         )
         .expect("exact transaction-details lookup");
         assert_eq!(actual, details);
+    }
+    #[test]
+    fn transaction_details_reader_returns_exact_rejected_result() {
+        let client = compatible_client_with_conflicting_wire_headers();
+        let (entrypoint_hash, details, reason) = rejected_transaction_details_fixture();
+        let encoded = norito::to_bytes(&details).expect("encode rejected transaction details");
+        let actual = with_mock_http(
+            move |_| {
+                Ok(Response::builder()
+                    .status(HttpStatusCode::OK)
+                    .header("content-type", APPLICATION_NORITO)
+                    .body(encoded.clone())
+                    .expect("rejected transaction-details response"))
+            },
+            || client.get_transaction_details(entrypoint_hash),
+        )
+        .expect("authenticated rejected transaction-details lookup");
+        assert_eq!(actual, details);
+        assert_eq!(
+            actual
+                .transaction
+                .result()
+                .0
+                .as_ref()
+                .expect_err("fixture result must be rejected"),
+            &reason
+        );
+    }
+    #[test]
+    fn successful_transaction_details_reader_still_rejects_rejected_result() {
+        let client = compatible_client_with_conflicting_wire_headers();
+        let (entrypoint_hash, details, _) = rejected_transaction_details_fixture();
+        let encoded = norito::to_bytes(&details).expect("encode rejected transaction details");
+        let error = with_mock_http(
+            move |_| {
+                Ok(Response::builder()
+                    .status(HttpStatusCode::OK)
+                    .header("content-type", APPLICATION_NORITO)
+                    .body(encoded.clone())
+                    .expect("rejected transaction-details response"))
+            },
+            || client.get_successful_transaction_details(entrypoint_hash),
+        )
+        .expect_err("success-only transaction reader must reject a committed failure");
+        assert!(
+            error
+                .to_string()
+                .contains("contains a rejected transaction result"),
+            "unexpected success-only reader error: {error}"
+        );
     }
     #[test]
     fn transaction_details_reader_rejects_noncanonical_or_non_norito_success() {

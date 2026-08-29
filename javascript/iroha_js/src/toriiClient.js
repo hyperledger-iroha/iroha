@@ -31857,6 +31857,14 @@ async function readSccpBridgeSubmitResponse(response, request) {
   if (request.creation_time_ms !== undefined) {
     expectations.creation_time_ms = request.creation_time_ms;
   }
+  if (request.destination_proof_b64 !== undefined) {
+    expectations.proof_b64 = request.destination_proof_b64;
+    expectations.destination = true;
+  } else {
+    expectations.proof_b64 = request.native_proof_b64;
+    expectations.replay_witness_b64 = request.replay_witness_b64;
+    expectations.destination = false;
+  }
   const { parseSccpBridgeSubmitResponseJson } = await loadToriiOptionalModule();
   return parseSccpBridgeSubmitResponseJson(text, expectations);
 }

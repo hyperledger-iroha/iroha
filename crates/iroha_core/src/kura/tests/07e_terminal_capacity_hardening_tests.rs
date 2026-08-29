@@ -1549,7 +1549,12 @@ fn merge_application_receipt_makes_autonomous_auxiliary_persistence_terminal() {
     let lane_entry = lane_config.primary();
     let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
         .expect("initialize Kura");
-    let entrypoint = offline_top_up_entrypoint_for_index([0xD2; 32], [0xD3; 32]);
+    let entrypoint = offline_top_up_entrypoint_for_index_with_outer_authority_and_admission_intent(
+        [0xD2; 32],
+        [0xD3; 32],
+        &SAMPLE_GENESIS_ACCOUNT_KEYPAIR,
+        iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
+    );
 
     let proposal = merge_entry_with_indexed_entrypoint(entrypoint.clone())
         .execution_batch
