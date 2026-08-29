@@ -16098,7 +16098,7 @@ mod tests {
             (1_000, 301, 1_100, 990, 1_300),
             (u64::MAX, 1, u64::MAX, 990, u64::MAX),
         ] {
-            validate_prepared_transaction_time_window(
+            let _error = validate_prepared_transaction_time_window(
                 creation,
                 ttl,
                 now,
@@ -16121,7 +16121,7 @@ mod tests {
             PreparedMutationLifetimeCheck::Structural,
         )
         .expect("durable identity recovery accepts an expired signed transaction");
-        validate_prepared_transaction_time_window(
+        let _error = validate_prepared_transaction_time_window(
             1_000,
             200,
             1_200,
@@ -16141,7 +16141,7 @@ mod tests {
             PreparedMutationLifetimeCheck::Structural,
         )
         .expect("durable identity recovery does not depend on the current wall clock");
-        validate_prepared_transaction_time_window(
+        let _error = validate_prepared_transaction_time_window(
             future_creation,
             200,
             1_000,
@@ -16177,7 +16177,7 @@ mod tests {
         assert!(selected.charge_limits().is_empty());
 
         inventory.fee_intent.sponsor_program_revision = Some(0);
-        inventory_fee_payment_intent(&inventory)
+        let _error = inventory_fee_payment_intent(&inventory)
             .expect_err("zero sponsor revision must fail closed");
     }
 
@@ -16197,7 +16197,7 @@ mod tests {
         assert_eq!(policy.amount(), &inventory.faucet_policy.amount);
 
         inventory.faucet_policy.authority = "not-an-account".to_owned();
-        inventory_faucet_policy(&inventory)
+        let _error = inventory_faucet_policy(&inventory)
             .expect_err("an invalid signed faucet authority must fail closed");
     }
 
@@ -16564,7 +16564,7 @@ mod tests {
             .expect("write published receipt fixture");
         file.sync_all().expect("sync published receipt fixture");
         drop(file);
-        reconcile_local_receipt_staging_at(&receipt_root, "00", "nonce", receipt_name)
+        let _error = reconcile_local_receipt_staging_at(&receipt_root, "00", "nonce", receipt_name)
             .expect_err("a published receipt must not erase conflicting staged evidence");
         assert_eq!(
             fs::read(&staging).expect("preserved staged evidence after destination conflict"),
@@ -16696,19 +16696,19 @@ mod tests {
 
         let mut wrong_request = plan.clone();
         wrong_request.request_sha256 = "0".repeat(64);
-        validate_cleanup_plan(&admitted, &wrong_request)
+        let _error = validate_cleanup_plan(&admitted, &wrong_request)
             .expect_err("another request cannot replay the plan");
 
         let mut duplicate = plan.clone();
         duplicate.entries.push(duplicate.entries[0].clone());
         duplicate.bytes_before = 2;
-        validate_cleanup_plan(&admitted, &duplicate)
+        let _error = validate_cleanup_plan(&admitted, &duplicate)
             .expect_err("duplicate cleanup roots are not canonical");
 
         let mut oversized = plan;
         oversized.entries[0].initial_bytes = oversized.max_reclaim_bytes + 1;
         oversized.bytes_before = oversized.entries[0].initial_bytes;
-        validate_cleanup_plan(&admitted, &oversized)
+        let _error = validate_cleanup_plan(&admitted, &oversized)
             .expect_err("cleanup plan cannot exceed the signed cap");
     }
 
@@ -16781,7 +16781,7 @@ mod tests {
         let mut over_partition = plan;
         over_partition.entries[0].initial_bytes = over_partition.max_reclaim_bytes + 1;
         over_partition.bytes_before = over_partition.entries[0].initial_bytes;
-        validate_cleanup_plan(&admitted, &over_partition)
+        let _error = validate_cleanup_plan(&admitted, &over_partition)
             .expect_err("one target cannot consume one byte beyond its physical-host share");
 
         assert!(partition_cleanup_reclaim_limit(1, 5, 5).is_err());
@@ -16871,7 +16871,7 @@ mod tests {
             cleanup_plan_deleted_prefix(100, 100, false).expect("unchanged candidate"),
             0
         );
-        cleanup_plan_deleted_prefix(100, 99, false)
+        let _error = cleanup_plan_deleted_prefix(100, 99, false)
             .expect_err("an unrenamed candidate cannot be partially deleted");
         assert_eq!(
             cleanup_plan_deleted_prefix(100, 40, true).expect("partial tombstone"),
@@ -16881,7 +16881,7 @@ mod tests {
             cleanup_plan_deleted_prefix(100, 0, true).expect("durably completed root"),
             100
         );
-        cleanup_plan_deleted_prefix(100, 101, true)
+        let _error = cleanup_plan_deleted_prefix(100, 101, true)
             .expect_err("a planned root cannot grow past its admitted byte closure");
     }
 
@@ -16892,7 +16892,7 @@ mod tests {
         let other = Path::new("/srv/taira/node/releases/2222222222222222222222222222222222222222");
         ensure_cleanup_plan_entry_not_selected("release", planned, other)
             .expect("an unselected old release remains eligible");
-        ensure_cleanup_plan_entry_not_selected("release", planned, planned)
+        let _error = ensure_cleanup_plan_entry_not_selected("release", planned, planned)
             .expect_err("a release selected after planning must never be deleted");
         ensure_cleanup_plan_entry_not_selected("upload", planned, planned)
             .expect("the release selector does not govern upload roots");
@@ -17362,11 +17362,11 @@ mod tests {
 
         let mut reordered = manifest.clone();
         reordered.files.swap(0, 1);
-        validate_inrou_stage_upload_manifest(&admitted, &reordered)
+        let _error = validate_inrou_stage_upload_manifest(&admitted, &reordered)
             .expect_err("noncanonical file ordering must fail closed");
         let mut traversal = manifest;
         traversal.files[0].path = "../container.json".to_owned();
-        validate_inrou_stage_upload_manifest(&admitted, &traversal)
+        let _error = validate_inrou_stage_upload_manifest(&admitted, &traversal)
             .expect_err("stage path traversal must fail closed");
     }
 
@@ -17926,7 +17926,7 @@ mod tests {
                 .as_object_mut()
                 .expect("write report object")
                 .remove(*field);
-            validate_prepared_write_report(
+            let _error = validate_prepared_write_report(
                 &missing,
                 &admitted,
                 "pre_edge",
@@ -17942,7 +17942,7 @@ mod tests {
             .as_object_mut()
             .expect("write report object")
             .insert("legacy_terminal_kind".to_owned(), "Applied".into());
-        validate_prepared_write_report(
+        let _error = validate_prepared_write_report(
             &extra,
             &admitted,
             "pre_edge",
@@ -17975,7 +17975,7 @@ mod tests {
                 .as_object_mut()
                 .expect("final-canary report object")
                 .remove(*field);
-            validate_prepared_write_report(
+            let _error = validate_prepared_write_report(
                 &missing,
                 &admitted,
                 "pre_edge",
@@ -17991,7 +17991,7 @@ mod tests {
             .as_object_mut()
             .expect("final-canary report object")
             .insert("operation".to_owned(), "write_canary".into());
-        validate_prepared_write_report(
+        let _error = validate_prepared_write_report(
             &report,
             &admitted,
             "pre_edge",
@@ -18024,7 +18024,7 @@ mod tests {
                 .as_object_mut()
                 .expect("Inrou report object")
                 .remove(*field);
-            validate_prepared_inrou_report(
+            let _error = validate_prepared_inrou_report(
                 &missing,
                 &admitted,
                 "pre_edge",
@@ -18040,7 +18040,7 @@ mod tests {
             .as_object_mut()
             .expect("Inrou report object")
             .insert("submitted_tx_hash".to_owned(), "4".repeat(64).into());
-        validate_prepared_inrou_report(
+        let _error = validate_prepared_inrou_report(
             &extra,
             &admitted,
             "pre_edge",
@@ -18057,11 +18057,13 @@ mod tests {
         validate_report_evidence_token("Rejected", &["Rejected", "Expired"], "rejection")
             .expect("canonical rejection class");
         for invalid in ["", "ledger_rejected", "Rejected\n"] {
-            validate_report_evidence_token(invalid, &["Rejected", "Expired"], "rejection")
-                .expect_err("synthetic, unbounded, or noncanonical evidence must fail");
+            let _error =
+                validate_report_evidence_token(invalid, &["Rejected", "Expired"], "rejection")
+                    .expect_err("synthetic, unbounded, or noncanonical evidence must fail");
         }
-        validate_report_evidence_token(&"R".repeat(33), &["Rejected", "Expired"], "rejection")
-            .expect_err("unbounded evidence must fail");
+        let _error =
+            validate_report_evidence_token(&"R".repeat(33), &["Rejected", "Expired"], "rejection")
+                .expect_err("unbounded evidence must fail");
         for evidence in PREPARED_INROU_REJECTED_EVIDENCE {
             validate_report_evidence_token(
                 evidence,
@@ -18071,7 +18073,7 @@ mod tests {
             .expect("producer-compatible Inrou rejection evidence");
         }
         for retired in ["execution_expired_before_submit", "submitted_hash_mismatch"] {
-            validate_report_evidence_token(
+            let _error = validate_report_evidence_token(
                 retired,
                 PREPARED_INROU_REJECTED_EVIDENCE,
                 "Inrou rejection",
@@ -18197,9 +18199,9 @@ mod tests {
         let retained = canonical_local_report(&fresh).expect("retained Inrou check report");
         validate_retained_inrou_check_report(&retained, &admitted)
             .expect("exact retained Inrou check report");
-        validate_fresh_inrou_check_report(&retained, &admitted)
+        let _error = validate_fresh_inrou_check_report(&retained, &admitted)
             .expect_err("retained schema cannot masquerade as fresh evidence");
-        validate_retained_inrou_check_report(&fresh, &admitted)
+        let _error = validate_retained_inrou_check_report(&fresh, &admitted)
             .expect_err("fresh timestamp is outside the retained schema");
 
         for field in FRESH_INROU_CHECK_REPORT_FIELDS {
@@ -18208,7 +18210,7 @@ mod tests {
                 .as_object_mut()
                 .expect("Inrou check object")
                 .remove(*field);
-            validate_fresh_inrou_check_report(&missing, &admitted)
+            let _error = validate_fresh_inrou_check_report(&missing, &admitted)
                 .expect_err("every fresh Inrou check field is mandatory");
         }
         let mut extra = fresh;
@@ -18216,7 +18218,7 @@ mod tests {
             .as_object_mut()
             .expect("Inrou check object")
             .insert("mutation_mode".to_owned(), "deploy".into());
-        validate_fresh_inrou_check_report(&extra, &admitted)
+        let _error = validate_fresh_inrou_check_report(&extra, &admitted)
             .expect_err("retired mixed-mode fields must fail closed");
     }
 
@@ -18536,7 +18538,7 @@ mod tests {
             .as_object_mut()
             .expect("doctor object")
             .remove("warnings");
-        validate_doctor_report(&sparse, public_root)
+        let _error = validate_doctor_report(&sparse, public_root)
             .expect_err("sparse doctor report must fail closed");
 
         let mut extra = canonical.clone();
@@ -18544,7 +18546,7 @@ mod tests {
             .as_object_mut()
             .expect("doctor object")
             .insert("legacy_routes".to_owned(), norito::json!([]));
-        validate_doctor_report(&extra, public_root)
+        let _error = validate_doctor_report(&extra, public_root)
             .expect_err("unknown doctor report fields must fail closed");
 
         let mut nonfinal_mcp = canonical.clone();
@@ -18564,7 +18566,7 @@ mod tests {
             .and_then(norito::json::Value::as_object_mut)
             .expect("MCP GET doctor check");
         mcp_get.insert("http_status".to_owned(), 204_u64.into());
-        validate_doctor_report(&nonfinal_mcp, public_root)
+        let _error = validate_doctor_report(&nonfinal_mcp, public_root)
             .expect_err("MCP GET must require exact HTTP 405");
 
         let mut substituted = canonical;
@@ -18576,7 +18578,7 @@ mod tests {
             .and_then(norito::json::Value::as_object_mut)
             .expect("first doctor check")
             .insert("name".to_owned(), "health".into());
-        validate_doctor_report(&substituted, public_root)
+        let _error = validate_doctor_report(&substituted, public_root)
             .expect_err("substituted doctor route name must fail closed");
     }
 
@@ -19138,7 +19140,8 @@ mod tests {
                 json::to_value(&candidate).expect("encode substituted atomic response"),
                 false,
             );
-            result.expect_err("atomic network, version, and identity substitution must fail");
+            let _error =
+                result.expect_err("atomic network, version, and identity substitution must fail");
             assert_exact_atomic_proof_post(&request, &account_id, &alias);
         }
     }
@@ -19209,7 +19212,7 @@ mod tests {
                 norito::json::Value::from("not-a-typed-block-hash"),
             );
         let (result, request) = exercise_atomic_proof_response(invalid_hash, false);
-        result.expect_err("untyped atomic block hash must fail closed");
+        let _error = result.expect_err("untyped atomic block hash must fail closed");
         assert_exact_atomic_proof_post(&request, &account_id, &alias);
     }
 

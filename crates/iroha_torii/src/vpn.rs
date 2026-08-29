@@ -1661,6 +1661,8 @@ fn verify_vpn_payment(
     {
         return Ok(requested_payment_hash);
     }
+    #[cfg(not(test))]
+    let _ = requested_payment_hash;
     let (tx, _) = committed_transaction_by_hash(app, payment_hash)?;
     let canonical_payment_hash = canonical_signed_transaction_hash(&tx);
     if canonical_payment_hash != lease.open_tx_hash {

@@ -613,7 +613,9 @@ public final class AliasLifecycleClientTests {
               body.getBytes(StandardCharsets.UTF_8),
               "stub",
               Collections.singletonMap(
-                  "Content-Type", Collections.singletonList("application/json")));
+                  "Content-Type", Collections.singletonList("application/json")),
+              null,
+              false);
     }
 
     @Override

@@ -823,7 +823,7 @@ class BootleLanternIssuanceClientV1Test {
         status: Int,
         body: ByteArray,
         headers: Map<String, List<String>>,
-    ): TransportResponse = TransportResponse(status, body, "scripted", headers)
+    ): TransportResponse = TransportResponse(status, body, "scripted", headers, null, false)
 
     private fun patterned(size: Int): ByteArray = ByteArray(size) { index -> index.toByte() }.also { body ->
         when (size) {

@@ -1187,6 +1187,7 @@ fn snapshot_policy_output(
     snapshot_policy_output_with_hooks(path, label, replacement, || Ok(()), || Ok(()))
 }
 
+#[cfg(test)]
 fn snapshot_policy_output_with_hook<F>(
     path: &Path,
     label: &str,

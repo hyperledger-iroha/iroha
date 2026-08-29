@@ -192,6 +192,11 @@ impl BigInt {
     pub fn try_to_u64(&self) -> Option<u64> {
         num_traits::ToPrimitive::to_u64(&self.inner)
     }
+    /// Convert to `u128` if the value is non-negative and representable.
+    #[must_use]
+    pub fn try_to_u128(&self) -> Option<u128> {
+        num_traits::ToPrimitive::to_u128(&self.inner)
+    }
     pub(crate) fn from_inner(inner: InnerBigInt) -> Result<Self, BigIntError> {
         if signed_twos_byte_len(&inner) > MAX_ENCODED_BYTES {
             return Err(BigIntError::Overflow);
@@ -689,6 +694,16 @@ mod tests {
         assert_eq!(BigInt::from(-1_i64).try_to_u64(), None);
         assert_eq!(BigInt::from(u64::MAX).try_to_u64(), Some(u64::MAX));
         assert_eq!(BigInt::from(u64::MAX).try_to_i64(), None);
+    }
+    #[test]
+    fn unsigned_128_conversion_boundaries_are_exact() {
+        assert_eq!(BigInt::from(-1_i64).try_to_u128(), None);
+        assert_eq!(BigInt::from(u128::MAX).try_to_u128(), Some(u128::MAX));
+
+        let above_max: BigInt = "340282366920938463463374607431768211456"
+            .parse()
+            .expect("u128::MAX + 1 fits the adaptive-width domain");
+        assert_eq!(above_max.try_to_u128(), None);
     }
     #[test]
     fn norito_decode_rejects_redundant_sign_extension() {

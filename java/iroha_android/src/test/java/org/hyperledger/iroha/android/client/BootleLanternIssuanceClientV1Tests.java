@@ -958,7 +958,7 @@ public final class BootleLanternIssuanceClientV1Tests {
 
   private static TransportResponse response(
       final int status, final byte[] body, final Map<String, List<String>> headers) {
-    return new TransportResponse(status, body, "scripted", headers);
+    return new TransportResponse(status, body, "scripted", headers, null, false);
   }
 
   private static byte[] patterned(final int size) {

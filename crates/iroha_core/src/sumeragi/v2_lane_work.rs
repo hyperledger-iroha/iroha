@@ -2162,8 +2162,12 @@ impl HistoricalRecoveryRequestCadence {
 }
 #[derive(Clone, Debug)]
 enum PendingMergeStage {
+    /// Fully validated candidate collecting authenticated committee shares.
     Collecting(crate::merge::MergeLedgerCandidate),
+    /// Quorate entry awaiting its one fail-stop Kura publication attempt.
     Certified(MergeLedgerEntry),
+    /// Kura-published entry retained until the global carrier locks or changes view.
+    Persisted(MergeLedgerEntry),
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct AutonomousLanePayloadKey {
@@ -3075,6 +3079,8 @@ pub(crate) struct V2LaneWorkAdapter {
     queue_plan_admission_handoff_cursor: usize,
     merge_entries: BTreeMap<MergeKey, PendingMerge>,
     merge_claims: BTreeMap<(u64, u64, wire::ValidatorIndex), Hash>,
+    #[cfg(test)]
+    merge_candidate_validation_checks: std::cell::Cell<usize>,
     /// Durable local merge-signing authority. Non-voting adapters never open
     /// or mutate this namespace.
     merge_signing_guard: Option<MergeSigningGuard>,
@@ -3804,6 +3810,8 @@ impl V2LaneWorkAdapter {
             queue_plan_admission_handoff_cursor: 0,
             merge_entries: BTreeMap::new(),
             merge_claims: BTreeMap::new(),
+            #[cfg(test)]
+            merge_candidate_validation_checks: std::cell::Cell::new(0),
             merge_signing_guard,
             merge_sidecars,
             predecessor_sidecar_requesters: None,
@@ -11120,7 +11128,7 @@ impl V2LaneWorkAdapter {
                 };
                 let candidate = match &pending.stage {
                     PendingMergeStage::Collecting(candidate) => candidate.clone(),
-                    PendingMergeStage::Certified(entry) => {
+                    PendingMergeStage::Certified(entry) | PendingMergeStage::Persisted(entry) => {
                         crate::merge::MergeLedgerCandidate::from(entry)
                     }
                 };
@@ -15358,12 +15366,14 @@ impl V2LaneWorkAdapter {
                         intent.dataspace_id,
                         intent.lane_incarnation,
                     ),
-                    PendingMergeStage::Certified(entry) => merge_entry_carries_lane(
-                        entry,
-                        intent.lane_id,
-                        intent.dataspace_id,
-                        intent.lane_incarnation,
-                    ),
+                    PendingMergeStage::Certified(entry) | PendingMergeStage::Persisted(entry) => {
+                        merge_entry_carries_lane(
+                            entry,
+                            intent.lane_id,
+                            intent.dataspace_id,
+                            intent.lane_incarnation,
+                        )
+                    }
                 })
         {
             return true;
@@ -15687,6 +15697,12 @@ impl V2LaneWorkAdapter {
         parent_header: &BlockHeader,
         active_view: wire::View,
     ) -> Result<(), String> {
+        #[cfg(test)]
+        self.merge_candidate_validation_checks.set(
+            self.merge_candidate_validation_checks
+                .get()
+                .saturating_add(1),
+        );
         if let Some(batch) = candidate.execution_batch.as_ref() {
             let expected_header =
                 self.merge_carrier_context_header(active_view)
@@ -15974,6 +15990,55 @@ impl V2LaneWorkAdapter {
                 "voting lane work lacks its merge-signing authority".to_owned(),
             )
         })?;
+        let mut persisted_entries = self.merge_entries.iter().filter_map(|(key, pending)| {
+            let PendingMergeStage::Persisted(entry) = &pending.stage else {
+                return None;
+            };
+            Some((*key, entry))
+        });
+        if let Some((key, entry)) = persisted_entries.next() {
+            if persisted_entries.next().is_some() {
+                return Err(V2LaneWorkError::SigningGuard(
+                    "one global round retained multiple persisted merge candidates".to_owned(),
+                ));
+            }
+            let candidate = crate::merge::MergeLedgerCandidate::from(entry);
+            let candidate_bytes = candidate.canonical_bytes();
+            let signing_context = MergeSigningContextV1 {
+                epoch_id: candidate.epoch_id,
+                view: candidate.view,
+                carrier_height: candidate.carrier_height,
+                parent_hash: candidate.carrier_parent_hash,
+                validator_set_hash,
+            };
+            let authorized = signing_guard
+                .authorized_candidate(&signing_context)
+                .map_err(|error| V2LaneWorkError::SigningGuard(error.to_string()))?;
+            let expected_digest = crate::merge::merge_qc_message_digest(
+                &self.context.network_id,
+                &candidate,
+                VALIDATOR_SET_HASH_VERSION_V1,
+                validator_set_hash,
+            );
+            if key.epoch_id != expected_epoch
+                || key.view != active_view
+                || candidate.epoch_id != key.epoch_id
+                || candidate.view != key.view
+                || candidate.carrier_height != self.context.height
+                || candidate.carrier_parent_hash != expected_parent
+                || key.digest != expected_digest
+                || entry.merge_qc.epoch_id != key.epoch_id
+                || entry.merge_qc.view != key.view
+                || entry.merge_qc.message_digest != key.digest
+                || authorized != Some((key.digest, candidate, candidate_bytes))
+            {
+                return Err(V2LaneWorkError::SigningGuard(
+                    "persisted merge candidate contradicts its exact global-round authority"
+                        .to_owned(),
+                ));
+            }
+            return Ok(());
+        }
         let authorized_candidate = signing_guard
             .authorized_candidate(&signing_context)
             .map_err(|error| V2LaneWorkError::SigningGuard(error.to_string()))?;
@@ -16020,7 +16085,9 @@ impl V2LaneWorkAdapter {
                 {
                     Some(candidate.clone())
                 }
-                PendingMergeStage::Collecting(_) | PendingMergeStage::Certified(_) => None,
+                PendingMergeStage::Collecting(_)
+                | PendingMergeStage::Certified(_)
+                | PendingMergeStage::Persisted(_) => None,
             })
             .collect::<Vec<_>>();
         if let Some((_, candidate, _)) = authorized_candidate {
@@ -16169,6 +16236,93 @@ impl V2LaneWorkAdapter {
             return Ok(V2LaneIngressOutcome::Rejected);
         }
         let leader = self.context.leader(active_view);
+        let key = MergeKey {
+            epoch_id: signature.epoch_id,
+            view: signature.view,
+            digest: signature.message_digest,
+        };
+        let claim_key = (signature.epoch_id, signature.view, signature.signer);
+        if let Some(existing_digest) = self.merge_claims.get(&claim_key).copied() {
+            if existing_digest != signature.message_digest {
+                if signature.signer != leader {
+                    return Ok(V2LaneIngressOutcome::Rejected);
+                }
+                // A conflicting leader body must still pass the complete
+                // candidate checks below before durable equivocation is fatal.
+            } else {
+                let Some(pending) = self.merge_entries.get(&key) else {
+                    // Signer claims outlive any retired volatile candidate.
+                    // Never reconstruct or reexecute a candidate from an
+                    // authenticated replay after its round ownership is gone.
+                    return Ok(V2LaneIngressOutcome::Rejected);
+                };
+                if pending.signatures.get(&signature.signer) != Some(&signature.bls_sig) {
+                    return Ok(V2LaneIngressOutcome::Rejected);
+                }
+                let candidate = match &pending.stage {
+                    PendingMergeStage::Collecting(candidate) => candidate.clone(),
+                    PendingMergeStage::Certified(entry) | PendingMergeStage::Persisted(entry) => {
+                        crate::merge::MergeLedgerCandidate::from(entry)
+                    }
+                };
+                let candidate_bytes = candidate.canonical_bytes();
+                let expected_digest = crate::merge::merge_qc_message_digest(
+                    &self.context.network_id,
+                    &candidate,
+                    VALIDATOR_SET_HASH_VERSION_V1,
+                    self.frozen_validator_set_hash(),
+                );
+                let expected_parent = self
+                    .context
+                    .parent_commit_qc
+                    .as_ref()
+                    .map(|qc| qc.subject.block_hash)
+                    .or_else(|| {
+                        self.context
+                            .snapshot_bootstrap
+                            .as_ref()
+                            .map(|anchor| anchor.snapshot_block_hash)
+                    });
+                if candidate.epoch_id != key.epoch_id
+                    || candidate.view != active_view
+                    || candidate.carrier_height != self.context.height
+                    || Some(candidate.carrier_parent_hash) != expected_parent
+                    || expected_digest != key.digest
+                {
+                    return Err(V2LaneWorkError::SigningGuard(
+                        "admitted merge claim contradicts its exact volatile candidate".to_owned(),
+                    ));
+                }
+                let signing_context = MergeSigningContextV1 {
+                    epoch_id: candidate.epoch_id,
+                    view: candidate.view,
+                    carrier_height: candidate.carrier_height,
+                    parent_hash: candidate.carrier_parent_hash,
+                    validator_set_hash: self.frozen_validator_set_hash(),
+                };
+                let signing_guard = self.merge_signing_guard.as_ref().ok_or_else(|| {
+                    V2LaneWorkError::SigningGuard(
+                        "voting lane work lacks its merge-signing authority".to_owned(),
+                    )
+                })?;
+                let authorized = signing_guard
+                    .authorized_candidate(&signing_context)
+                    .map_err(|error| V2LaneWorkError::SigningGuard(error.to_string()))?;
+                if authorized != Some((key.digest, candidate.clone(), candidate_bytes.clone())) {
+                    return Err(V2LaneWorkError::SigningGuard(
+                        "admitted merge claim contradicts its durable signing authority".to_owned(),
+                    ));
+                }
+                if signature.signer == leader
+                    && signature.leader_candidate_body.as_deref()
+                        != Some(candidate_bytes.as_slice())
+                {
+                    return Ok(V2LaneIngressOutcome::Rejected);
+                }
+                self.try_commit_merge(key)?;
+                return Ok(V2LaneIngressOutcome::Duplicate);
+            }
+        }
         if signature.signer == leader {
             let Some(parent_header) = self.state.latest_block_header_fast() else {
                 return Ok(V2LaneIngressOutcome::Rejected);
@@ -16230,13 +16384,12 @@ impl V2LaneWorkAdapter {
             signing_guard
                 .authorize(signing_context, signature.message_digest, &candidate)
                 .map_err(|error| V2LaneWorkError::SigningGuard(error.to_string()))?;
-            let key = MergeKey {
-                epoch_id: candidate.epoch_id,
-                view: candidate.view,
-                digest: signature.message_digest,
-            };
             self.merge_entries.retain(|existing, pending| {
-                existing == &key || matches!(&pending.stage, PendingMergeStage::Certified(_))
+                existing == &key
+                    || matches!(
+                        &pending.stage,
+                        PendingMergeStage::Certified(_) | PendingMergeStage::Persisted(_)
+                    )
             });
             if !self.merge_entries.contains_key(&key)
                 && self.merge_entries.len() >= self.limits.merge_capacity.get()
@@ -16252,11 +16405,6 @@ impl V2LaneWorkAdapter {
             });
         }
         self.refresh_merge_candidates(active_view)?;
-        let key = MergeKey {
-            epoch_id: signature.epoch_id,
-            view: signature.view,
-            digest: signature.message_digest,
-        };
         let Some(pending) = self.merge_entries.get(&key) else {
             return Ok(V2LaneIngressOutcome::Rejected);
         };
@@ -16267,12 +16415,13 @@ impl V2LaneWorkAdapter {
                 VALIDATOR_SET_HASH_VERSION_V1,
                 self.frozen_validator_set_hash(),
             ),
-            PendingMergeStage::Certified(entry) => entry.merge_qc.message_digest,
+            PendingMergeStage::Certified(entry) | PendingMergeStage::Persisted(entry) => {
+                entry.merge_qc.message_digest
+            }
         };
         if expected_digest != signature.message_digest {
             return Ok(V2LaneIngressOutcome::Rejected);
         }
-        let claim_key = (signature.epoch_id, signature.view, signature.signer);
         if let Some(existing) = self.merge_claims.get(&claim_key) {
             if existing != &signature.message_digest {
                 if signature.signer == leader {
@@ -16310,6 +16459,7 @@ impl V2LaneWorkAdapter {
         let cached_entry = match &pending.stage {
             PendingMergeStage::Certified(entry) => Some(entry.clone()),
             PendingMergeStage::Collecting(_) => None,
+            PendingMergeStage::Persisted(_) => return Ok(()),
         };
         if let Some(entry) = cached_entry {
             return self.persist_certified_merge_entry(key, &entry);
@@ -16428,10 +16578,34 @@ impl V2LaneWorkAdapter {
         key: MergeKey,
         entry: &MergeLedgerEntry,
     ) -> Result<(), V2LaneWorkError> {
-        self.kura
+        let persisted_hash = self
+            .kura
             .persist_pending_certified_merge_entry(entry)
             .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
-        self.merge_entries.remove(&key);
+        if persisted_hash != crate::merge::merge_ledger_entry_hash(entry) {
+            return Err(V2LaneWorkError::Persistence(
+                "Kura returned a conflicting hash for the certified merge candidate".to_owned(),
+            ));
+        }
+        let Some(pending) = self.merge_entries.get_mut(&key) else {
+            return Err(V2LaneWorkError::SigningGuard(
+                "certified merge candidate lost volatile ownership after persistence".to_owned(),
+            ));
+        };
+        match &pending.stage {
+            PendingMergeStage::Certified(staged) if staged == entry => {
+                pending.stage = PendingMergeStage::Persisted(entry.clone());
+            }
+            PendingMergeStage::Persisted(staged) if staged == entry => {}
+            PendingMergeStage::Collecting(_)
+            | PendingMergeStage::Certified(_)
+            | PendingMergeStage::Persisted(_) => {
+                return Err(V2LaneWorkError::SigningGuard(
+                    "persisted merge candidate differs from its volatile certified owner"
+                        .to_owned(),
+                ));
+            }
+        }
         Ok(())
     }
     fn frozen_certificate_quorum_met(&self, signers: &[wire::ValidatorIndex]) -> bool {

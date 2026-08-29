@@ -100,7 +100,7 @@ public final class SumeragiHttpTransportTests {
             Collections.emptyMap(),
             Map.of("Content-Type", List.of("application/json; charset=utf-8")),
             Map.of("Content-Type", List.of("application/json", "application/json")))) {
-      final TransportResponse response = new TransportResponse(200, body, "", headers);
+      final TransportResponse response = new TransportResponse(200, body, "", headers, null, false);
       assertThrows(RuntimeException.class, () -> transport(new OneResponseExecutor(response)).getSumeragiStatus().join());
       assertThrows(RuntimeException.class, () -> transport(new OneResponseExecutor(response)).getSumeragiDiagnostics().join());
     }
@@ -116,13 +116,17 @@ public final class SumeragiHttpTransportTests {
               200,
               body,
               "",
-              Map.of("Content-Type", List.of("application/json"), "Content-Length", lengths));
+              Map.of("Content-Type", List.of("application/json"), "Content-Length", lengths),
+              null,
+              false);
       assertThrows(RuntimeException.class, () -> transport(new OneResponseExecutor(response)).getSumeragiStatus().join());
     }
     final byte[] oversized = new byte[(int) SumeragiStatusModels.STATUS_JSON_MAX_BYTES + 1];
     final TransportResponse oversizedResponse =
         new TransportResponse(
-            200, oversized, "", Map.of("Content-Type", List.of("application/json")));
+            200, oversized, "", Map.of("Content-Type", List.of("application/json")),
+            null,
+            false);
     assertThrows(
         RuntimeException.class,
         () -> transport(new OneResponseExecutor(oversizedResponse)).getSumeragiStatus().join());
@@ -290,7 +294,9 @@ public final class SumeragiHttpTransportTests {
         "ok",
         Map.of(
             "Content-Type", List.of("application/json"),
-            "Content-Length", List.of(Integer.toString(body.length))));
+            "Content-Length", List.of(Integer.toString(body.length))),
+        null,
+        false);
   }
 
   private static String statusJson() {

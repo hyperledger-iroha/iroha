@@ -1088,7 +1088,6 @@ fn parse_tron_raw_transaction_sccp_call(
     let mut cursor = 0usize;
     let mut previous = 0u32;
     let mut ref_block_bytes = None;
-    let mut ref_block_num = None;
     let mut ref_block_hash = None;
     let mut expiration = None;
     let mut call = None;
@@ -1102,15 +1101,6 @@ fn parse_tron_raw_transaction_sccp_call(
         previous = field;
         match (field, wire) {
             (1, 2) => ref_block_bytes = Some(read_transaction_bytes_field(bytes, &mut cursor)?),
-            (3, 0) => {
-                // The shared varint reader rejects overlong encodings.  Proto3
-                // would omit zero, and the schema declares this field as int64.
-                let number = read_transaction_varint(bytes, &mut cursor)?;
-                if number == 0 || i64::try_from(number).is_err() {
-                    return Err(transaction_encoding_error());
-                }
-                ref_block_num = Some(number);
-            }
             (4, 2) => ref_block_hash = Some(read_transaction_bytes_field(bytes, &mut cursor)?),
             (8, 0) => expiration = Some(read_transaction_varint(bytes, &mut cursor)?),
             (11, 2) => {
@@ -1136,10 +1126,6 @@ fn parse_tron_raw_transaction_sccp_call(
     if ref_block_bytes.len() != 2
         || ref_block_hash.len() != 8
         || ref_block_hash.iter().all(|byte| *byte == 0)
-        || ref_block_num.is_some_and(|number| {
-            let encoded = number.to_be_bytes();
-            encoded[6..] != ref_block_bytes[..]
-        })
         || timestamp == 0
         || i64::try_from(timestamp).is_err()
         || expiration <= timestamp
@@ -1553,7 +1539,6 @@ mod tests {
             contract_result,
             type_url,
             &[0x12, 0x34],
-            Some(0x1234),
             &[0x44; 8],
         )
     }
@@ -1562,7 +1547,6 @@ mod tests {
         contract_result: u64,
         type_url: &[u8],
         ref_block_bytes: &[u8],
-        ref_block_num: Option<u64>,
         ref_block_hash: &[u8],
     ) -> Vec<u8> {
         let owner = test_sender();
@@ -1587,9 +1571,6 @@ mod tests {
         push_bytes(&mut contract, 2, &any);
         let mut raw = Vec::new();
         push_bytes(&mut raw, 1, ref_block_bytes);
-        if let Some(ref_block_num) = ref_block_num {
-            push_int(&mut raw, 3, ref_block_num);
-        }
         push_bytes(&mut raw, 4, ref_block_hash);
         push_int(&mut raw, 8, 2_000_000);
         push_bytes(&mut raw, 11, &contract);
@@ -2138,16 +2119,17 @@ mod tests {
         assert_eq!(validated.source_event_digest, statement.source_event_digest);
     }
     #[test]
-    fn native_transaction_accepts_byte_exact_java_tron_raw_data_fixture() {
+    fn native_transaction_accepts_current_java_tron_raw_data_and_rejects_field_3() {
         // Provenance: `protocol.Transaction.raw` field numbers and types come
-        // from tronprotocol/protocol `core/Tron.proto` (fields 1, 3, and 4).
+        // from tronprotocol/protocol `core/Tron.proto`. The SCCP profile accepts
+        // the current field-1 + field-4 TAPOS shape and rejects deprecated field 3.
         // The field-1 + field-4 shape comes from the Java `setReference` demo
         // in tronprotocol/documentation `TRX/Tron-overview.md`: it takes height
         // bytes [6..8] and block-hash bytes [8..16], without setting field 3.
         // This literal is the resulting deterministic raw-data protobuf for
         // the test SCCP trigger, with `00 00` height bytes and `44` hash bytes.
         const JAVA_TRON_RAW_DATA_HEX: &str = concat!(
-            "0a020000220844444444444444444080897a5a9002081f128b020a31747970652e676f6f676c65617069732e636f6d2f",
+            "0x0a020000220844444444444444444080897a5a9002081f128b020a31747970652e676f6f676c65617069732e636f6d2f",
             "70726f746f636f6c2e54726967676572536d617274436f6e747261637412d5010a154122222222222222222222222222",
             "22222222222222121541333333333333333333333333333333333333333322a401ebfc6ca80000000000000000000000",
             "000000000000000000000000000000000000000060000000000000000000000000000000000000000000000000000000",
@@ -2177,11 +2159,11 @@ mod tests {
         assert_eq!(owner, test_sender());
         assert_eq!(&contract[1..], &[0x33; 20]);
 
-        let mut overlong_ref_block_num = raw_data.clone();
-        overlong_ref_block_num.splice(4..4, [0x18, 0x81, 0x00]);
+        let mut deprecated_ref_block_num = raw_data.clone();
+        deprecated_ref_block_num.splice(4..4, [0x18, 0xb4, 0x24]);
         assert_eq!(
             parse_tron_raw_transaction_sccp_call(
-                &overlong_ref_block_num,
+                &deprecated_ref_block_num,
                 [0x33; 20],
                 test_sender(),
                 &transfer.recipient,
@@ -2206,58 +2188,38 @@ mod tests {
         );
     }
     #[test]
-    fn native_transaction_accepts_java_tron_tapos_without_deprecated_block_number() {
+    fn native_transaction_accepts_current_java_tron_tapos() {
         let contract = [0x33; 20];
         let statement = test_transaction_statement();
         // Java-Tron transaction construction populates the two-byte TAPOS
         // reference and eight-byte block hash but omits deprecated field 3.
-        // A low-16-bit block number of zero is represented by these exact two
-        // bytes and remains valid when the deprecated full number is absent.
-        let omitted = transaction_bytes_with_tapos(
+        // Field 1 carries the low 16-bit block number, including zero.
+        let canonical = transaction_bytes_with_tapos(
             contract,
             1,
             TRON_TRIGGER_SMART_CONTRACT_TYPE_URL_V1,
             &[0x00, 0x00],
-            None,
             &[0x44; 8],
         );
-        let omitted_root = sha256_bytes(&omitted);
+        let canonical_root = sha256_bytes(&canonical);
         verify_test_transaction(
-            &single_transaction_proof(omitted),
-            omitted_root,
+            &single_transaction_proof(canonical),
+            canonical_root,
             contract,
             &statement,
         )
-        .expect("canonical Java-Tron TAPOS without deprecated ref_block_num");
-
-        let matching = transaction_bytes_with_tapos(
-            contract,
-            1,
-            TRON_TRIGGER_SMART_CONTRACT_TYPE_URL_V1,
-            &[0x12, 0x34],
-            Some(0x1_1234),
-            &[0x44; 8],
-        );
-        let matching_root = sha256_bytes(&matching);
-        verify_test_transaction(
-            &single_transaction_proof(matching),
-            matching_root,
-            contract,
-            &statement,
-        )
-        .expect("canonical matching ref_block_num extension");
+        .expect("canonical current Java-Tron TAPOS");
     }
     #[test]
     fn native_transaction_rejects_inconsistent_or_malformed_tapos_fields() {
         let contract = [0x33; 20];
         let statement = test_transaction_statement();
-        let reject = |ref_block_bytes: &[u8], ref_block_num, ref_block_hash: &[u8]| {
+        let reject = |ref_block_bytes: &[u8], ref_block_hash: &[u8]| {
             let transaction = transaction_bytes_with_tapos(
                 contract,
                 1,
                 TRON_TRIGGER_SMART_CONTRACT_TYPE_URL_V1,
                 ref_block_bytes,
-                ref_block_num,
                 ref_block_hash,
             );
             let root = sha256_bytes(&transaction);
@@ -2272,13 +2234,10 @@ mod tests {
             );
         };
 
-        reject(&[0x12, 0x34], Some(0x1235), &[0x44; 8]);
-        reject(&[0x00, 0x00], Some(0), &[0x44; 8]);
-        reject(&[0x00, 0x00], Some(1_u64 << 63), &[0x44; 8]);
-        reject(&[0x12], None, &[0x44; 8]);
-        reject(&[0x12, 0x34, 0x56], None, &[0x44; 8]);
-        reject(&[0x12, 0x34], None, &[0x44; 7]);
-        reject(&[0x12, 0x34], None, &[0x44; 9]);
+        reject(&[0x12], &[0x44; 8]);
+        reject(&[0x12, 0x34, 0x56], &[0x44; 8]);
+        reject(&[0x12, 0x34], &[0x44; 7]);
+        reject(&[0x12, 0x34], &[0x44; 9]);
     }
     #[test]
     fn native_transaction_rejects_recomputed_payload_for_same_transaction_with_changed_nonce() {

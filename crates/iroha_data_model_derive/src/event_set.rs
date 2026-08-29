@@ -301,6 +301,9 @@ impl ToTokens for EventSetEnum {
                             norito::json::Value::Number(number) => match number {
                                 norito::json::Number::I64(value) => format!("integer `{value}`"),
                                 norito::json::Number::U64(value) => format!("integer `{value}`"),
+                                norito::json::Number::U128(value) => {
+                                    format!("integer `{value}`")
+                                }
                                 norito::json::Number::F64(value) => {
                                     format!("floating point `{value}`")
                                 }

@@ -617,7 +617,9 @@ public final class SubscriptionToriiClientTests {
     private void enqueue(final int status, final String body) {
       responses.add(
           new TransportResponse(
-              status, body.getBytes(StandardCharsets.UTF_8), "", java.util.Map.of()));
+              status, body.getBytes(StandardCharsets.UTF_8), "", java.util.Map.of(),
+              null,
+              false));
     }
 
     @Override

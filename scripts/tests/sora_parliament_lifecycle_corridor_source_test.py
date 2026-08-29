@@ -159,13 +159,17 @@ EXACT_ABSENCE_CLASSIFICATION_MARKERS = (
     EXACT_INACTIVE_CONTRACT_PROJECTION,
     "expected the exact inactive governed-contract projection",
     "fn assert_asset_not_found(client: &Client, asset_id: &AssetId, label: &str)",
+    "let query = FindAssetById::new(asset_id.clone());",
+    "query.asset_id(),",
+    "singular asset query must remain bound to the exact requested identifier",
     "FindError::Asset(missing),",
     "if missing.as_ref() == asset_id => Ok(())",
     "Err(QueryError::Validation(ValidationFail::QueryFailed(QueryExecutionFail::NotFound))) => {",
     ".query(FindAssets::new())",
-    'format!("{label}: full asset inventory query failed after generic not-found")',
-    "assets.iter().any(|asset| asset.id() == asset_id)",
-    "generic not-found contradicted by full inventory containing asset",
+    '.filter_with(|asset| asset.equals("id", asset_id.clone()))',
+    ".execute_single_opt()",
+    "exact-ID asset query failed after a generic not-found response",
+    "generic not-found contradicted by exact-ID query returning asset",
     "expected an exact asset-not-found result",
     "fn assert_timed_ovn_casting_context_not_castable(",
     '.expect_err("a sealed timed-OVN corpus must not return a casting context");',
@@ -177,6 +181,13 @@ EXACT_ABSENCE_CLASSIFICATION_MARKERS = (
         "a sealed corpus is no longer a cast-capable context",
     )?;''',
     "fn assert_no_global_beacon_pulse_at(client: &Client, height: u64, label: &str)",
+    "fn exact_block(client: &Client, height: u64) -> Result<SignedBlock>",
+    "NonZeroU64::new(height)",
+    ".query(FindBlocks)",
+    '.filter_with(|block| block.equals("height", height))',
+    ".execute_single()",
+    "if block.header().height() != requested_height",
+    "finalized block stream returned height",
     "let block = exact_block(client, height)",
     '''if block
         .npos_consensus_effects()
@@ -566,8 +577,23 @@ def validate_exact_absence_classification(source: str) -> None:
         "asset absence must classify exactly one nested NotFound fallback",
     )
     require(
-        source.count(".query(FindAssets::new())") == 1,
-        "generic asset NotFound must be resolved by one authoritative full inventory query",
+        source.count("let query = FindAssetById::new(asset_id.clone());") == 1
+        and source.count("query.asset_id(),") == 1
+        and source.count(
+            '.filter_with(|asset| asset.equals("id", asset_id.clone()))'
+        )
+        == 1
+        and source.count(".execute_single_opt()") == 1,
+        "generic asset NotFound must be corroborated by one bounded exact-ID query",
+    )
+    require(
+        source.count('.filter_with(|block| block.equals("height", height))') == 1
+        and source.count(".execute_single()") == 1,
+        "exact finalized-block checks must use one bounded exact-height query",
+    )
+    require(
+        ".query(FindBlocks)\n        .execute_all()" not in source,
+        "finalized-block checks must not use an unbounded block inventory query",
     )
 
     broad_absence_patterns = {
@@ -1292,9 +1318,24 @@ class SoraParliamentLifecycleCorridorSourceTests(unittest.TestCase):
             "sealed timed-OVN casting-context lookup": corridor
             + "\nclient.get_parliament_timed_ovn_casting_context(ballot_attempt_id)"
             ".is_err();\n",
-            "generic asset not-found skips exact inventory absence": corridor.replace(
-                "assets.iter().any(|asset| asset.id() == asset_id)",
-                "assets.iter().any(|_| false)",
+            "generic asset not-found drops exact request binding": corridor.replace(
+                "query.asset_id(),",
+                "asset_id,",
+                1,
+            ),
+            "generic asset not-found drops exact corroboration": corridor.replace(
+                '.filter_with(|asset| asset.equals("id", asset_id.clone()))',
+                '.filter_with(|asset| asset.equals("definition", asset_id.clone()))',
+                1,
+            ),
+            "block lookup drops exact height filter": corridor.replace(
+                '.filter_with(|block| block.equals("height", height))',
+                '.filter_with(|block| block.equals("hash", height))',
+                1,
+            ),
+            "unbounded block inventory query": corridor.replace(
+                ".query(FindBlocks)\n        .filter_with(|block| block.equals(\"height\", height))\n        .execute_single()",
+                ".query(FindBlocks)\n        .execute_all()",
                 1,
             ),
             "bare active-contract transport success": corridor

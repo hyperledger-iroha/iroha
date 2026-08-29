@@ -478,13 +478,8 @@ fn run_pending_active_height(
         activated.with_runner_runtime(
             &mut active_runner,
             |executor, _services, lane_work| -> Result<_, V2RunnerError> {
-                drain_lane_relay_ingress(
-                    lane_relay_rx,
-                    lane_work,
-                    executor.current_tag().view(),
-                    control_queue_capacity,
-                )
-                .map_err(V2RunnerError::LaneWork)
+                drain_lane_relay_ingress(lane_relay_rx, lane_work, executor.current_tag().view())
+                    .map_err(V2RunnerError::LaneWork)
             },
         )?;
         let terminal_exact_output_pending = reconcile_pending_kura_terminal_lane_output_handoffs(
@@ -555,12 +550,7 @@ fn run_pending_active_height(
                     block_sync_server,
                     DecidedLaneRecoveryIngressDrainMode::OpenPreflight,
                 )?;
-                drain_lane_relay_ingress(
-                    lane_relay_rx,
-                    lane_work,
-                    executor.current_tag().view(),
-                    control_queue_capacity,
-                )?;
+                drain_lane_relay_ingress(lane_relay_rx, lane_work, executor.current_tag().view())?;
                 drive_merge_sidecar_recovery(executor, services, lane_work)?;
                 let now = Instant::now();
                 if now >= next_lane_retransmit {

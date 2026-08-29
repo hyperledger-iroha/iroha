@@ -44688,10 +44688,13 @@ pub(crate) fn validate_sccp_registry_cell_json_str(
                     return Err("snapshot SCCP registry cell duplicates `blocks`".to_owned());
                 }
                 blocks = Some(
-                    cell.parse_value::<SccpOnChainRegistryV1>()
-                        .map_err(|error| {
-                            format!("snapshot SCCP registry blocks is invalid: {error}")
-                        })?,
+                    cell.parse_value_with_parser(|parser| {
+                        let raw = parser.raw_value_slice()?;
+                        norito::json::from_json::<SccpOnChainRegistryV1>(raw)
+                    })
+                    .map_err(|error| {
+                        format!("snapshot SCCP registry blocks is invalid: {error}")
+                    })?,
                 );
             }
             "revert" => {
@@ -44699,10 +44702,18 @@ pub(crate) fn validate_sccp_registry_cell_json_str(
                     return Err("snapshot SCCP registry cell duplicates `revert`".to_owned());
                 }
                 revert = Some(
-                    cell.parse_value::<Option<SccpOnChainRegistryV1>>()
-                        .map_err(|error| {
-                            format!("snapshot SCCP registry revert is invalid: {error}")
-                        })?,
+                    cell.parse_value_with_parser(|parser| {
+                        parser.skip_ws();
+                        if parser.try_consume_null()? {
+                            Ok(None)
+                        } else {
+                            let raw = parser.raw_value_slice()?;
+                            norito::json::from_json::<SccpOnChainRegistryV1>(raw).map(Some)
+                        }
+                    })
+                    .map_err(|error| {
+                        format!("snapshot SCCP registry revert is invalid: {error}")
+                    })?,
                 );
             }
             field => {
@@ -51011,6 +51022,7 @@ mod tiered_snapshot_diff_tests {
         AssetHandleIssuerPayloadV1, AxtBinding, AxtHandleIssuerContextV1, GroupBinding,
         HandleBudget, HandleSubject,
     };
+    use iroha_test_samples::ALICE_ID;
     const SCCP_SNAPSHOT_CHAIN_ID: &str = iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1;
     fn authenticated_sccp_archive_kura() -> Arc<Kura> {
         let catalog = LaneCatalog::default();
@@ -51083,17 +51095,33 @@ mod tiered_snapshot_diff_tests {
     fn seed_sccp_snapshot_height_one(state: &State, block_hash: HashOf<BlockHeader>) {
         seed_sccp_snapshot_block_hashes(state, [block_hash]);
     }
-    fn sccp_state_snapshot_value(world: World, chain_id: &str) -> norito::json::Value {
+    fn sccp_state_snapshot_value(mut world: World, chain_id: &str) -> norito::json::Value {
+        let (fixture, _) = exact_sccp_finalized_block_fixture();
+        let finality =
+            iroha_sccp::decode_taira_bridge_finality_proof(&fixture.bundle.finality_proof)
+                .expect("exact SCCP finality fixture decodes");
+        let revision = MusubiResolverIndexRevisionV1::default();
+        let checkpoint = MusubiRegistrySnapshotV1 {
+            finalized_height: 1,
+            finalized_block_hash: *finality.finality_artifact.block_hash.as_ref(),
+            index_revision: revision.get(),
+        };
+        checkpoint
+            .validate()
+            .expect("SCCP snapshot fixture genesis resolver checkpoint is canonical");
+        assert!(
+            world
+                .musubi_resolver_index_checkpoints
+                .insert(revision, checkpoint)
+                .is_none(),
+            "SCCP snapshot fixture must not pre-seed a resolver checkpoint"
+        );
         let state = State::new_with_chain(
             world,
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
             chain_id.parse().expect("canonical SCCP snapshot chain id"),
         );
-        let (fixture, _) = exact_sccp_finalized_block_fixture();
-        let finality =
-            iroha_sccp::decode_taira_bridge_finality_proof(&fixture.bundle.finality_proof)
-                .expect("exact SCCP finality fixture decodes");
         seed_sccp_snapshot_height_one(&state, finality.finality_artifact.block_hash);
         norito::json::to_value(&state).expect("serialize authoritative state snapshot")
     }
@@ -52674,6 +52702,93 @@ mod tiered_snapshot_diff_tests {
         }
     }
     #[test]
+    fn sccp_route_liability_roundtrips_with_its_governed_route_key() {
+        let (mut world, _, _, route, _) = world_with_valid_sccp_inbound_history();
+        let route_key = route.key();
+        let liability = SccpRouteLiabilityV1::new(7).expect("nonzero route liability");
+        let escrow = iroha_data_model::bridge::sccp_route_escrow_account_id_v1(
+            &DEFAULT_TEST_NETWORK_ID,
+            &route_key,
+            &route.settlement.asset_definition_id,
+        );
+        let escrow_asset =
+            AssetId::new(route.settlement.asset_definition_id.clone(), escrow.clone());
+        let escrow_balance = sccp_liability_quantity_v1(
+            liability.outstanding_liability,
+            route.settlement.payload_amount_scale,
+        )
+        .expect("governed route liability converts to its exact escrow quantity");
+        let (escrow_asset, escrow_value) =
+            Asset::new(escrow_asset.clone(), escrow_balance.clone()).into_key_value();
+        for account_id in [ALICE_ID.clone(), escrow] {
+            let (account_id, account_value) =
+                Account::new(account_id).build(&ALICE_ID).into_key_value();
+            world.accounts.insert(account_id, account_value);
+        }
+        let mut definition = AssetDefinition::new(
+            route.settlement.asset_definition_id.clone(),
+            "SCCP settlement snapshot fixture",
+            NumericSpec::fractional(route.settlement.payload_amount_scale),
+            AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&ALICE_ID);
+        definition.total_quantity = escrow_balance.clone();
+        world
+            .asset_definitions
+            .insert(route.settlement.asset_definition_id.clone(), definition);
+        let registration_header = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+            b"SCCP liability snapshot asset registration",
+        ));
+        let incarnation = AxtAssetIncarnationV1::derive(
+            &DEFAULT_TEST_NETWORK_ID,
+            &route.settlement.asset_definition_id,
+            &registration_header,
+            &Hash::new(b"SCCP liability snapshot asset execution"),
+            0,
+        );
+        world
+            .axt_asset_incarnations
+            .insert(route.settlement.asset_definition_id.clone(), incarnation);
+        world.assets.insert(escrow_asset.clone(), escrow_value);
+        world
+            .sccp_route_liabilities
+            .insert(route_key.clone(), liability);
+
+        let decoded = decode_sccp_world_snapshot(world)
+            .expect("deserialize exactly backed governed SCCP route liability");
+        assert_eq!(
+            decoded.sccp_registry_snapshot().route(&route_key),
+            Some(&route),
+            "the liability key must still resolve to its exact governed route"
+        );
+        let decoded_world = decoded.world_view();
+        assert_eq!(
+            decoded_world.sccp_route_liabilities().get(&route_key),
+            Some(&liability)
+        );
+        assert_eq!(
+            decoded_world
+                .assets()
+                .get(&escrow_asset)
+                .map(|value| value.as_ref()),
+            Some(&escrow_balance),
+            "the roundtripped liability must retain exact escrow backing"
+        );
+    }
+    #[test]
+    fn sccp_registry_validators_accept_nonempty_canonical_cell() {
+        let (world, _, _, _, _) = world_with_valid_sccp_inbound_history();
+        let encoded = norito::json::to_json(&world.sccp_registry)
+            .expect("serialize nonempty SCCP registry cell");
+        validate_sccp_registry_cell_json_str(&encoded)
+            .expect("validate canonical nonempty SCCP registry directly from snapshot JSON");
+        let owned = norito::json::to_value(&world.sccp_registry)
+            .expect("materialize nonempty SCCP registry cell for test-only validation");
+        validate_sccp_registry_cell_json(&owned)
+            .expect("validate canonical nonempty SCCP registry from an owned JSON value");
+    }
+    #[test]
     fn sccp_replay_snapshot_roundtrips_and_requires_each_replay_index() {
         let (inbound_world, key, record, _, _) = world_with_valid_sccp_inbound_history();
         let decoded = decode_sccp_world_snapshot(inbound_world)
@@ -52713,6 +52828,7 @@ mod tiered_snapshot_diff_tests {
         );
         let encoded = sccp_state_snapshot_value(World::default(), SCCP_SNAPSHOT_CHAIN_ID);
         for field in [
+            "sccp_route_liabilities",
             "sccp_outbound_pending_usage",
             "sccp_outbound_pending_messages",
             "sccp_outbound_message_locator",

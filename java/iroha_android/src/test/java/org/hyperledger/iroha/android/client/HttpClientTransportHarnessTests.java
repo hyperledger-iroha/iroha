@@ -124,7 +124,9 @@ public final class HttpClientTransportHarnessTests {
             .build();
     executor.setResponse(
         new TransportResponse(
-            200, "{\"status\":\"ok\"}".getBytes(StandardCharsets.UTF_8), "OK", Map.of()));
+            200, "{\"status\":\"ok\"}".getBytes(StandardCharsets.UTF_8), "OK", Map.of(),
+            null,
+            false));
     final HttpClientTransport transport = HttpClientTransport.withExecutor(executor, transportConfig);
 
     final SorafsGatewayClient gatewayClient =
@@ -152,7 +154,7 @@ public final class HttpClientTransportHarnessTests {
             .putDefaultHeader("Authorization", "Bearer executor")
             .addObserver(observer)
             .build();
-    executor.setResponse(new TransportResponse(204, new byte[0], "", Map.of()));
+    executor.setResponse(new TransportResponse(204, new byte[0], "", Map.of(), null, false));
     final HttpClientTransport transport =
         HttpClientTransport.withExecutor(executor, transportConfig);
     final NoritoRpcClient rpcClient = transport.newNoritoRpcClient();

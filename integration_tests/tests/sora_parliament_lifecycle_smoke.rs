@@ -507,7 +507,13 @@ fn assert_governed_contract_binding(
 }
 
 fn assert_asset_not_found(client: &Client, asset_id: &AssetId, label: &str) -> Result<()> {
-    match client.query_single(FindAssetById::new(asset_id.clone())) {
+    let query = FindAssetById::new(asset_id.clone());
+    assert_eq!(
+        query.asset_id(),
+        asset_id,
+        "{label}: singular asset query must remain bound to the exact requested identifier"
+    );
+    match client.query_single(query) {
         Ok(_) => Err(eyre!(
             "{label}: expected asset `{asset_id}` to be absent, but the query returned it"
         )),
@@ -515,18 +521,22 @@ fn assert_asset_not_found(client: &Client, asset_id: &AssetId, label: &str) -> R
             FindError::Asset(missing),
         )))) if missing.as_ref() == asset_id => Ok(()),
         Err(QueryError::Validation(ValidationFail::QueryFailed(QueryExecutionFail::NotFound))) => {
-            let assets = client
+            let exact_match = client
                 .query(FindAssets::new())
-                .execute_all()
-                .wrap_err_with(|| {
-                    format!("{label}: full asset inventory query failed after generic not-found")
+                .filter_with(|asset| asset.equals("id", asset_id.clone()))
+                .execute_single_opt()
+                .map_err(|error| {
+                    eyre!(
+                        "{label}: exact-ID asset query failed after a generic not-found response: {error}"
+                    )
                 })?;
-            if assets.iter().any(|asset| asset.id() == asset_id) {
-                return Err(eyre!(
-                    "{label}: generic not-found contradicted by full inventory containing asset `{asset_id}`"
-                ));
+            match exact_match {
+                None => Ok(()),
+                Some(asset) => Err(eyre!(
+                    "{label}: generic not-found contradicted by exact-ID query returning asset `{}`",
+                    asset.id()
+                )),
             }
-            Ok(())
         }
         Err(error) => Err(eyre!(
             "{label}: expected an exact asset-not-found result for `{asset_id}`, got {error:?}"
@@ -644,16 +654,9 @@ fn pulse_at(
     client: &Client,
     height: u64,
 ) -> Result<iroha::data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1> {
-    client
-        .query(FindBlocks)
-        .execute_all()?
-        .into_iter()
-        .find(|block| block.header().height().get() == height)
-        .and_then(|block| {
-            block
-                .npos_consensus_effects()
-                .and_then(|effects| effects.finalized_global_beacon_pulse)
-        })
+    exact_block(client, height)?
+        .npos_consensus_effects()
+        .and_then(|effects| effects.finalized_global_beacon_pulse)
         .ok_or_else(|| eyre!("block {height} does not carry the demanded global beacon pulse"))
 }
 
@@ -837,12 +840,20 @@ fn public_finding_root(attempt_id: GovernanceAttemptId, body: ParliamentBody) ->
 }
 
 fn exact_block(client: &Client, height: u64) -> Result<SignedBlock> {
-    client
+    let requested_height =
+        NonZeroU64::new(height).ok_or_else(|| eyre!("finalized block height must be nonzero"))?;
+    let block = client
         .query(FindBlocks)
-        .execute_all()?
-        .into_iter()
-        .find(|block| block.header().height().get() == height)
-        .ok_or_else(|| eyre!("peer does not retain finalized block {height}"))
+        .filter_with(|block| block.equals("height", height))
+        .execute_single()
+        .map_err(|error| eyre!("query exact finalized block {height}: {error}"))?;
+    if block.header().height() != requested_height {
+        return Err(eyre!(
+            "finalized block stream returned height {} for exact request {height}",
+            block.header().height()
+        ));
+    }
+    Ok(block)
 }
 
 fn assert_no_global_beacon_pulse_at(client: &Client, height: u64, label: &str) -> Result<()> {

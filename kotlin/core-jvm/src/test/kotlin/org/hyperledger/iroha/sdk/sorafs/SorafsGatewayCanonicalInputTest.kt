@@ -671,7 +671,7 @@ class SorafsGatewayCanonicalInputTest {
 private object NoopExecutor : HttpTransportExecutor {
     override fun execute(request: TransportRequest): CompletableFuture<TransportResponse> =
         CompletableFuture.completedFuture(
-            TransportResponse(200, ByteArray(0), "OK", emptyMap()),
+            TransportResponse(200, ByteArray(0), "OK", emptyMap(), null, false),
         )
 }
 

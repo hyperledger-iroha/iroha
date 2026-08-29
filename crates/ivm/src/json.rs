@@ -162,6 +162,7 @@ fn json_from_value_ref(value: &njson::Value) -> Result<Json, VMError> {
                     njson::Value::Number(value) => match value {
                         JsonNumber::I64(value) => output.push_str(&value.to_string()),
                         JsonNumber::U64(value) => output.push_str(&value.to_string()),
+                        JsonNumber::U128(value) => output.push_str(&value.to_string()),
                         JsonNumber::F64(value) => {
                             if !value.is_finite() {
                                 return Err(VMError::DecodeError);
@@ -829,6 +830,7 @@ fn canonical_json_integer(field: &njson::Value) -> Option<BigInt> {
     match field {
         njson::Value::Number(JsonNumber::I64(value)) => Some(BigInt::from(*value)),
         njson::Value::Number(JsonNumber::U64(value)) => Some(BigInt::from(*value)),
+        njson::Value::Number(JsonNumber::U128(value)) => Some(BigInt::from(*value)),
         njson::Value::Number(JsonNumber::F64(_))
         | njson::Value::Null
         | njson::Value::Bool(_)
@@ -1731,12 +1733,12 @@ mod tests {
         ] {
             assert_eq!(canonical_json_integer(&value), None);
         }
-        let overflow = njson::parse_value("18446744073709551616")
-            .expect("generic JSON may represent this token outside the integer domain");
+        let wide = njson::parse_value("18446744073709551616")
+            .expect("generic JSON must preserve wide integer tokens exactly");
         assert_eq!(
-            canonical_json_integer(&overflow),
-            None,
-            "get_int must reject a numeric token outside its u64 domain"
+            canonical_json_integer(&wide),
+            Some(BigInt::from(u128::from(u64::MAX) + 1)),
+            "get_int must preserve the full Norito JSON integer domain"
         );
     }
     #[test]

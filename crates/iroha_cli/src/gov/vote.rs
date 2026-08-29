@@ -950,6 +950,7 @@ fn stringify_json_value(value: &json::Value) -> String {
         json::Value::String(s) => s.clone(),
         json::Value::Number(n) => match n {
             json::Number::U64(v) => v.to_string(),
+            json::Number::U128(v) => v.to_string(),
             json::Number::I64(v) => v.to_string(),
             json::Number::F64(v) => v.to_string(),
         },

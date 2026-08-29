@@ -948,7 +948,6 @@ fn run_lifecycle_active_height(
                         lane_relay_rx,
                         &mut lane_work,
                         executor.current_tag().view(),
-                        control_queue_capacity,
                     )?;
                     drive_merge_sidecar_recovery(executor, services, &mut lane_work)?;
                     let now = Instant::now();
@@ -1063,7 +1062,6 @@ fn run_lifecycle_active_height(
                             lane_relay_rx,
                             &mut lane_work,
                             executor.current_tag().view(),
-                            control_queue_capacity,
                         )?;
                         drive_merge_sidecar_recovery(executor, services, &mut lane_work)?;
                         let now = Instant::now();
@@ -1182,7 +1180,6 @@ fn run_lifecycle_active_height(
                         lane_relay_rx,
                         &mut lane_work,
                         executor.current_tag().view(),
-                        control_queue_capacity,
                     )?;
                     drive_merge_sidecar_recovery(executor, services, &mut lane_work)?;
                     let now = Instant::now();

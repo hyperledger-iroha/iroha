@@ -311,7 +311,7 @@ public final class Java8CompatibilitySurfaceTests {
     assertTrue(request.headers().get("X-Test").isEmpty());
     assertImmutable(request.headers().get("X-Test"));
 
-    final TransportResponse response = new TransportResponse(202, null, null, headers);
+    final TransportResponse response = new TransportResponse(202, null, null, headers, null, false);
     assertTrue(response.headers().get("X-Test").isEmpty());
     assertImmutable(response.headers().get("X-Test"));
 

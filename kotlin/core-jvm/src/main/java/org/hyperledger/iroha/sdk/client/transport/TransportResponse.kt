@@ -8,9 +8,8 @@ import java.util.TreeMap
  * SDK-owned transport response wrapper to decouple callers from `java.net.http.HttpResponse`.
  *
  * [finalUri] and [redirected] carry network provenance for response paths that must remain bound
- * to an exact signed URI. The four-argument constructor remains available for response paths that
- * do not require that provenance; exact signed-response consumers fail closed when [finalUri] is
- * absent.
+ * to an exact signed URI. Callers must provide both fields explicitly; [finalUri] is `null` only
+ * when the response source genuinely cannot establish network provenance.
  */
 class TransportResponse(
     @JvmField val statusCode: Int,
@@ -20,14 +19,6 @@ class TransportResponse(
     @JvmField val finalUri: URI?,
     @JvmField val redirected: Boolean,
 ) {
-    /** Creates a response without network provenance for response paths that do not require it. */
-    constructor(
-        statusCode: Int,
-        body: ByteArray?,
-        message: String?,
-        headers: Map<String, List<String>>?,
-    ) : this(statusCode, body, message, headers, null, false)
-
     @JvmField val message: String = message ?: ""
 
     private val _body: ByteArray = body?.copyOf() ?: ByteArray(0)

@@ -53,6 +53,8 @@ public final class OkHttpTransportExecutorTests {
       assertEquals(201, response.statusCode());
       assertEquals("hello", new String(response.body(), StandardCharsets.UTF_8));
       assertArrayEquals(new String[] {"ok"}, response.headers().get("X-Test").toArray());
+      assertEquals(request.uri(), response.finalUri());
+      assertFalse(response.redirected());
     }
   }
 

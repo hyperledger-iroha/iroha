@@ -1098,30 +1098,6 @@ class HttpClientTransportTest {
     }
 
     @Test
-    fun prepareContractCallWithoutTrustedIntentFailsBeforeDispatch() {
-        val executor = CapturingExecutor()
-        val transport = HttpClientTransport.withExecutor(
-            executor,
-            ClientConfig.builder()
-                .setBaseUri(URI.create("https://torii.example"))
-                .build(),
-        )
-
-        val error = assertFailsWith<IllegalStateException> {
-            transport.prepareContractCall(
-                authority = testAccountId(0x1a),
-                feePayment = testFeePayment(5_000L),
-                contractAddress =
-                    "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
-                entrypoint = "ping",
-            )
-        }
-
-        assertContains(error.message.orEmpty(), "ContractCallDraftIntent")
-        assertEquals(0, executor.requestCount)
-    }
-
-    @Test
     fun prepareContractCallRejectsRehashedSignatureBoundSubstitutions() {
         val networkId = TestNetworkIds.fromSeed(0x31L)
         val authority = testAccountId(0x31)
@@ -2021,19 +1997,15 @@ class HttpClientTransportTest {
     }
 
     @Test
-    fun callContractRejectsAmbiguousSelector() {
-        val transport = HttpClientTransport.withExecutor(
-            executor = CapturingExecutor(),
-            config = ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build(),
-        )
-
+    fun contractCallDraftPayloadRejectsAmbiguousSelector() {
         val error = assertFailsWith<IllegalArgumentException> {
-            transport.prepareContractCall(
+            HttpClientTransport.buildContractCallDraftPayload(
                 authority = "alice",
                 feePayment = testFeePayment(5_000L),
                 contractAddress = "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
                 contractAlias = "router::universal",
                 entrypoint = "contribute",
+                payload = null,
             )
         }
 

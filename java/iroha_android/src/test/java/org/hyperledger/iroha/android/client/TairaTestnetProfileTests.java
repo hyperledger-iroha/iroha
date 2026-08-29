@@ -56,7 +56,9 @@ public final class TairaTestnetProfileTests {
                   CAPABILITY_JSON,
                   "OK",
                   Collections.singletonMap(
-                      "Content-Type", Collections.singletonList("application/json"))));
+                      "Content-Type", Collections.singletonList("application/json")),
+                  null,
+                  false));
         };
     final Duration requestTimeout = Duration.ofSeconds(37);
     final ClientConfig config =

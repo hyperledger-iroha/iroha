@@ -141,7 +141,8 @@ fn integration_route() -> SccpGovernedRouteV1 {
         route_address: [0x51; 20],
         route_code_hash: [0x61; 32],
         taira_to_token_multiplier: SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER,
-        max_wrapped_supply: MAX_OUTSTANDING_LIABILITY * SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER as u128,
+        max_wrapped_supply: MAX_OUTSTANDING_LIABILITY
+            * u128::from(SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER),
     };
     let destination = SccpDestinationDeploymentV1::Evm(deployment);
     let route_configuration_hash = destination
