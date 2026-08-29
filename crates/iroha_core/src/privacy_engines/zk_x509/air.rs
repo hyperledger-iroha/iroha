@@ -387,7 +387,8 @@ mod tests {
             &ZkX509ShaCallScheduleV1,
             ZkX509CredentialMainPreAuxV1,
             &[u8],
-        ) -> Result<GoldilocksDigest384V1, ZkX509CaAccumulatorProofErrorV1> =
+        )
+            -> Result<GoldilocksDigest384V1, ZkX509CaAccumulatorProofErrorV1> =
             ca_accumulator_proof_binding_digest_v1;
     }
 }

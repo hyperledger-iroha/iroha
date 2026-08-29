@@ -1715,7 +1715,7 @@ state_test! { sync sccp_ton_breaker_observation_hydration_accepts_canonical_reco
         route_key,
         record,
     );
-    validate_sccp_ton_breaker_observations_v1(&world, registry.as_ref(), 7)
+    validate_sccp_ton_breaker_observations_v1(&world.view(), registry.as_ref(), 7)
         .expect("a self-consistent TON observation bound to retained governance must hydrate");
 }
 state_test! { sync sccp_ton_breaker_observation_hydration_rejects_corruption_and_governance_drift
@@ -1729,7 +1729,7 @@ state_test! { sync sccp_ton_breaker_observation_hydration_rejects_corruption_and
     | {
         let world = world_with_ton_breaker_observation_for_testing(registry, map_key, record);
         let error = validate_sccp_ton_breaker_observations_v1(
-            &world,
+            &world.view(),
             registry,
             committed_height,
         )
@@ -1857,7 +1857,7 @@ state_test! { sync sccp_ton_breaker_observation_hydration_rejects_corruption_and
         record.clone(),
     );
     validate_sccp_ton_breaker_observations_v1(
-        &rotated_world,
+        &rotated_world.view(),
         rotated_registry.as_ref(),
         7,
     )
@@ -2005,7 +2005,7 @@ state_test! { sync sccp_ton_breaker_observation_hydration_enforces_anchor_contin
             route_key.clone(),
             record,
         );
-        validate_sccp_ton_breaker_observations_v1(&world, registry.as_ref(), 7)
+        validate_sccp_ton_breaker_observations_v1(&world.view(), registry.as_ref(), 7)
     };
 
     case(40, 41).expect("one-block continuation is admitted");

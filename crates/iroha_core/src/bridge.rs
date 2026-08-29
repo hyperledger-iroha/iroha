@@ -3122,7 +3122,7 @@ mod tests {
             &trusted_finality,
         )
         .expect("locally anchored destination proof verifies against governed route");
-        assert_eq!(call.public_inputs, fixture.request.public_inputs);
+        assert_eq!(call.public_inputs(), &fixture.request.public_inputs);
         assert_eq!(
             iroha_sccp::sccp_destination_proof_work_counters_v1(),
             iroha_sccp::SccpDestinationProofWorkCountersV1 {

@@ -61,11 +61,12 @@ pub use sccp_registry::{
 };
 pub use sccp_replay::{
     SCCP_REPLAY_SMT_DEPTH_V1, SCCP_REPLAY_SMT_MAGIC_V1, SCCP_REPLAY_SMT_MAX_SIBLINGS_V1,
-    SCCP_REPLAY_SMT_SHARD_COUNT_V1, SccpReplayAccumulatorError, SccpReplayAccumulatorIdV1,
-    SccpReplayActorV1, SccpReplayBoundaryV1, SccpReplayDeltaV1, SccpReplayDomainV1,
-    SccpReplayForestV1, SccpReplayPrincipalV1, SccpReplayRecordV1, SccpSparseMerkleWitnessV1,
-    SccpTonAccountV1, sccp_replay_domain_hash_v1, sccp_replay_empty_hashes_v1, sccp_replay_key_v1,
-    sccp_replay_record_digest_v1,
+    SCCP_REPLAY_SMT_SHARD_COUNT_V1, SCCP_REPLAY_WITNESS_MAX_BASE64_BYTES_V1,
+    SCCP_REPLAY_WITNESS_MAX_ENCODED_BYTES_V1, SccpReplayAccumulatorError,
+    SccpReplayAccumulatorIdV1, SccpReplayActorV1, SccpReplayBoundaryV1, SccpReplayDeltaV1,
+    SccpReplayDomainV1, SccpReplayForestV1, SccpReplayPrincipalV1, SccpReplayRecordV1,
+    SccpSparseMerkleWitnessV1, SccpTonAccountV1, sccp_replay_domain_hash_v1,
+    sccp_replay_empty_hashes_v1, sccp_replay_key_v1, sccp_replay_record_digest_v1,
 };
 pub use sccp_ton_breaker::{
     SCCP_TON_BREAKER_MAX_AGE_MS_V1, SCCP_TON_BREAKER_MAX_FUTURE_SKEW_MS_V1,

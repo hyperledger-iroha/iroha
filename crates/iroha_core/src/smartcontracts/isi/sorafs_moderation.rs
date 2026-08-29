@@ -2372,7 +2372,7 @@ impl Execute for FinalizeSorafsModerationSortition {
                 "proposed moderation roster or waitlist exceeds hard bounds",
             ));
         }
-        if self.pop_snapshot_digest == [0; 32] || self.randomness_anchor == [0; 32] {
+        if self.citizen_snapshot_digest == [0; 32] || self.randomness_anchor == [0; 32] {
             return Err(invalid_parameter(
                 "moderation sortition snapshot and randomness anchors must be non-zero",
             ));
@@ -2399,9 +2399,9 @@ impl Execute for FinalizeSorafsModerationSortition {
                 "moderation appeal sortition missed the acceptance window",
             ));
         }
-        if self.pop_snapshot_digest != appeal.pop_snapshot_digest {
+        if self.citizen_snapshot_digest != appeal.pop_snapshot_digest {
             return Err(invalid_parameter(
-                "moderation sortition PoP snapshot digest does not match the admitted appeal",
+                "moderation sortition citizen snapshot digest does not match the admitted appeal",
             ));
         }
         require_pinned_pop_snapshot(state_transaction, &appeal.pop_snapshot)?;

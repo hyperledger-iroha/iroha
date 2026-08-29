@@ -40,7 +40,7 @@ use iroha_data_model::{
         CommittedTransaction, QueryOutput, QueryOutputBatchBox, QueryOutputBatchBoxTuple,
         QueryRequest, QueryResponse, SingularQueryBox, SingularQueryOutputBox,
         dsl::{CompoundPredicate, EvaluateSelector, HasProjection, SelectorMarker},
-        error::QueryExecutionFail as Error,
+        error::{FindError, QueryExecutionFail as Error},
         parameters::{DEFAULT_FETCH_SIZE, QueryParams, SortOrder},
     },
 };
@@ -948,6 +948,22 @@ impl ExecuteSingularQuery for SingularQueryBox {
             SingularQueryBox::FindSorafsPopRegistryStatus(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
+            // These four query schemas are reserved for the native anonymity
+            // ledger. Until that ledger owns an authenticated storage and ZK
+            // admission boundary, fail closed instead of interpreting bytes
+            // from the generic smart-contract state namespace.
+            SingularQueryBox::FindSorafsCitizenBondBySerialCommitment(q) => Err(Error::Find(
+                FindError::SorafsCitizenBond(q.serial_commitment),
+            )),
+            SingularQueryBox::FindSorafsCitizenBondSnapshot(_) => {
+                Err(Error::Find(FindError::SorafsCitizenBondSnapshot))
+            }
+            SingularQueryBox::FindSorafsAnonymousServiceEscrowById(q) => Err(Error::Find(
+                FindError::SorafsAnonymousServiceEscrow(q.escrow_id),
+            )),
+            SingularQueryBox::FindSorafsAnonymousJurorCandidacy(q) => Err(Error::Find(
+                FindError::SorafsAnonymousJurorCandidacy(q.action_digest),
+            )),
             SingularQueryBox::FindSorafsRepairTask(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
@@ -4037,6 +4053,63 @@ mod tests {
                 if records.is_empty()
         ));
         assert_eq!(stats.processed_items(), 0);
+    }
+    #[test]
+    fn sorafs_anonymity_queries_require_bounded_lane_and_fail_closed() {
+        use iroha_data_model::query::sorafs::prelude::{
+            FindSorafsAnonymousJurorCandidacy, FindSorafsAnonymousServiceEscrowById,
+            FindSorafsCitizenBondBySerialCommitment, FindSorafsCitizenBondSnapshot,
+        };
+
+        let mut world = World::default();
+        world.smart_contract_state.insert(
+            "untrusted_sorafs_anonymity_query_payload"
+                .parse()
+                .expect("test state path"),
+            vec![0xA5; 128],
+        );
+        let state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let view = state.view();
+        let budget = QueryExecutionBudget::from_weighted_limit(1_000_000, 1, 1);
+        let cases: [(SingularQueryBox, FindError); 4] = [
+            (
+                FindSorafsCitizenBondBySerialCommitment::new([0x11; 32]).into(),
+                FindError::SorafsCitizenBond([0x11; 32]),
+            ),
+            (
+                FindSorafsCitizenBondSnapshot.into(),
+                FindError::SorafsCitizenBondSnapshot,
+            ),
+            (
+                FindSorafsAnonymousServiceEscrowById::new([0x22; 32]).into(),
+                FindError::SorafsAnonymousServiceEscrow([0x22; 32]),
+            ),
+            (
+                FindSorafsAnonymousJurorCandidacy::new([0x33; 32]).into(),
+                FindError::SorafsAnonymousJurorCandidacy([0x33; 32]),
+            ),
+        ];
+        for (query, expected) in cases {
+            let inactive = ordinary_memory::preflight_server_singular_source_materialization(
+                &query, &view, budget, false,
+            )
+            .expect_err("an unbounded server lane must not admit an anonymity query");
+            assert!(
+                matches!(inactive, Error::Conversion(message) if message.contains("SoraFS anonymity query"))
+            );
+            assert_eq!(
+                ordinary_memory::preflight_server_singular_source_materialization(
+                    &query, &view, budget, true,
+                )
+                .expect("the bounded lane admits the fail-closed dispatcher"),
+                0,
+            );
+            assert_eq!(query.execute(&view), Err(Error::Find(expected)));
+        }
     }
     #[test]
     fn server_metered_alias_query_preserves_bounded_resolution() {

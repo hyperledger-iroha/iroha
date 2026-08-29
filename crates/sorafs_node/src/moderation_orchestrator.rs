@@ -321,7 +321,7 @@ impl ModerationNativeActionV1 {
             }
             Self::FinalizeSortition(value) => {
                 validate_scope(value.case_id(), value.round_id())?;
-                if *value.pop_snapshot_digest() == [0; 32]
+                if *value.citizen_snapshot_digest() == [0; 32]
                     || *value.randomness_anchor() == [0; 32]
                     || value.proposed_jurors().len()
                         > usize::from(MODERATION_LEDGER_MAX_PANEL_SIZE_V1)
@@ -7041,7 +7041,7 @@ fn action_effect(
         ModerationNativeActionV1::FinalizeSortition(value) => Ok(snapshot
             .appeal(value.case_id(), value.round_id())
             .map_or(ActionEffect::Absent, |entry| {
-                if entry.appeal.pop_snapshot_digest != *value.pop_snapshot_digest() {
+                if entry.appeal.pop_snapshot_digest != *value.citizen_snapshot_digest() {
                     return ActionEffect::Conflict;
                 }
                 if entry.appeal.status == ModerationAppealStatusV1::InsufficientEligiblePool {

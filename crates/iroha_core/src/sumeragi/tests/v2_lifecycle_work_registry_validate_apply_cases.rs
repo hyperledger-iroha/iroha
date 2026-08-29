@@ -2044,6 +2044,7 @@ fn assert_lifecycle_decision_apply_live_recovered_substitution_matrix(
     live_executor
         .arm_live_lifecycle_validate_successor(
             live_validate_dispatch_key,
+            None,
             live_certificate.proposal_round,
             live_cleanup.subject(),
             true,

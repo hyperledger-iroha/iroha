@@ -617,7 +617,7 @@ fn der_registration_claim_order_and_every_shape_field_are_bound() {
         aux_frontier: Vec::new(),
     }];
     let challenge_state = |derive_after_aux| {
-        let mut transcript = new_transcript_v1(&[0x71; 32]).expect("transcript");
+        let mut transcript = new_transcript_v1(&test_stark_digest_v1(0x71)).expect("transcript");
         absorb_aggregate_layout_v1(
             &mut transcript,
             b"iroha:privacy:zk-x509:der-aggregate-layout:test:v1",
@@ -636,7 +636,7 @@ fn der_registration_claim_order_and_every_shape_field_are_bound() {
     };
     assert_ne!(challenge_state(false), challenge_state(true));
     let transcript_state = |claims, claims_before_aux| {
-        let mut transcript = new_transcript_v1(&[0x71; 32]).expect("transcript");
+        let mut transcript = new_transcript_v1(&test_stark_digest_v1(0x71)).expect("transcript");
         absorb_aggregate_layout_v1(
             &mut transcript,
             b"iroha:privacy:zk-x509:der-aggregate-layout:test:v1",
@@ -684,7 +684,7 @@ fn der_registration_claim_order_and_every_shape_field_are_bound() {
     );
     let mut noncanonical = claims;
     noncanonical.node[0] = F(crate::privacy_engines::transparent_stark::GOLDILOCKS_MODULUS_V1);
-    let mut transcript = new_transcript_v1(&[0x71; 32]).expect("transcript");
+    let mut transcript = new_transcript_v1(&test_stark_digest_v1(0x71)).expect("transcript");
     assert!(absorb_der_terminal_claims_v1(&mut transcript, noncanonical).is_err());
     let aux = [F::ZERO; ZK_X509_DER_STARK_AUX_WIDTH_V1];
     let zero_claims = ZkX509DerStarkTerminalClaimsV1 {
@@ -777,7 +777,8 @@ fn x5m1_main_envelope_is_canonical_bounded_and_adversarially_strict() {
         encode_zk_x509_main_proof_envelope_v1(internally_unequal, aggregate),
         Err(ZkX509StarkErrorV1::InternalInvariant)
     ));
-    let mut transcript = new_transcript_v1(&[0x92; 32]).expect("MAIN terminal transcript fixture");
+    let mut transcript =
+        new_transcript_v1(&test_stark_digest_v1(0x92)).expect("MAIN terminal transcript fixture");
     let transcript_before = transcript;
     assert!(matches!(
         absorb_zk_x509_main_terminal_claims_v1(&mut transcript, internally_unequal),
@@ -807,7 +808,8 @@ fn x5m1_main_envelope_is_canonical_bounded_and_adversarially_strict() {
         Err(ZkX509StarkErrorV1::MalformedProof)
     ));
     let terminal_challenge = |claims| {
-        let mut transcript = new_transcript_v1(&[0x91; 32]).expect("MAIN transcript");
+        let mut transcript =
+            new_transcript_v1(&test_stark_digest_v1(0x91)).expect("MAIN transcript");
         absorb_zk_x509_main_terminal_claims_v1(&mut transcript, claims).expect("terminal frame");
         transcript
             .challenge_fp4(b"main-terminal-test-alpha-v1")
@@ -898,7 +900,8 @@ fn x5m1_main_envelope_is_canonical_bounded_and_adversarially_strict() {
                 ),
                 "RFC role {role:?} lane {lane} escaped MAIN encoding"
             );
-            let mut transcript = new_transcript_v1(&[0x91; 32]).expect("MAIN transcript fixture");
+            let mut transcript =
+                new_transcript_v1(&test_stark_digest_v1(0x91)).expect("MAIN transcript fixture");
             let transcript_before = transcript;
             assert!(
                 matches!(
@@ -952,8 +955,8 @@ fn x5m1_main_envelope_is_canonical_bounded_and_adversarially_strict() {
                     ),
                     "SHA segment {segment} stream {stream} lane {lane} escaped MAIN encoding"
                 );
-                let mut transcript =
-                    new_transcript_v1(&[0x91; 32]).expect("MAIN transcript fixture");
+                let mut transcript = new_transcript_v1(&test_stark_digest_v1(0x91))
+                    .expect("MAIN transcript fixture");
                 let transcript_before = transcript;
                 assert!(
                     matches!(
@@ -1101,7 +1104,7 @@ fn der_statement_digest_and_x5p1_envelope_are_exact_and_fail_closed() {
     let shape = ZkX509DerStarkShapeV1;
     let digest = der_public_digest_v1(&shape).expect("DER public digest");
     assert_eq!(
-        hex::encode(digest),
+        hex::encode(digest.to_le_bytes()),
         "b4837637f1bf0678fa78729a4fb2d9ae62da60c7768cf5bdf061abfe96a7443d"
     );
     let claims = ZkX509DerStarkTerminalClaimsV1 {

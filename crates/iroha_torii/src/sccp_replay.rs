@@ -443,9 +443,10 @@ impl ToriiSccpReplayArchiveServiceV1 {
         kura: Arc<Kura>,
     ) -> Result<Arc<Self>, ToriiSccpReplayStartupErrorV1> {
         validate_runtime_config(&config)?;
-        let source = Arc::new(HttpsSccpReplayCheckpointSourceV1::new(
-            config.request_timeout,
-        )?);
+        let source = Arc::new(
+            HttpsSccpReplayCheckpointSourceV1::new(config.request_timeout)
+                .map_err(|_| ToriiSccpReplayStartupErrorV1::Transport)?,
+        );
         let local_authority = Arc::new(CoreKuraSccpReplayLocalAuthorityV1 { state, kura });
         Self::bootstrap_with_components(config, source, local_authority)
     }

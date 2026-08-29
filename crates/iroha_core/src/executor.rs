@@ -324,6 +324,10 @@ fn native_singular_query_access(query: &SingularQueryBox) -> NativeQueryAccess {
         | SingularQueryBox::FindLaneRelayEnvelopeByRef(_)
         | SingularQueryBox::FindFxCorridorPolicyRegistry(_)
         | SingularQueryBox::FindFxCorridorPolicyById(_)
+        | SingularQueryBox::FindSorafsCitizenBondBySerialCommitment(_)
+        | SingularQueryBox::FindSorafsCitizenBondSnapshot(_)
+        | SingularQueryBox::FindSorafsAnonymousServiceEscrowById(_)
+        | SingularQueryBox::FindSorafsAnonymousJurorCandidacy(_)
         | SingularQueryBox::FindNftById(_) => NativeQueryAccess::AllLedger,
     }
 }
@@ -11142,6 +11146,26 @@ mod tests {
         AccountId::new(checked_keypair().public_key().clone())
     }
     #[test]
+    fn native_sorafs_anonymity_queries_require_all_ledger_access() {
+        use iroha_data_model::query::sorafs::prelude::{
+            FindSorafsAnonymousJurorCandidacy, FindSorafsAnonymousServiceEscrowById,
+            FindSorafsCitizenBondBySerialCommitment, FindSorafsCitizenBondSnapshot,
+        };
+
+        let queries: [SingularQueryBox; 4] = [
+            FindSorafsCitizenBondBySerialCommitment::new([0x11; 32]).into(),
+            FindSorafsCitizenBondSnapshot.into(),
+            FindSorafsAnonymousServiceEscrowById::new([0x22; 32]).into(),
+            FindSorafsAnonymousJurorCandidacy::new([0x33; 32]).into(),
+        ];
+        for query in &queries {
+            assert_eq!(
+                native_singular_query_access(query),
+                NativeQueryAccess::AllLedger
+            );
+        }
+    }
+    #[test]
     fn native_escrow_query_authorization_uses_query_specific_tags() {
         use iroha_data_model::{
             escrow::AssetEscrowStatus,
@@ -11734,7 +11758,7 @@ mod tests {
         };
 
         let profile =
-            compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0)
+            compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1)
                 .expect("load compiled Jindo profile");
         let activation = profile.activation_record(PrivacyProtocolLifecycleV1::Proposed(
             PrivacyProposedLifecycleV1 {
@@ -11742,7 +11766,7 @@ mod tests {
                 activate_at_height: 2 + crate::privacy::PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1,
             },
         ));
-        let statement = PrivacyStatementV1::IrohaJindoPolynomialCommitmentV0(
+        let statement = PrivacyStatementV1::IrohaJindoPolynomialCommitmentV1(
             IrohaJindoPolynomialCommitmentStatementV1 {
                 context: PrivacyStatementContextV1 {
                     network_id: executor_test_network_id(b"initial-privacy-corridor"),
@@ -11761,6 +11785,8 @@ mod tests {
         );
         let statement_digest = statement.digest().expect("hash Jindo statement fixture");
         let envelope = PrivacyProofEnvelopeV1 {
+            wire_magic: Default::default(),
+            catalog_commitment: Default::default(),
             protocol_id: profile.protocol_id,
             proof_system_id: profile.proof_system_id,
             engine_id: profile.engine_id,
@@ -11771,7 +11797,7 @@ mod tests {
             engine_manifest_digest: profile.engine_manifest_digest,
             statement_digest,
             statement,
-            proof: PrivacyProofV1::IrohaJindoPolynomialCommitmentV0(PrivacyProofBytesV1::new(
+            proof: PrivacyProofV1::IrohaJindoPolynomialCommitmentV1(PrivacyProofBytesV1::new(
                 vec![0x55],
             )),
         };

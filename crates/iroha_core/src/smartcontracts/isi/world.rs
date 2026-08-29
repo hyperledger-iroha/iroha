@@ -11174,7 +11174,7 @@ pub mod isi {
             route_configuration_hash: record.route_configuration_hash,
             finality_height: artifact.public_inputs().finality_height,
             commitment_index: record.commitment_index,
-            finality_block_hash: artifact.public_inputs.finality_block_hash,
+            finality_block_hash: artifact.public_inputs().finality_block_hash,
         })
     }
     #[derive(Debug)]
@@ -23281,8 +23281,6 @@ pub mod isi {
                 &mut stx,
                 "register dataspace-restricted SCCP settlement fixture",
             );
-            Register::account(Account::new(route.settlement.custody_owner.clone()))
-                .expect_execute(&ALICE_ID, &mut stx, "register SCCP custody owner fixture");
             let registry_before = stx.sccp_registry.to_wire();
             let durable_registry_before = stx.world.sccp_registry.get().clone();
             stx.world.internal_event_buf.clear();

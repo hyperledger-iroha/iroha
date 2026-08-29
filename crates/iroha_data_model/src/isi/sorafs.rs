@@ -1081,9 +1081,9 @@ isi! {
         pub case_id: String,
         /// Ballot round identifier.
         pub round_id: String,
-        /// Exact pinned `PoP` snapshot digest expected by the operator.
+        /// Exact pinned citizen-bond snapshot digest expected by the operator.
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
-        pub pop_snapshot_digest: [u8; 32],
+        pub citizen_snapshot_digest: [u8; 32],
         /// Exact latest committed parent hash expected to seed the draw.
         ///
         /// Native execution requires this anchor to match consensus state after
@@ -1807,7 +1807,7 @@ impl FinalizeSorafsModerationSortition {
     pub fn new(
         case_id: String,
         round_id: String,
-        pop_snapshot_digest: [u8; 32],
+        citizen_snapshot_digest: [u8; 32],
         randomness_anchor: [u8; 32],
         proposed_jurors: Vec<AccountId>,
         proposed_waitlist: Vec<AccountId>,
@@ -1815,7 +1815,7 @@ impl FinalizeSorafsModerationSortition {
         Self {
             case_id,
             round_id,
-            pop_snapshot_digest,
+            citizen_snapshot_digest,
             randomness_anchor,
             proposed_jurors,
             proposed_waitlist,
@@ -2230,7 +2230,7 @@ impl_sorafs_decode_from_slice!(RegisterSorafsModerationJurorEligibility {
 impl_sorafs_decode_from_slice!(FinalizeSorafsModerationSortition {
     case_id: String,
     round_id: String,
-    pop_snapshot_digest: [u8; 32],
+    citizen_snapshot_digest: [u8; 32],
     randomness_anchor: [u8; 32],
     proposed_jurors: Vec<AccountId>,
     proposed_waitlist: Vec<AccountId>,
@@ -3058,6 +3058,7 @@ mod tests {
             vec![owner()],
             Vec::new(),
         );
+        assert_eq!(finalize_sortition.citizen_snapshot_digest, [0x65; 32]);
         assert_eq!(finalize_sortition.randomness_anchor, [0x64; 32]);
         assert_slice_roundtrip(finalize_sortition);
         assert_slice_roundtrip(AcceptSorafsModerationJurorAssignment::new(
