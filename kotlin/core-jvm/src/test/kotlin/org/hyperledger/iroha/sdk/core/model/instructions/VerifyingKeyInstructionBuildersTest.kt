@@ -27,13 +27,13 @@ class VerifyingKeyInstructionBuildersTest {
     @Test
     fun `update verifying key instruction accepts only exact registry backends`() {
         val instruction = UpdateVerifyingKeyInstruction(
-            backend = "stark/fri/sha256-goldilocks",
+            backend = "stark/fri/poseidon-x7-goldilocks-6x64-v1",
             name = "stark-proof",
-            record = sampleRecord("stark/fri/sha256-goldilocks"),
+            record = sampleRecord("stark/fri/poseidon-x7-goldilocks-6x64-v1"),
         )
 
         assertEquals("UpdateVerifyingKey", instruction.arguments["action"])
-        assertEquals("stark/fri/sha256-goldilocks", instruction.arguments["backend"])
+        assertEquals("stark/fri/poseidon-x7-goldilocks-6x64-v1", instruction.arguments["backend"])
         assertEquals(instruction, UpdateVerifyingKeyInstruction.fromArguments(instruction.arguments))
     }
 
@@ -60,7 +60,7 @@ class VerifyingKeyInstructionBuildersTest {
 
     @Test
     fun `register and update reject inline records committed with a different backend`() {
-        val mismatchedRecord = sampleRecord("stark/fri/sha256-goldilocks")
+        val mismatchedRecord = sampleRecord("stark/fri/poseidon-x7-goldilocks-6x64-v1")
 
         assertFailsWith<IllegalArgumentException> {
             RegisterVerifyingKeyInstruction("halo2/ipa", "vk", mismatchedRecord)
@@ -187,8 +187,8 @@ class VerifyingKeyInstructionBuildersTest {
         "halo2\uFF0Fipa",
         "halo2/\u200Bipa",
         "h\u0430lo2/ipa",
-        " stark/fri/sha256-goldilocks",
-        "stark/fri/sha256-goldilocks ",
+        " stark/fri/poseidon-x7-goldilocks-6x64-v1",
+        "stark/fri/poseidon-x7-goldilocks-6x64-v1 ",
         "halo2/ipa/orchard",
         "halo2-ipa-orchard",
         "halo2/ipa/penumbra",

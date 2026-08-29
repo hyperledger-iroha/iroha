@@ -1,6 +1,6 @@
-//! Authenticated fixed-size cells for strict SoraNet constant-rate transport.
+//! Authenticated fixed-size cells for strict `SoraNet` constant-rate transport.
 //!
-//! QUIC DATAGRAMs are unreliable and may be reordered.  Strict SoraNet does
+//! QUIC DATAGRAMs are unreliable and may be reordered.  Strict `SoraNet` does
 //! not try to disguise that property as reliable delivery: every scheduled
 //! tick, including cover, consumes the post-handshake record sequence.  A
 //! missing, duplicated, reordered, or unauthenticated cell therefore makes the
@@ -11,7 +11,10 @@ use super::record::{
     DuplexRecordLayer, RECORD_HEADER_LEN, RECORD_TAG_LEN, RecordEndpoint, RecordError, RecordLayer,
     RecordOpener, RecordSealer, RecordStreamContext, RecordStreamKind,
 };
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::{
+    collections::{HashMap, HashSet, VecDeque},
+    time::Duration,
+};
 use thiserror::Error;
 
 /// Exact QUIC DATAGRAM payload size advertised by `snnet.constant_rate` v1.
@@ -21,6 +24,11 @@ pub const CONSTANT_RATE_CELL_HEADER_BYTES: usize = 4;
 /// Maximum authenticated record carried by one fixed cell.
 pub const CONSTANT_RATE_CELL_RECORD_BYTES: usize =
     CONSTANT_RATE_CELL_BYTES - CONSTANT_RATE_CELL_HEADER_BYTES;
+/// Maximum number of scheduled cells that a strict receiver accepts ahead of elapsed wall time.
+///
+/// Two ticks tolerate ordinary scheduler and network jitter while preventing an authenticated peer
+/// from turning the fixed-rate receiver into a line-rate record-opening loop.
+pub const CONSTANT_RATE_RECEIVE_EARLY_GRACE_TICKS: u32 = 2;
 
 const CELL_TYPE_DATA: u8 = 1;
 const CELL_CLASS_CONTROL: u8 = 0;
@@ -34,6 +42,52 @@ const CONSTANT_RATE_RECORD_CONTEXT_INDEX: u64 = u64::MAX;
 /// Maximum logical payload in one authenticated strict constant-rate cell.
 pub const CONSTANT_RATE_MAX_PAYLOAD_BYTES: usize =
     CONSTANT_RATE_CELL_RECORD_BYTES - RECORD_HEADER_LEN - RECORD_TAG_LEN - MUX_HEADER_BYTES;
+
+/// Cumulative arrival envelope for a strict constant-rate receiver.
+///
+/// The first observed cell establishes time zero. Cell index `n` is accepted only after elapsed
+/// time plus [`CONSTANT_RATE_RECEIVE_EARLY_GRACE_TICKS`] ticks reaches `n * tick_duration`.
+/// Comparing against the cumulative schedule, instead of requiring a minimum gap between adjacent
+/// arrivals, lets delayed datagrams arrive together without granting a sender an unbounded burst.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConstantRateReceivePacer {
+    tick_duration: Duration,
+    next_cell_index: u128,
+}
+
+impl ConstantRateReceivePacer {
+    /// Construct a receiver pacing guard for a non-zero negotiated tick duration.
+    #[must_use]
+    pub const fn new(tick_duration: Duration) -> Option<Self> {
+        if tick_duration.is_zero() {
+            return None;
+        }
+        Some(Self {
+            tick_duration,
+            next_cell_index: 0,
+        })
+    }
+
+    /// Admit one received cell at the supplied elapsed time since the first cell.
+    ///
+    /// Returns `false` when accepting the cell would put the peer more than two ticks ahead of the
+    /// negotiated cumulative schedule. A rejected observation does not advance the schedule.
+    #[must_use]
+    pub fn admit(&mut self, elapsed_since_first: Duration) -> bool {
+        let tick_nanos = self.tick_duration.as_nanos();
+        let early_grace_nanos =
+            tick_nanos.saturating_mul(u128::from(CONSTANT_RATE_RECEIVE_EARLY_GRACE_TICKS));
+        let maximum_cell_index = elapsed_since_first
+            .as_nanos()
+            .saturating_add(early_grace_nanos)
+            / tick_nanos;
+        if self.next_cell_index > maximum_cell_index {
+            return false;
+        }
+        self.next_cell_index = self.next_cell_index.saturating_add(1);
+        true
+    }
+}
 
 /// Traffic class committed inside every authenticated constant-rate cell.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -80,7 +134,7 @@ impl CellClass {
 pub enum MuxChannel {
     /// An authenticated cover tick with no application payload.
     Cover = 0,
-    /// General SoraNet application payload.
+    /// General `SoraNet` application payload.
     Application = 1,
     /// Exit-adapter request or response payload.
     Exit = 2,
@@ -103,7 +157,7 @@ impl MuxChannel {
     }
 }
 
-/// Logical stream transition flags authenticated by the SoraNet record layer.
+/// Logical stream transition flags authenticated by the `SoraNet` record layer.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct MuxFlags(u8);
 
@@ -627,7 +681,9 @@ impl WireCell {
         let mut encoded = [0_u8; CONSTANT_RATE_CELL_BYTES];
         encoded[0] = CELL_TYPE_DATA;
         encoded[1] = self.class as u8;
-        encoded[2..4].copy_from_slice(&(self.record.len() as u16).to_be_bytes());
+        let record_len =
+            u16::try_from(self.record.len()).expect("the fixed cell record bound fits in a u16");
+        encoded[2..4].copy_from_slice(&record_len.to_be_bytes());
         encoded[4..4 + self.record.len()].copy_from_slice(&self.record);
         encoded
     }
@@ -1323,5 +1379,59 @@ mod tests {
                 expected
             );
         }
+    }
+
+    #[test]
+    fn receive_pacer_allows_only_two_early_cells() {
+        let mut pacing =
+            ConstantRateReceivePacer::new(Duration::from_millis(5)).expect("non-zero tick");
+        assert!(pacing.admit(Duration::ZERO), "anchor cell");
+        assert!(pacing.admit(Duration::ZERO), "first jitter cell");
+        assert!(pacing.admit(Duration::ZERO), "second jitter cell");
+        assert!(
+            !pacing.admit(Duration::ZERO),
+            "a third early cell must exceed the two-tick envelope"
+        );
+    }
+
+    #[test]
+    fn receive_pacer_accepts_exact_rate() {
+        let tick = Duration::from_millis(5);
+        let mut pacing = ConstantRateReceivePacer::new(tick).expect("non-zero tick");
+        for index in 0..32_u32 {
+            assert!(
+                pacing.admit(tick.saturating_mul(index)),
+                "cell {index} follows the exact negotiated cadence"
+            );
+        }
+    }
+
+    #[test]
+    fn receive_pacer_accepts_delayed_coalesced_cells() {
+        let tick = Duration::from_millis(5);
+        let mut pacing = ConstantRateReceivePacer::new(tick).expect("non-zero tick");
+        assert!(pacing.admit(Duration::ZERO));
+        let delayed = tick.saturating_mul(4);
+        for _ in 0..4 {
+            assert!(
+                pacing.admit(delayed),
+                "elapsed time must earn slots for a coalesced delivery"
+            );
+        }
+    }
+
+    #[test]
+    fn receive_pacer_rejects_one_cell_beyond_cumulative_envelope() {
+        let tick = Duration::from_millis(5);
+        let mut pacing = ConstantRateReceivePacer::new(tick).expect("non-zero tick");
+        assert!(pacing.admit(Duration::ZERO));
+        let delayed = tick.saturating_mul(4);
+        for _ in 0..6 {
+            assert!(pacing.admit(delayed));
+        }
+        assert!(
+            !pacing.admit(delayed),
+            "elapsed slots plus the two-tick jitter lead are exhausted"
+        );
     }
 }

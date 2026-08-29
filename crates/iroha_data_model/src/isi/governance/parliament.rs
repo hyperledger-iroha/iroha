@@ -11,6 +11,10 @@ use std::{cmp::Ordering, vec::Vec};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
+pub use crate::governance::types::{
+    PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1, parliament_timed_ovn_required_chunk_blocks_v1,
+};
+
 use crate::{
     governance::types::{
         AssignmentId, BallotAttemptId, BeaconPulseId, BeaconSessionId, BodyElectionAttemptId,

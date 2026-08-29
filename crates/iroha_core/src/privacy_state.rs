@@ -5,9 +5,10 @@
 //! ledger. Every map still participates in the same [`crate::state::StateTransaction`], so a
 //! rejected transaction cannot leave a partial replay marker, commitment, or root behind.
 use iroha_data_model::{
-    AssetDefinitionId,
+    AssetDefinitionId, ChainId, NetworkId,
     account::AccountId,
     asset::AssetBalanceScope,
+    peer::PeerId,
     privacy::{
         ANONYMOUS_PGC_ANONYMITY_SET_SIZES_V1, BOOTLE_LANTERN_MAX_ISSUER_POLICIES_V1,
         BootleLanternIssuerPolicyV1, FCMP_MAX_INPUTS_V1, FCMP_MAX_OUTPUTS_V1,
@@ -15,8 +16,9 @@ use iroha_data_model::{
         IrohaZkX509StarkP256StatementV1, ORCHARD_MAX_ACTIONS_V1, PQ_MASP_MAX_INPUTS_V1,
         PQ_MASP_MAX_OUTPUTS_V1, PRIVACY_ORCHARD_POOL_INITIAL_EPOCH_V1,
         PRIVACY_PGC_BOOTSTRAP_INITIAL_EPOCH_V1, PRIVACY_ZK_ACE_MAX_POLICIES_V1,
-        PrivacyActivationValidationError, PrivacyCommitmentV1, PrivacyConsensusLimitsV1,
-        PrivacyConsensusPolicyV1, PrivacyFcmpKeyImageV1, PrivacyFcmpOutputIdV1,
+        PrivacyActivationValidationError, PrivacyCapabilityRowV1, PrivacyCommitmentV1,
+        PrivacyCompiledProfileResultV1, PrivacyConsensusLimitsV1, PrivacyConsensusPolicyV1,
+        PrivacyExact12QualificationRecordV1, PrivacyFcmpKeyImageV1, PrivacyFcmpOutputIdV1,
         PrivacyFcmpOutputTupleV1, PrivacyFcmpTreeRootV1, PrivacyIssuerIdV1,
         PrivacyNamespaceScopeV1, PrivacyNamespaceV1, PrivacyNullifierV1,
         PrivacyOrchardPoolBootstrapDigestV1, PrivacyOrchardPoolBootstrapV1,
@@ -24,22 +26,23 @@ use iroha_data_model::{
         PrivacyPgcAccountV1, PrivacyPgcBootstrapProofDigestV1, PrivacyPolicyIdV1, PrivacyPoolIdV1,
         PrivacyPoolNamespaceV1, PrivacyProofManagedPoolBootstrapDigestV1,
         PrivacyProofManagedPoolBootstrapV1, PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1,
-        PrivacyProtocolLifecycleV1, PrivacyRootManagementV1, PrivacyRootPublicationDigestV1,
-        PrivacyRootPublicationV1, PrivacyRootRoleV1, PrivacyRootV1, PrivacyStatementDigestV1,
-        PrivacyStatementV1, PrivacyTrustAnchorNamespaceV1, PrivacyTrustAnchorPolicyNamespaceV1,
-        PrivacyVegaIssuerRecordLifecycleV1, PrivacyVegaIssuerRecordV1,
-        PrivacyZkAcePolicyRecordDigestV1, PrivacyZkAcePolicyRecordV1,
-        PrivacyZkAmsIssuerPolicyRecordDigestV1, PrivacyZkAmsKeyImageV1, PrivacyZkAmsPhcHashV1,
-        PrivacyZkAmsRegistryBootstrapDigestV1, PrivacyZkAmsSeedPublicKeyV1,
-        PrivacyZkX509CertificatePolicyRecordDigestV1, PrivacyZkX509CertificatePolicyRecordV1,
-        PrivacyZkX509CrlRecordDigestV1, PrivacyZkX509CrlRecordV1, PrivacyZkX509RecordLifecycleV1,
+        PrivacyProtocolLifecycleV1, PrivacyReleaseArtifactDigestV1, PrivacyRootManagementV1,
+        PrivacyRootPublicationDigestV1, PrivacyRootPublicationV1, PrivacyRootRoleV1, PrivacyRootV1,
+        PrivacyStatementDigestV1, PrivacyStatementV1, PrivacyTrustAnchorNamespaceV1,
+        PrivacyTrustAnchorPolicyNamespaceV1, PrivacyVegaIssuerRecordLifecycleV1,
+        PrivacyVegaIssuerRecordV1, PrivacyZkAcePolicyRecordDigestV1, PrivacyZkAcePolicyRecordV1,
+        PrivacyZkAceReplayNullifierV1, PrivacyZkAmsIssuerPolicyRecordDigestV1,
+        PrivacyZkAmsKeyImageV1, PrivacyZkAmsPhcHashV1, PrivacyZkAmsRegistryBootstrapDigestV1,
+        PrivacyZkAmsSeedPublicKeyV1, PrivacyZkX509CertificatePolicyRecordDigestV1,
+        PrivacyZkX509CertificatePolicyRecordV1, PrivacyZkX509CrlRecordDigestV1,
+        PrivacyZkX509CrlRecordV1, PrivacyZkX509RecordLifecycleV1,
         PrivacyZkX509TrustAnchorRecordDigestV1, PrivacyZkX509TrustAnchorRecordV1,
         VEGA_MAX_ISSUER_RECORD_REVISIONS_PER_LINEAGE_V1, VEGA_MAX_ISSUER_RECORDS_V1,
         ZK_AMS_REGISTRY_BOOTSTRAP_INITIAL_EPOCH_V1, ZK_X509_MAX_CERTIFICATE_POLICY_RECORDS_V1,
         ZK_X509_MAX_CRL_AGE_SECONDS_V1, ZK_X509_MAX_CRL_LINEAGES_V1,
         ZK_X509_MAX_RECORD_REVISIONS_PER_LINEAGE_V1, ZK_X509_MAX_TRUST_ANCHOR_RECORDS_V1,
-        validate_vega_issuer_revocation_v1, validate_vega_issuer_rotation_v1,
-        validate_zk_x509_certificate_policy_revocation_v1,
+        privacy_exact12_syscall_list_digest_v1, validate_vega_issuer_revocation_v1,
+        validate_vega_issuer_rotation_v1, validate_zk_x509_certificate_policy_revocation_v1,
         validate_zk_x509_certificate_policy_rotation_v1,
         validate_zk_x509_trust_anchor_revocation_v1, validate_zk_x509_trust_anchor_rotation_v1,
     },
@@ -74,6 +77,124 @@ impl PrivacyActivationKeyV1 {
     pub const fn protocol_id(self) -> PrivacyProtocolIdV1 {
         self.protocol_id
     }
+}
+
+/// Move-only proof that one activation is backed by the registered Exact12 singleton.
+///
+/// Construction is private to this module so admission callers cannot assert
+/// qualification from lifecycle or caller-supplied digests.
+pub(crate) struct QualifiedPrivacyActivationV1<'a> {
+    activation: &'a PrivacyProtocolActivationRecordV1,
+}
+
+impl<'a> QualifiedPrivacyActivationV1<'a> {
+    /// Borrow the exact qualified activation.
+    #[must_use]
+    pub(crate) const fn activation(&self) -> &'a PrivacyProtocolActivationRecordV1 {
+        self.activation
+    }
+}
+
+/// Resolve one active activation only through full registered Exact12 evidence.
+pub(crate) fn resolve_qualified_privacy_activation_v1<'a>(
+    qualification: Option<&PrivacyExact12QualificationRecordV1>,
+    activations: &'a impl StorageReadOnly<PrivacyActivationKeyV1, PrivacyProtocolActivationRecordV1>,
+    protocol_id: PrivacyProtocolIdV1,
+    committed_height: u64,
+) -> Result<QualifiedPrivacyActivationV1<'a>, String> {
+    let qualification = qualification
+        .ok_or_else(|| "privacy Exact12 production qualification is not registered".to_owned())?;
+    let activation = activations
+        .get(&PrivacyActivationKeyV1::new(protocol_id))
+        .ok_or_else(|| format!("privacy protocol {protocol_id:?} is not registered"))?;
+    let row = PrivacyCapabilityRowV1 {
+        protocol_id,
+        compiled_profile: crate::privacy_profiles::compiled_privacy_profile_snapshot_result_v1(
+            protocol_id,
+        ),
+        activation: Some(*activation),
+    };
+    qualification
+        .validate_protocol_at_snapshot(committed_height, &row)
+        .map_err(|error| {
+            format!("privacy protocol {protocol_id:?} is not production-qualified: {error}")
+        })?;
+    Ok(QualifiedPrivacyActivationV1 { activation })
+}
+
+/// Validate the immutable Exact12 singleton against this binary and target network.
+pub(crate) fn validate_privacy_exact12_qualification_registration_v1(
+    qualification: &PrivacyExact12QualificationRecordV1,
+    chain_id: &ChainId,
+    network_id: NetworkId,
+    committed_height: u64,
+    activations: &impl StorageReadOnly<PrivacyActivationKeyV1, PrivacyProtocolActivationRecordV1>,
+    validator_topology: &[PeerId],
+) -> Result<(), String> {
+    qualification
+        .validate()
+        .map_err(|error| format!("invalid Exact12 qualification evidence: {error}"))?;
+    let deployment = &qualification.deployment_qualification;
+    if &deployment.chain_id != chain_id {
+        return Err("Exact12 qualification chain identifier differs from this chain".to_owned());
+    }
+    if deployment.network_id != network_id || deployment.genesis_hash != *network_id.as_bytes() {
+        return Err("Exact12 qualification network/genesis differs from this chain".to_owned());
+    }
+    if deployment.convergence_height > committed_height {
+        return Err(format!(
+            "Exact12 deployment convergence height {} is after committed height {committed_height}",
+            deployment.convergence_height
+        ));
+    }
+    if validator_topology.len()
+        != iroha_data_model::privacy::PRIVACY_EXACT12_DEPLOYMENT_VALIDATORS_V1
+        || deployment.validator_canaries.len() != validator_topology.len()
+        || deployment
+            .validator_canaries
+            .iter()
+            .zip(validator_topology)
+            .any(|(canary, peer)| &canary.validator != peer.public_key())
+    {
+        return Err(
+            "Exact12 qualification validator roster differs from the four-validator topology"
+                .to_owned(),
+        );
+    }
+    let release = &qualification.release_manifest;
+    let local_abi_hash = PrivacyReleaseArtifactDigestV1::new(ivm::syscalls::compute_abi_hash(
+        ivm::SyscallPolicy::AbiV1,
+    ));
+    if release.abi_version != iroha_data_model::privacy::PRIVACY_EXACT12_ABI_VERSION_V1
+        || release.abi_hash != local_abi_hash
+        || release.syscall_list_digest
+            != privacy_exact12_syscall_list_digest_v1(ivm::syscalls::abi_syscall_list())
+    {
+        return Err("Exact12 qualification ABI-v1 binding differs from this binary".to_owned());
+    }
+    let rows = PrivacyProtocolIdV1::ALL
+        .into_iter()
+        .map(|protocol_id| PrivacyCapabilityRowV1 {
+            protocol_id,
+            compiled_profile: crate::privacy_profiles::compiled_privacy_profile_snapshot_result_v1(
+                protocol_id,
+            ),
+            activation: activations
+                .get(&PrivacyActivationKeyV1::new(protocol_id))
+                .copied(),
+        })
+        .collect::<Vec<_>>();
+    if rows.iter().any(|row| {
+        !matches!(
+            row.compiled_profile,
+            PrivacyCompiledProfileResultV1::Available(_)
+        )
+    }) {
+        return Err("Exact12 qualification requires all twelve compiled profiles".to_owned());
+    }
+    qualification
+        .validate_against_snapshot(committed_height, &rows)
+        .map_err(|error| format!("Exact12 qualification does not match committed state: {error}"))
 }
 /// Deterministic failure while planning scheduled activation promotion.
 #[derive(Clone, Debug, PartialEq, Eq, Error)]
@@ -1788,7 +1909,7 @@ pub(crate) fn privacy_zk_x509_ca_namespace_v1(
     trust_anchor_id: PrivacyIssuerIdV1,
 ) -> Result<PrivacyNamespaceV1, String> {
     let namespace = PrivacyNamespaceV1::new(
-        PrivacyProtocolIdV1::IrohaZkX509StarkP256V0,
+        PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
         PrivacyNamespaceScopeV1::TrustAnchor(PrivacyTrustAnchorNamespaceV1 { trust_anchor_id }),
     );
     namespace
@@ -1802,7 +1923,7 @@ pub(crate) fn privacy_zk_x509_policy_namespace_v1(
     policy_id: PrivacyPolicyIdV1,
 ) -> Result<PrivacyNamespaceV1, String> {
     let namespace = PrivacyNamespaceV1::new(
-        PrivacyProtocolIdV1::IrohaZkX509StarkP256V0,
+        PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
         PrivacyNamespaceScopeV1::TrustAnchorPolicy(PrivacyTrustAnchorPolicyNamespaceV1 {
             trust_anchor_id,
             policy_id,
@@ -1819,7 +1940,7 @@ fn zk_x509_ca_namespace_component_v1(
     namespace
         .validate()
         .map_err(|error| format!("invalid X.509 namespace: {error}"))?;
-    if namespace.protocol_id() != PrivacyProtocolIdV1::IrohaZkX509StarkP256V0 {
+    if namespace.protocol_id() != PrivacyProtocolIdV1::IrohaZkX509StarkP256V1 {
         return Err("X.509 CA state requires the X.509 protocol namespace".to_owned());
     }
     let PrivacyNamespaceScopeV1::TrustAnchor(scope) = namespace.scope() else {
@@ -1833,7 +1954,7 @@ fn zk_x509_policy_namespace_components_v1(
     namespace
         .validate()
         .map_err(|error| format!("invalid X.509 namespace: {error}"))?;
-    if namespace.protocol_id() != PrivacyProtocolIdV1::IrohaZkX509StarkP256V0 {
+    if namespace.protocol_id() != PrivacyProtocolIdV1::IrohaZkX509StarkP256V1 {
         return Err("X.509 policy state requires the X.509 protocol namespace".to_owned());
     }
     let PrivacyNamespaceScopeV1::TrustAnchorPolicy(scope) = namespace.scope() else {
@@ -2125,10 +2246,10 @@ pub(crate) fn validate_privacy_zk_x509_statement_state_v1(
     trusted_block_timestamp_ms: u64,
     consensus_limits: &PrivacyConsensusLimitsV1,
 ) -> Result<(), String> {
-    PrivacyStatementV1::IrohaZkX509StarkP256V0(statement.clone())
+    PrivacyStatementV1::IrohaZkX509StarkP256V1(statement.clone())
         .validate(consensus_limits)
         .map_err(|error| format!("invalid X.509 public statement: {error}"))?;
-    if PrivacyNamespaceV1::from_statement(&PrivacyStatementV1::IrohaZkX509StarkP256V0(
+    if PrivacyNamespaceV1::from_statement(&PrivacyStatementV1::IrohaZkX509StarkP256V1(
         statement.clone(),
     )) != state.namespace()
     {
@@ -2737,7 +2858,7 @@ impl PrivacyProofManagedAccumulatorStateV1 {
         let namespace = bootstrap.namespace();
         let max_outputs = match bootstrap.protocol_id() {
             PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1 => IVM_PRIVATE_NOTE_MAX_OUTPUTS_V1,
-            PrivacyProtocolIdV1::PqMaspStarkV0 => PQ_MASP_MAX_OUTPUTS_V1,
+            PrivacyProtocolIdV1::PqMaspStarkV1 => PQ_MASP_MAX_OUTPUTS_V1,
             PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1 => {
                 return Err("FCMP++ cannot construct a SHA-256 private-note frontier");
             }
@@ -2779,7 +2900,7 @@ impl PrivacyProofManagedAccumulatorStateV1 {
         )?;
         let max_outputs = match self.namespace.protocol_id() {
             PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1 => IVM_PRIVATE_NOTE_MAX_OUTPUTS_V1,
-            PrivacyProtocolIdV1::PqMaspStarkV0 => PQ_MASP_MAX_OUTPUTS_V1,
+            PrivacyProtocolIdV1::PqMaspStarkV1 => PQ_MASP_MAX_OUTPUTS_V1,
             _ => return Err("proof-managed accumulator protocol is invalid"),
         };
         let output_count = u32::try_from(output_commitments.len())
@@ -2874,7 +2995,7 @@ impl PrivacyProofManagedAccumulatorStateV1 {
             PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1 => {
                 u64::from(IVM_PRIVATE_NOTE_MAX_OUTPUTS_V1)
             }
-            PrivacyProtocolIdV1::PqMaspStarkV0 => u64::from(PQ_MASP_MAX_OUTPUTS_V1),
+            PrivacyProtocolIdV1::PqMaspStarkV1 => u64::from(PQ_MASP_MAX_OUTPUTS_V1),
             _ => return Err("proof-managed accumulator protocol is invalid"),
         };
         let minimum_size = origin
@@ -2942,7 +3063,7 @@ impl PrivacyProofManagedPoolAccumulatorStateV1 {
                     .map(Self::Fcmp)
             }
             PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1
-            | PrivacyProtocolIdV1::PqMaspStarkV0 => {
+            | PrivacyProtocolIdV1::PqMaspStarkV1 => {
                 PrivacyProofManagedAccumulatorStateV1::bootstrap(bootstrap, bootstrap_digest)
                     .map(Self::PrivateNote)
             }
@@ -2966,7 +3087,7 @@ impl PrivacyProofManagedPoolAccumulatorStateV1 {
             (
                 Self::PrivateNote(state),
                 PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1
-                | PrivacyProtocolIdV1::PqMaspStarkV0,
+                | PrivacyProtocolIdV1::PqMaspStarkV1,
             ) => state.validate_against_bootstrap(bootstrap, bootstrap_digest, initial_root),
             (Self::Fcmp(_), _) => Err("non-FCMP++ pool carries an FCMP++ curve frontier"),
             (Self::PrivateNote(_), _) => Err("FCMP++ pool carries a foreign SHA-256 note frontier"),
@@ -3266,7 +3387,7 @@ impl PrivacyProofManagedPoolSnapshotV1 {
     pub(crate) fn canonical_pq_masp_bootstrap_for_test(
         bootstrap: PrivacyProofManagedPoolBootstrapV1,
     ) -> Self {
-        Self::canonical_note_bootstrap_for_test(bootstrap, PrivacyProtocolIdV1::PqMaspStarkV0)
+        Self::canonical_note_bootstrap_for_test(bootstrap, PrivacyProtocolIdV1::PqMaspStarkV1)
     }
     #[cfg(test)]
     fn with_note_successor_for_test(
@@ -3329,7 +3450,7 @@ impl PrivacyProofManagedPoolSnapshotV1 {
     }
     #[cfg(test)]
     pub(crate) fn with_pq_masp_successor_for_test(&self, outputs: &[PrivacyCommitmentV1]) -> Self {
-        self.with_note_successor_for_test(outputs, PrivacyProtocolIdV1::PqMaspStarkV0)
+        self.with_note_successor_for_test(outputs, PrivacyProtocolIdV1::PqMaspStarkV1)
     }
     #[cfg(test)]
     pub(crate) fn without_retained_current_root_for_test(&self) -> Self {
@@ -3912,7 +4033,7 @@ pub(crate) fn load_privacy_proof_managed_pool_snapshot_v1(
                 sequence,
             )
         }
-        PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1 | PrivacyProtocolIdV1::PqMaspStarkV0 => {
+        PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1 | PrivacyProtocolIdV1::PqMaspStarkV1 => {
             if commitments
                 .range(PrivacyCommitmentKeyV1::fcmp_output_range(namespace))
                 .next()
@@ -4012,7 +4133,7 @@ pub(crate) fn load_privacy_proof_managed_pool_snapshot_v1(
                     IVM_PRIVATE_NOTE_MAX_OUTPUTS_V1,
                     IVM_PRIVATE_NOTE_MAX_INPUTS_V1,
                 ),
-                PrivacyProtocolIdV1::PqMaspStarkV0 => {
+                PrivacyProtocolIdV1::PqMaspStarkV1 => {
                     (PQ_MASP_MAX_OUTPUTS_V1, PQ_MASP_MAX_INPUTS_V1)
                 }
                 _ => unreachable!("private-note branch checked above"),
@@ -4139,7 +4260,7 @@ pub(crate) fn load_privacy_proof_managed_pool_snapshot_v1(
         .validate_against_bootstrap(bootstrap, bootstrap_digest, initial_root)
         .map_err(|error| format!("proof-managed native frontier is invalid: {error}"))?;
     match namespace.protocol_id() {
-        PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1 | PrivacyProtocolIdV1::PqMaspStarkV0 => {
+        PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1 | PrivacyProtocolIdV1::PqMaspStarkV1 => {
             let state = accumulator_state.private_note().ok_or_else(|| {
                 "proof-managed private-note pool has no compact frontier".to_owned()
             })?;
@@ -4290,7 +4411,7 @@ pub(crate) fn validate_privacy_persisted_state_v1(
         record
             .validate()
             .map_err(|error| format!("invalid privacy commitment provenance: {error}"))?;
-        if key.protocol_id() != PrivacyProtocolIdV1::IrohaZkX509StarkP256V0 {
+        if key.protocol_id() != PrivacyProtocolIdV1::IrohaZkX509StarkP256V1 {
             ensure_protocol_activation(key.protocol_id())?;
         }
     }
@@ -4307,7 +4428,7 @@ pub(crate) fn validate_privacy_persisted_state_v1(
         provenance
             .validate()
             .map_err(|error| format!("invalid privacy root provenance: {error}"))?;
-        if key.namespace().protocol_id() != PrivacyProtocolIdV1::IrohaZkX509StarkP256V0 {
+        if key.namespace().protocol_id() != PrivacyProtocolIdV1::IrohaZkX509StarkP256V1 {
             ensure_activation(key.namespace())?;
         }
         history_by_scope
@@ -4416,7 +4537,7 @@ pub(crate) fn validate_privacy_persisted_state_v1(
                     "duplicate proof-managed pool root scope for {namespace:?}"
                 ));
             }
-        } else if namespace.protocol_id() == PrivacyProtocolIdV1::IrohaZkX509StarkP256V0 {
+        } else if namespace.protocol_id() == PrivacyProtocolIdV1::IrohaZkX509StarkP256V1 {
             let Some((first_key, _)) = history.first() else {
                 return Err("grouped X.509 root history is unexpectedly empty".to_owned());
             };
@@ -4567,7 +4688,7 @@ pub(crate) fn validate_privacy_persisted_state_v1(
             .map_err(|error| format!("invalid privacy root-head key: {error}"))?;
         head.validate()
             .map_err(|error| format!("invalid privacy root-head record: {error}"))?;
-        if key.namespace().protocol_id() != PrivacyProtocolIdV1::IrohaZkX509StarkP256V0 {
+        if key.namespace().protocol_id() != PrivacyProtocolIdV1::IrohaZkX509StarkP256V1 {
             ensure_activation(key.namespace())?;
         }
         if !history_by_scope.contains_key(&(key.namespace(), key.role())) {
@@ -5678,7 +5799,7 @@ pub enum PrivacyNullifierKeyV1 {
         /// Stable authoritative policy identifier.
         policy_id: PrivacyPolicyIdV1,
         /// Canonical nonzero per-action replay nullifier.
-        replay_nullifier: PrivacyNullifierV1,
+        replay_nullifier: PrivacyZkAceReplayNullifierV1,
     },
     /// One consumed ZK-AMS LSAG key image in its exact registry namespace.
     ZkAmsKeyImage {
@@ -5724,7 +5845,7 @@ impl PrivacyNullifierKeyV1 {
     /// Rejects a zero policy id or replay nullifier.
     pub fn zk_ace_replay(
         policy_id: PrivacyPolicyIdV1,
-        replay_nullifier: PrivacyNullifierV1,
+        replay_nullifier: PrivacyZkAceReplayNullifierV1,
     ) -> Result<Self, &'static str> {
         if policy_id.is_zero() {
             return Err("ZK-ACE policy id must be non-zero");
@@ -5768,7 +5889,7 @@ impl PrivacyNullifierKeyV1 {
         namespace
             .validate()
             .map_err(|_| "X.509 certificate nullifier namespace is invalid")?;
-        if namespace.protocol_id() != PrivacyProtocolIdV1::IrohaZkX509StarkP256V0
+        if namespace.protocol_id() != PrivacyProtocolIdV1::IrohaZkX509StarkP256V1
             || !matches!(
                 namespace.scope(),
                 PrivacyNamespaceScopeV1::TrustAnchorPolicy(_)
@@ -5911,9 +6032,9 @@ impl PrivacyNullifierKeyV1 {
     #[must_use]
     pub const fn protocol_id(self) -> PrivacyProtocolIdV1 {
         match self {
-            Self::ZkAceReplay { .. } => PrivacyProtocolIdV1::ZkAcePqAuthorizationV0,
+            Self::ZkAceReplay { .. } => PrivacyProtocolIdV1::ZkAcePqAuthorizationV1,
             Self::ZkAmsKeyImage { .. } => PrivacyProtocolIdV1::IrohaZkAmsV1,
-            Self::ZkX509CertificateNullifier { .. } => PrivacyProtocolIdV1::IrohaZkX509StarkP256V0,
+            Self::ZkX509CertificateNullifier { .. } => PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
             Self::OrchardNullifier { .. } => PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
             Self::FcmpKeyImage { .. } => PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1,
             Self::ProofManagedNullifier { namespace, .. } => namespace.protocol_id(),
@@ -6523,18 +6644,18 @@ impl PrivacyCommitmentKeyV1 {
     #[must_use]
     pub const fn protocol_id(self) -> PrivacyProtocolIdV1 {
         match self {
-            Self::ZkAcePolicy { .. } => PrivacyProtocolIdV1::ZkAcePqAuthorizationV0,
+            Self::ZkAcePolicy { .. } => PrivacyProtocolIdV1::ZkAcePqAuthorizationV1,
             Self::BootleLanternIssuerPolicy { .. } => {
                 PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1
             }
-            Self::VegaIssuerRevision { .. } => PrivacyProtocolIdV1::VegaExistingCredentialZkV0,
+            Self::VegaIssuerRevision { .. } => PrivacyProtocolIdV1::VegaExistingCredentialZkV1,
             Self::OrchardPoolState { .. } => PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
             Self::ProofManagedPoolConfig { namespace }
             | Self::ProofManagedPoolCommitment { namespace, .. }
             | Self::FcmpOutput { namespace, .. } => namespace.protocol_id(),
             Self::ZkX509TrustAnchorRevision { .. }
             | Self::ZkX509CertificatePolicyRevision { .. }
-            | Self::ZkX509CrlCurrent { .. } => PrivacyProtocolIdV1::IrohaZkX509StarkP256V0,
+            | Self::ZkX509CrlCurrent { .. } => PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
             Self::ZkAmsIssuerPolicyRecord { .. }
             | Self::ZkAmsPhc { .. }
             | Self::ZkAmsSeedKey { .. } => PrivacyProtocolIdV1::IrohaZkAmsV1,
@@ -6677,14 +6798,14 @@ pub(crate) fn proof_managed_pool_root_role_v1(
     let role = match namespace.protocol_id() {
         PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1 => PrivacyRootRoleV1::OutputSet,
         PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1 => PrivacyRootRoleV1::ProgramState,
-        PrivacyProtocolIdV1::PqMaspStarkV0 => PrivacyRootRoleV1::NoteCommitmentAnchor,
-        PrivacyProtocolIdV1::ZkAcePqAuthorizationV0
+        PrivacyProtocolIdV1::PqMaspStarkV1 => PrivacyRootRoleV1::NoteCommitmentAnchor,
+        PrivacyProtocolIdV1::ZkAcePqAuthorizationV1
         | PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1
         | PrivacyProtocolIdV1::VeRangeTransparentRangeV1
         | PrivacyProtocolIdV1::IrohaZkAmsV1
-        | PrivacyProtocolIdV1::VegaExistingCredentialZkV0
-        | PrivacyProtocolIdV1::IrohaZkX509StarkP256V0
-        | PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0
+        | PrivacyProtocolIdV1::VegaExistingCredentialZkV1
+        | PrivacyProtocolIdV1::IrohaZkX509StarkP256V1
+        | PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1
         | PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1
         | PrivacyProtocolIdV1::OrchardHalo2ActionsV1 => {
             return Err("namespace is not a proof-managed FCMP++, private-IVM, or PQ-MASP pool");
@@ -6714,7 +6835,7 @@ fn validate_proof_managed_pool_protocol_v1(
         protocol_id,
         PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1
             | PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1
-            | PrivacyProtocolIdV1::PqMaspStarkV0
+            | PrivacyProtocolIdV1::PqMaspStarkV1
     ) {
         Ok(())
     } else {
@@ -7027,7 +7148,7 @@ impl PrivacyRootProvenanceV1 {
         namespace
             .validate()
             .map_err(|_| "X.509 CA-root namespace is invalid")?;
-        if namespace.protocol_id() != PrivacyProtocolIdV1::IrohaZkX509StarkP256V0 {
+        if namespace.protocol_id() != PrivacyProtocolIdV1::IrohaZkX509StarkP256V1 {
             return Err("X.509 CA-root provenance requires the X.509 protocol namespace");
         }
         let PrivacyNamespaceScopeV1::TrustAnchor(scope) = namespace.scope() else {
@@ -7207,7 +7328,7 @@ impl PrivacyRootProvenanceV1 {
                 IVM_PRIVATE_NOTE_MAX_INPUTS_V1,
                 IVM_PRIVATE_NOTE_MAX_OUTPUTS_V1,
             ),
-            PrivacyProtocolIdV1::PqMaspStarkV0 => (PQ_MASP_MAX_INPUTS_V1, PQ_MASP_MAX_OUTPUTS_V1),
+            PrivacyProtocolIdV1::PqMaspStarkV1 => (PQ_MASP_MAX_INPUTS_V1, PQ_MASP_MAX_OUTPUTS_V1),
             _ => return Err("unsupported proof-managed pool protocol"),
         };
         if nullifier_count == 0 || nullifier_count > max_nullifiers {
@@ -9014,10 +9135,10 @@ pub(crate) const PRIVACY_ROOT_RETENTION_ANCHORED_PROTOCOLS_V1: [PrivacyProtocolI
     PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
     PrivacyProtocolIdV1::IrohaZkAmsV1,
     PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
-    PrivacyProtocolIdV1::IrohaZkX509StarkP256V0,
+    PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
     PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1,
     PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
-    PrivacyProtocolIdV1::PqMaspStarkV0,
+    PrivacyProtocolIdV1::PqMaspStarkV1,
 ];
 const fn privacy_root_history_supports_retention_anchor_v1(
     protocol_id: PrivacyProtocolIdV1,
@@ -9035,7 +9156,7 @@ const fn privacy_root_history_supports_retention_anchor_v1(
             PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
             PrivacyRootRoleV1::NoteCommitmentAnchor
         ) | (
-            PrivacyProtocolIdV1::IrohaZkX509StarkP256V0,
+            PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
             PrivacyRootRoleV1::CertificateAuthorityMembership
         ) | (
             PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1,
@@ -9044,7 +9165,7 @@ const fn privacy_root_history_supports_retention_anchor_v1(
             PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
             PrivacyRootRoleV1::ProgramState
         ) | (
-            PrivacyProtocolIdV1::PqMaspStarkV0,
+            PrivacyProtocolIdV1::PqMaspStarkV1,
             PrivacyRootRoleV1::NoteCommitmentAnchor
         )
     )
@@ -9214,8 +9335,9 @@ mod tests {
         PrivacyVegaMdlDigestAlgorithmV1, PrivacyVegaMdlNamespaceV1,
         PrivacyVegaMdlSignatureAlgorithmV1, PrivacyVerifierDigestV1, PrivacyX509CrlDerDigestV1,
         PrivacyX509CrlIssuerSpkiDigestV1, PrivacyX509ExtendedKeyUsageV1, PrivacyX509KeyUsageV1,
-        PrivacyX509TrustStoreDigestV1, PrivacyZkAcePolicyLifecycleV1,
-        PrivacyZkAcePolicyRecordDigestV1, PrivacyZkAcePolicyRecordV1, PrivacyZkAmsKeyImageV1,
+        PrivacyX509TrustStoreDigestV1, PrivacyZkAceIdentityCommitmentV1,
+        PrivacyZkAcePolicyLifecycleV1, PrivacyZkAcePolicyRecordDigestV1,
+        PrivacyZkAcePolicyRecordV1, PrivacyZkAceReplayNullifierV1, PrivacyZkAmsKeyImageV1,
         PrivacyZkAmsRegistryIdV1, PrivacyZkX509CertificatePolicyRecordDigestV1,
         PrivacyZkX509CrlRecordDigestV1, PrivacyZkX509CrlRecordV1,
         PrivacyZkX509DisclosedAttributeV1, PrivacyZkX509TrustAnchorRecordDigestV1,
@@ -9227,6 +9349,26 @@ mod tests {
     use mv::{json::JsonKeyCodec, storage::Storage};
     use p256::{ProjectivePoint, Scalar, elliptic_curve::Group};
     use std::str::FromStr as _;
+
+    #[test]
+    fn qualified_activation_resolver_rejects_missing_singleton_evidence() {
+        let activations =
+            Storage::<PrivacyActivationKeyV1, PrivacyProtocolActivationRecordV1>::new();
+        let error = match resolve_qualified_privacy_activation_v1(
+            None,
+            &activations.view(),
+            PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
+            1,
+        ) {
+            Ok(_) => panic!("missing Exact12 evidence must never produce a qualified activation"),
+            Err(error) => error,
+        };
+        assert_eq!(
+            error,
+            "privacy Exact12 production qualification is not registered"
+        );
+    }
+
     macro_rules! assert_variant_field_corruptions {
         (
             $record:ident as $variant:path;
@@ -9387,7 +9529,8 @@ mod tests {
         allowlist.sort_unstable();
         PrivacyZkAcePolicyRecordV1::new(
             policy_id,
-            PrivacyCommitmentV1::new(nonzero(13)),
+            PrivacyZkAceIdentityCommitmentV1::new([13; 6])
+                .expect("small fixture words are canonical"),
             PrivacyPolicyDigestV1::new(nonzero(14)),
             1,
             AssetDefinitionId::derive_from_components(
@@ -9479,7 +9622,7 @@ mod tests {
     }
     fn vega_namespace() -> PrivacyNamespaceV1 {
         PrivacyNamespaceV1::new(
-            PrivacyProtocolIdV1::VegaExistingCredentialZkV0,
+            PrivacyProtocolIdV1::VegaExistingCredentialZkV1,
             PrivacyNamespaceScopeV1::Parameter(PrivacyParameterNamespaceV1 {
                 parameter_id: PrivacyParameterIdV1::new(nonzero(40)),
             }),
@@ -9548,7 +9691,7 @@ mod tests {
     }
     fn pq_masp_namespace(pool_byte: u8) -> PrivacyNamespaceV1 {
         PrivacyNamespaceV1::new(
-            PrivacyProtocolIdV1::PqMaspStarkV0,
+            PrivacyProtocolIdV1::PqMaspStarkV1,
             PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 {
                 pool_id: PrivacyPoolIdV1::new(nonzero(pool_byte)),
             }),
@@ -9556,7 +9699,7 @@ mod tests {
     }
     fn x509_namespace() -> PrivacyNamespaceV1 {
         PrivacyNamespaceV1::new(
-            PrivacyProtocolIdV1::IrohaZkX509StarkP256V0,
+            PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
             PrivacyNamespaceScopeV1::TrustAnchorPolicy(PrivacyTrustAnchorPolicyNamespaceV1 {
                 trust_anchor_id: PrivacyIssuerIdV1::new(nonzero(41)),
                 policy_id: PrivacyPolicyIdV1::new(nonzero(42)),
@@ -9565,7 +9708,7 @@ mod tests {
     }
     fn x509_ca_namespace() -> PrivacyNamespaceV1 {
         PrivacyNamespaceV1::new(
-            PrivacyProtocolIdV1::IrohaZkX509StarkP256V0,
+            PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
             PrivacyNamespaceScopeV1::TrustAnchor(PrivacyTrustAnchorNamespaceV1 {
                 trust_anchor_id: PrivacyIssuerIdV1::new(nonzero(41)),
             }),
@@ -10452,8 +10595,8 @@ mod tests {
                     },
                 )
             }
-            PrivacyProtocolIdV1::PqMaspStarkV0 => {
-                PrivacyProofManagedPoolBootstrapV1::PqMaspStarkV0(
+            PrivacyProtocolIdV1::PqMaspStarkV1 => {
+                PrivacyProofManagedPoolBootstrapV1::PqMaspStarkV1(
                     iroha_data_model::privacy::PrivacyPqMaspPoolBootstrapV1 {
                         pool_id: PrivacyPoolIdV1::new(nonzero(0xB1)),
                         asset_definition_id,
@@ -10532,7 +10675,7 @@ mod tests {
         proof_managed_note_persisted_fixture(PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1)
     }
     fn pq_masp_persisted_fixture() -> ProofManagedPersistedFixture {
-        proof_managed_note_persisted_fixture(PrivacyProtocolIdV1::PqMaspStarkV0)
+        proof_managed_note_persisted_fixture(PrivacyProtocolIdV1::PqMaspStarkV1)
     }
     struct FcmpPersistedFixture {
         commitments: Storage<PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1>,
@@ -11226,7 +11369,7 @@ mod tests {
     fn malformed_activation_aborts_entire_promotion_plan_without_mutation() {
         let proposal = activation_proposal();
         let valid_key = PrivacyActivationKeyV1::new(proposal.protocol_id);
-        let mismatched_key = PrivacyActivationKeyV1::new(PrivacyProtocolIdV1::PqMaspStarkV0);
+        let mismatched_key = PrivacyActivationKeyV1::new(PrivacyProtocolIdV1::PqMaspStarkV1);
         let mut activations = Storage::new();
         activations.insert(valid_key, proposal);
         activations.insert(mismatched_key, proposal);
@@ -12120,7 +12263,7 @@ mod tests {
             ),
             (
                 PrivacyNamespaceV1::new(
-                    PrivacyProtocolIdV1::PqMaspStarkV0,
+                    PrivacyProtocolIdV1::PqMaspStarkV1,
                     PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 {
                         pool_id: PrivacyPoolIdV1::new(nonzero(0xBD)),
                     }),
@@ -12430,7 +12573,7 @@ mod tests {
             .expect("canonical Vega issuer key");
         assert_eq!(
             key.protocol_id(),
-            PrivacyProtocolIdV1::VegaExistingCredentialZkV0
+            PrivacyProtocolIdV1::VegaExistingCredentialZkV1
         );
         let state_record = PrivacyStateItemRecordV1::vega_issuer_governance(record, 7)
             .expect("canonical Vega governance provenance");
@@ -12755,12 +12898,13 @@ mod tests {
     fn zk_ace_storage_keys_are_scoped_role_separated_and_nonzero() {
         let policy_a = zk_ace_policy_id(1);
         let policy_b = zk_ace_policy_id(2);
-        let replay = PrivacyNullifierV1::new(nonzero(21));
+        let replay =
+            PrivacyZkAceReplayNullifierV1::new([21; 6]).expect("small fixture words are canonical");
         let policy_key =
             PrivacyCommitmentKeyV1::zk_ace_policy(policy_a).expect("nonzero policy key");
         assert_eq!(
             policy_key.protocol_id(),
-            PrivacyProtocolIdV1::ZkAcePqAuthorizationV0
+            PrivacyProtocolIdV1::ZkAcePqAuthorizationV1
         );
         assert_eq!(policy_key.zk_ams_namespace(), None);
         assert!(PrivacyCommitmentKeyV1::zk_ace_policy(PrivacyPolicyIdV1::new([0; 32])).is_err());
@@ -12774,15 +12918,18 @@ mod tests {
         );
         assert_eq!(
             replay_a.protocol_id(),
-            PrivacyProtocolIdV1::ZkAcePqAuthorizationV0
+            PrivacyProtocolIdV1::ZkAcePqAuthorizationV1
         );
         assert_eq!(replay_a.zk_ams_namespace(), None);
         assert!(
             PrivacyNullifierKeyV1::zk_ace_replay(PrivacyPolicyIdV1::new([0; 32]), replay,).is_err()
         );
         assert!(
-            PrivacyNullifierKeyV1::zk_ace_replay(policy_a, PrivacyNullifierV1::new([0; 32]))
-                .is_err()
+            PrivacyNullifierKeyV1::zk_ace_replay(
+                policy_a,
+                PrivacyZkAceReplayNullifierV1::default(),
+            )
+            .is_err()
         );
         let mut encoded = String::new();
         replay_a.encode_json_key(&mut encoded);
@@ -12796,7 +12943,7 @@ mod tests {
     fn zk_x509_certificate_nullifier_keys_are_policy_scoped_role_closed_and_canonical() {
         let namespace_a = x509_namespace();
         let namespace_b = PrivacyNamespaceV1::new(
-            PrivacyProtocolIdV1::IrohaZkX509StarkP256V0,
+            PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
             PrivacyNamespaceScopeV1::TrustAnchorPolicy(PrivacyTrustAnchorPolicyNamespaceV1 {
                 trust_anchor_id: PrivacyIssuerIdV1::new(nonzero(41)),
                 policy_id: PrivacyPolicyIdV1::new(nonzero(43)),
@@ -12813,7 +12960,7 @@ mod tests {
         );
         assert_eq!(
             key_a.protocol_id(),
-            PrivacyProtocolIdV1::IrohaZkX509StarkP256V0
+            PrivacyProtocolIdV1::IrohaZkX509StarkP256V1
         );
         assert_eq!(
             key_a.zk_x509_certificate_identity(),
@@ -12957,7 +13104,7 @@ mod tests {
             ),
             (
                 pq,
-                PrivacyProtocolIdV1::PqMaspStarkV0,
+                PrivacyProtocolIdV1::PqMaspStarkV1,
                 PrivacyRootRoleV1::NoteCommitmentAnchor,
             ),
         ] {

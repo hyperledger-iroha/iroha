@@ -102,23 +102,21 @@ final class Halo2PastaTests: XCTestCase {
         }
     }
 
-    func testIPAParametersReadAndCommitUseIrohaLayout() throws {
-        let generator = VestaAffine.generator
-        let g = (1...4).map { generator.multiplied(by: PastaFp(UInt64($0))) }
-        let gLagrange = (5...8).map { generator.multiplied(by: PastaFp(UInt64($0))) }
-        let params = try Halo2IPAParameters(
-            k: 2,
-            g: g,
-            gLagrange: gLagrange,
-            w: generator.multiplied(by: PastaFp(9)),
-            u: generator.multiplied(by: PastaFp(10))
+    func testIPAParametersReadAndCommitUseCanonicalIrohaLayout() throws {
+        let params = try Halo2IPAParameters.generated(expectedK: 2, maximumK: 2)
+        XCTAssertEqual(
+            try Halo2IPAParameters.read(
+                from: params.serialized(),
+                expectedK: 2,
+                maximumK: 2
+            ),
+            params
         )
-        XCTAssertEqual(try Halo2IPAParameters.read(from: params.serialized()), params)
 
         let coefficients = [PastaFp(1), PastaFp(2), PastaFp(3), PastaFp(4)]
         let blind = PastaFp(5)
         var expectedScalars = coefficients
-        var expectedBases = g
+        var expectedBases = params.g
         expectedScalars.append(blind)
         expectedBases.append(params.w)
         XCTAssertEqual(
@@ -129,56 +127,106 @@ final class Halo2PastaTests: XCTestCase {
     }
 
     func testIPAParametersRejectMalformedEncodingsAndLengths() throws {
-        let generator = VestaAffine.generator
-        XCTAssertThrowsError(try Halo2IPAParameters.generated(k: 32)) { error in
+        XCTAssertThrowsError(
+            try Halo2IPAParameters.generated(expectedK: 32, maximumK: 31)
+        ) { error in
             XCTAssertEqual(error as? Halo2IPAError, .invalidK(32))
         }
-        XCTAssertThrowsError(try Halo2IPAParameters(
-            k: 2,
-            g: [generator, generator, generator],
-            gLagrange: [generator, generator, generator, generator],
-            w: generator,
-            u: generator
-        )) { error in
-            XCTAssertEqual(error as? Halo2IPAError, .invalidPointCount(expected: 4, actual: 3))
+        XCTAssertThrowsError(
+            try Halo2IPAParameters.generated(expectedK: 2, maximumK: 1)
+        ) { error in
+            XCTAssertEqual(
+                error as? Halo2IPAError,
+                .kExceedsMaximum(k: 2, maximum: 1)
+            )
+        }
+        XCTAssertThrowsError(
+            try Halo2IPAParameters.generated(expectedK: 31, maximumK: 8)
+        ) { error in
+            XCTAssertEqual(
+                error as? Halo2IPAError,
+                .kExceedsMaximum(k: 31, maximum: 8)
+            )
         }
 
-        let params = try Halo2IPAParameters.generated(k: 1)
+        let params = try Halo2IPAParameters.generated(expectedK: 1, maximumK: 1)
         XCTAssertThrowsError(try params.commitLagrange(evaluations: [PastaFp.one], blind: .zero)) { error in
             XCTAssertEqual(error as? Halo2IPAError, .invalidPolynomialLength(expected: 2, actual: 1))
         }
 
-        XCTAssertThrowsError(try Halo2IPAParameters.read(from: Data([0, 0, 0]))) { error in
+        XCTAssertThrowsError(
+            try Halo2IPAParameters.read(
+                from: Data([0, 0, 0]),
+                expectedK: 1,
+                maximumK: 1
+            )
+        ) { error in
             XCTAssertEqual(error as? Halo2IPAError, .truncatedParameters)
         }
 
         var invalidK = Data()
         Self.appendUInt32LE(32, to: &invalidK)
-        XCTAssertThrowsError(try Halo2IPAParameters.read(from: invalidK)) { error in
+        XCTAssertThrowsError(
+            try Halo2IPAParameters.read(from: invalidK, expectedK: 1, maximumK: 1)
+        ) { error in
             XCTAssertEqual(error as? Halo2IPAError, .invalidK(32))
+        }
+
+        var overBudgetHeaderOnly = Data()
+        Self.appendUInt32LE(31, to: &overBudgetHeaderOnly)
+        XCTAssertThrowsError(
+            try Halo2IPAParameters.read(
+                from: overBudgetHeaderOnly,
+                expectedK: 1,
+                maximumK: 1
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? Halo2IPAError,
+                .kExceedsMaximum(k: 31, maximum: 1)
+            )
         }
 
         var identityPointParameters = Data()
         Self.appendUInt32LE(0, to: &identityPointParameters)
         identityPointParameters.append(Data(repeating: 0, count: 32 * 4))
-        XCTAssertThrowsError(try Halo2IPAParameters.read(from: identityPointParameters)) { error in
+        XCTAssertThrowsError(
+            try Halo2IPAParameters.read(
+                from: identityPointParameters,
+                expectedK: 0,
+                maximumK: 0
+            )
+        ) { error in
             XCTAssertEqual(error as? Halo2IPAError, .invalidPointEncoding)
         }
 
         var trailingByteParameters = params.serialized()
         trailingByteParameters.append(0)
-        XCTAssertThrowsError(try Halo2IPAParameters.read(from: trailingByteParameters)) { error in
+        XCTAssertThrowsError(
+            try Halo2IPAParameters.read(
+                from: trailingByteParameters,
+                expectedK: 1,
+                maximumK: 1
+            )
+        ) { error in
             XCTAssertEqual(error as? Halo2IPAError, .invalidPointEncoding)
         }
     }
 
     func testZeroRoundIPAParametersRoundTripAndCommit() throws {
-        let params = try Halo2IPAParameters.generated(k: 0)
+        let params = try Halo2IPAParameters.generated(expectedK: 0, maximumK: 0)
         XCTAssertEqual(params.k, 0)
         XCTAssertEqual(params.n, 1)
         XCTAssertEqual(params.serialized().count, 132)
         XCTAssertEqual(params.gLagrange, params.g)
-        XCTAssertEqual(try Halo2IPAParameters.read(from: params.serialized()), params)
+        XCTAssertEqual(
+            try Halo2IPAParameters.read(
+                from: params.serialized(),
+                expectedK: 0,
+                maximumK: 0
+            ),
+            params
+        )
 
         let coefficient = PastaFp(21)
         let evaluation = PastaFp(23)
@@ -212,87 +260,124 @@ final class Halo2PastaTests: XCTestCase {
     }
 
     func testZeroRoundIPAParametersRejectMalformedSerializedPayloads() throws {
-        let params = try Halo2IPAParameters.generated(k: 0)
+        let params = try Halo2IPAParameters.generated(expectedK: 0, maximumK: 0)
 
         var truncated = params.serialized()
         truncated.removeLast()
-        XCTAssertThrowsError(try Halo2IPAParameters.read(from: truncated)) { error in
+        XCTAssertThrowsError(
+            try Halo2IPAParameters.read(from: truncated, expectedK: 0, maximumK: 0)
+        ) { error in
             XCTAssertEqual(error as? Halo2IPAError, .truncatedParameters)
         }
 
         var trailingByte = params.serialized()
         trailingByte.append(0)
-        XCTAssertThrowsError(try Halo2IPAParameters.read(from: trailingByte)) { error in
+        XCTAssertThrowsError(
+            try Halo2IPAParameters.read(from: trailingByte, expectedK: 0, maximumK: 0)
+        ) { error in
             XCTAssertEqual(error as? Halo2IPAError, .invalidPointEncoding)
         }
 
         var identityGenerator = params.serialized()
         identityGenerator.replaceSubrange(4..<36, with: Data(repeating: 0, count: 32))
-        XCTAssertThrowsError(try Halo2IPAParameters.read(from: identityGenerator)) { error in
+        XCTAssertThrowsError(
+            try Halo2IPAParameters.read(from: identityGenerator, expectedK: 0, maximumK: 0)
+        ) { error in
             XCTAssertEqual(error as? Halo2IPAError, .invalidPointEncoding)
         }
 
         var identityLagrangeGenerator = params.serialized()
         identityLagrangeGenerator.replaceSubrange(36..<68, with: Data(repeating: 0, count: 32))
-        XCTAssertThrowsError(try Halo2IPAParameters.read(from: identityLagrangeGenerator)) { error in
+        XCTAssertThrowsError(
+            try Halo2IPAParameters.read(
+                from: identityLagrangeGenerator,
+                expectedK: 0,
+                maximumK: 0
+            )
+        ) { error in
             XCTAssertEqual(error as? Halo2IPAError, .invalidPointEncoding)
         }
 
         var identityW = params.serialized()
         identityW.replaceSubrange(68..<100, with: Data(repeating: 0, count: 32))
-        XCTAssertThrowsError(try Halo2IPAParameters.read(from: identityW)) { error in
+        XCTAssertThrowsError(
+            try Halo2IPAParameters.read(from: identityW, expectedK: 0, maximumK: 0)
+        ) { error in
             XCTAssertEqual(error as? Halo2IPAError, .invalidPointEncoding)
         }
 
         var identityU = params.serialized()
         identityU.replaceSubrange(100..<132, with: Data(repeating: 0, count: 32))
-        XCTAssertThrowsError(try Halo2IPAParameters.read(from: identityU)) { error in
+        XCTAssertThrowsError(
+            try Halo2IPAParameters.read(from: identityU, expectedK: 0, maximumK: 0)
+        ) { error in
             XCTAssertEqual(error as? Halo2IPAError, .invalidPointEncoding)
         }
     }
 
-    func testZeroRoundIPAParametersRejectConstructorLengthMismatches() throws {
+    func testIPAParametersRejectKnownLogCollisionAndNonCanonicalBases() throws {
         let generator = VestaAffine.generator
-        let point = generator.multiplied(by: PastaFp(3))
+        let knownG = generator.multiplied(by: PastaFp(3))
+        let knownW = generator.multiplied(by: PastaFp(7))
+        let coefficient = PastaFp(13)
+        let blind = PastaFp(17)
+        let delta = PastaFp(19)
+        let shiftedCoefficient = coefficient + PastaFp(7) * delta
+        let shiftedBlind = blind - PastaFp(3) * delta
+        let first = VestaProjective.multiscalarMultiply(
+            scalars: [coefficient, blind],
+            bases: [knownG, knownW]
+        )
+        let colliding = VestaProjective.multiscalarMultiply(
+            scalars: [shiftedCoefficient, shiftedBlind],
+            bases: [knownG, knownW]
+        )
+        XCTAssertEqual(first.toAffine(), colliding.toAffine())
+        XCTAssertNotEqual(coefficient, shiftedCoefficient)
 
-        XCTAssertThrowsError(try Halo2IPAParameters(
+        let forged = Self.serializedIPAParameters(
             k: 0,
-            g: [],
-            gLagrange: [point],
-            w: point,
-            u: point
-        )) { error in
-            XCTAssertEqual(error as? Halo2IPAError, .invalidPointCount(expected: 1, actual: 0))
+            g: [knownG],
+            gLagrange: [generator.multiplied(by: PastaFp(5))],
+            w: knownW,
+            u: generator.multiplied(by: PastaFp(11))
+        )
+        XCTAssertThrowsError(
+            try Halo2IPAParameters.read(from: forged, expectedK: 0, maximumK: 0)
+        ) { error in
+            XCTAssertEqual(error as? Halo2IPAError, .nonCanonicalParameters)
+        }
+    }
+
+    func testIPAParametersRejectValidPointMutationsAndKDowngrade() throws {
+        let params = try Halo2IPAParameters.generated(expectedK: 0, maximumK: 0)
+        let replacement = VestaAffine.generator.multiplied(by: PastaFp(3))
+        XCTAssertFalse(
+            [params.g[0], params.gLagrange[0], params.w, params.u].contains(replacement)
+        )
+        for range in [4..<36, 36..<68, 68..<100, 100..<132] {
+            var mutated = params.serialized()
+            mutated.replaceSubrange(range, with: replacement.compressedBytes())
+            XCTAssertThrowsError(
+                try Halo2IPAParameters.read(from: mutated, expectedK: 0, maximumK: 0)
+            ) { error in
+                XCTAssertEqual(error as? Halo2IPAError, .nonCanonicalParameters)
+            }
         }
 
-        XCTAssertThrowsError(try Halo2IPAParameters(
-            k: 0,
-            g: [point],
-            gLagrange: [],
-            w: point,
-            u: point
-        )) { error in
-            XCTAssertEqual(error as? Halo2IPAError, .invalidPointCount(expected: 1, actual: 0))
-        }
-
-        XCTAssertThrowsError(try Halo2IPAParameters(
-            k: 0,
-            g: [point, generator.multiplied(by: PastaFp(5))],
-            gLagrange: [point],
-            w: point,
-            u: point
-        )) { error in
-            XCTAssertEqual(error as? Halo2IPAError, .invalidPointCount(expected: 1, actual: 2))
-        }
-
-        XCTAssertThrowsError(try Halo2IPAParameters(
-            k: 0,
-            g: [point],
-            gLagrange: [point, generator.multiplied(by: PastaFp(7))],
-            w: point,
-            u: point
-        )) { error in
-            XCTAssertEqual(error as? Halo2IPAError, .invalidPointCount(expected: 1, actual: 2))
+        var downgradeHeaderOnly = Data()
+        Self.appendUInt32LE(0, to: &downgradeHeaderOnly)
+        XCTAssertThrowsError(
+            try Halo2IPAParameters.read(
+                from: downgradeHeaderOnly,
+                expectedK: 1,
+                maximumK: 1
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? Halo2IPAError,
+                .unexpectedK(expected: 1, actual: 0)
+            )
         }
     }
 
@@ -300,19 +385,14 @@ final class Halo2PastaTests: XCTestCase {
         let expected = try Self.hex("""
         0300000045065ed079bf389758f591131095ef419310e8c708a805852b9b77bed8c7ecbde0c0802686d3ed571f7f3399526b24460b16ace461ebda9dcfe6e5b7b298c18cd27962962ce9ed2b87ae4c95462914917a9da0295f593956c1a76adca2ebc394a74f2af0a526eb437ebb22c416a78fda0a275a2f2756115e51248f7c5a7acdaca3c70c4c2497a714ebe96b6192bf940a13a277a6a7c4152a3524988d86be181bc887e3240ff4de618fb8531a447b4f469f50a8ac35fe905da8b8e8732e527eb8b7e796477bd8c4fe4b9ef9806c39cb32ed5558ef9d8c582909779eec700e259a6787540156e67c55fba03e961d98971ccd6bf71c4edd0d80d4d7aec06f9cdb0a1d499756f70cf0deb7b52b1b0def41337e091269c9bcd46334f97a05842a0f0105c58c4a440e77a80e25f3dd162f2b74d6866003b664d1c3ddd6a185c3309314dd77de397f82818f5b36495c402dbb92096a5fc5f8b73210ac79f9b8af3e7ab9cd97784c9657aeefb68194c1546984ae653ba1e4abfc06e887990db451c7cd3227cdb3ef3e31a17568c8953cffba5a911f7c2020cdde94c8b96d35d5eeb7f6021ad59e266061b96ab8968ac8e547138a9f47b9186eddf13ad329d0921707de14fe16f4009d2fa0c76524113ba0796a5f512d5bf2acdd92721d841139fd5b242d3904ea829062811fcf825218a681c7881caa753008c9a8aecd1f8cc600b410907520d96f3e5cd41760367151608b54821883c10c4b9a4ff2beae227bef94bcab379dc4dcfdbf61ccc7d5a0bb9759acf611694f24d0c040f249bad30a83b1a897
         """)
-        XCTAssertEqual(try Halo2IPAParameters.generated(k: 3).serialized(), expected)
+        XCTAssertEqual(
+            try Halo2IPAParameters.generated(expectedK: 3, maximumK: 3).serialized(),
+            expected
+        )
     }
 
     func testIPAOpeningProofVerifiesNativeTranscript() throws {
-        let generator = VestaAffine.generator
-        let g = (1...8).map { generator.multiplied(by: PastaFp(UInt64($0))) }
-        let params = try Halo2IPAParameters(
-            k: 3,
-            g: g,
-            gLagrange: g,
-            w: generator.multiplied(by: PastaFp(11)),
-            u: generator.multiplied(by: PastaFp(12))
-        )
+        let params = try Halo2IPAParameters.generated(expectedK: 3, maximumK: 3)
         let polynomial = (1...8).map { PastaFp(UInt64($0 * 3 + 1)) }
         var rng = SeededGenerator(state: 0x0123_4567_89ab_cdef)
         let proof = try Halo2IPAOpeningProof.create(
@@ -507,7 +587,7 @@ final class Halo2PastaTests: XCTestCase {
     }
 
     func testZeroRoundGeneratedIPAOpeningProofUsesPublicCreateOverload() throws {
-        let params = try Halo2IPAParameters.generated(k: 0)
+        let params = try Halo2IPAParameters.generated(expectedK: 0, maximumK: 0)
         let proof = try Halo2IPAOpeningProof.create(
             params: params,
             polynomial: [PastaFp(41)],
@@ -1137,9 +1217,13 @@ final class Halo2PastaTests: XCTestCase {
     }
 
     func testIPAOpeningProofVerifiesRustHalo2Vector() throws {
-        let params = try Halo2IPAParameters.read(from: try Self.hex("""
+        let params = try Halo2IPAParameters.read(
+            from: try Self.hex("""
         0300000045065ed079bf389758f591131095ef419310e8c708a805852b9b77bed8c7ecbde0c0802686d3ed571f7f3399526b24460b16ace461ebda9dcfe6e5b7b298c18cd27962962ce9ed2b87ae4c95462914917a9da0295f593956c1a76adca2ebc394a74f2af0a526eb437ebb22c416a78fda0a275a2f2756115e51248f7c5a7acdaca3c70c4c2497a714ebe96b6192bf940a13a277a6a7c4152a3524988d86be181bc887e3240ff4de618fb8531a447b4f469f50a8ac35fe905da8b8e8732e527eb8b7e796477bd8c4fe4b9ef9806c39cb32ed5558ef9d8c582909779eec700e259a6787540156e67c55fba03e961d98971ccd6bf71c4edd0d80d4d7aec06f9cdb0a1d499756f70cf0deb7b52b1b0def41337e091269c9bcd46334f97a05842a0f0105c58c4a440e77a80e25f3dd162f2b74d6866003b664d1c3ddd6a185c3309314dd77de397f82818f5b36495c402dbb92096a5fc5f8b73210ac79f9b8af3e7ab9cd97784c9657aeefb68194c1546984ae653ba1e4abfc06e887990db451c7cd3227cdb3ef3e31a17568c8953cffba5a911f7c2020cdde94c8b96d35d5eeb7f6021ad59e266061b96ab8968ac8e547138a9f47b9186eddf13ad329d0921707de14fe16f4009d2fa0c76524113ba0796a5f512d5bf2acdd92721d841139fd5b242d3904ea829062811fcf825218a681c7881caa753008c9a8aecd1f8cc600b410907520d96f3e5cd41760367151608b54821883c10c4b9a4ff2beae227bef94bcab379dc4dcfdbf61ccc7d5a0bb9759acf611694f24d0c040f249bad30a83b1a897
-        """))
+        """),
+            expectedK: 3,
+            maximumK: 3
+        )
         let commitment = try XCTUnwrap(VestaAffine.fromCompressedBytes(try Self.hex(
             "32dd3d6bbd12b8c91e6adef35ea9167cf421235a00d545b997b490adcf0ba899"
         )))
@@ -1163,7 +1247,7 @@ final class Halo2PastaTests: XCTestCase {
     }
 
     func testEvaluationDomainFftMatchesDirectEvaluation() throws {
-        let domain = try Halo2EvaluationDomain(k: 3)
+        let domain = try Halo2EvaluationDomain(k: 3, maximumK: 3)
         let coefficients = (0..<domain.n).map { PastaFp(UInt64($0 + 1)) }
         let evaluations = try domain.coeffToLagrange(coefficients)
 
@@ -1180,11 +1264,17 @@ final class Halo2PastaTests: XCTestCase {
     }
 
     func testEvaluationDomainsRejectInvalidParametersAndLengths() throws {
-        XCTAssertThrowsError(try Halo2EvaluationDomain(k: 33)) { error in
+        XCTAssertThrowsError(try Halo2EvaluationDomain(k: 33, maximumK: 32)) { error in
             XCTAssertEqual(error as? Halo2EvaluationDomainError, .invalidK(33))
         }
+        XCTAssertThrowsError(try Halo2EvaluationDomain(k: 31, maximumK: 8)) { error in
+            XCTAssertEqual(
+                error as? Halo2EvaluationDomainError,
+                .kExceedsMaximum(k: 31, maximum: 8)
+            )
+        }
 
-        let domain = try Halo2EvaluationDomain(k: 2)
+        let domain = try Halo2EvaluationDomain(k: 2, maximumK: 2)
         XCTAssertThrowsError(try domain.coeffToLagrange([PastaFp.one])) { error in
             XCTAssertEqual(error as? Halo2EvaluationDomainError, .invalidValueCount(expected: 4, actual: 1))
         }
@@ -1192,16 +1282,75 @@ final class Halo2PastaTests: XCTestCase {
             XCTAssertEqual(error as? Halo2EvaluationDomainError, .invalidValueCount(expected: 4, actual: 2))
         }
 
-        XCTAssertThrowsError(try Halo2ExtendedEvaluationDomain(degree: 1, k: 2)) { error in
+        XCTAssertThrowsError(
+            try Halo2ExtendedEvaluationDomain(
+                degree: 1,
+                k: 2,
+                maximumK: 2,
+                maximumExtendedK: 2
+            )
+        ) { error in
             XCTAssertEqual(error as? Halo2ExtendedEvaluationDomainError, .invalidDegree(1))
         }
-        XCTAssertThrowsError(try Halo2ExtendedEvaluationDomain(degree: 2, k: 33)) { error in
+        XCTAssertThrowsError(
+            try Halo2ExtendedEvaluationDomain(
+                degree: 2,
+                k: 33,
+                maximumK: 32,
+                maximumExtendedK: 32
+            )
+        ) { error in
             XCTAssertEqual(error as? Halo2ExtendedEvaluationDomainError, .invalidK(33))
         }
+        XCTAssertThrowsError(
+            try Halo2ExtendedEvaluationDomain(
+                degree: Int.max,
+                k: 1,
+                maximumK: 1,
+                maximumExtendedK: 32
+            )
+        ) { error in
+            XCTAssertEqual(error as? Halo2ExtendedEvaluationDomainError, .invalidDegree(Int.max))
+        }
+        XCTAssertThrowsError(
+            try Halo2ExtendedEvaluationDomain(
+                degree: 2,
+                k: 31,
+                maximumK: 8,
+                maximumExtendedK: 31
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? Halo2ExtendedEvaluationDomainError,
+                .kExceedsMaximum(k: 31, maximum: 8)
+            )
+        }
+        XCTAssertThrowsError(
+            try Halo2ExtendedEvaluationDomain(
+                degree: 6,
+                k: 3,
+                maximumK: 3,
+                maximumExtendedK: 5
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? Halo2ExtendedEvaluationDomainError,
+                .extendedKExceedsMaximum(required: 6, maximum: 5)
+            )
+        }
 
-        let extended = try Halo2ExtendedEvaluationDomain(degree: 6, k: 3)
+        let extended = try Halo2ExtendedEvaluationDomain(
+            degree: 6,
+            k: 3,
+            maximumK: 3,
+            maximumExtendedK: 6
+        )
         XCTAssertEqual(extended.rotateOmega(PastaFp(7), by: 1), PastaFp(7) * extended.omega)
         XCTAssertEqual(extended.rotateOmega(PastaFp(7), by: -1), PastaFp(7) * extended.omegaInv)
+        XCTAssertEqual(
+            extended.rotateOmega(PastaFp(7), by: Int32.min),
+            PastaFp(7) * extended.omegaInv.powVartime([UInt64(Int32.min.magnitude), 0, 0, 0])
+        )
         XCTAssertThrowsError(try extended.coeffToExtendedPart([PastaFp.one], factor: .one)) { error in
             XCTAssertEqual(error as? Halo2ExtendedEvaluationDomainError, .invalidValueCount(expected: 8, actual: 1))
         }
@@ -1223,7 +1372,12 @@ final class Halo2PastaTests: XCTestCase {
     }
 
     func testExtendedEvaluationDomainPartsRoundTripCoefficients() throws {
-        let domain = try Halo2ExtendedEvaluationDomain(degree: 6, k: 3)
+        let domain = try Halo2ExtendedEvaluationDomain(
+            degree: 6,
+            k: 3,
+            maximumK: 3,
+            maximumExtendedK: 6
+        )
         let coefficients = (0..<domain.n).map { PastaFp(UInt64($0 * 7 + 3)) }
         let lagrange = try domain.coeffToLagrange(coefficients)
         var point = PastaFp.one
@@ -1247,7 +1401,12 @@ final class Halo2PastaTests: XCTestCase {
     }
 
     func testExtendedEvaluationDomainDividesVanishingPolynomial() throws {
-        let domain = try Halo2ExtendedEvaluationDomain(degree: 6, k: 3)
+        let domain = try Halo2ExtendedEvaluationDomain(
+            degree: 6,
+            k: 3,
+            maximumK: 3,
+            maximumExtendedK: 6
+        )
         let quotientLength = domain.n * domain.quotientPolynomialDegree
         let quotient = (0..<quotientLength).map { PastaFp(UInt64($0 * 5 + 11)) }
         var numerator = [PastaFp](repeating: .zero, count: domain.extendedN)
@@ -1345,15 +1504,28 @@ final class Halo2PastaTests: XCTestCase {
         }
     }
 
+    private static func serializedIPAParameters(
+        k: UInt32,
+        g: [VestaAffine],
+        gLagrange: [VestaAffine],
+        w: VestaAffine,
+        u: VestaAffine
+    ) -> Data {
+        var bytes = Data()
+        appendUInt32LE(k, to: &bytes)
+        for point in g {
+            bytes.append(point.compressedBytes())
+        }
+        for point in gLagrange {
+            bytes.append(point.compressedBytes())
+        }
+        bytes.append(w.compressedBytes())
+        bytes.append(u.compressedBytes())
+        return bytes
+    }
+
     private static func zeroRoundIPAParameters() throws -> Halo2IPAParameters {
-        let generator = VestaAffine.generator
-        return try Halo2IPAParameters(
-            k: 0,
-            g: [generator.multiplied(by: PastaFp(3))],
-            gLagrange: [generator.multiplied(by: PastaFp(5))],
-            w: generator.multiplied(by: PastaFp(7)),
-            u: generator.multiplied(by: PastaFp(11))
-        )
+        try Halo2IPAParameters.generated(expectedK: 0, maximumK: 0)
     }
 
     private static func verifyZeroRoundSamePointMultiOpeningProof(

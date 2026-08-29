@@ -58,6 +58,7 @@ use iroha_core::zk::confidential_v2::{
 use iroha_core::zk::hash_vk;
 use iroha_crypto::{
     Algorithm, ExposedPrivateKey, Hash, HashOf, KeyPair, PrivateKey, PublicKey, Signature,
+    confidential_memo::generate_confidential_memo_keypair_v1 as generate_confidential_memo_native_keypair_v1,
     derive_keyset_from_slice,
     sm::{Sm2PrivateKey, Sm2PublicKey, Sm2Signature, encode_sm2_public_key_payload},
 };
@@ -74,6 +75,7 @@ use iroha_data_model::{
         validate_asset_transfer_availability_reason,
     },
     block::{BlockHeader, consensus::LaneBlockCommitment},
+    confidential::{ConfidentialMemoEnvelopeV1, ConfidentialMemoSuiteV1},
     da::manifest::DaManifestV1,
     domain::{Domain, DomainId, NewDomain},
     escrow::EscrowId,
@@ -631,6 +633,16 @@ pub struct JsKeyPair {
     pub private_key: Buffer,
     /// Optional distinguishing identifier for algorithms that require it (SM2).
     pub distid: Option<String>,
+}
+/// Typed ML-KEM keypair used only by the first-release confidential memo API.
+#[napi(object)]
+pub struct JsConfidentialMemoKeypairV1 {
+    /// Exact confidential-memo suite label.
+    pub suite: String,
+    /// Canonical suite-sized ML-KEM public key.
+    pub public_key: Buffer,
+    /// Canonical suite-sized ML-KEM secret key retained by the local caller.
+    pub secret_key: Buffer,
 }
 /// Canonical Kotodama compilation result envelope returned by the Rust compiler.
 ///
@@ -2052,6 +2064,57 @@ fn decode_instruction_aligned(bytes: &[u8]) -> Result<InstructionBox, norito_cor
         Err(_) => Err(primary_error),
     }
 }
+/// Generate one local ML-KEM keypair for the exact-eight-slot confidential memo API.
+#[napi]
+pub fn generate_confidential_memo_keypair_v1(
+    suite: String,
+) -> napi::Result<JsConfidentialMemoKeypairV1> {
+    let suite = parse_confidential_memo_suite_v1(&suite)?;
+    let keypair =
+        generate_confidential_memo_native_keypair_v1(suite.into()).map_err(norito_to_napi)?;
+    Ok(JsConfidentialMemoKeypairV1 {
+        suite: confidential_memo_suite_label_v1(suite).to_owned(),
+        public_key: Buffer::from(keypair.public_key().to_vec()),
+        secret_key: Buffer::from(keypair.secret_key().to_vec()),
+    })
+}
+
+/// Seal a memo for one to eight typed ML-KEM public keys.
+#[napi]
+pub fn seal_confidential_memo_v1(
+    suite: String,
+    recipient_public_keys: Vec<Buffer>,
+    plaintext: Uint8Array,
+) -> napi::Result<Buffer> {
+    let suite = parse_confidential_memo_suite_v1(&suite)?;
+    let recipients = recipient_public_keys
+        .iter()
+        .map(|key| key.as_ref().to_vec())
+        .collect::<Vec<_>>();
+    let envelope = ConfidentialMemoEnvelopeV1::seal(suite, &recipients, plaintext.as_ref())
+        .map_err(norito_to_napi)?;
+    envelope
+        .encode_wire()
+        .map(Buffer::from)
+        .map_err(norito_to_napi)
+}
+
+/// Open one canonical exact-eight-slot memo with a local ML-KEM secret key.
+#[napi]
+pub fn open_confidential_memo_v1(
+    suite: String,
+    recipient_secret_key: Uint8Array,
+    envelope_wire: Uint8Array,
+) -> napi::Result<Buffer> {
+    let suite = parse_confidential_memo_suite_v1(&suite)?;
+    let envelope =
+        ConfidentialMemoEnvelopeV1::decode_wire(envelope_wire.as_ref()).map_err(norito_to_napi)?;
+    envelope
+        .open(suite, recipient_secret_key.as_ref())
+        .map(Buffer::from)
+        .map_err(norito_to_napi)
+}
+
 /// Derive the confidential key hierarchy from a 32-byte spend key.
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // N-API typed arrays require ownership at the boundary
@@ -2500,6 +2563,26 @@ fn account_address_err(err: AccountAddressError) -> napi::Error {
 }
 fn norito_to_napi<E: fmt::Display>(error: E) -> napi::Error {
     napi::Error::new(napi::Status::GenericFailure, error.to_string())
+}
+fn parse_confidential_memo_suite_v1(value: &str) -> napi::Result<ConfidentialMemoSuiteV1> {
+    match value {
+        "ml-kem-768-xchacha20-poly1305-v1" => {
+            Ok(ConfidentialMemoSuiteV1::MlKem768XChaCha20Poly1305)
+        }
+        "ml-kem-1024-xchacha20-poly1305-v1" => {
+            Ok(ConfidentialMemoSuiteV1::MlKem1024XChaCha20Poly1305)
+        }
+        _ => Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "suite must be exactly ml-kem-768-xchacha20-poly1305-v1 or ml-kem-1024-xchacha20-poly1305-v1",
+        )),
+    }
+}
+const fn confidential_memo_suite_label_v1(suite: ConfidentialMemoSuiteV1) -> &'static str {
+    match suite {
+        ConfidentialMemoSuiteV1::MlKem768XChaCha20Poly1305 => "ml-kem-768-xchacha20-poly1305-v1",
+        ConfidentialMemoSuiteV1::MlKem1024XChaCha20Poly1305 => "ml-kem-1024-xchacha20-poly1305-v1",
+    }
 }
 fn sign_js_transaction(
     builder: TransactionBuilder,
@@ -13346,6 +13429,7 @@ seiyaku Privacy {
             version: PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1,
             committed_height: 3,
             consensus_policy: PrivacyConsensusPolicyV1::taira_default(),
+            qualification: None,
             protocols,
         }
         .exact12_capability_manifest_v1()
@@ -13368,14 +13452,17 @@ seiyaku Privacy {
             .expect("decode canonical Exact12 manifest JSON");
         assert!(json.contains("manifest_digest"));
         assert!(json.contains("operation_schema"));
-        assert!(json.contains("available-experimental"));
-        assert!(json.contains("missing-distribution-wide-knowledge-soundness-evidence"));
+        assert!(json.contains("missing-production-qualification"));
+        assert!(json.contains("qualification"));
+        assert!(!json.contains("production_qualification"));
+        assert!(!json.contains("available-experimental"));
+        assert!(!json.contains("limitation"));
         assert!(
             privacy_require_exact12_capability_tuple_v1(
                 Uint8Array::from(archive.clone()),
                 active_protocol.canonical_label().to_owned(),
             )
-            .expect("exact active local tuple")
+            .is_err()
         );
         assert!(
             privacy_require_exact12_capability_tuple_v1(

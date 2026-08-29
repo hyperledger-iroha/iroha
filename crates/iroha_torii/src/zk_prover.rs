@@ -2651,10 +2651,7 @@ mod tests {
         for backend in [
             "halo2/ipa",
             "halo2/pasta/ivm-execution-v1",
-            "stark/fri",
-            "stark/fri/sha256-goldilocks",
-            "stark/fri/poseidon2-goldilocks",
-            "stark/fri/sha256_goldilocks.v1",
+            "stark/fri/poseidon-x7-goldilocks-6x64-v1",
         ] {
             assert!(
                 backend_allowed(backend, &[]),

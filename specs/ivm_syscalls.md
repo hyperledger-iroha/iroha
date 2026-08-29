@@ -83,13 +83,16 @@ Notes
   logical-limb work.
 - `JSON_BUILD` (`0x01004E`) consumes one compiler-emitted construction schema
   and flattened word table, recursively reads bounded `Option`/`List` handles,
-  sorts object keys canonically, and encodes one `Json` payload. Decimal and
-  quantity values remain exact decimal strings, bytes use lowercase `0x`
-  hex, and no floating-point conversion is used.
+  sorts object keys canonically, and encodes one `Json` payload. Int, decimal,
+  and quantity values remain exact canonical strings, including the complete
+  signed 512-bit int domain; bytes use lowercase `0x` hex, and no
+  floating-point or host integer-width conversion is used.
 - Every `JSON_GET_*` syscall returns a compiler-owned `Option<T>` sum handle;
   missing/wrongly typed fields are `none`. Numeric getters distinguish
-  `JSON_GET_INT`, `JSON_GET_DECIMAL`, and `JSON_GET_QUANTITY`; retired numeric
-  getter names are not part of V1.
+  `JSON_GET_INT`, `JSON_GET_DECIMAL`, and `JSON_GET_QUANTITY` at
+  `0x010160..=0x010162`; all three accept canonical strings only. JSON number
+  tokens are rejected, `0x010163..=0x010165` remain unassigned, and retired
+  numeric getter names are not part of V1.
 - `CORE_QUERY_GET` (`0x010001`) accepts stable entity tag `1..=5` for account,
   asset, asset definition, domain, or NFT plus that family's exact typed ID,
   and returns a compiler-owned `Option<View>` handle. `CORE_QUERY_PAGE`

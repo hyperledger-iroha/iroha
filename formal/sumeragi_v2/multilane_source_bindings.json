@@ -434,7 +434,7 @@
         {
           "path": "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/SumeragiHttpTransportContractTest.kt",
           "required_tokens": [
-            "fun `status and diagnostics reject missing parameterized or ambiguous JSON content types`()",
+            "fun `status and diagnostics accept parameters and reject malformed or ambiguous JSON content types`()",
             "status endpoint must reject a diagnostics-shaped payload",
             "diagnostics endpoint must reject a status-shaped payload"
           ]
@@ -442,7 +442,7 @@
         {
           "path": "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/SumeragiHttpTransportTests.java",
           "required_tokens": [
-            "public void responsesRequireExactContentTypeCanonicalLengthAndBoundedBody()",
+            "public void responsesAcceptParametersAndRejectMalformedContentTypesLengthsAndBodies()",
             "status endpoint must reject a diagnostics-shaped payload",
             "diagnostics endpoint must reject a status-shaped payload"
           ]
@@ -546,7 +546,7 @@
           "path": "scripts/write_sumeragi_v2_release_receipt.py",
           "required_tokens": [
             "\"write_sumeragi_v2_release_receipt_gate_evidence.py\": (",
-            "0654dc5ac1f8235bc66df852947003054d4d17658703ffe72a38be3be352441b",
+            "0d89b39300b4d1b83e28623a75bcabdf31574451dfe68d8f1b67a49afd1dc440",
             "_SDK_SOURCE_CLOSURE_RESOLVER = \"ci/resolve_sumeragi_v2_sdk_source_closure.py\"",
             "_SDK_SOURCE_CLOSURE_MANIFEST = \"ci/sumeragi_v2_sdk_source_closure.json\"",
             "_NATIVE_AMX_GROUPED_SOURCE_CLOSURE_SUITE = \"native-amx-v2-grouped\"",
@@ -674,9 +674,9 @@
             "observed_test_count=34",
             "ExactCertificateCardinalityTests",
             "SumeragiV2WireFixtureTests'",
-            "observed_test_count=43",
+            "observed_test_count=44",
             "--tests org.hyperledger.iroha.sdk.consensus.SumeragiV2WireFixtureTest",
-            "observed_test_count=42",
+            "observed_test_count=43",
             "--tests org.hyperledger.iroha.android.consensus.SumeragiV2WireFixtureTests"
           ]
         },
@@ -2800,11 +2800,18 @@
           "canonical_lane_queue_reservation_group_identity_projection(",
           "replacement.retirement_hash() != Some(self.retirement_hash)",
           "let (action, actor, before, after) = if finalize_release",
-          "match release_mode",
+          "let replacement_disposition = replacement.replica_queue_disposition()",
+          "replacement_disposition != released_disposition.replica_queue_disposition()",
+          "match (release_mode, released_disposition)",
           "AutonomousLaneClaimReleaseAuthorizationMode::QueuePrepared",
           "AutonomousLaneClaimReleaseAuthorizationMode::ReplicaFifo",
-          "if self.actor == self.producer",
+          "if self.actor == self.producer {\n                            return Err(\n                                \"producer cannot use non-Queue replica FIFO release authority\"",
+          "AutonomousLaneClaimReleaseAuthorizationMode::ReplicaDisposition",
+          "AutonomousLaneReleasedClaimDisposition::ReplicaQueueAbsent",
+          "AutonomousLaneReleasedClaimDisposition::ReplicaQueueFifoPreserved",
+          "if self.actor == self.producer {\n                            return Err(\n                                \"producer cannot use replica Queue disposition authority\"",
           "IN_FLIGHT_FIRST_RELEASE_RESERVATION_DIRECT_RELEASED",
+          "disposition.reservation_state()",
           "self.actor,",
           "IN_FLIGHT_FIRST_RELEASE_ACTION_ADVANCE_RELEASED",
           "IN_FLIGHT_FIRST_RELEASE_ACTION_ADVANCE_RELEASE_PENDING",
@@ -3009,10 +3016,18 @@
         "kind": "method",
         "symbol": "Queue::release_barrier_has_exact_fifo_ownership_locked",
         "required_tokens": [
-          "fifo_snapshot_locked()",
+          "self.replica_group_has_byte_exact_ordinary_fifo_ownership_locked(&barrier.ordered_keys)"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/queue.rs",
+        "kind": "method",
+        "symbol": "Queue::replica_group_has_byte_exact_ordinary_fifo_ownership_locked",
+        "required_tokens": [
+          "let fifo = self.fifo_snapshot_locked()",
           "HashMap::with_capacity(fifo.len())",
           "positions.insert(hash, position).is_some()",
-          "barrier.ordered_keys",
+          "for key in ordered_keys",
           "let Some(tx) = self.txs.get(&hash) else",
           "accepted.hash_as_entrypoint() != key.entrypoint_hash",
           "let Some(plan) = self.routing_plans.get(&hash) else",
@@ -3164,9 +3179,15 @@
           "certified_merge_queue_reservation_hashes(",
           "state_block.staged_merge_entry()",
           "staged_merge_queue_reservation_hashes",
-          "self.queue.remove_committed_hashes(",
           ".filter(|entrypoint_hash|",
-          "!staged_merge_queue_reservation_hashes.contains(entrypoint_hash)"
+          "!staged_merge_queue_reservation_hashes.contains(entrypoint_hash)",
+          "globally_bound_durable_claim_hashes(committed_queue_hashes.iter().copied())",
+          "authorize_completed_autonomous_queue_cleanup_for_entrypoints(",
+          "self.network_id,",
+          "&terminal_candidates,",
+          "remove_committed_hashes_with_kura_terminal_authorizations(",
+          "committed_queue_hashes,",
+          "terminal_authorizations,"
         ]
       },
       {
@@ -4117,13 +4138,21 @@
           "let binding_a =",
           "if replacement.retirement_hash() != Some(self.retirement_hash)",
           "let (action, actor, before, after) = if finalize_release",
-          "let (reservation_state, fifo_restored, actor) = match release_mode",
+          "let replacement_disposition = replacement.replica_queue_disposition();",
+          "replacement_disposition != released_disposition.replica_queue_disposition()",
+          "let (reservation_state, fifo_restored, actor) =",
+          "match (release_mode, released_disposition) {",
           "AutonomousLaneClaimReleaseAuthorizationMode::QueuePrepared",
           "AutonomousLaneClaimReleaseAuthorizationMode::ReplicaFifo",
-          "if self.actor == self.producer",
+          "if self.actor == self.producer {\n                            return Err(\n                                \"producer cannot use non-Queue replica FIFO release authority\"",
           "IN_FLIGHT_FIRST_RELEASE_RESERVATION_DIRECT_RELEASED",
           "true,",
           "self.actor,",
+          "AutonomousLaneClaimReleaseAuthorizationMode::ReplicaDisposition",
+          "AutonomousLaneReleasedClaimDisposition::ReplicaQueueAbsent",
+          "AutonomousLaneReleasedClaimDisposition::ReplicaQueueFifoPreserved",
+          "if self.actor == self.producer {\n                            return Err(\n                                \"producer cannot use replica Queue disposition authority\"",
+          "disposition.reservation_state()",
           "IN_FLIGHT_FIRST_RELEASE_ACTION_ADVANCE_RELEASED",
           "IN_FLIGHT_FIRST_RELEASE_ACTION_ADVANCE_RELEASE_PENDING",
           "let projection = ProductionInFlightFirstReleaseTransitionProjection {",
@@ -5223,12 +5252,22 @@
       {
         "path": "crates/iroha_core/src/kura.rs",
         "kind": "method",
+        "symbol": "Kura::durable_mutation_authorized",
+        "required_tokens": [
+          "self.emergency_fast_startup_enabled()",
+          "Error::EmergencyFastAuxiliaryUnavailable",
+          "self.ensure_snapshot_bootstrap_authenticated()?",
+          "self.ensure_canonical_storage_not_poisoned()"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/kura.rs",
+        "kind": "method",
         "symbol": "Kura::start",
         "required_tokens": [
+          "kura.durable_mutation_authorized()?",
           "kura.local_peer_id.get().is_none()",
-          "Error::KuraReplicaLocalPeerUnbound",
-          "kura.ensure_snapshot_bootstrap_authenticated()?",
-          "kura.ensure_canonical_storage_not_poisoned()?"
+          "Error::KuraReplicaLocalPeerUnbound"
         ]
       },
       {
@@ -5267,8 +5306,9 @@
         "kind": "method",
         "symbol": "Kura::new_inner",
         "required_tokens": [
-          "let replica_registry_key_capacity = config",
-          ".replica_advert\n            .validate(config.blocks_in_memory)",
+          "let replica_registry_key_capacity = if config.init_mode == InitMode::Fast {",
+          "NonZeroUsize::MIN",
+          ".replica_advert\n                .validate(config.blocks_in_memory)",
           "Error::InvalidKuraReplicaAdvertConfiguration(error.to_string())",
           "eviction_required_replicas: config.replica_advert.eviction_required_replicas",
           "local_peer_id: OnceLock::new()",
@@ -7465,7 +7505,15 @@
           "symbol": "V2EffectExecutor<SerializedV2Runtime>::lifecycle_decision_apply_dispatch_available",
           "required_tokens": [
             "self.ensure_open()?",
-            "self.pending_work() == 0",
+            "let successor_debt_is_exact = match successor_outputs",
+            "self.pending_lifecycle_output_admissions.is_empty()",
+            "attestation.pending_count() == self.pending_lifecycle_output_admissions.len()",
+            "attestation.exactly_matches_pending_keys(",
+            "attestation.exactly_matches_retransmit_apply(&owned.effect)",
+            "exactly_precedes_periodic_retransmit_apply",
+            "self.pending_work() == self.pending_lifecycle_output_admissions.len()",
+            "successor_debt_is_exact",
+            "self.pending_runner_decision_cleanup.is_none()",
             "self.recovered_decision_fetch_request_index_is_exact_and_empty()",
             "self.retained_effect_batch.is_none()",
             "self.parked_effect_batch.is_none()",
@@ -7480,7 +7528,8 @@
           "symbol": "ProductionLifecycleOwnerV1::dispatch_completion_with_runner_debt_and_required_ordinal",
           "required_tokens": [
             "let executor_available = executor",
-            ".lifecycle_decision_apply_dispatch_available()",
+            ".lifecycle_decision_apply_dispatch_available(",
+            "live_apply_successor_outputs.get(ordinal)",
             "LifecycleCompletionCapacityProbeV1::Apply",
             "executor_available",
             "services.capture_lifecycle_completion_capacity_census(probes)",
@@ -7644,10 +7693,20 @@
           "symbol": "V2EffectExecutor<SerializedV2Runtime>::prepare_lifecycle_decision_apply_completion",
           "required_tokens": [
             "self.ensure_open()?",
+            "preflight_recovered_apply_validate_retry_predecessor",
             "let pending_recovery_is_exact =",
             "authority.exactly_matches_pending_kura_recovery(&self.context, evidence)",
             "let lineage_owner_is_exact =",
+            "let successor_outputs_are_exact =",
+            "attestation.dispatch_key() == authority.dispatch_key()",
+            "attestation.pending_count()",
+            "attestation.exactly_matches_pending_keys(",
+            "self.pending_work() != self.pending_lifecycle_output_admissions.len()",
+            "|| !successor_outputs_are_exact",
+            "self.pending_runner_decision_cleanup.is_some()",
             "self.recovered_decision_fetch_request_index_is_exact_and_empty()",
+            "|| self.retained_effect_batch.is_some()",
+            "|| self.parked_effect_batch.is_some()",
             "|| !pending_recovery_is_exact",
             "|| self.finality_completion.is_some()",
             "|| self.runtime.queued_commands() != 0",
@@ -7660,6 +7719,7 @@
           "kind": "method",
           "symbol": "V2EffectExecutor<SerializedV2Runtime>::commit_lifecycle_decision_apply_finality",
           "required_tokens": [
+            "self.pending_runner_decision_cleanup.is_none()",
             "evidence.stage() == PendingKuraApplyRecoveryStage::ApplicationDispatched",
             "tag == evidence.replay_tag()",
             "artifact.subject == evidence.commit_subject()",
@@ -8041,14 +8101,17 @@
             "drain_lane_relay_ingress(",
             "lane_work.schedule_retransmission()?",
             "dispatch_lane_work_effects(",
-            "let discovery_was_outstanding = if lane_only_completion_barrier {",
+            "let discovery_was_outstanding = if terminal_finalization_fenced {",
             ".terminal_settlement_stops_runtime()",
-            "Ok::<_, V2RunnerError>((executor.ready_to_finish(), false))",
-            "let apply_terminal_settled = producer_claim.apply_terminal_settled();",
-            "if apply_terminal_settled && !ready_to_finish {",
-            "let producer_turn = if apply_terminal_settled {",
-            "if !apply_terminal_settled && (!ready_to_finish || producer_turn.is_some()) {",
-            "if ready_to_finish && !rollover_ready {",
+            "AdvanceExecutorSliceOutcomeV1::Idle",
+            "let terminal_planning_fenced =",
+            "producer_claim.apply_terminal_settled();",
+            "if terminal_planning_fenced && !ready_to_finish {",
+            "let producer_turn = if terminal_planning_fenced {",
+            "if !terminal_planning_fenced && (!ready_to_finish || producer_turn.is_some()) {",
+            "let finalization_ready = if ready_to_finish {",
+            "if ready_to_finish && !finalization_ready {",
+            "if finalization_ready && !rollover_ready {",
             "let mut next_lane_retransmit = deadline_after(height_started_at, retransmit_interval)",
             "service_historical_recovery_tick(&mut lane_work)?",
             "schedule_autonomous_new_view_timeouts",
@@ -8626,8 +8689,8 @@
             "file.seek(SeekFrom::Start(0))",
             ".take(u64::try_from(max_bytes)?.saturating_add(1))",
             ".read_to_end(&mut readback)",
-            "let opened = file",
-            ".metadata()",
+            "let opened = secure_file_metadata::from_file(file)",
+            ".map_err(|error| Error::IO(error, path.to_path_buf()))?",
             "regular_sidecar_metadata_for",
             "readback != expected_bytes",
             "sidecar_file_metadata_unchanged(&metadata.file, &opened)",
@@ -8643,8 +8706,8 @@
             "file.seek(SeekFrom::Start(0))",
             ".take(u64::try_from(max_bytes)?.saturating_add(1))",
             ".read_to_end(&mut readback)",
-            "let opened = file",
-            ".metadata()",
+            "let opened = secure_file_metadata::from_file(file)",
+            ".map_err(|error| Error::IO(error, path.to_path_buf()))?",
             "regular_sidecar_metadata_for",
             "readback != expected_bytes",
             "metadata.canonical_path != current.canonical_path",
@@ -8660,7 +8723,7 @@
           "symbol": "remove_bound_progress_file_if_matches",
           "required_tokens": [
             "path.parent() != Some(immediate.expected_path.as_path())",
-            "let expected_metadata = expected.metadata()?",
+            "let expected_metadata = secure_file_metadata::from_file(expected)?",
             "sidecar_file_metadata_unchanged",
             "rustix::fs::statat",
             "rustix::fs::AtFlags::SYMLINK_NOFOLLOW",
@@ -8670,7 +8733,7 @@
             "entry.st_ino as u64 != expected_snapshot.file.ino()",
             "entry.st_nlink as u64 != 1",
             "rustix::fs::unlinkat",
-            "std::fs::symlink_metadata(path)?",
+            "let current = secure_file_metadata::from_path(path)?",
             "current.file_type().is_symlink()",
             "sidecar_is_single_link(&current)",
             "std::fs::remove_file(path)"
@@ -9835,6 +9898,7 @@
             "for authority in bootstraps",
             "complete_autonomous_lifecycle_bootstrap",
             "if recover_one_attempt(",
+            "recovered_attempts = recovered_attempts.saturating_add(1);",
             "revalidate_lane_reservation_startup_reconciliation_receipt(&receipt, &snapshot)",
             "changed the Queue owner-quarantine state"
           ]
@@ -9995,10 +10059,19 @@
           "kind": "fn",
           "symbol": "release_barrier_has_exact_fifo_ownership_locked",
           "required_tokens": [
+            "replica_group_has_byte_exact_ordinary_fifo_ownership_locked",
+            "barrier.ordered_keys"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "fn",
+          "symbol": "replica_group_has_byte_exact_ordinary_fifo_ownership_locked",
+          "required_tokens": [
             "fifo_snapshot_locked",
             "HashMap::with_capacity",
             "positions.insert",
-            "barrier.ordered_keys",
+            "ordered_keys",
             "let Some(tx) = self.txs.get(&hash) else",
             "accepted.hash_as_entrypoint() != key.entrypoint_hash",
             "let Some(plan) = self.routing_plans.get(&hash) else",
@@ -10599,9 +10672,12 @@
           "symbol": "Queue::preflight_lane_reservation_plan_journal",
           "required_tokens": [
             "let guard = self.plan_journal.lock();",
-            "journal.observe_startup_replay_receipt_with_finalized_absence(",
+            "if !preflight.replica_keys.is_empty()",
+            "LaneQueueReservationError::JournalNotInstalled",
+            "journal.observe_startup_replay_receipt_with_terminal_cuts(",
             "&preflight.active_phases",
-            "&preflight.finalized_keys"
+            "&preflight.finalized_keys",
+            "&preflight.replica_keys"
           ]
         },
         {
@@ -10617,9 +10693,18 @@
           "kind": "fn",
           "symbol": "observe_startup_replay_receipt_with_finalized_absence",
           "required_tokens": [
-            "if phases.len() > self.limits.max_live_records",
+            "self.observe_startup_replay_receipt_with_terminal_cuts(phases, finalized_keys, &[])"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue/journal_reservation_commit_preflight.rs",
+          "kind": "fn",
+          "symbol": "observe_startup_replay_receipt_with_terminal_cuts",
+          "required_tokens": [
+            ".checked_add(replica_keys.len())",
             "for phase in phases",
             "for key in finalized_keys",
+            "for key in replica_keys",
             "let mut replay = self.prepare_replay_with_removed_entrypoints(Some(&entrypoints))?;",
             "replay.verify_snapshot_content()?;",
             "let live_claims =",
@@ -10992,10 +11077,25 @@
           "kind": "method",
           "symbol": "Queue::lane_reservation_reconciliation_snapshot",
           "required_tokens": [
+            "self.transaction_selection_durability_faulted()",
             "self.lane_reservation_transition_lock.lock()",
             "self.push_remove_lock.lock()",
+            "self.lane_reservation_journal.lock().is_none()",
+            "LaneQueueReservationError::JournalNotInstalled",
+            "self.lane_reservation_reconciliation_snapshot_locked()"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "method",
+          "symbol": "Queue::lane_reservation_reconciliation_snapshot_locked",
+          "required_tokens": [
             "let store = self.lane_reservations.lock()",
             "store.live_by_entrypoint.values()",
+            "self.validate_live_reservation_against_queue(record)?",
+            "LaneQueueReservationError::ReconciliationFifoOrderMismatch",
+            "LaneQueueReservationError::ReconciliationMissingDurableClaim",
+            "reconciliation_record_from_durable_claim",
             "store.commit_barriers.clone()",
             "store.release_barriers.clone()",
             "store.completed_releases.clone()",
@@ -11007,7 +11107,11 @@
             "commit_barriers.sort_by_key",
             "prepared_release_barriers.sort_by_key",
             "completed_releases.sort_by_key",
-            "LaneQueueReservationReconciliationSnapshotV1 {"
+            "let ordered_owner_phases = self.lane_reservation_recovery_phases_locked()?;",
+            "ordered_records.sort_by_key",
+            "LaneQueueReservationError::ReconciliationDuplicateFifoOrdinal",
+            "MAX_LANE_EXECUTABLE_ENTRYPOINTS",
+            "Ok(LaneQueueReservationReconciliationSnapshotV1 {"
           ]
         },
         {
@@ -11564,7 +11668,7 @@
         },
         {
           "config": "multilane_queue_plan_execution_before_global_cas_bug.cfg",
-          "invariant": "MLQueueEligibilityExact"
+          "invariant": "MLQueuePlanExecutionAutonomousOnly"
         },
         {
           "config": "multilane_queue_plan_conflicting_cas_bug.cfg",
@@ -11661,7 +11765,7 @@
           "required_tokens": [
             "self.pending_control_sidecar_limits.queue_plan_admissions",
             "std::fs::read_dir",
-            "symlink_metadata",
+            "secure_file_metadata::from_path(&path)",
             "is_symlink",
             "sidecar_is_single_link",
             "MAX_PENDING_QUEUE_PLAN_ADMISSION_CERTIFICATE_BYTES",
@@ -11785,9 +11889,12 @@
           "kind": "fn",
           "symbol": "kura_disk_usage_bytes",
           "required_tokens": [
-            "PENDING_MERGE_ENTRIES_DIR",
-            "PENDING_QUEUE_PLAN_ADMISSIONS_DIR",
-            "directory_tree_file_bytes"
+            "let blocks_root = self.store_root.join(\"blocks\")",
+            "let retired_blocks_root = self.store_root.join(\"retired\").join(\"blocks\")",
+            "self.historical_autonomous_recovery_aggregate_byte_limit()",
+            "Self::blocks_root_bytes(&blocks_root, historical_byte_limit)?",
+            "Self::blocks_root_bytes(&retired_blocks_root, historical_byte_limit)?",
+            "self.kura_shared_disk_usage_bytes()?"
           ]
         },
         {
@@ -11795,6 +11902,19 @@
           "kind": "fn",
           "symbol": "kura_total_disk_usage_bytes",
           "required_tokens": [
+            "self.kura_disk_usage_bytes_with_total()",
+            ".map(|(_, total)| total)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "fn",
+          "symbol": "kura_shared_disk_usage_bytes",
+          "required_tokens": [
+            "Self::merge_root_bytes(&merge_root)?",
+            "Self::merge_root_bytes(&retired_merge_root)?",
+            "Self::directory_tree_file_bytes(&retired_geometry_root)?",
+            "MERGE_CARRIERS_DIR",
             "PENDING_MERGE_ENTRIES_DIR",
             "PENDING_QUEUE_PLAN_ADMISSIONS_DIR",
             "directory_tree_file_bytes"
@@ -11871,12 +11991,97 @@
         {
           "path": "crates/iroha_core/src/block.rs",
           "kind": "fn",
+          "symbol": "external_queue_plan_synced_entrypoint_index",
+          "required_tokens": [
+            "block.external_entrypoints_cloned()",
+            ".position(|entrypoint|",
+            "entrypoint.admission_intent()",
+            "TransactionAdmissionIntent::QueuePlanSynced"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/block.rs",
+          "kind": "fn",
           "symbol": "validate_staged_execution_controls",
           "required_tokens": [
             "bundle.queue_plan_admissions()",
+            "if let Some(index) = external_queue_plan_synced_entrypoint_index(block)",
+            "must use autonomous lane ownership and a certified merge carrier",
             "reference.is_some() && !native_queue_plan_admissions.is_empty()",
             "native_queue_plan_admissions != state_block.staged_queue_plan_admissions()",
             "staged_merge_entry"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_candidate.rs",
+          "kind": "method",
+          "symbol": "V2CandidateAssembler::snapshot_routable_candidates",
+          "required_tokens": [
+            "let queue_plan_synced =",
+            "TransactionAdmissionIntent::QueuePlanSynced",
+            "binding.validate_for_request(",
+            "report.routable = report.routable.saturating_add(1)",
+            "if queue_plan_synced",
+            "report.work_deferred = report.work_deferred.saturating_add(1)",
+            "records.push(CandidateRecord {"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "method",
+          "symbol": "Queue::bounded_pending_snapshot",
+          "required_tokens": [
+            "let live_reservations = self.lane_reservations.lock().live_hashes()",
+            "let mut live_reservation_fifo_cut = None",
+            "for hash in &live_reservations",
+            "let order = self.fifo_order_by_hash.get(hash)?",
+            "live_reservation_fifo_cut.map_or(order.value().ordinal",
+            "if live_reservations.contains(hash) || global_owners.contains_key(hash)",
+            "let Some(fifo_order) = self.fifo_order_by_hash.get(hash)",
+            "live_reservation_fifo_cut.is_some_and(|cut| fifo_order.value().ordinal >= cut)",
+            "blocked_by_fifo_predecessor = true"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/lane_consensus.rs",
+          "kind": "fn",
+          "symbol": "validate_lane_executable_payload_body",
+          "required_tokens": [
+            "entrypoints.is_empty()",
+            "entrypoints.iter().any(|entrypoint|",
+            "entrypoint.admission_intent() != TransactionAdmissionIntent::QueuePlanSynced",
+            "LaneAutonomousArtifactError::InvalidAdmissionIntent",
+            "let encoded_payload_body_len = Encode::encode(&("
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+          "kind": "method",
+          "symbol": "&mut V2LaneWorkAdapter::prepare",
+          "required_tokens": [
+            "if !candidates.is_empty()",
+            "let broad_autonomous_route_exclusion =",
+            "proposal_lookahead_enabled(&nexus, self.context.height)",
+            "let is_queue_plan_synced =",
+            "== iroha_data_model::transaction::TransactionAdmissionIntent::",
+            "QueuePlanSynced;",
+            "(is_queue_plan_synced",
+            "|| (broad_autonomous_route_exclusion",
+            ".contains_key(&(route.lane_id, route.dataspace_id))",
+            ".then_some(index)",
+            "CandidateWorkUnavailable::new("
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+          "kind": "method",
+          "symbol": "V2LaneWorkAdapter::bind_locked_global_body_from_origin",
+          "required_tokens": [
+            "!origin_matches || block.header().height().get() != self.context.height",
+            "if crate::block::external_queue_plan_synced_entrypoint_index(block).is_some()",
+            "let canonical_recovery = canonical_v2_lane_payload_matches_kura(",
+            "retain_pending_certified_merge_entry_for_locked_carrier(",
+            "retire_autonomous_payload_batch(&losing_pending)"
           ]
         },
         {
@@ -12554,10 +12759,25 @@
           "kind": "method",
           "symbol": "Queue::lane_reservation_reconciliation_snapshot",
           "required_tokens": [
+            "self.transaction_selection_durability_faulted()",
             "self.lane_reservation_transition_lock.lock()",
             "self.push_remove_lock.lock()",
+            "self.lane_reservation_journal.lock().is_none()",
+            "LaneQueueReservationError::JournalNotInstalled",
+            "self.lane_reservation_reconciliation_snapshot_locked()"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "method",
+          "symbol": "Queue::lane_reservation_reconciliation_snapshot_locked",
+          "required_tokens": [
             "let store = self.lane_reservations.lock()",
             "store.live_by_entrypoint.values()",
+            "self.validate_live_reservation_against_queue(record)?",
+            "LaneQueueReservationError::ReconciliationFifoOrderMismatch",
+            "LaneQueueReservationError::ReconciliationMissingDurableClaim",
+            "reconciliation_record_from_durable_claim",
             "store.commit_barriers.clone()",
             "store.release_barriers.clone()",
             "store.completed_releases.clone()",
@@ -12569,7 +12789,11 @@
             "commit_barriers.sort_by_key",
             "prepared_release_barriers.sort_by_key",
             "completed_releases.sort_by_key",
-            "LaneQueueReservationReconciliationSnapshotV1 {"
+            "let ordered_owner_phases = self.lane_reservation_recovery_phases_locked()?;",
+            "ordered_records.sort_by_key",
+            "LaneQueueReservationError::ReconciliationDuplicateFifoOrdinal",
+            "MAX_LANE_EXECUTABLE_ENTRYPOINTS",
+            "Ok(LaneQueueReservationReconciliationSnapshotV1 {"
           ]
         },
         {

@@ -577,11 +577,7 @@ where
         let challenge = derive_challenge(binding, &client_nonce, expires_at_secs);
         let mut solution = Zeroizing::new([0u8; 32]);
         fill_random(rng, "minting puzzle solution nonce", &mut solution[..])?;
-        reject_reused_solution_nonce(
-            &solution,
-            &client_nonce,
-            previous_solution.as_ref().map(|previous| &**previous),
-        )?;
+        reject_reused_solution_nonce(&solution, &client_nonce, previous_solution.as_deref())?;
         let digest = Zeroizing::new(derive_digest(&challenge, &solution, params).map_err(
             |err| match err {
                 DigestError::Parameters(msg) => MintError::Parameters(msg),
@@ -908,7 +904,7 @@ mod tests {
         )
         .expect("test puzzle parameters must be valid");
         let binding = binding();
-        let mut rng = ChaCha20Rng::seed_from_u64(0x51_6e_65_64);
+        let mut rng = ChaCha20Rng::seed_from_u64(0x516e_6564);
         let ticket = mint_ticket(&params, &binding, Duration::from_secs(10), &mut rng)
             .expect("mint Argon2 ticket");
         let verify_time = stable_verify_time(&ticket, &params);

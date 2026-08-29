@@ -5483,7 +5483,8 @@ PROOF
                       signer, roundView, highestPrepare)
       BY <1>1, <2>8, TransportOnlyFaultPreservesProgressOwnership
     <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>3c, <2>4,
-                <2>5, <2>6, <2>7, <2>8 DEF AsyncFaultStep
+                <2>5, <2>6, <2>7, <2>8
+         DEF AsyncFaultStep, ByzantineProposalJustificationDomain
   <1> QED BY <1>1
 
 THEOREM OpenHistoricalRecoveryPreservesProgressOwnership ==

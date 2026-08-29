@@ -65,7 +65,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tokio::time::{Instant, sleep, timeout};
-const ZK_ACE_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::ZkAcePqAuthorizationV0;
+const ZK_ACE_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::ZkAcePqAuthorizationV1;
 const PGC_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1;
 const VERANGE_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::VeRangeTransparentRangeV1;
 const BOOTLE_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1;

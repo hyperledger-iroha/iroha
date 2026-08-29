@@ -6741,6 +6741,7 @@ mod sccp_first_release_api_tests {
                 iroha_data_model::isi::bridge::RecordSccpMessage::new(
                     fixture.bundle.commitment.context,
                     payload_bytes.clone(),
+                    iroha_data_model::bridge::SccpSparseMerkleWitnessV1::empty_shard(),
                 ),
             )]
             .into(),
@@ -6867,71 +6868,94 @@ mod sccp_first_release_api_tests {
             )
             .expect("exact SCCP route registry"),
         );
+        let replay_accumulator_id = iroha_data_model::bridge::SccpReplayAccumulatorIdV1 {
+            route_key: fixture.route.key(),
+            boundary: iroha_data_model::bridge::SccpReplayBoundaryV1::SoraOutboundLock,
+        };
+        let replay_domain = iroha_data_model::bridge::SccpReplayDomainV1 {
+            source_network: fixture.bundle.commitment.context.lane.source,
+            target_network: fixture.bundle.commitment.context.lane.target,
+            boundary: iroha_data_model::bridge::SccpReplayBoundaryV1::SoraOutboundLock,
+            route_revision: fixture.route.revision,
+            route_configuration_hash: fixture.bundle.commitment.context.route_configuration_hash,
+            actor: iroha_data_model::bridge::SccpReplayActorV1::Route,
+        };
+        let iroha_sccp::SccpPayloadV1::Transfer(transfer) = &fixture.bundle.payload;
+        let sender_literal =
+            core::str::from_utf8(&transfer.sender).expect("exact SCCP sender is canonical UTF-8");
+        let sender = iroha_data_model::account::AccountAddress::parse_encoded(
+            sender_literal,
+            Some(iroha_sccp::SCCP_TAIRA_I105_DISCRIMINANT_V1),
+        )
+        .expect("exact SCCP sender parses")
+        .to_account_id()
+        .expect("exact SCCP sender has a canonical controller");
+        let replay_record = iroha_data_model::bridge::SccpReplayRecordV1 {
+            operation: iroha_data_model::bridge::SccpReplayBoundaryV1::SoraOutboundLock,
+            replay_id: fixture.bundle.commitment.message_id,
+            payload_sha256: Sha256::digest(&payload_bytes).into(),
+            amount: transfer.amount,
+            principal: iroha_data_model::bridge::SccpReplayPrincipalV1::SoraAccount(sender),
+            auxiliary_identity_sha256: Sha256::digest(
+                fixture.bundle.commitment.context.destination_binding_hash,
+            )
+            .into(),
+        };
+        let mut expected_replay_forest = iroha_data_model::bridge::SccpReplayForestV1::default();
+        let replay_delta = expected_replay_forest
+            .occupy(
+                &replay_domain,
+                &replay_record,
+                &iroha_data_model::bridge::SccpSparseMerkleWitnessV1::empty_shard(),
+            )
+            .expect("exact SCCP archive fixture occupies its replay leaf");
+        state
+            .insert_sccp_replay_forest_for_testing(
+                replay_accumulator_id.clone(),
+                expected_replay_forest.clone(),
+            )
+            .expect("install exact SCCP archive replay forest");
         let key = iroha_data_model::bridge::SccpOutboundMessageKeyV1 {
             lane: fixture.bundle.commitment.context.lane,
             message_id: fixture.bundle.commitment.message_id,
         };
+        let pending = iroha_data_model::bridge::SccpOutboundPendingMessageRecordV1 {
+            destination_binding_hash: fixture.bundle.commitment.context.destination_binding_hash,
+            route_configuration_hash: fixture.bundle.commitment.context.route_configuration_hash,
+            payload_hash: fixture.bundle.commitment.payload_hash,
+            payload_bytes,
+            recorded_at_height: 2,
+            commitment_index: 0,
+        };
         state
-            .insert_sccp_outbound_message_for_testing(
-                key,
-                iroha_data_model::bridge::SccpOutboundPendingMessageRecordV1 {
-                    destination_binding_hash: fixture
-                        .bundle
-                        .commitment
-                        .context
-                        .destination_binding_hash,
-                    route_configuration_hash: fixture
-                        .bundle
-                        .commitment
-                        .context
-                        .route_configuration_hash,
-                    payload_hash: fixture.bundle.commitment.payload_hash,
-                    payload_bytes,
-                    recorded_at_height: 2,
-                    commitment_index: 0,
-                },
-            )
+            .insert_sccp_outbound_message_for_testing(key, pending.clone())
             .expect("insert exact SCCP outbox descriptor");
-        state
-            .transition_sccp_outbound_message_to_terminal_for_testing(
-                key,
-                iroha_data_model::bridge::SccpOutboundProofRecordV1 {
-                    payload_hash: fixture.bundle.commitment.payload_hash,
-                    destination_binding_hash: fixture
-                        .bundle
-                        .commitment
-                        .context
-                        .destination_binding_hash,
-                    route_configuration_hash: fixture
-                        .bundle
-                        .commitment
-                        .context
-                        .route_configuration_hash,
-                    finality_block_hash: <[u8; 32]>::from(Hash::from(
-                        finality.finality_artifact.block_hash,
-                    )),
-                    destination_proof_commitment: [0xE7; 32],
-                    finality_height: 2,
-                    commitment_index: 0,
-                    accepted_at_height: 3,
-                },
-            )
-            .expect("move exact SCCP message to terminal fixed replay state");
         let world = state.world_view();
-        assert!(world.sccp_outbound_pending_messages().get(&key).is_none());
-        let stored_proof = world
-            .sccp_outbound_proofs()
-            .get(&key)
-            .copied()
-            .expect("terminal SCCP proof record");
         assert_eq!(
-            stored_proof.finality_block_hash,
-            fixture.request.public_inputs.finality_block_hash
+            world.sccp_outbound_pending_messages().get(&key),
+            Some(&pending),
+            "proof-generation fixtures remain pending until destination validation"
         );
-        assert_eq!(stored_proof.finality_height, 2);
+        assert_eq!(
+            world.sccp_replay_forests().get(&replay_accumulator_id),
+            Some(&expected_replay_forest),
+            "pending API fixtures retain the admission replay authority"
+        );
+        let stored_forest = world
+            .sccp_replay_forests()
+            .get(&replay_accumulator_id)
+            .expect("admission SCCP replay forest");
+        assert_eq!(stored_forest.leaf_count, 1);
+        assert_eq!(stored_forest.update_sequence, 1);
+        assert_eq!(
+            stored_forest.shard_root(replay_delta.shard),
+            replay_delta.new_root
+        );
         assert_eq!(
             world.sccp_outbound_pending_usage(),
             iroha_data_model::bridge::SccpOutboundPendingUsageV1::default()
+                .checked_add_payload(pending.payload_bytes.len())
+                .expect("one bounded SCCP payload fits pending usage")
         );
         drop(world);
         let height = std::num::NonZeroUsize::new(2).expect("two is nonzero");
@@ -7171,7 +7195,7 @@ mod sccp_first_release_api_tests {
         const LIMIT: usize = 7;
         let lane = iroha_data_model::bridge::SccpLaneIdV1 {
             source: iroha_data_model::bridge::SccpNetworkV1::SoraTaira,
-            target: iroha_data_model::bridge::SccpNetworkV1::EthereumSepolia,
+            target: iroha_data_model::bridge::SccpNetworkV1::EthereumMainnet,
         };
         let mut history = BTreeSet::new();
         for height in 1..=HISTORY {
@@ -7218,7 +7242,7 @@ mod sccp_first_release_api_tests {
         const LIMIT: usize = 50;
         let lane = iroha_data_model::bridge::SccpLaneIdV1 {
             source: iroha_data_model::bridge::SccpNetworkV1::SoraTaira,
-            target: iroha_data_model::bridge::SccpNetworkV1::EthereumSepolia,
+            target: iroha_data_model::bridge::SccpNetworkV1::EthereumMainnet,
         };
         let mut history = BTreeSet::new();
         for commitment_index in 0..iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1
@@ -7289,16 +7313,14 @@ mod sccp_first_release_api_tests {
         };
         let projection_for = |target| {
             let recipient = match target {
-                iroha_data_model::bridge::SccpNetworkV1::EthereumSepolia => {
+                iroha_data_model::bridge::SccpNetworkV1::EthereumMainnet
+                | iroha_data_model::bridge::SccpNetworkV1::BscMainnet => {
                     SccpNormalizedCodecValueV1::EvmAddress20 { bytes: [0x91; 20] }
                 }
-                iroha_data_model::bridge::SccpNetworkV1::TronNile => {
+                iroha_data_model::bridge::SccpNetworkV1::TronMainnet => {
                     let mut bytes = [0x92; 21];
                     bytes[0] = 0x41;
                     SccpNormalizedCodecValueV1::TronAddress21 { bytes }
-                }
-                iroha_data_model::bridge::SccpNetworkV1::SolanaTestnet => {
-                    SccpNormalizedCodecValueV1::SolanaPubkey32 { bytes: [0x93; 32] }
                 }
                 iroha_data_model::bridge::SccpNetworkV1::TonMainnet => {
                     SccpNormalizedCodecValueV1::TonAccount36 {
@@ -7329,9 +7351,9 @@ mod sccp_first_release_api_tests {
             })
         };
         for target in [
-            iroha_data_model::bridge::SccpNetworkV1::EthereumSepolia,
-            iroha_data_model::bridge::SccpNetworkV1::TronNile,
-            iroha_data_model::bridge::SccpNetworkV1::SolanaTestnet,
+            iroha_data_model::bridge::SccpNetworkV1::EthereumMainnet,
+            iroha_data_model::bridge::SccpNetworkV1::BscMainnet,
+            iroha_data_model::bridge::SccpNetworkV1::TronMainnet,
             iroha_data_model::bridge::SccpNetworkV1::TonMainnet,
         ] {
             let context = context_for(target);
@@ -7380,8 +7402,8 @@ mod sccp_first_release_api_tests {
         assert!(
             sccp_sora_outbound_material_for_route(
                 &state,
-                "solana-testnet",
-                "taira_sol_xor",
+                "ethereum-mainnet",
+                "taira_eth_xor",
                 "xor",
                 1,
             )
@@ -7389,7 +7411,7 @@ mod sccp_first_release_api_tests {
             .is_none()
         );
         assert!(
-            sccp_sora_outbound_material_for_route(&state, "sora-taira", "taira_sol_xor", "xor", 1,)
+            sccp_sora_outbound_material_for_route(&state, "sora-taira", "taira_eth_xor", "xor", 1,)
                 .is_err(),
             "a SORA source profile must fail before route lookup"
         );
@@ -7901,6 +7923,7 @@ mod sccp_first_release_api_tests {
             &authority,
             creation_time_ms,
             &bridge_proof,
+            None,
             &payload_b64,
             &signature_b64,
             "race test",
@@ -7914,6 +7937,52 @@ mod sccp_first_release_api_tests {
         transaction
             .verify_signature()
             .expect("exact generic signature remains valid");
+
+        let replay_witness =
+            iroha_data_model::bridge::SccpSparseMerkleWitnessV1::empty_shard();
+        let mut unexpected_witness_builder = TransactionBuilder::new(
+            *state.network_id_ref(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
+        unexpected_witness_builder
+            .set_creation_time(Duration::from_millis(creation_time_ms));
+        let unexpected_witness_builder = unexpected_witness_builder.with_instructions([
+            SubmitBridgeProof::new(bridge_proof.clone())
+                .with_replay_witness(replay_witness.clone()),
+        ]);
+        let unexpected_witness_payload = unexpected_witness_builder.payload();
+        let unexpected_witness_payload_bytes = unexpected_witness_builder.encode_payload();
+        let error = exact_sccp_transaction_builder(
+            state.network_id_ref(),
+            &authority,
+            creation_time_ms,
+            &bridge_proof,
+            None,
+            unexpected_witness_payload,
+            &unexpected_witness_payload_bytes,
+        )
+        .expect_err("generic destination submission must reject a replay witness");
+        assert!(conversion_message(&error).is_some_and(|message| {
+            message.contains("different bridge proof or replay witness")
+        }));
+
+        let mut different_witness = replay_witness.clone();
+        different_witness.expected_shard_root = [0xA5; 32];
+        let error = exact_sccp_transaction_builder(
+            state.network_id_ref(),
+            &authority,
+            creation_time_ms,
+            &bridge_proof,
+            Some(&different_witness),
+            unexpected_witness_payload,
+            &unexpected_witness_payload_bytes,
+        )
+        .expect_err("native submission must reject a substituted replay witness");
+        assert!(conversion_message(&error).is_some_and(|message| {
+            message.contains("different bridge proof or replay witness")
+        }));
+
         let mut non_default_ttl = builder;
         non_default_ttl.set_ttl(Duration::from_secs(1));
         let non_default_payload_b64 =
@@ -7930,6 +7999,7 @@ mod sccp_first_release_api_tests {
             &authority,
             creation_time_ms,
             &bridge_proof,
+            None,
             &non_default_payload_b64,
             &non_default_signature_b64,
             "TTL mutation test",
@@ -8054,6 +8124,7 @@ mod sccp_first_release_api_tests {
             signature_b64: None,
             transaction_payload_b64: None,
             native_proof_b64: "AA==".to_owned(),
+            replay_witness_b64: "AA==".to_owned(),
             creation_time_ms: None,
         };
         let encoded = norito::json::to_json(&request).expect("encode native submit request");
@@ -8079,10 +8150,43 @@ mod sccp_first_release_api_tests {
             .as_object()
             .expect("native request object")
             .clone();
+        assert!(missing.remove("replay_witness_b64").is_some());
+        assert!(
+            norito::json::from_value::<BridgeMessageSubmitDto>(Value::Object(missing)).is_err()
+        );
+        let mut missing = norito::json::from_str::<Value>(&encoded)
+            .expect("native request JSON value")
+            .as_object()
+            .expect("native request object")
+            .clone();
         assert!(missing.remove("fee_payment").is_some());
         assert!(
             norito::json::from_value::<BridgeMessageSubmitDto>(Value::Object(missing)).is_err()
         );
+        use base64::Engine as _;
+        for (mut witness, label) in [
+            (
+                iroha_data_model::bridge::SccpSparseMerkleWitnessV1::empty_shard(),
+                "zero expected root",
+            ),
+            (
+                iroha_data_model::bridge::SccpSparseMerkleWitnessV1::empty_shard(),
+                "membership witness",
+            ),
+        ] {
+            if label == "zero expected root" {
+                witness.expected_shard_root = [0; 32];
+            } else {
+                witness.prior_record_digest = [0xA5; 32];
+            }
+            let encoded = base64::engine::general_purpose::STANDARD.encode(
+                norito::to_bytes(&witness).expect("encode invalid replay witness fixture"),
+            );
+            assert!(
+                decode_sccp_replay_witness_b64(&encoded).is_err(),
+                "{label} must reject"
+            );
+        }
     }
     routing_test! { sync sccp_finality_encoding_is_the_exact_v2_bridge_proof
         let fixture = iroha_sccp::sccp_exact_outbound_test_fixture_v1();
@@ -8337,24 +8441,15 @@ fn validate_recent_message_projection(
     let recipient_matches_target = match (context.lane.target, &transfer.recipient) {
         (
             iroha_data_model::bridge::SccpNetworkV1::EthereumMainnet
-            | iroha_data_model::bridge::SccpNetworkV1::EthereumSepolia
-            | iroha_data_model::bridge::SccpNetworkV1::BscMainnet
-            | iroha_data_model::bridge::SccpNetworkV1::BscTestnet,
+            | iroha_data_model::bridge::SccpNetworkV1::BscMainnet,
             SccpNormalizedCodecValueV1::EvmAddress20 { .. },
         )
         | (
-            iroha_data_model::bridge::SccpNetworkV1::TronMainnet
-            | iroha_data_model::bridge::SccpNetworkV1::TronNile
-            | iroha_data_model::bridge::SccpNetworkV1::TronShasta,
+            iroha_data_model::bridge::SccpNetworkV1::TronMainnet,
             SccpNormalizedCodecValueV1::TronAddress21 { .. },
         )
         | (
-            iroha_data_model::bridge::SccpNetworkV1::SolanaTestnet,
-            SccpNormalizedCodecValueV1::SolanaPubkey32 { .. },
-        )
-        | (
-            iroha_data_model::bridge::SccpNetworkV1::TonMainnet
-            | iroha_data_model::bridge::SccpNetworkV1::TonTestnet,
+            iroha_data_model::bridge::SccpNetworkV1::TonMainnet,
             SccpNormalizedCodecValueV1::TonAccount36 { .. },
         ) => true,
         _ => false,
@@ -17288,6 +17383,55 @@ fn decode_sccp_native_proof_b64(
         .map_err(|error| conversion_error(format!("invalid native SCCP proof: {error}")))?;
     Ok((proof, bytes))
 }
+fn decode_sccp_replay_witness_b64(
+    encoded: &str,
+) -> Result<iroha_data_model::bridge::SccpSparseMerkleWitnessV1> {
+    use base64::Engine as _;
+    let maximum =
+        iroha_data_model::bridge::SCCP_REPLAY_WITNESS_MAX_BASE64_BYTES_V1;
+    if encoded.is_empty() || encoded.len() > maximum {
+        return Err(conversion_error(format!(
+            "replay_witness_b64 length must be between 1 and {maximum} bytes"
+        )));
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(encoded.as_bytes())
+        .map_err(|error| conversion_error(format!("invalid replay_witness_b64: {error}")))?;
+    if bytes.len()
+        > iroha_data_model::bridge::SCCP_REPLAY_WITNESS_MAX_ENCODED_BYTES_V1
+        || base64::engine::general_purpose::STANDARD.encode(&bytes) != encoded
+    {
+        return Err(conversion_error(
+            "replay_witness_b64 must use canonical padded base64 within the protocol bound"
+                .to_owned(),
+        ));
+    }
+    let witness = norito::decode_from_bytes::<
+        iroha_data_model::bridge::SccpSparseMerkleWitnessV1,
+    >(&bytes)
+    .map_err(|error| {
+        conversion_error(format!(
+            "replay_witness_b64 must contain one canonical sparse replay witness: {error}"
+        ))
+    })?;
+    if norito::to_bytes(&witness).ok().as_deref() != Some(bytes.as_slice()) {
+        return Err(conversion_error(
+            "replay_witness_b64 must contain exactly one canonical sparse replay witness"
+                .to_owned(),
+        ));
+    }
+    witness.validate().map_err(|error| {
+        conversion_error(format!(
+            "replay_witness_b64 contains a non-canonical sparse replay witness: {error}"
+        ))
+    })?;
+    if witness.prior_record_digest != [0; 32] {
+        return Err(conversion_error(
+            "replay_witness_b64 must contain a replay non-membership witness".to_owned(),
+        ));
+    }
+    Ok(witness)
+}
 fn validate_sccp_creation_time(creation_time_ms: Option<u64>) -> Result<()> {
     if creation_time_ms == Some(0) {
         return Err(conversion_error(
@@ -17442,6 +17586,7 @@ fn exact_sccp_transaction_builder(
     authority: &AccountId,
     creation_time_ms: u64,
     expected_bridge_proof: &iroha_data_model::bridge::BridgeProof,
+    expected_replay_witness: Option<&iroha_data_model::bridge::SccpSparseMerkleWitnessV1>,
     payload: &iroha_data_model::transaction::signed::TransactionPayload,
     canonical_payload_bytes: &[u8],
 ) -> Result<TransactionBuilder> {
@@ -17489,9 +17634,12 @@ fn exact_sccp_transaction_builder(
                 "prepared SCCP transaction payload must contain only SubmitBridgeProof".to_owned(),
             )
         })?;
-    if submit.proof != *expected_bridge_proof {
+    if submit.proof != *expected_bridge_proof
+        || submit.replay_witness.as_ref() != expected_replay_witness
+    {
         return Err(conversion_error(
-            "prepared SCCP transaction payload contains a different bridge proof".to_owned(),
+            "prepared SCCP transaction payload contains a different bridge proof or replay witness"
+                .to_owned(),
         ));
     }
     // The fixed default TTL and absent nonce were validated above. Rehydrate every remaining
@@ -17514,6 +17662,7 @@ fn build_exact_sccp_signed_transaction(
     authority: &AccountId,
     creation_time_ms: u64,
     expected_bridge_proof: &iroha_data_model::bridge::BridgeProof,
+    expected_replay_witness: Option<&iroha_data_model::bridge::SccpSparseMerkleWitnessV1>,
     transaction_payload_b64: &str,
     signature_b64: &str,
     context: &str,
@@ -17524,6 +17673,7 @@ fn build_exact_sccp_signed_transaction(
         authority,
         creation_time_ms,
         expected_bridge_proof,
+        expected_replay_witness,
         &payload,
         &payload_bytes,
     )?;
@@ -17928,6 +18078,7 @@ fn prepare_bridge_proof_submit(
             &authority,
             creation_time_ms,
             &bridge_proof,
+            None,
             transaction_payload_b64
                 .as_deref()
                 .expect("validated direct SCCP transaction payload"),
@@ -18084,6 +18235,7 @@ fn prepare_bridge_message_submit(
         signature_b64,
         transaction_payload_b64,
         native_proof_b64,
+        replay_witness_b64,
         creation_time_ms,
     } = req;
     validate_app_api_fee_payment(&fee_payment, false)?;
@@ -18095,6 +18247,7 @@ fn prepare_bridge_message_submit(
         creation_time_ms,
     )?;
     let (native_proof, native_proof_bytes) = decode_sccp_native_proof_b64(&native_proof_b64)?;
+    let replay_witness = decode_sccp_replay_witness_b64(&replay_witness_b64)?;
     validate_sccp_taira_transfer_recipient(&native_proof.payload)?;
     let source_height = native_proof.source.source_finality.height;
     let lane = native_proof.source.lane;
@@ -18161,6 +18314,7 @@ fn prepare_bridge_message_submit(
             &authority,
             creation_time_ms,
             &bridge_proof,
+            Some(&replay_witness),
             transaction_payload_b64
                 .as_deref()
                 .expect("validated direct SCCP transaction payload"),
@@ -18207,8 +18361,9 @@ fn prepare_bridge_message_submit(
         }
     } else {
         let creation_time_ms = creation_time_ms.unwrap_or_else(current_time_millis);
-        let instruction: dm::InstructionBox =
-            dm::SubmitBridgeProof::new(bridge_proof.clone()).into();
+        let instruction: dm::InstructionBox = dm::SubmitBridgeProof::new(bridge_proof.clone())
+            .with_replay_witness(replay_witness)
+            .into();
         let mut builder = dm::TransactionBuilder::new(
             *state.network_id_ref(),
             authority.clone().into(),
@@ -30013,6 +30168,8 @@ pub struct BridgeMessageSubmitDto {
     pub transaction_payload_b64: Option<String>,
     /// Base64-encoded canonical Norito native inbound SCCP proof.
     pub native_proof_b64: String,
+    /// Base64-encoded canonical Norito sparse replay non-membership witness.
+    pub replay_witness_b64: String,
     /// Optional fixed transaction creation timestamp used to keep detached-sign flows deterministic.
     #[norito(default)]
     pub creation_time_ms: Option<u64>,
@@ -30027,6 +30184,7 @@ struct BridgeMessageSubmitDtoWire {
     #[norito(default)]
     transaction_payload_b64: Option<String>,
     native_proof_b64: String,
+    replay_witness_b64: String,
     #[norito(default)]
     creation_time_ms: Option<u64>,
 }
@@ -30038,6 +30196,7 @@ impl From<BridgeMessageSubmitDtoWire> for BridgeMessageSubmitDto {
             signature_b64,
             transaction_payload_b64,
             native_proof_b64,
+            replay_witness_b64,
             creation_time_ms,
         } = wire;
         Self {
@@ -30046,6 +30205,7 @@ impl From<BridgeMessageSubmitDtoWire> for BridgeMessageSubmitDto {
             signature_b64,
             transaction_payload_b64,
             native_proof_b64,
+            replay_witness_b64,
             creation_time_ms,
         }
     }
@@ -30062,6 +30222,7 @@ impl norito::json::JsonDeserialize for BridgeMessageSubmitDto {
                 "signature_b64",
                 "transaction_payload_b64",
                 "native_proof_b64",
+                "replay_witness_b64",
                 "creation_time_ms",
             ],
         )?;
@@ -30076,6 +30237,7 @@ impl norito::json::JsonDeserialize for BridgeMessageSubmitDto {
                 "signature_b64",
                 "transaction_payload_b64",
                 "native_proof_b64",
+                "replay_witness_b64",
                 "creation_time_ms",
             ],
         )?;

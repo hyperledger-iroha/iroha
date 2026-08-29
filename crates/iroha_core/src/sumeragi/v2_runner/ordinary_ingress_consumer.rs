@@ -346,7 +346,7 @@ pub(in crate::sumeragi) fn consume_prepared_dequeued_v2_ingress(
         | BlockMessage::LaneHistoricalRecoveryResponse(_) => {
             let _ = lane_work
                 .accept_lane_message_with_ingress_ownership(inbound, executor.current_tag().view());
-            let _ = lane_work.service_next_historical_recovery()?;
+            let _ = service_historical_recovery_tick(lane_work, services)?;
             finish!(ProductionPreparedOrdinaryIngressConsumptionV1::Continue);
         }
         BlockMessage::V2(_) => {}

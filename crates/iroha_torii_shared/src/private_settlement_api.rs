@@ -396,6 +396,7 @@ pub struct PrivateSettlementBundleStatusResponseV1 {
     ///
     /// An opaque global abort marker can outlive restricted sidecars, so
     /// terminal abort status remains queryable without manufacturing fields.
+    #[norito(required)]
     pub manifest: Option<AtomicPrivateSettlementV1>,
     /// Current public lifecycle.
     pub lifecycle: PrivateSettlementLifecycleDtoV1,
@@ -426,6 +427,30 @@ pub enum PrivateSettlementBundleReceiptResponseV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bundle_status_json_requires_explicit_manifest() {
+        let response = PrivateSettlementBundleStatusResponseV1 {
+            manifest: None,
+            lifecycle: PrivateSettlementLifecycleDtoV1::Aborted,
+            finalized_height: None,
+        };
+        let value = norito::json::to_value(&response).expect("encode bundle status JSON");
+        assert_eq!(value.get("manifest"), Some(&norito::json::Value::Null));
+        let decoded =
+            norito::json::from_value::<PrivateSettlementBundleStatusResponseV1>(value.clone())
+                .expect("explicit null manifest decodes");
+        assert_eq!(decoded, response);
+
+        let mut omitted = value;
+        omitted
+            .as_object_mut()
+            .expect("bundle status is a JSON object")
+            .remove("manifest");
+        let error = norito::json::from_value::<PrivateSettlementBundleStatusResponseV1>(omitted)
+            .expect_err("omitted manifest must reject");
+        assert!(error.to_string().contains("missing field `manifest`"));
+    }
 
     #[test]
     fn lifecycle_and_pending_receipt_roundtrip_canonically() {

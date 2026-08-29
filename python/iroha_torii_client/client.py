@@ -10146,6 +10146,7 @@ class ToriiClient(
         *,
         authority: str,
         native_proof_b64: str,
+        replay_witness_b64: str,
         fee_payment: Mapping[str, Any],
         signature_b64: Optional[str] = None,
         transaction_payload_b64: Optional[str] = None,
@@ -10161,6 +10162,7 @@ class ToriiClient(
             "authority": authority,
             "fee_payment": fee_payment,
             "native_proof_b64": native_proof_b64,
+            "replay_witness_b64": replay_witness_b64,
         }
         for key, value in (
             ("signature_b64", signature_b64),

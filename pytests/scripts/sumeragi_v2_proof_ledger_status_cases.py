@@ -514,8 +514,10 @@ def _check_persistent_recovery_cut_requires_concrete_runtime_impl(
     path = repo_root / "crates/iroha_core/src/sumeragi/v2_runtime.rs"
     mutate_source_once(
         path,
-        "impl SerializedV2Runtime<SumeragiV2Adapter> {",
-        "impl SerializedV2Runtime {",
+        "impl SerializedV2Runtime<SumeragiV2Adapter> {\n"
+        "    /// Stage the deferred pending-Kura validation",
+        "impl SerializedV2Runtime {\n"
+        "    /// Stage the deferred pending-Kura validation",
     )
 
     errors = module._persistent_recovery_cut_source_fidelity_errors(repo_root)
@@ -593,30 +595,30 @@ def test_leader_wire_recovery_cut_uses_shared_physical_highwater(
         (
             (
                 "retiring_the_sole_certificate_does_not_fake_completion_headroom",
-                """        assert_eq!(
-            runtime.remaining_completion_capacity(),
-            0,
-            "retiring the sole certificate removes its credit as well as its physical owner"
-        );""",
-                """        assert_eq!(
-            runtime.remaining_completion_capacity(),
-            1,
-            "retiring the sole certificate removes its credit as well as its physical owner"
-        );""",
+                """    assert_eq!(
+        runtime.remaining_completion_capacity(),
+        0,
+        "retiring the sole certificate removes its credit as well as its physical owner"
+    );""",
+                """    assert_eq!(
+        runtime.remaining_completion_capacity(),
+        1,
+        "retiring the sole certificate removes its credit as well as its physical owner"
+    );""",
                 "sole-certificate retirement must not invent Completion headroom",
             ),
             (
                 "unpublished_body_replacement_cannot_overbook_the_certified_slot",
-                """        assert_eq!(
-            runtime.queued_commands(),
-            2,
-            "the conflicting proposal must retire before the reservation becomes live"
-        );""",
-                """        assert_eq!(
-            runtime.queued_commands(),
-            3,
-            "the conflicting proposal must retire before the reservation becomes live"
-        );""",
+                """    assert_eq!(
+        runtime.queued_commands(),
+        2,
+        "the conflicting proposal must retire before the reservation becomes live"
+    );""",
+                """    assert_eq!(
+        runtime.queued_commands(),
+        3,
+        "the conflicting proposal must retire before the reservation becomes live"
+    );""",
                 "unpublished BodyAvailable must atomically replace its conflict",
             ),
         )
@@ -1987,9 +1989,153 @@ def test_checked_in_tool_run_metadata_is_rejected() -> None:
     assert any("tool runs and counts belong only" in error for error in errors)
 
 
-def test_tlc_runner_cannot_claim_or_mutate_proof_completion() -> None:
+def test_tlc_runner_cannot_claim_or_mutate_proof_completion(
+    tmp_path: Path,
+) -> None:
     module = load_checker()
     runner = (ROOT_DIR / "scripts" / "formal" / "run_sumeragi_v2_tlc.sh").read_text()
+
+    assert module._FINITE_TLC_OPERATOR_OVERRIDE_CONFIGS == (
+        "quorum_count.cfg",
+        "quorum_stake.cfg",
+        "safety_count.cfg",
+        "safety_stake.cfg",
+        "chain_epoch.cfg",
+        "liveness.cfg",
+        "resume_locked_commit_witness.cfg",
+    )
+    assert module._FINITE_TLC_OPERATOR_OVERRIDES == (
+        "  Generations <- FiniteGenerations\n",
+        "  GenerationCanIncrement <- FiniteGenerationCanIncrement\n",
+        "  ModelConfiguration <- FiniteModelConfiguration\n",
+        "  ByzantineProposalJustificationDomain <- FiniteByzantineProposalJustificationDomain\n",
+    )
+    for cfg_name in module._FINITE_TLC_OPERATOR_OVERRIDE_CONFIGS:
+        source = (module.FORMAL_DIR / cfg_name).read_text(encoding="utf-8")
+        for override in module._FINITE_TLC_OPERATOR_OVERRIDES:
+            assert source.count(override) == 1, (cfg_name, override)
+        max_view = re.findall(r"(?m)^  MaxView = ([0-9]+)$", source)
+        max_generation = re.findall(
+            r"(?m)^  MaxGeneration = ([0-9]+)$", source
+        )
+        assert len(max_view) == len(max_generation) == 1, cfg_name
+        assert int(max_generation[0]) >= int(max_view[0]), cfg_name
+    assert module._FINITE_TLC_ASYNC_OVERRIDES == (
+        "  AsyncIngressPhysicalOrdinalMaximum <- FiniteAsyncIngressPhysicalOrdinalMaximum\n",
+        "  AsyncNetworkItems <- FiniteAsyncNetworkItems\n",
+    )
+    assert module._BYZANTINE_PROPOSAL_DOMAIN_PROOF_BINDINGS == {
+        "SumeragiV2Proofs.tla": (
+            ("NextLockFootprintClassification", "Next"),
+        ),
+        "SumeragiV2AsyncRecoveryVoteEpochProofs.tla": (
+            ("CoreNextSerializedBusyActionClassification", "Next"),
+            ("AsyncFaultStepLeavesOutstandingTags", "AsyncFaultStep"),
+        ),
+        "SumeragiV2AsyncRecoveryProgressWitnessProofs.tla": (
+            ("CoreNextPreservesDecisionTimeoutFrontier", "Next"),
+        ),
+        "SumeragiV2AsyncFairServiceProofs.tla": (
+            ("AsyncFaultStepLeavesDiscoveryClock", "AsyncFaultStep"),
+        ),
+        "SumeragiV2AsyncProgressOwnershipProofs.tla": (
+            ("AsyncFaultPreservesProgressOwnership", "AsyncFaultStep"),
+        ),
+        "SumeragiV2AsyncTimeoutKernelProofs.tla": (
+            ("CoreNextKeepsPrepareQcsMonotone", "Next"),
+            ("AsyncFaultStepKeepsTimeoutPool", "AsyncFaultStep"),
+            ("AsyncFaultStepPreservesSchedulerType", "AsyncFaultStep"),
+        ),
+    }
+    liveness_source = (module.FORMAL_DIR / "liveness.cfg").read_text(encoding="utf-8")
+    for override in module._FINITE_TLC_ASYNC_OVERRIDES:
+        assert liveness_source.count(override) == 1
+
+    formal_dir = tmp_path / "formal"
+    formal_dir.mkdir()
+    for cfg_name in module.REQUIRED_TLC_CONFIGS:
+        shutil.copyfile(module.FORMAL_DIR / cfg_name, formal_dir / cfg_name)
+    assert module._finite_tlc_configuration_errors(formal_dir) == []
+
+    pair_override = module._FINITE_TLC_OPERATOR_OVERRIDES[-1]
+    mutations = (
+        (
+            "safety_count.cfg",
+            pair_override,
+            "",
+            "canonical operator override",
+        ),
+        (
+            "safety_count.cfg",
+            pair_override,
+            pair_override + pair_override,
+            "found 2",
+        ),
+        (
+            "safety_count.cfg",
+            pair_override,
+            pair_override.replace("  Byzantine", "   Byzantine", 1),
+            "canonical operator override",
+        ),
+        (
+            "safety_count.cfg",
+            pair_override,
+            "(* " + pair_override.rstrip("\n") + " *)\n",
+            "canonical operator override",
+        ),
+        (
+            "safety_count.cfg",
+            pair_override,
+            pair_override
+            + pair_override.replace("  Byzantine", "   Byzantine", 1),
+            "ByzantineProposalJustificationDomain finite override inventory",
+        ),
+        (
+            "safety_count.cfg",
+            "  MaxGeneration = 3\n",
+            "  MaxGeneration = 2\n",
+            "must cover MaxView 3",
+        ),
+        (
+            "safety_count.cfg",
+            "  MaxGeneration = 3\n",
+            "(*  MaxGeneration = 3 *)\n",
+            "must declare exactly one decimal MaxView and MaxGeneration",
+        ),
+        (
+            "liveness.cfg",
+            module._FINITE_TLC_ASYNC_OVERRIDES[0],
+            "",
+            "finite async operator override must occur exactly 1",
+        ),
+        (
+            "liveness.cfg",
+            module._FINITE_TLC_ASYNC_OVERRIDES[1],
+            "",
+            "finite async operator override must occur exactly 1",
+        ),
+        (
+            "safety_count.cfg",
+            "CHECK_DEADLOCK FALSE\n",
+            "CHECK_DEADLOCK FALSE\n"
+            + module._FINITE_TLC_ASYNC_OVERRIDES[1],
+            "finite async operator override must occur exactly 0",
+        ),
+        (
+            "effective_lock_acquisition.cfg",
+            "CHECK_DEADLOCK FALSE\n",
+            "CHECK_DEADLOCK FALSE\n" + pair_override,
+            "ByzantineProposalJustificationDomain finite override inventory",
+        ),
+    )
+    for cfg_name, needle, replacement, expected_error in mutations:
+        path = formal_dir / cfg_name
+        canonical = path.read_text(encoding="utf-8")
+        assert canonical.count(needle) == 1, (cfg_name, needle)
+        path.write_text(canonical.replace(needle, replacement, 1), encoding="utf-8")
+        errors = module._finite_tlc_configuration_errors(formal_dir)
+        assert any(expected_error in error for error in errors), errors
+        path.write_text(canonical, encoding="utf-8")
 
     assert "COUNTEREXAMPLE SEARCH ONLY" in runner
     assert "no proof status was changed" in runner
@@ -2125,7 +2271,48 @@ def test_locked_commit_resume_witness_is_pinned_as_expected_counterexample(
     assert any("extend the canonical inductive model directly" in error for error in errors)
     witness.write_text(canonical_witness, encoding="utf-8")
 
+    for canonical, replacement, expected_error in (
+        (
+            "ResumeWitnessRosters == <<<<0>>>>",
+            "ResumeWitnessRosters == <<<<0, 1>>>>",
+            "carrier ResumeWitnessRosters must equal only",
+        ),
+        (
+            "ResumeWitnessPowers == <<<<1>>>>",
+            "ResumeWitnessPowers == <<<<1, 1>>>>",
+            "carrier ResumeWitnessPowers must equal only",
+        ),
+    ):
+        witness.write_text(
+            canonical_witness.replace(canonical, replacement, 1),
+            encoding="utf-8",
+        )
+        errors = module._resume_vote_witness_errors(formal_dir)
+        assert any(expected_error in error for error in errors)
+    witness.write_text(canonical_witness, encoding="utf-8")
+
     cfg = formal_dir / "resume_locked_commit_witness.cfg"
+    canonical_cfg = cfg.read_text(encoding="utf-8")
+    for canonical, replacement, expected_error in (
+        (
+            "  EpochRosters <- ResumeWitnessRosters",
+            "  EpochRosters <- CountRostersOneEpoch",
+            "substitution EpochRosters must equal the exact local carrier",
+        ),
+        (
+            "  EpochPowers <- ResumeWitnessPowers",
+            "  EpochPowers <- CountPowersOneEpoch",
+            "substitution EpochPowers must equal the exact local carrier",
+        ),
+    ):
+        cfg.write_text(
+            canonical_cfg.replace(canonical, replacement, 1),
+            encoding="utf-8",
+        )
+        errors = module._resume_vote_witness_errors(formal_dir)
+        assert any(expected_error in error for error in errors)
+    cfg.write_text(canonical_cfg, encoding="utf-8")
+
     cfg.write_text(
         cfg.read_text(encoding="utf-8").replace(
             "INVARIANT NoRecoveredHistoricalLockedCommitSigning",

@@ -38,6 +38,8 @@ public struct ToriiParliamentProposalV1: Sendable, Equatable, Encodable {
     public let kind: ToriiGovernanceProposalKind
 
     private let wireValue: ToriiJSONValue
+    fileprivate let exactWireData: Data
+    private let requiresExactIntegerEncoding: Bool
 
     /// Validate one exact seven-kind proposal wire value before it can enter a draft request.
     public init(validating data: Data) throws {
@@ -51,18 +53,35 @@ public struct ToriiParliamentProposalV1: Sendable, Equatable, Encodable {
                 "proposal must be valid UTF-8 JSON without duplicate object keys and with canonical SCCP UInt128 integers."
             )
         }
+        let exactIntegerLexemes: [String: String]
+        do {
+            exactIntegerLexemes = try governanceExactJSONIntegerLexemes(data)
+        } catch {
+            throw ToriiClientError.invalidPayload(
+                "proposal must use exact canonical first-release JSON integers."
+            )
+        }
         let decoder = JSONDecoder()
+        decoder.userInfo[governanceExactIntegerLexemesUserInfoKey] = exactIntegerLexemes
         kind = try decoder.decode(ToriiGovernanceProposalKind.self, from: data)
         wireValue = try decoder.decode(ToriiJSONValue.self, from: data)
-        try governanceRequireExactJSONIntegers(
-            wireValue,
-            codingPath: [],
-            context: "proposal"
-        )
+        exactWireData = data
+        requiresExactIntegerEncoding = exactIntegerLexemes.values.contains { value in
+            value.count > 16 || UInt64(value).map { $0 > 9_007_199_254_740_991 } ?? true
+        }
         try ToriiParliamentAPIV1.rejectSigningMaterial(wireValue, context: "proposal")
     }
 
     public func encode(to encoder: Encoder) throws {
+        guard !requiresExactIntegerEncoding else {
+            throw EncodingError.invalidValue(
+                self,
+                .init(
+                    codingPath: encoder.codingPath,
+                    debugDescription: "exact extended integers must be encoded through ToriiParliamentAPIV1.attemptDraftRequestData"
+                )
+            )
+        }
         try wireValue.encode(to: encoder)
     }
 }
@@ -926,13 +945,13 @@ public enum ToriiParliamentAPIV1 {
                 "attempt_sequence must be between zero and 16."
             )
         }
-        return try JSONEncoder().encode(
-            ToriiParliamentAttemptDraftEnvelopeV1(
-                version: version,
-                proposal: proposal,
-                attemptSequence: attemptSequence
-            )
-        )
+        // JSONEncoder represents arbitrary JSON numbers as Double. Assemble this
+        // tiny fixed envelope around the already validated proposal bytes so SCCP
+        // UInt128 and TON 2^120 caps retain their exact numeric lexemes.
+        var data = Data("{\"attempt_sequence\":\(attemptSequence),\"proposal\":".utf8)
+        data.append(proposal.exactWireData)
+        data.append(Data(",\"version\":\(version)}".utf8))
+        return data
     }
 
     /// Encode the exact, versioned lifecycle-transition draft request body.

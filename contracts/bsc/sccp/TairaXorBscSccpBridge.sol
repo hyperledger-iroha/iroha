@@ -10,6 +10,7 @@ contract TairaXorBscSccpBridge is TairaXorExactEvmSccpBridge {
         VerifierPolicyV1 memory configuredVerifierPolicy,
         uint8 configuredBscProfile,
         uint32 configuredRouteRevision,
+        address[5] memory configuredMintGuardians,
         uint256 configuredMaxWrappedSupply
     ) TairaXorExactEvmSccpBridge(
         tokenAddress,
@@ -17,10 +18,11 @@ contract TairaXorBscSccpBridge is TairaXorExactEvmSccpBridge {
         2,
         configuredBscProfile,
         configuredRouteRevision,
+        configuredMintGuardians,
         configuredMaxWrappedSupply
     ) {}
 
-    /** Return the exact SCCP BSC profile tag (`4` mainnet or `5` testnet). */
+    /** Return the exact SCCP BSC mainnet profile tag (`0x42`). */
     function bscProfile() external view returns (uint8) {
         return networkProfile;
     }

@@ -2601,8 +2601,9 @@ mod harness {
         }
         let config = Config::parse()?;
         ensure_trace_environment(&config)?;
-        let params = find_by_name("fastpq-lane-balanced")
-            .ok_or_else(|| "canonical parameter set 'fastpq-lane-balanced' missing".to_owned())?;
+        let params = find_by_name("fastpq-state-transition-stark-v1").ok_or_else(|| {
+            "canonical parameter set 'fastpq-state-transition-stark-v1' missing".to_owned()
+        })?;
         let planner = Planner::new(params);
         let padded = config
             .rows

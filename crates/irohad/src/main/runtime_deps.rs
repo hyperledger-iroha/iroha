@@ -807,6 +807,17 @@ mod parliament_tle_release_tests {
     struct UnavailableSigner;
 
     impl iroha_core::tle_release::TlePartialReleaseSignerV1 for UnavailableSigner {
+        fn attest_partial_release_capability(
+            &self,
+            _session: &iroha_core::tle_release::ValidatedTleKeySessionV1,
+            _expected_participant_index: u16,
+        ) -> Result<
+            iroha_core::tle_release::TlePartialReleaseCapabilityAttestationV1,
+            iroha_core::tle_release::TlePartialReleaseCapabilityErrorV1,
+        > {
+            Err(iroha_core::tle_release::TlePartialReleaseCapabilityErrorV1::Unavailable)
+        }
+
         fn sign_partial_release(
             &self,
             _context: &iroha_core::tle_release::AuthorizedTleReleaseContextV1,

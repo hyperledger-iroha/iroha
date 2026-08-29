@@ -2338,6 +2338,17 @@ impl ParliamentTlePartialReleaseSignerBrokerBackendV1 for TestParliamentTleBroke
         Ok(self.qualification)
     }
 
+    fn attest_partial_release_capability(
+        &self,
+        _session: &iroha_core::tle_release::ValidatedTleKeySessionV1,
+        _expected_participant_index: u16,
+    ) -> Result<
+        iroha_core::tle_release::TlePartialReleaseCapabilityAttestationV1,
+        ParliamentTlePartialReleaseSignerBrokerBackendErrorV1,
+    > {
+        Err(ParliamentTlePartialReleaseSignerBrokerBackendErrorV1::Rejected)
+    }
+
     fn sign_projected_partial_release(
         &self,
         _projection: &iroha_core::tle_release::ValidatedTleReleaseProjectionV1,

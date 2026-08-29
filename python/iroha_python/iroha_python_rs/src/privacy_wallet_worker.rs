@@ -1707,18 +1707,18 @@ fn retained_protocol(protocol: &str) -> Result<PrivacyProtocolIdV1, WorkerError>
     let protocol_id = PrivacyProtocolIdV1::from_canonical_label(protocol)
         .ok_or(WorkerError::UnsupportedProtocol)?;
     match protocol_id {
-        PrivacyProtocolIdV1::ZkAcePqAuthorizationV0
+        PrivacyProtocolIdV1::ZkAcePqAuthorizationV1
         | PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1
         | PrivacyProtocolIdV1::VeRangeTransparentRangeV1
         | PrivacyProtocolIdV1::IrohaZkAmsV1
-        | PrivacyProtocolIdV1::VegaExistingCredentialZkV0
-        | PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0
+        | PrivacyProtocolIdV1::VegaExistingCredentialZkV1
+        | PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1
         | PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1
         | PrivacyProtocolIdV1::OrchardHalo2ActionsV1
         | PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1
         | PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1
-        | PrivacyProtocolIdV1::PqMaspStarkV0 => {}
-        PrivacyProtocolIdV1::IrohaZkX509StarkP256V0 => {
+        | PrivacyProtocolIdV1::PqMaspStarkV1 => {}
+        PrivacyProtocolIdV1::IrohaZkX509StarkP256V1 => {
             return Err(WorkerError::UnsupportedProtocol);
         }
     }
@@ -2182,13 +2182,13 @@ mod tests {
     const KEY: [u8; 32] = [0x51; 32];
     const TEST_SIGNER_SEED: [u8; 32] = [7; 32];
     const JINDO_PUBLIC_ACTION: &[u8] = br#"{"evaluation_point_hex":"0000000000000000000000000000000000000000000000000000000000000000"}"#;
-    const JINDO_WITNESS: &[u8] = br#"{"polynomials_hex":[["0000000000000000000000000000000000000000000000000000000000000000"],["0100000000000000000000000000000000000000000000000000000000000000"],["0200000000000000000000000000000000000000000000000000000000000000"],["0300000000000000000000000000000000000000000000000000000000000000"]]}"#;
-    const CANONICAL_JINDO_PUBLIC_INTENT: &[u8] = br#"{"algorithm_id":"iroha-jindo-polynomial-commitment-v0","operation_schema":"jindo_polynomial_evaluation_v1","protocol_id":"iroha-jindo-polynomial-commitment-v0","public_action":{"evaluation_point_hex":"0000000000000000000000000000000000000000000000000000000000000000"},"selected_criteria":{"hide_amount":false,"hide_asset_type":false,"hide_receiver":false,"hide_sender":false,"post_quantum":false},"selected_features":{"hide_amount":false,"hide_asset_type":false,"hide_receiver":false,"hide_sender":false,"post_quantum":false},"signer_wallet_id":"alice@wonderland"}"#;
+    const JINDO_WITNESS: &[u8] = br#"{"polynomials_hex":[["0000000000000000000000000000000000000000000000000000000000000000"]]}"#;
+    const CANONICAL_JINDO_PUBLIC_INTENT: &[u8] = br#"{"algorithm_id":"iroha-jindo-polynomial-commitment-v1","operation_schema":"jindo_polynomial_evaluation_v1","protocol_id":"iroha-jindo-polynomial-commitment-v1","public_action":{"evaluation_point_hex":"0000000000000000000000000000000000000000000000000000000000000000"},"selected_criteria":{"hide_amount":false,"hide_asset_type":false,"hide_receiver":false,"hide_sender":false,"post_quantum":false},"selected_features":{"hide_amount":false,"hide_asset_type":false,"hide_receiver":false,"hide_sender":false,"post_quantum":false},"signer_wallet_id":"alice@wonderland"}"#;
     fn binding() -> WitnessBinding {
         WitnessBinding {
             network_id: [1; 32],
             signer: "alice@wonderland".to_owned(),
-            protocol: "iroha-jindo-polynomial-commitment-v0".to_owned(),
+            protocol: "iroha-jindo-polynomial-commitment-v1".to_owned(),
             profile_digest: [2; 32],
             public_intent_digest: canonical_public_intent_digest(CANONICAL_JINDO_PUBLIC_INTENT),
             nonce: [4; 32],
@@ -2261,7 +2261,7 @@ mod tests {
         output.push(1);
         put_text(&mut output, "alice@wonderland");
         put_text(&mut output, &authority.to_string());
-        put_text(&mut output, "iroha-jindo-polynomial-commitment-v0");
+        put_text(&mut output, "iroha-jindo-polynomial-commitment-v1");
         put_text(&mut output, "jindo_polynomial_evaluation_v1");
         put_bytes_u32(&mut output, JINDO_PUBLIC_ACTION).expect("public action");
         output.extend_from_slice(&TEST_SIGNER_SEED);
@@ -2274,21 +2274,21 @@ mod tests {
     #[test]
     fn generic_worker_registry_rejects_the_separate_zk_x509_path() {
         assert!(matches!(
-            retained_protocol("iroha-zk-x509-stark-p256-v0"),
+            retained_protocol("iroha-zk-x509-stark-p256-v1"),
             Err(WorkerError::UnsupportedProtocol)
         ));
         for protocol in [
-            "zk-ace-pq-authorization-v0",
+            "zk-ace-pq-authorization-v1",
             "anonymous-pgc-k-out-of-n-v1",
             "verange-transparent-range-v1",
             "iroha-zk-ams-v1",
-            "vega-existing-credential-zk-v0",
-            "iroha-jindo-polynomial-commitment-v0",
+            "vega-existing-credential-zk-v1",
+            "iroha-jindo-polynomial-commitment-v1",
             "iroha-bootle-lantern-anoncred-v1",
             "orchard-halo2-actions-v1",
             "monero-fcmp-plus-plus-v1",
             "iroha-ivm-private-note-stark-v1",
-            "pq-masp-stark-v0",
+            "pq-masp-stark-v1",
         ] {
             assert!(retained_protocol(protocol).is_ok(), "{protocol}");
         }
@@ -2391,7 +2391,7 @@ mod tests {
                 "\"network_id_hex\":\"{}\",",
                 "\"nonce\":7,",
                 "\"operation_schema\":\"jindo_polynomial_evaluation_v1\",",
-                "\"protocol_id\":\"iroha-jindo-polynomial-commitment-v0\",",
+                "\"protocol_id\":\"iroha-jindo-polynomial-commitment-v1\",",
                 "\"public_action\":{{\"evaluation_point_hex\":\"0000000000000000000000000000000000000000000000000000000000000000\"}},",
                 "\"schema_version\":1,",
                 "\"transaction_metadata\":{{}},",
@@ -2796,7 +2796,7 @@ mod tests {
             _ => panic!("valid Jindo execute returned the wrong response kind"),
         };
         let (_, expected_public_key, expected_authority) = test_signer();
-        assert_eq!(signed.protocol_id, "iroha-jindo-polynomial-commitment-v0");
+        assert_eq!(signed.protocol_id, "iroha-jindo-polynomial-commitment-v1");
         assert_eq!(signed.operation_schema, "jindo_polynomial_evaluation_v1");
         assert_eq!(signed.network_id, [1; 32]);
         assert_eq!(signed.authority, expected_authority.to_string());
@@ -2825,7 +2825,7 @@ mod tests {
                 .expect("independently inspect signed transaction");
             assert_eq!(
                 inspected.protocol_id(),
-                PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0
+                PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1
             );
             assert_eq!(inspected.transaction_hash(), signed.transaction_hash);
             assert_eq!(
@@ -2985,7 +2985,7 @@ mod tests {
             statement_schema_digest: [0x44; 32],
             engine_manifest_digest: [0x55; 32],
         };
-        let baseline = compiled_profile_digest("iroha-jindo-polynomial-commitment-v0", &profile)
+        let baseline = compiled_profile_digest("iroha-jindo-polynomial-commitment-v1", &profile)
             .expect("profile digest");
         assert_eq!(
             hex::encode(baseline),
@@ -3009,7 +3009,7 @@ mod tests {
             };
             assert_ne!(
                 baseline,
-                compiled_profile_digest("iroha-jindo-polynomial-commitment-v0", &changed,)
+                compiled_profile_digest("iroha-jindo-polynomial-commitment-v1", &changed,)
                     .expect("changed profile digest")
             );
             mutations[index][0] ^= 1;

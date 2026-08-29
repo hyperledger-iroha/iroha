@@ -9,7 +9,7 @@
 //! The transcript challenges must be sampled only after both endpoint and
 //! address-sorted traces have been committed.
 use crate::privacy_engines::transparent_stark::{
-    GoldilocksFieldV1 as F, TransparentStarkErrorV1, TransparentTranscriptV1,
+    GoldilocksDigest384V1, GoldilocksFieldV1 as F, TransparentStarkErrorV1, TransparentTranscriptV1,
 };
 use thiserror::Error;
 /// Manifest descriptor for cross-segment byte-channel binding.
@@ -942,12 +942,21 @@ mod tests {
         for (index, label) in labels.iter().enumerate() {
             assert!(!labels[..index].contains(label));
         }
-        let profile = [0x10; 32];
-        let public = [0x20; 32];
-        let execution_root = [0x30; 32];
-        let sorted_root = [0x40; 32];
-        let mut transcript = TransparentTranscriptV1::new(b"zk-x509-io-test", &profile, &public)
-            .expect("transcript");
+        let profile = GoldilocksDigest384V1::new([0x10; 6]).expect("profile digest");
+        let public = GoldilocksDigest384V1::new([0x20; 6]).expect("public digest");
+        let execution_root = GoldilocksDigest384V1::new([0x30; 6])
+            .expect("execution root")
+            .to_le_bytes();
+        let sorted_root = GoldilocksDigest384V1::new([0x40; 6])
+            .expect("sorted root")
+            .to_le_bytes();
+        let mut transcript = TransparentTranscriptV1::new(
+            super::super::stark::ZK_X509_DIGEST_CONTEXT_V1,
+            b"zk-x509-io-test",
+            &profile,
+            &public,
+        )
+        .expect("transcript");
         transcript
             .absorb(
                 b"zk-x509-io-trace-commitments-v1",
@@ -958,8 +967,13 @@ mod tests {
         sampled.validate().expect("valid challenges");
         let mut changed_root = sorted_root;
         changed_root[5] ^= 1;
-        let mut changed = TransparentTranscriptV1::new(b"zk-x509-io-test", &profile, &public)
-            .expect("transcript");
+        let mut changed = TransparentTranscriptV1::new(
+            super::super::stark::ZK_X509_DIGEST_CONTEXT_V1,
+            b"zk-x509-io-test",
+            &profile,
+            &public,
+        )
+        .expect("transcript");
         changed
             .absorb(
                 b"zk-x509-io-trace-commitments-v1",

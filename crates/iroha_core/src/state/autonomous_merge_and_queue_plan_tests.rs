@@ -2749,7 +2749,8 @@ fn autonomous_execution_requires_exact_pre_carrier_queue_plan_admission() {
         entrypoint,
         routing_plan,
         &validator_keypairs,
-    );
+    )
+    .expect("canonical autonomous QueuePlan fixture source");
     let application_header = BlockHeader::new(
         NonZeroU64::new(carrier_height).expect("fixture carrier height is non-zero"),
         Some(parent.hash()),
@@ -2870,6 +2871,78 @@ fn pending_queue_plan_admission_keeps_historical_eligibility_after_frontier_adva
         PendingQueuePlanAdmissionDisposition::EligibleAbsent,
         "advancing the receiver must retain the exact predecessor, roster, and incarnation authority at H"
     );
+}
+#[test]
+fn queue_plan_validation_waiting_for_state_generation_does_not_pin_block_hashes() {
+    let (state, validator_keypairs, _, parent) = configured_single_lane_queue_plan_state();
+    let authority_height = parent.header().height().get();
+    let proposal_height = authority_height
+        .checked_add(1)
+        .expect("fixture proposal height");
+    let routing_plan = crate::queue::RoutingPlan::single(crate::queue::RoutingDecision::new(
+        LaneId::SINGLE,
+        DataSpaceId::UNIVERSAL,
+    ));
+    let (_, certificate) = queue_plan_admission_certificate_for_state_test(
+        &state,
+        routing_plan,
+        &validator_keypairs,
+        authority_height,
+        0x65,
+    );
+    let state = Arc::new(state);
+    let start = Arc::new(Barrier::new(2));
+    let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+    let (completion_tx, completion_rx) = std::sync::mpsc::channel();
+    let worker_state = Arc::clone(&state);
+    let worker_start = Arc::clone(&start);
+    let worker = std::thread::spawn(move || {
+        worker_start.wait();
+        entered_tx
+            .send(())
+            .expect("announce QueuePlan validation attempt");
+        let result = worker_state
+            .validate_queue_plan_admissions_for_carrier(&[certificate], proposal_height)
+            .map(|_| ())
+            .map_err(|error| error.to_string());
+        completion_tx
+            .send(result)
+            .expect("return QueuePlan validation result");
+    });
+
+    let generation_guard = state.begin_state_view_write();
+    start.wait();
+    entered_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("QueuePlan validation worker starts");
+    let observation_deadline = std::time::Instant::now() + Duration::from_millis(250);
+    let mut block_hashes_pinned = false;
+    while std::time::Instant::now() < observation_deadline {
+        if state.block_hashes.inner.try_write().is_none() {
+            block_hashes_pinned = true;
+            break;
+        }
+        std::thread::yield_now();
+    }
+    let premature_completion = completion_rx.try_recv().ok();
+    let completed_while_generation_odd = premature_completion.is_some();
+    drop(generation_guard);
+    let validation = premature_completion.unwrap_or_else(|| {
+        completion_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("QueuePlan validation completes after the writer generation ends")
+    });
+    worker.join().expect("QueuePlan validation worker");
+
+    assert!(
+        !block_hashes_pinned,
+        "validation waiting for a coherent State generation must not retain a block-hash read guard",
+    );
+    assert!(
+        !completed_while_generation_odd,
+        "validation must wait for the active State writer generation",
+    );
+    validation.expect("the exact QueuePlan certificate remains valid");
 }
 #[test]
 fn pending_queue_plan_admission_is_future_until_its_canonical_frontier_arrives() {

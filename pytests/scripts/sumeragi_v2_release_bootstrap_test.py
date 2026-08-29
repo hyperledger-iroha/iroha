@@ -30,7 +30,6 @@ APPROVAL_CONTRACT = (
 )
 RECEIPT_VALIDATOR_SUPPORT = REPO_ROOT / "scripts" / "sumeragi_v2_localnet_manifest.py"
 PYTHON = Path(sys.executable).resolve(strict=True)
-FINGERPRINT = "SHA256:" + "A" * 43
 SCALING_EVIDENCE_ENV = "IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST"
 SCALING_TRUST_ENV = (
     "IROHA_RELEASE_SCALING_CONFIGURATION_SHA256",
@@ -43,6 +42,12 @@ RELEASE_CONTROL_ENV = (
     "IROHA_RELEASE_APALACHE_BIN",
     "IROHA_RELEASE_CANCEL_REQUEST_PATH",
     "IROHA_RELEASE_TLA2TOOLS_JAR",
+)
+FORMAL_REPLAY_ENV = (
+    "IROHA_RELEASE_FORMAL_REPLAY_SOURCE_RECEIPT",
+    "IROHA_RELEASE_FORMAL_REPLAY_RELEASE_ROOT",
+    "IROHA_RELEASE_FORMAL_REPLAY_SIGNATURE_SHA256",
+    "IROHA_RELEASE_FORMAL_REPLAY_SIGNER_PRINCIPAL",
 )
 DEFAULT_SCALING_DIGESTS = {
     "IROHA_RELEASE_SCALING_CONFIGURATION_SHA256": "a" * 64,
@@ -91,7 +96,11 @@ def test_release_trust_inputs_are_the_only_new_runner_environment_names(
         "RUSTUP_TOOLCHAIN",
         "SSL_CERT_FILE",
     }
-    expected_release_environment = set(SCALING_TRUST_ENV) | set(RELEASE_CONTROL_ENV)
+    expected_release_environment = (
+        set(SCALING_TRUST_ENV)
+        | set(RELEASE_CONTROL_ENV)
+        | set(FORMAL_REPLAY_ENV)
+    )
     assert (
         module._RUNNER_ENV_ALLOWLIST - preexisting_allowlist
         == expected_release_environment
@@ -638,7 +647,10 @@ OPTION_ORDER = (
     "--signature-git", "--signature-ssh-keygen", "--expected-git-sha256",
     "--expected-ssh-keygen-sha256", "--expected-allowed-signers-sha256",
     "--expected-revocation-sha256", "--expected-signer-fingerprint",
-    "--corridor-completion", "--formal-completion", "--seed-completion",
+    "--corridor-completion", "--formal-completion",
+    "--formal-replay-source-receipt", "--formal-replay-release-root",
+    "--expected-formal-replay-signature-sha256",
+    "--formal-replay-principal", "--seed-completion",
     "--chaos-completion", "--g4p-completion",
     "--g12-seed-completion", "--g12-fault-soak-completion",
     "--scaling-evidence-manifest",
@@ -659,6 +671,8 @@ PATH_OPTIONS = frozenset({
         "--expected-bootstrap-completion-sha256", "--expected-git-sha256",
         "--expected-ssh-keygen-sha256", "--expected-allowed-signers-sha256",
         "--expected-revocation-sha256", "--expected-signer-fingerprint",
+        "--expected-formal-replay-signature-sha256",
+        "--formal-replay-principal",
         "--expected-scaling-trial-harness-sha256",
         "--expected-scaling-configuration-sha256",
         "--expected-scaling-irohad-sha256",
@@ -694,6 +708,10 @@ for option in (
     "bootstrap-runner",
     "corridor-completion",
     "formal-completion",
+    "formal-replay-source-receipt",
+    "formal-replay-release-root",
+    "expected-formal-replay-signature-sha256",
+    "formal-replay-principal",
     "seed-completion",
     "chaos-completion",
     "g4p-completion",
@@ -782,6 +800,26 @@ for argument, environment_name in (
     (
         args.expected_scaling_iroha_cli_sha256,
         "IROHA_RELEASE_SCALING_IROHA_CLI_SHA256",
+    ),
+    (
+        args.expected_formal_replay_signature_sha256,
+        "IROHA_RELEASE_FORMAL_REPLAY_SIGNATURE_SHA256",
+    ),
+    (
+        args.formal_replay_principal,
+        "IROHA_RELEASE_FORMAL_REPLAY_SIGNER_PRINCIPAL",
+    ),
+):
+    if argument != os.environ.get(environment_name):
+        raise SystemExit(43)
+for argument, environment_name in (
+    (
+        args.formal_replay_source_receipt,
+        "IROHA_RELEASE_FORMAL_REPLAY_SOURCE_RECEIPT",
+    ),
+    (
+        args.formal_replay_release_root,
+        "IROHA_RELEASE_FORMAL_REPLAY_RELEASE_ROOT",
     ),
 ):
     if argument != os.environ.get(environment_name):
@@ -1753,6 +1791,46 @@ g12_evidence = {{
     "fault_soak_log": full_artifact(g12_soak_log),
 }}
 
+formal_replay_source = Path(
+    os.environ["IROHA_RELEASE_FORMAL_REPLAY_SOURCE_RECEIPT"]
+).resolve(strict=True)
+formal_replay_root = Path(
+    os.environ["IROHA_RELEASE_FORMAL_REPLAY_RELEASE_ROOT"]
+).resolve(strict=True)
+formal_replay_source_value = json.loads(formal_replay_source.read_bytes())
+formal_replay_source_artifacts = [
+    full_artifact(formal_replay_source.parent / record["path"])
+    for record in formal_replay_source_value["artifact_inventory"]
+]
+formal_replay_release = {{
+    "schema_version": 1,
+    "scheme": "detached-ssh",
+    "provider": "openssh-sshsig",
+    "namespace": "iroha-sumeragi-v2-replay-receipt-v1",
+    "principal": os.environ[
+        "IROHA_RELEASE_FORMAL_REPLAY_SIGNER_PRINCIPAL"
+    ],
+    "signer_fingerprint": signer_fingerprint,
+    "source_artifacts": formal_replay_source_artifacts,
+    "source_receipt": full_artifact(formal_replay_source),
+    "receipt": full_artifact(formal_replay_root / "receipt.json"),
+    "signature": full_artifact(formal_replay_root / "receipt.json.sig"),
+    "ssh_keygen": full_artifact(
+        formal_replay_root / "ssh-keygen.release-tool"
+    ),
+    "allowed_signers": full_artifact(formal_replay_root / "allowed_signers"),
+    "revocation": full_artifact(formal_replay_root / "revocation.krl"),
+    "attestation": full_artifact(
+        formal_replay_root / "release-attestation.json"
+    ),
+    "tlapm_folds": full_artifact(
+        formal_replay_root / "tlapm-projection" / "Folds.tla"
+    ),
+    "tlapm_functions": full_artifact(
+        formal_replay_root / "tlapm-projection" / "Functions.tla"
+    ),
+}}
+
 release_root.chmod(0o500)
 
 trust_policy = {{
@@ -1896,6 +1974,7 @@ receipt = {{
         "formal_toolchain": {{}},
         "formal_tlaps_resource_jsonl": artifact(formal_resource_jsonl),
         "formal_tlaps_resource_summary": artifact(formal_resource_summary),
+        "formal_replay_release": formal_replay_release,
         "seed_matrix_summary": {{}},
         "seed_matrix_run_logs": [],
         "seed_matrix_localnet_manifest_index": {{}},
@@ -1964,6 +2043,10 @@ python3 -I -S "$SUMERAGI_V2_RELEASE_BOOTSTRAP_EVIDENCE_DIR/validate-receipt.py" 
   --expected-signer-fingerprint "$SUMERAGI_V2_RELEASE_EXPECTED_SIGNER_FINGERPRINT" \
   --corridor-completion "$release_output/mock-completions/corridor_completion.tsv" \
   --formal-completion "$release_output/mock-completions/formal_completion.tsv" \
+  --formal-replay-source-receipt "$IROHA_RELEASE_FORMAL_REPLAY_SOURCE_RECEIPT" \
+  --formal-replay-release-root "$IROHA_RELEASE_FORMAL_REPLAY_RELEASE_ROOT" \
+  --expected-formal-replay-signature-sha256 "$IROHA_RELEASE_FORMAL_REPLAY_SIGNATURE_SHA256" \
+  --formal-replay-principal "$IROHA_RELEASE_FORMAL_REPLAY_SIGNER_PRINCIPAL" \
   --seed-completion "$release_output/mock-completions/seed_matrix_completion.tsv" \
   --chaos-completion "$release_output/mock-completions/chaos_completion.tsv" \
   --g4p-completion "$release_output/g4p/COMPLETED.tsv" \
@@ -2153,6 +2236,17 @@ def _wait_for(path: Path, timeout: float = 10.0) -> None:
     raise AssertionError(f"timed out waiting for {path}")
 
 
+@dataclass(frozen=True)
+class SignedReplayBundle:
+    """One genuine externally signed replay release shared by bootstrap cases."""
+
+    source_receipt: Path
+    release_root: Path
+    signature_sha256: str
+    principal: str
+    signer_fingerprint: str
+
+
 @dataclass
 class Fixture:
     root: Path
@@ -2171,6 +2265,7 @@ class Fixture:
     approvals: dict[str, Path]
     sdk_manifest: Path
     tool_manifest: Path
+    formal_replay: SignedReplayBundle
     git: Path
     ssh: Path
     bash: Path
@@ -2256,7 +2351,8 @@ class Fixture:
             "--expected-runner-tool-manifest-sha256", _sha256(self.tool_manifest),
             "--bash-bin", str(self.bash),
             "--expected-bash-sha256", _sha256(self.bash),
-            "--expected-signer-fingerprint", FINGERPRINT,
+            "--expected-signer-fingerprint",
+            self.formal_replay.signer_fingerprint,
             "--ssh-allowed-signers", str(self.allowed),
             "--expected-ssh-allowed-signers-sha256", _sha256(self.allowed),
             "--ssh-revocation-file", str(self.revocation),
@@ -2275,6 +2371,27 @@ class Fixture:
         for name in SCALING_TRUST_ENV:
             arguments.extend(
                 ["--runner-environment", f"{name}={scaling_environment[name]}"]
+            )
+        formal_replay_environment = {
+            "IROHA_RELEASE_FORMAL_REPLAY_SOURCE_RECEIPT": str(
+                self.formal_replay.source_receipt
+            ),
+            "IROHA_RELEASE_FORMAL_REPLAY_RELEASE_ROOT": str(
+                self.formal_replay.release_root
+            ),
+            "IROHA_RELEASE_FORMAL_REPLAY_SIGNATURE_SHA256": (
+                self.formal_replay.signature_sha256
+            ),
+            "IROHA_RELEASE_FORMAL_REPLAY_SIGNER_PRINCIPAL": (
+                self.formal_replay.principal
+            ),
+        }
+        for name in FORMAL_REPLAY_ENV:
+            arguments.extend(
+                [
+                    "--runner-environment",
+                    f"{name}={formal_replay_environment[name]}",
+                ]
             )
         return arguments
 
@@ -2296,8 +2413,56 @@ class Fixture:
         )
 
 
+@pytest.fixture(scope="module")
+def signed_replay_bundle() -> SignedReplayBundle:
+    """Finalize one ephemeral Ed25519 replay receipt through production code."""
+
+    path = REPO_ROOT / "scripts" / "formal" / "sumeragi_v2_replay_receipt_test.py"
+    name = "sumeragi_v2_bootstrap_signed_replay_fixture"
+    spec = importlib.util.spec_from_file_location(name, path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    test_class = module.ReplayReceiptTest
+    test_class.setUpClass()
+    try:
+        case = test_class(
+            methodName="test_release_signature_checker_and_finalizer_pass"
+        )
+        release_root = test_class.work / "bootstrap-release"
+        module.FINALIZER.finalize(case._finalizer_args(release_root))
+        module.RELEASE_VERIFIER.verify_release(
+            case._release_verifier_args(release_root)
+        )
+        bundle = SignedReplayBundle(
+            source_receipt=test_class.receipt_path.resolve(strict=True),
+            release_root=release_root.resolve(strict=True),
+            signature_sha256=_sha256(release_root / "receipt.json.sig"),
+            principal=test_class.principal,
+            signer_fingerprint=test_class.fingerprint,
+        )
+        yield bundle
+    finally:
+        release_root = test_class.work / "bootstrap-release"
+        if release_root.exists() and not release_root.is_symlink():
+            for directory, child_directories, files in os.walk(
+                release_root, topdown=False
+            ):
+                current = Path(directory)
+                for filename in files:
+                    (current / filename).chmod(0o600)
+                for child in child_directories:
+                    (current / child).chmod(0o700)
+                current.chmod(0o700)
+        test_class.tearDownClass()
+        sys.modules.pop(name, None)
+
+
 @pytest.fixture
-def release_fixture(tmp_path: Path) -> Fixture:
+def release_fixture(
+    tmp_path: Path, signed_replay_bundle: SignedReplayBundle
+) -> Fixture:
     root = tmp_path.resolve(strict=True)
     candidate = root / "candidate"
     trust = root / "trust"
@@ -2376,7 +2541,11 @@ def release_fixture(tmp_path: Path) -> Fixture:
         _sdk_source_manifest_fixture(git),
         0o400,
     )
-    ssh = _write(trust / "ssh-keygen", "#!/bin/sh\nexit 0\n", 0o500)
+    ssh = _write(
+        trust / "ssh-keygen",
+        (signed_replay_bundle.release_root / "ssh-keygen.release-tool").read_bytes(),
+        0o500,
+    )
     bash = _write(
         trust / "relocatable-bash",
         "#!/bin/bash\nexec /bin/bash \"$@\"\n",
@@ -2384,10 +2553,14 @@ def release_fixture(tmp_path: Path) -> Fixture:
     )
     allowed = _write(
         trust / "allowed-signers",
-        "release namespaces=\"git\" ssh-ed25519 AAAATEST\n",
+        (signed_replay_bundle.release_root / "allowed_signers").read_bytes(),
         0o400,
     )
-    revocation = _write(trust / "revocation", b"", 0o400)
+    revocation = _write(
+        trust / "revocation",
+        (signed_replay_bundle.release_root / "revocation.krl").read_bytes(),
+        0o400,
+    )
     _write(
         candidate / "scripts" / "run_sumeragi_v2_release_gates.sh",
         _runner(launch_count, candidate, "success"),
@@ -2417,6 +2590,7 @@ def release_fixture(tmp_path: Path) -> Fixture:
         approvals,
         sdk_manifest,
         tool_manifest,
+        signed_replay_bundle,
         git,
         ssh,
         bash,
@@ -2603,8 +2777,9 @@ def _rebind_bootstrap_trusted_input(
                 "sha256": _sha256(component_archive),
                 "size_bytes": component_archive.stat().st_size,
             }
-    digest = _sha256(archive if framework_python else source)
-    source_metadata = (archive if framework_python else source).stat()
+    trusted_source = archive if framework_python else source
+    digest = _sha256(trusted_source)
+    source_metadata = trusted_source.stat()
     runtime_name = {"python": "python3", "bash": "bash", "git": "git"}.get(label)
     if runtime_name is not None:
         runtime_tools = evidence.get("runtime_tool_probe_tools")
@@ -2614,7 +2789,7 @@ def _rebind_bootstrap_trusted_input(
         runtime_tool = runtime_tools[runtime_name]
         assert isinstance(runtime_tool, Path)
         runtime_tool.chmod(0o700)
-        runtime_tool.write_bytes(source.read_bytes())
+        runtime_tool.write_bytes(trusted_source.read_bytes())
         runtime_tool.chmod(0o500)
         completion_lines = corridor_completion.read_text(
             encoding="utf-8"

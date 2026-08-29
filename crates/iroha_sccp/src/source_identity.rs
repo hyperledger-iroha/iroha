@@ -6,12 +6,11 @@
 use crate::H256;
 pub use iroha_data_model::bridge::{
     SccpEvmSourceEmitterV1, SccpLaneIdV1, SccpNetworkV1, SccpOutboundMessageContextV1,
-    SccpOutboundMessageKeyV1, SccpOutboundPendingMessageRecordV1, SccpSolanaSourceEmitterV1,
-    SccpSourceEmitterV1, SccpSourceIdentityV1, SccpTronSourceEmitterV1,
-    canonical_sccp_lane_id_bytes_v1, canonical_sccp_network_bytes_v1,
-    canonical_sccp_source_emitter_bytes_v1, canonical_sccp_source_identity_bytes_v1,
-    sccp_lane_id_hash_v1, sccp_network_identity_hash_v1, sccp_network_tag_v1,
-    sccp_source_emitter_identity_hash_v1, sccp_source_identity_hash_v1,
+    SccpOutboundMessageKeyV1, SccpOutboundPendingMessageRecordV1, SccpSourceEmitterV1,
+    SccpSourceIdentityV1, SccpTronSourceEmitterV1, canonical_sccp_lane_id_bytes_v1,
+    canonical_sccp_network_bytes_v1, canonical_sccp_source_emitter_bytes_v1,
+    canonical_sccp_source_identity_bytes_v1, sccp_lane_id_hash_v1, sccp_network_identity_hash_v1,
+    sccp_network_tag_v1, sccp_source_emitter_identity_hash_v1, sccp_source_identity_hash_v1,
 };
 use tiny_keccak::{Hasher as _, Keccak};
 /// Keccak-256 source-event domain separator used by every native route contract.
@@ -28,25 +27,19 @@ fn keccak256(prefix: &[u8], payload: &[u8]) -> H256 {
 #[must_use]
 pub const fn sccp_network_from_tag_v1(tag: u8) -> Option<SccpNetworkV1> {
     match tag {
-        1 => Some(SccpNetworkV1::SoraTaira),
-        2 => Some(SccpNetworkV1::EthereumMainnet),
-        3 => Some(SccpNetworkV1::EthereumSepolia),
-        4 => Some(SccpNetworkV1::BscMainnet),
-        5 => Some(SccpNetworkV1::BscTestnet),
-        10 => Some(SccpNetworkV1::TronMainnet),
-        11 => Some(SccpNetworkV1::TronNile),
-        12 => Some(SccpNetworkV1::TronShasta),
-        13 => Some(SccpNetworkV1::SolanaTestnet),
-        14 => Some(SccpNetworkV1::TonMainnet),
-        15 => Some(SccpNetworkV1::TonTestnet),
+        0x40 => Some(SccpNetworkV1::SoraTaira),
+        0x41 => Some(SccpNetworkV1::EthereumMainnet),
+        0x42 => Some(SccpNetworkV1::BscMainnet),
+        0x43 => Some(SccpNetworkV1::TronMainnet),
+        0x44 => Some(SccpNetworkV1::TonMainnet),
         _ => None,
     }
 }
 /// Return the canonical V1 preimage for an SCCP event emitted on one exact lane.
 ///
 /// Binding the exact lane hash, rather than only the two numeric protocol
-/// domains, prevents a proof from being replayed between mainnet and testnet
-/// profiles that intentionally share a protocol domain.
+/// domains, prevents a proof from being replayed across distinct profiles even
+/// if their independently typed domain identifiers ever coincide.
 pub fn canonical_sccp_lane_source_event_bytes_v1(
     lane: SccpLaneIdV1,
     message_id: H256,
@@ -87,18 +80,12 @@ pub fn sccp_lane_source_event_digest_v1(
 mod tests {
     use super::*;
     use std::collections::BTreeSet;
-    const NETWORKS: [SccpNetworkV1; 11] = [
+    const NETWORKS: [SccpNetworkV1; 5] = [
         SccpNetworkV1::SoraTaira,
         SccpNetworkV1::EthereumMainnet,
-        SccpNetworkV1::EthereumSepolia,
         SccpNetworkV1::BscMainnet,
-        SccpNetworkV1::BscTestnet,
         SccpNetworkV1::TronMainnet,
-        SccpNetworkV1::TronNile,
-        SccpNetworkV1::TronShasta,
-        SccpNetworkV1::SolanaTestnet,
         SccpNetworkV1::TonMainnet,
-        SccpNetworkV1::TonTestnet,
     ];
     fn sample_identity() -> SccpSourceIdentityV1 {
         SccpSourceIdentityV1 {
@@ -131,28 +118,17 @@ mod tests {
         assert_eq!(
             canonical_sccp_network_bytes_v1(SccpNetworkV1::SoraTaira),
             [
-                1, 1, 0, 0, 0, 0, 0xfc, 0x56, 0x98, 0x4b, 0x2b, 0xe7, 0x43, 0x1d, 0x84, 0x0e, 0x21,
-                0x51, 0x4d, 0x18, 0x83, 0xf0,
+                1, 0x40, 0, 0, 0, 0, 0xfc, 0x56, 0x98, 0x4b, 0x2b, 0xe7, 0x43, 0x1d, 0x84, 0x0e,
+                0x21, 0x51, 0x4d, 0x18, 0x83, 0xf0,
             ],
         );
         assert_eq!(
             canonical_sccp_network_bytes_v1(SccpNetworkV1::EthereumMainnet),
-            [1, 2, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0]
+            [1, 0x41, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0]
         );
         assert_eq!(
             canonical_sccp_network_bytes_v1(SccpNetworkV1::TronMainnet),
-            [1, 10, 5, 0, 0, 0, 0xdc, 0x53, 0x66, 0x2b]
-        );
-        let solana = canonical_sccp_network_bytes_v1(SccpNetworkV1::SolanaTestnet);
-        assert_eq!(solana.len(), 38);
-        assert_eq!(&solana[..6], &[1, 13, 3, 0, 0, 0]);
-        assert_eq!(
-            &solana[6..],
-            &iroha_data_model::bridge::SCCP_SOLANA_TESTNET_GENESIS_HASH_V1
-        );
-        assert_ne!(
-            sccp_network_identity_hash_v1(SccpNetworkV1::BscMainnet),
-            sccp_network_identity_hash_v1(SccpNetworkV1::BscTestnet)
+            [1, 0x43, 5, 0, 0, 0, 0xdc, 0x53, 0x66, 0x2b]
         );
     }
     #[test]
@@ -165,14 +141,14 @@ mod tests {
         assert_eq!(
             sccp_network_identity_hash_v1(SccpNetworkV1::EthereumMainnet),
             crate::decode_fixed_hex_bytes::<32>(
-                "e8fe46a73f87245767d448aff69467a3723ad25ab9b73d7a8d018e5abd8eae89",
+                "b4e6ed3c39657858da45edc0807367ce70f39eb52fbe7ec9a22923b87fc5d45f",
             )
             .expect("network hash vector"),
         );
         assert_eq!(
             lane_hash,
             crate::decode_fixed_hex_bytes::<32>(
-                "647fa252d0f3a6a52574ff713b02f80a35542af4abc77de6d36eef2b18a62819",
+                "0a51ec60c46a0504e04832071f3415ea50319a3ab685dea45fcde071262ecbb9",
             )
             .expect("lane hash vector"),
         );
@@ -186,7 +162,7 @@ mod tests {
         assert_eq!(
             identity_hash,
             crate::decode_fixed_hex_bytes::<32>(
-                "10ee71fd8d22ce7ba84f72eefe154cd21cf5414fdd7168719338a22d905ec27f",
+                "9ed949a012b69884b94cc4e042efc0bdb41122db80df0c39fac5eaa90e0823c4",
             )
             .expect("source identity hash vector"),
         );
@@ -224,15 +200,9 @@ mod tests {
         let networks = [
             SccpNetworkV1::SoraTaira,
             SccpNetworkV1::EthereumMainnet,
-            SccpNetworkV1::EthereumSepolia,
             SccpNetworkV1::BscMainnet,
-            SccpNetworkV1::BscTestnet,
             SccpNetworkV1::TronMainnet,
-            SccpNetworkV1::TronNile,
-            SccpNetworkV1::TronShasta,
-            SccpNetworkV1::SolanaTestnet,
             SccpNetworkV1::TonMainnet,
-            SccpNetworkV1::TonTestnet,
         ];
         let tags = networks.map(sccp_network_tag_v1);
         for (network, tag) in networks.into_iter().zip(tags) {
@@ -241,8 +211,10 @@ mod tests {
         for (index, tag) in tags.iter().enumerate() {
             assert!(tags[index + 1..].iter().all(|other| tag != other));
         }
-        for unknown in core::iter::once(0).chain(6..=9).chain(16..=u8::MAX) {
-            assert!(sccp_network_from_tag_v1(unknown).is_none());
+        for tag in u8::MIN..=u8::MAX {
+            if !(0x40..=0x44).contains(&tag) {
+                assert!(sccp_network_from_tag_v1(tag).is_none());
+            }
         }
     }
     #[test]
@@ -253,8 +225,8 @@ mod tests {
             source: SccpNetworkV1::EthereumMainnet,
             target: SccpNetworkV1::SoraTaira,
         };
-        let sepolia_taira = SccpLaneIdV1 {
-            source: SccpNetworkV1::EthereumSepolia,
+        let bsc_taira = SccpLaneIdV1 {
+            source: SccpNetworkV1::BscMainnet,
             target: SccpNetworkV1::SoraTaira,
         };
         let expected = sccp_lane_source_event_digest_v1(mainnet_taira, message_id, payload_hash)
@@ -262,13 +234,13 @@ mod tests {
         assert_eq!(
             expected,
             crate::decode_fixed_hex_bytes::<32>(
-                "dd71a2bb21c6213d7b07c9c45197c4ff41db5cc4c059c41342b490e2879fd9a4",
+                "3011b1c51bced3bd64ce0330b29fcbf28c634b65f7b09388c37aab118cd7851e",
             )
             .expect("lane-bound event digest vector")
         );
         assert_ne!(
             Some(expected),
-            sccp_lane_source_event_digest_v1(sepolia_taira, message_id, payload_hash)
+            sccp_lane_source_event_digest_v1(bsc_taira, message_id, payload_hash)
         );
         assert!(sccp_lane_source_event_digest_v1(mainnet_taira, [0; 32], payload_hash).is_none());
         assert!(sccp_lane_source_event_digest_v1(mainnet_taira, message_id, [0; 32]).is_none());
@@ -320,44 +292,6 @@ mod tests {
         }
     }
     #[test]
-    fn solana_identity_hash_commits_to_every_immutable_deployment_role() {
-        let identity = SccpSourceIdentityV1 {
-            lane: SccpLaneIdV1 {
-                source: SccpNetworkV1::SolanaTestnet,
-                target: SccpNetworkV1::SoraTaira,
-            },
-            emitter: SccpSourceEmitterV1::Solana(SccpSolanaSourceEmitterV1 {
-                program_id: [0x41; 32],
-                program_data_address: [0x42; 32],
-                program_data_slot: 7,
-                state_account: [0x43; 32],
-                program_code_hash: [0x44; 32],
-                route_config_hash: [0x45; 32],
-            }),
-        };
-        let expected = sccp_source_identity_hash_v1(&identity).expect("valid Solana identity");
-        for field in 0..6 {
-            let mut mutated = identity;
-            let SccpSourceEmitterV1::Solana(emitter) = &mut mutated.emitter else {
-                unreachable!("fixture uses Solana emitter")
-            };
-            match field {
-                0 => emitter.program_id[0] ^= 1,
-                1 => emitter.program_data_address[0] ^= 1,
-                2 => emitter.program_data_slot += 1,
-                3 => emitter.state_account[0] ^= 1,
-                4 => emitter.program_code_hash[0] ^= 1,
-                5 => emitter.route_config_hash[0] ^= 1,
-                _ => unreachable!(),
-            }
-            assert_ne!(
-                sccp_source_identity_hash_v1(&mutated),
-                Some(expected),
-                "Solana deployment role {field} was not committed"
-            );
-        }
-    }
-    #[test]
     fn malformed_emitters_fail_before_hashing() {
         for emitter in [
             SccpSourceEmitterV1::Evm(SccpEvmSourceEmitterV1 {
@@ -369,14 +303,6 @@ mod tests {
                 address: [1; 20],
                 runtime_code_hash: [2; 32],
                 route_config_hash: [2; 32],
-            }),
-            SccpSourceEmitterV1::Solana(SccpSolanaSourceEmitterV1 {
-                program_id: [1; 32],
-                program_data_address: [2; 32],
-                program_data_slot: 1,
-                state_account: [3; 32],
-                program_code_hash: [4; 32],
-                route_config_hash: [4; 32],
             }),
         ] {
             assert!(canonical_sccp_source_emitter_bytes_v1(&emitter).is_none());
@@ -411,7 +337,7 @@ mod tests {
             .get("vectors")
             .and_then(norito::json::Value::as_array)
             .expect("fixture vectors");
-        assert_eq!(vectors.len(), 7);
+        assert_eq!(vectors.len(), 4);
         for vector in vectors {
             let lane = SccpLaneIdV1 {
                 source: SccpNetworkV1::from_profile_key(text(vector, "source_profile"))

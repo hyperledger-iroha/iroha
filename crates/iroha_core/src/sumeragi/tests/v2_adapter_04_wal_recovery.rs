@@ -1779,8 +1779,22 @@ fn durable_timeout_and_decision_close_direct_local_mint_without_proposal_attempt
     );
 }
 #[cfg(feature = "bls")]
+fn run_decision_fetch_repair_test_on_stack() {
+    let handle = std::thread::Builder::new()
+        .name("sumeragi-v2-decision-fetch-repair".to_owned())
+        .stack_size(32 * 1024 * 1024)
+        .spawn(bls_decision_fetch_repairs_and_coalesces_without_rewrite)
+        .expect("spawn Decision Fetch repair recovery test");
+    if let Err(payload) = handle.join() {
+        std::panic::resume_unwind(payload);
+    }
+}
+#[cfg(feature = "bls")]
 #[test]
 fn bls_decision_fetch_repairs_and_coalesces_without_rewrite() {
+    if std::thread::current().name() != Some("sumeragi-v2-decision-fetch-repair") {
+        return run_decision_fetch_repair_test_on_stack();
+    }
     let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
     crate::sumeragi::status::clear_v2_status();
     let safety = TempDir::new().expect("temporary Decision Fetch safety store");
@@ -2756,8 +2770,22 @@ fn bls_pending_kura_durable_body_without_validation_marker_fails_owner_open() {
     assert!(crate::sumeragi::status::v2_status().is_none());
 }
 #[cfg(feature = "bls")]
+fn run_decision_fetch_same_key_drift_test_on_stack() {
+    let handle = std::thread::Builder::new()
+        .name("sumeragi-v2-decision-fetch-same-key-drift".to_owned())
+        .stack_size(32 * 1024 * 1024)
+        .spawn(bls_decision_fetch_same_key_drift_fails_without_rewrite)
+        .expect("spawn Decision Fetch same-key drift test");
+    if let Err(payload) = handle.join() {
+        std::panic::resume_unwind(payload);
+    }
+}
+#[cfg(feature = "bls")]
 #[test]
 fn bls_decision_fetch_same_key_drift_fails_without_rewrite() {
+    if std::thread::current().name() != Some("sumeragi-v2-decision-fetch-same-key-drift") {
+        return run_decision_fetch_same_key_drift_test_on_stack();
+    }
     let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
     let mutations: [(&str, fn(&std::path::Path, LifecycleContext) -> bool); 2] = [
         ("owner", substitute_recovered_decision_fetch_owner_for_test),

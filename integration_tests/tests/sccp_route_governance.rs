@@ -2,8 +2,7 @@
 use eyre::{Result, eyre};
 use integration_tests::sandbox;
 use iroha::data_model::{
-    account::{Account, AccountId},
-    asset::{AssetDefinition, AssetId},
+    asset::AssetDefinition,
     block::consensus_v2::PROTOCOL_VERSION,
     bridge::{
         BridgeNativeProofBackendV1, SCCP_V1_SORA_OUTBOUND_EXECUTION_SEMANTICS,
@@ -19,12 +18,11 @@ use iroha::data_model::{
         sccp_sora_taira_chain_id_hash_v1, sccp_v1_taira_xor_asset_definition_id,
     },
     isi::{
-        Grant, Mint, Register,
+        Grant, Register,
         bridge::{ApplySccpRouteGovernance, SccpRegisterRouteV1, SccpRouteGovernanceActionV1},
     },
     permission::Permission,
 };
-use iroha_crypto::{Algorithm, KeyPair};
 use iroha_executor_data_model::permission::sccp::CanManageSccpGovernance;
 use iroha_test_network::{Network, NetworkBuilder, init_instruction_registry};
 use iroha_test_samples::{ALICE_ID, BOB_ID, BOB_KEYPAIR};
@@ -32,7 +30,7 @@ use std::time::{Duration, Instant};
 use tokio::time::sleep;
 const REGISTRY_CONVERGENCE_TIMEOUT: Duration = Duration::from_secs(120);
 const TAIRA_CHAIN_ID: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
-const MAX_OUTSTANDING_LIABILITY: u128 = 1_000_000_000_000;
+const TEST_MAX_OUTSTANDING_LIABILITY: u128 = 1_000_000_000_000;
 fn word_u64(value: u64) -> [u8; 32] {
     let mut word = [0; 32];
     word[24..].copy_from_slice(&value.to_be_bytes());
@@ -140,8 +138,12 @@ fn integration_route() -> SccpGovernedRouteV1 {
         outbound_proof_policy: integration_outbound_policy(),
         route_address: [0x51; 20],
         route_code_hash: [0x61; 32],
+        replay_verifier_address: [0x71; 20],
+        replay_verifier_code_hash: [0x72; 32],
+        mint_breaker_address: [0x81; 20],
+        mint_breaker_code_hash: [0x82; 32],
         taira_to_token_multiplier: SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER,
-        max_wrapped_supply: MAX_OUTSTANDING_LIABILITY
+        max_wrapped_supply: TEST_MAX_OUTSTANDING_LIABILITY
             * u128::from(SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER),
     };
     let destination = SccpDestinationDeploymentV1::Evm(deployment);
@@ -154,10 +156,6 @@ fn integration_route() -> SccpGovernedRouteV1 {
             SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE,
         )
         .expect("integration route configuration must be canonical");
-    let custody = KeyPair::try_from_seed(vec![0x81; 32], Algorithm::Ed25519)
-        .expect("integration custody key must be valid")
-        .public_key()
-        .clone();
     let route = SccpGovernedRouteV1 {
         lane_id,
         route_id: "taira_eth_xor".to_owned(),
@@ -177,9 +175,8 @@ fn integration_route() -> SccpGovernedRouteV1 {
         sora_outbound_execution_policy: integration_sora_outbound_execution_policy(),
         settlement: SccpSoraSettlementV1 {
             asset_definition_id: sccp_v1_taira_xor_asset_definition_id(),
-            custody_owner: AccountId::new(custody),
             payload_amount_scale: SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE,
-            max_outstanding_liability: MAX_OUTSTANDING_LIABILITY,
+            max_outstanding_liability: TEST_MAX_OUTSTANDING_LIABILITY,
         },
     };
     route
@@ -262,26 +259,18 @@ async fn direct_sccp_route_governance_is_rejected_on_four_peers() -> Result<()> 
     init_instruction_registry();
     let route = integration_route();
     let key = route.key();
-    let custody_asset = AssetId::new(
-        route.settlement.asset_definition_id.clone(),
-        route.settlement.custody_owner.clone(),
-    );
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
         .with_config_layer(|layer| {
             layer.write("chain", TAIRA_CHAIN_ID);
         })
-        .with_genesis_instruction(Register::account(Account::new(
-            route.settlement.custody_owner.clone(),
-        )))
         .with_genesis_instruction(Register::asset_definition(AssetDefinition::numeric(
             route.settlement.asset_definition_id.clone(),
             "xor".to_owned(),
             iroha_data_model::asset::AssetBalancePolicy::Global,
             None,
         )))
-        .with_genesis_instruction(Mint::asset_quantity(1_u64, custody_asset))
         .with_genesis_instruction(Grant::account_permission(
             Permission::from(CanManageSccpGovernance),
             ALICE_ID.clone(),

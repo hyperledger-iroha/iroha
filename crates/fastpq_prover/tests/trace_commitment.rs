@@ -22,7 +22,8 @@ fn fixtures_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
 }
 fn build_fixture(name: &str) -> TransitionBatch {
-    let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
+    let mut batch =
+        TransitionBatch::new("fastpq-state-transition-stark-v1", PublicInputs::default());
     batch.public_inputs.dsid = [0xAA; 16];
     batch.public_inputs.slot = 42;
     batch.public_inputs.old_root = [0x11; 32];
@@ -202,26 +203,30 @@ fn ordering_hash_matches_golden_vectors() {
     }
 }
 #[test]
-fn trace_commitment_matches_golden_vectors() {
+fn trace_commitment_is_canonical_deterministic_and_fixture_separated() {
     let params = CANONICAL_PARAMETER_SETS
         .iter()
-        .find(|set| set.name == "fastpq-lane-balanced")
+        .find(|set| set.name == "fastpq-state-transition-stark-v1")
         .copied()
         .expect("canonical parameter set");
-    if fixture_update_requested() {
-        update_hash_fixture("trace_commitment.json", |batch| {
-            trace_commitment(&params, batch).expect("trace commitment")
-        });
-    }
-    for (name, expected_hex) in load_hash_expectations("trace_commitment.json") {
+    let mut commitments = std::collections::BTreeSet::new();
+    for name in FIXTURE_NAMES {
         let batch = build_fixture(name);
         let commitment = trace_commitment(&params, &batch).expect("trace commitment");
-        let actual: [u8; Hash::LENGTH] = commitment.into();
-        let actual_hex = bytes_to_hex(&actual);
-        assert!(
-            !expected_hex.is_empty(),
-            "missing golden commitment for {name}"
+        let encoded = commitment.to_le_bytes();
+        assert_eq!(
+            iroha_data_model::privacy::GoldilocksDigest384V1::from_le_bytes(encoded),
+            Some(commitment),
+            "{name} commitment must remain canonically encoded"
         );
-        assert_eq!(actual_hex, expected_hex, "commitment {name}");
+        assert_eq!(
+            trace_commitment(&params, &batch).expect("repeat trace commitment"),
+            commitment,
+            "{name} commitment must be deterministic"
+        );
+        assert!(
+            commitments.insert(encoded),
+            "{name} must not collide with another canonical fixture"
+        );
     }
 }

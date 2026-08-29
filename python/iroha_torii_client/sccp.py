@@ -15,14 +15,16 @@ from .norito_frame import validate_norito_frame
 SCCP_DOMAIN_SORA = 0
 SCCP_DOMAIN_ETH = 1
 SCCP_DOMAIN_BSC = 2
+SCCP_DOMAIN_TRON = 3
 SCCP_DOMAIN_TON = 4
-SCCP_DOMAIN_TRON = 5
 
-SCCP_CODEC_CANONICAL_TEXT = 1
-SCCP_CODEC_EVM_ADDRESS20 = 2
-SCCP_CODEC_TRON_ADDRESS21 = 5
-SCCP_CODEC_TON_ACCOUNT36 = 7
+SCCP_CODEC_CANONICAL_TEXT = 0
+SCCP_CODEC_EVM_ADDRESS20 = 1
+SCCP_CODEC_TRON_ADDRESS21 = 2
+SCCP_CODEC_TON_ACCOUNT36 = 3
 _SCCP_JSON_SAFE_INTEGER_MAX = (1 << 53) - 1
+SCCP_SORA_OUTBOUND_EXECUTION_SEMANTICS_V1 = "ivm_proved_record_sccp_message_v1"
+SCCP_MAX_SORA_OUTBOUND_GAS_LIMIT_V1 = 1_000_000_000
 
 SCCP_CODEC_KEYS = MappingProxyType(
     {
@@ -67,15 +69,23 @@ _DESTINATION_ARTIFACT_TYPE_NAME = (
 _NATIVE_INBOUND_PROOF_TYPE_NAME = (
     "iroha_sccp::native_admission::SccpNativeInboundMessageProofV1"
 )
+_REPLAY_WITNESS_TYPE_NAME = (
+    "iroha_data_model::bridge::sccp_replay::SccpSparseMerkleWitnessV1"
+)
+_MAX_REPLAY_WITNESS_BYTES = 16 * 1024
 _MAX_U64 = (1 << 64) - 1
 _MAX_U128 = (1 << 128) - 1
+_MAX_TON_COINS = (1 << 120) - 1
+_KECCAK256_EMPTY_BYTES = bytes.fromhex(
+    "c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470"
+)
 _CLOSED_DOMAINS = frozenset(
     {
         SCCP_DOMAIN_SORA,
         SCCP_DOMAIN_ETH,
         SCCP_DOMAIN_BSC,
-        SCCP_DOMAIN_TON,
         SCCP_DOMAIN_TRON,
+        SCCP_DOMAIN_TON,
     }
 )
 _BN254_BASE_FIELD_MODULUS = int(
@@ -119,16 +129,11 @@ _ROUTE_KEY = re.compile(r"[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?")
 
 _NETWORKS: Mapping[str, Tuple[int, int, bool]] = MappingProxyType(
     {
-        "sora-taira": (1, SCCP_DOMAIN_SORA, True),
-        "ethereum-mainnet": (2, SCCP_DOMAIN_ETH, False),
-        "ethereum-sepolia": (3, SCCP_DOMAIN_ETH, False),
-        "bsc-mainnet": (4, SCCP_DOMAIN_BSC, False),
-        "bsc-testnet": (5, SCCP_DOMAIN_BSC, False),
-        "tron-mainnet": (10, SCCP_DOMAIN_TRON, False),
-        "tron-nile": (11, SCCP_DOMAIN_TRON, False),
-        "tron-shasta": (12, SCCP_DOMAIN_TRON, False),
-        "ton-mainnet": (14, SCCP_DOMAIN_TON, False),
-        "ton-testnet": (15, SCCP_DOMAIN_TON, False),
+        "sora-taira": (0x40, SCCP_DOMAIN_SORA, True),
+        "ethereum-mainnet": (0x41, SCCP_DOMAIN_ETH, False),
+        "bsc-mainnet": (0x42, SCCP_DOMAIN_BSC, False),
+        "tron-mainnet": (0x43, SCCP_DOMAIN_TRON, False),
+        "ton-mainnet": (0x44, SCCP_DOMAIN_TON, False),
     }
 )
 SCCP_NETWORK_PROFILES = MappingProxyType(
@@ -144,10 +149,10 @@ _NETWORK_WIRE_NAMES = MappingProxyType(
 )
 _NATIVE_BACKENDS: Mapping[str, frozenset[str]] = MappingProxyType(
     {
-        "ethereum_beacon_v1": frozenset({"ethereum-mainnet", "ethereum-sepolia"}),
-        "bsc_parlia_v1": frozenset({"bsc-mainnet", "bsc-testnet"}),
-        "tron_dpos_v1": frozenset({"tron-mainnet", "tron-nile", "tron-shasta"}),
-        "ton_masterchain_v1": frozenset({"ton-mainnet", "ton-testnet"}),
+        "ethereum_beacon_v1": frozenset({"ethereum-mainnet"}),
+        "bsc_parlia_v1": frozenset({"bsc-mainnet"}),
+        "tron_dpos_v1": frozenset({"tron-mainnet"}),
+        "ton_masterchain_v1": frozenset({"ton-mainnet"}),
     }
 )
 _DESTINATION_BACKENDS = MappingProxyType(
@@ -163,8 +168,29 @@ _CAPABILITY_PATHS = MappingProxyType(
         "message_bundle_path": "/v1/sccp/proofs/message/{message_id}",
         "proof_request_path": "/v1/sccp/proof-requests/{message_id}",
         "recent_messages_path": "/v1/sccp/messages/recent",
+        "sora_outbound_material_path": "/v1/sccp/routes/{source_profile}/{route_id}/{asset_key}/{revision}/sora-outbound-material",
         "proof_submit_path": "/v1/bridge/proofs/submit",
         "native_message_submit_path": "/v1/bridge/messages",
+    }
+)
+
+_BRIDGE_RESPONSE_BACKENDS = MappingProxyType(
+    {
+        "ethereum-mainnet": frozenset(
+            {"evm-groth16-bn254-v1", "bridge/sccp/native/ethereum-beacon-v1"}
+        ),
+        "bsc-mainnet": frozenset(
+            {"evm-groth16-bn254-v1", "bridge/sccp/native/bsc-parlia-v1"}
+        ),
+        "ton-mainnet": frozenset(
+            {
+                "ton-groth16-bls12381-v1",
+                "bridge/sccp/native/ton-masterchain-v1",
+            }
+        ),
+        "tron-mainnet": frozenset(
+            {"tron-groth16-bn254-v1", "bridge/sccp/native/tron-dpos-v1"}
+        ),
     }
 )
 
@@ -279,6 +305,7 @@ class SccpCapabilities:
     message_bundle_path: str
     proof_request_path: str
     recent_messages_path: str
+    sora_outbound_material_path: str
     registry_limits: SccpRegistryLimits
     resource_limits: SccpResourceLimits
     proof_submit_path: Optional[str]
@@ -291,6 +318,27 @@ class SccpRegistry:
 
     version: int
     lanes: Tuple[Mapping[str, Any], ...]
+
+
+@dataclass(frozen=True)
+class SccpPortableVerifyingKeyRef:
+    """Strict portable reference to one governance-registered IVM key."""
+
+    backend: str
+    name: str
+    version: int
+    commitment: bytes
+
+
+@dataclass(frozen=True)
+class SccpSoraOutboundExecutionPolicy:
+    """Mandatory Taira-side execution policy for one outbound route."""
+
+    version: int
+    semantics: str
+    contract_artifact_sha256: bytes
+    vk_ref: SccpPortableVerifyingKeyRef
+    gas_limit: int
 
 
 @dataclass(frozen=True)
@@ -342,12 +390,17 @@ class _SccpDestinationDeployment:
     finality_anchor_hash: bytes
     route_address: bytes
     route_code_hash: bytes
+    replay_verifier_address: bytes
+    replay_verifier_code_hash: bytes
+    mint_breaker_address: bytes
+    mint_breaker_code_hash: bytes
     taira_to_token_multiplier: int
     max_wrapped_supply: int
     destination_binding_hash: bytes
     deployment_config_hash: bytes
     deployment_address_roles: Tuple[bytes, ...] = ()
     governed_hash_roles: Tuple[bytes, ...] = ()
+    execution_policy_hash_roles: Tuple[bytes, ...] = ()
 
 
 def _mapping(value: Any, label: str) -> Mapping[str, Any]:
@@ -396,10 +449,9 @@ def _integer(value: Any, label: str, minimum: int, maximum: int = (1 << 63) - 1)
 
 
 def _protocol_domain(value: Any, label: str) -> int:
-    domain = _integer(value, label, SCCP_DOMAIN_SORA, SCCP_DOMAIN_TRON)
-    if domain not in _CLOSED_DOMAINS:
+    if isinstance(value, bool) or not isinstance(value, int) or value not in _CLOSED_DOMAINS:
         raise ValueError(f"{label} is an unsupported or reserved SCCP domain")
-    return domain
+    return value
 
 
 def _unsigned_decimal(
@@ -665,29 +717,17 @@ def _canonical_network_bytes(network: Tuple[str, int, int, bool]) -> bytes:
         identity = _SORA_TAIRA_CHAIN_ID
     elif profile == "ethereum-mainnet":
         identity = (1).to_bytes(8, "little")
-    elif profile == "ethereum-sepolia":
-        identity = (11_155_111).to_bytes(8, "little")
     elif profile == "bsc-mainnet":
         identity = (56).to_bytes(8, "little")
-    elif profile == "bsc-testnet":
-        identity = (97).to_bytes(8, "little")
     elif profile == "tron-mainnet":
         identity = (0x2B66_53DC).to_bytes(4, "little")
-    elif profile == "tron-nile":
-        identity = (0xCD86_90DC).to_bytes(4, "little")
-    elif profile == "tron-shasta":
-        identity = (0x94A9_059E).to_bytes(4, "little")
-    elif profile in {"ton-mainnet", "ton-testnet"}:
-        global_id = -239 if profile == "ton-mainnet" else -3
+    elif profile == "ton-mainnet":
+        global_id = -239
         root_hash = bytes.fromhex(
             "17a3a92992aabea785a7a090985a265cd31f323d849da51239737e321fb05569"
-            if profile == "ton-mainnet"
-            else "823f81f306ff02694f935cf5021548e3ce2b86b529812af6a12148879e95a128"
         )
         file_hash = bytes.fromhex(
             "5e994fcf4d425c0a6ce6a792594b7173205f740a39cd56f537defd28b48a0f6e"
-            if profile == "ton-mainnet"
-            else "67e20ac184b9e039a62667acc3f9c00f90f359a76738233379efa47604980ce8"
         )
         identity = b"".join(
             (
@@ -946,7 +986,8 @@ def _sora_finality_anchor(value: Any, label: str) -> Tuple[bytes, Tuple[bytes, .
     if len(set(roles)) != len(roles):
         raise ValueError(f"{label} reuses a consensus hash role")
     canonical = (
-        b"\x01\x01"
+        b"\x01"
+        + bytes((source[1],))
         + protocol_version.to_bytes(2, "little")
         + chain_hash
         + checkpoint_height.to_bytes(8, "little")
@@ -1201,6 +1242,7 @@ def normalize_sccp_capabilities(value: Any) -> SccpCapabilities:
             "message_bundle_path",
             "proof_request_path",
             "recent_messages_path",
+            "sora_outbound_material_path",
             "registry_limits",
             "resource_limits",
             "proof_submit_path",
@@ -1215,6 +1257,7 @@ def normalize_sccp_capabilities(value: Any) -> SccpCapabilities:
             "message_bundle_path",
             "proof_request_path",
             "recent_messages_path",
+            "sora_outbound_material_path",
             "registry_limits",
             "resource_limits",
         }
@@ -1246,6 +1289,10 @@ def normalize_sccp_capabilities(value: Any) -> SccpCapabilities:
         or "",
         recent_messages_path=_capability_path(
             record["recent_messages_path"], "recent_messages_path"
+        )
+        or "",
+        sora_outbound_material_path=_capability_path(
+            record["sora_outbound_material_path"], "sora_outbound_material_path"
         )
         or "",
         registry_limits=_normalize_registry_limits(record["registry_limits"]),
@@ -1365,11 +1412,7 @@ def _destination_binding_hash(
 ) -> bytes:
     profile, _, target_domain, _ = network
     if destination.family == "tron":
-        network_values = {
-            "tron-mainnet": 0x2B66_53DC,
-            "tron-nile": 0xCD86_90DC,
-            "tron-shasta": 0x94A9_059E,
-        }
+        network_values = {"tron-mainnet": 0x2B66_53DC}
         try:
             network_value = network_values[profile]
         except KeyError as exc:
@@ -1378,12 +1421,14 @@ def _destination_binding_hash(
         backend = _TRON_GROTH16_BACKEND
         verifier_address = _abi_tron_address(destination.verifier_address)
         route_address = _abi_tron_address(destination.route_address)
+        replay_verifier_address = _abi_tron_address(
+            destination.replay_verifier_address
+        )
+        mint_breaker_address = _abi_tron_address(destination.mint_breaker_address)
     else:
         network_values = {
             "ethereum-mainnet": 1,
-            "ethereum-sepolia": 11_155_111,
             "bsc-mainnet": 56,
-            "bsc-testnet": 97,
         }
         try:
             network_value = network_values[profile]
@@ -1393,6 +1438,8 @@ def _destination_binding_hash(
         backend = _EVM_GROTH16_BACKEND
         verifier_address = _abi_address(destination.verifier_address)
         route_address = _abi_address(destination.route_address)
+        replay_verifier_address = _abi_address(destination.replay_verifier_address)
+        mint_breaker_address = _abi_address(destination.mint_breaker_address)
     payload = b"".join(
         (
             _keccak_256(binding_prefix),
@@ -1406,6 +1453,10 @@ def _destination_binding_hash(
             destination.verifier_key_hash,
             destination.semantic_profile_hash,
             destination.finality_anchor_hash,
+            replay_verifier_address,
+            destination.replay_verifier_code_hash,
+            mint_breaker_address,
+            destination.mint_breaker_code_hash,
         )
     )
     return _keccak_256(payload)
@@ -1413,6 +1464,70 @@ def _destination_binding_hash(
 
 def _length_prefixed(value: bytes) -> bytes:
     return len(value).to_bytes(4, "little") + value
+
+
+def _portable_verifying_key_id_field(value: Any, label: str) -> str:
+    text = _text(value, label, 256)
+    if (
+        re.fullmatch(r"[a-z0-9](?:[a-z0-9_/:.\-]*[a-z0-9])?", text) is None
+        or any(
+            separator in text
+            for separator in ("..", "//", ":::", "/:", ":/", "/.", "./", ":.", ".:")
+        )
+    ):
+        raise ValueError(f"{label} must use portable verification-key registry syntax")
+    return text
+
+
+def _sora_outbound_execution_policy(
+    value: Any, label: str
+) -> SccpSoraOutboundExecutionPolicy:
+    record = _exact_fields(
+        value,
+        frozenset(
+            {"version", "semantics", "contract_artifact_sha256", "vk_ref", "gas_limit"}
+        ),
+        label,
+    )
+    version = _integer(record["version"], f"{label}.version", 1, 1)
+    semantics = _text(record["semantics"], f"{label}.semantics", 64)
+    if semantics != SCCP_SORA_OUTBOUND_EXECUTION_SEMANTICS_V1:
+        raise ValueError(f"{label}.semantics is unsupported or retired")
+    contract_artifact_sha256 = bytes.fromhex(
+        _upper_hex(
+            record["contract_artifact_sha256"],
+            f"{label}.contract_artifact_sha256",
+            32,
+        )
+    )
+    reference = _exact_fields(
+        record["vk_ref"],
+        frozenset({"backend", "name", "version", "commitment"}),
+        f"{label}.vk_ref",
+    )
+    vk_ref = SccpPortableVerifyingKeyRef(
+        _portable_verifying_key_id_field(
+            reference["backend"], f"{label}.vk_ref.backend"
+        ),
+        _portable_verifying_key_id_field(reference["name"], f"{label}.vk_ref.name"),
+        _integer(reference["version"], f"{label}.vk_ref.version", 1, 0xFFFF_FFFF),
+        bytes.fromhex(
+            _upper_hex(reference["commitment"], f"{label}.vk_ref.commitment", 32)
+        ),
+    )
+    gas_limit = _integer(
+        record["gas_limit"],
+        f"{label}.gas_limit",
+        1,
+        SCCP_MAX_SORA_OUTBOUND_GAS_LIMIT_V1,
+    )
+    return SccpSoraOutboundExecutionPolicy(
+        version,
+        semantics,
+        contract_artifact_sha256,
+        vk_ref,
+        gas_limit,
+    )
 
 
 def _ton_proof_profile_commitment() -> bytes:
@@ -1446,6 +1561,7 @@ def _ton_destination(value: Any, lane: Any, label: str) -> _SccpDestinationDeplo
             "verifying_key",
             "verifier_key_hash",
             "proof_profile_commitment",
+            "mint_breaker_guardian_keys",
             "outbound_proof_policy",
             "taira_to_token_multiplier",
             "max_wrapped_supply",
@@ -1487,6 +1603,33 @@ def _ton_destination(value: Any, lane: Any, label: str) -> _SccpDestinationDeplo
         raise ValueError(f"{label}.verifier_circuit_hash does not match its semantic circuit")
     if hashes["proof_profile_commitment"] != _ton_proof_profile_commitment():
         raise ValueError(f"{label}.proof_profile_commitment is not canonical")
+    guardian_record = _exact_fields(
+        deployment["mint_breaker_guardian_keys"],
+        frozenset(
+            {
+                "guardian_0",
+                "guardian_1",
+                "guardian_2",
+                "guardian_3",
+                "guardian_4",
+            }
+        ),
+        f"{label}.mint_breaker_guardian_keys",
+    )
+    guardian_keys = tuple(
+        bytes.fromhex(
+            _upper_hex(
+                guardian_record[f"guardian_{index}"],
+                f"{label}.mint_breaker_guardian_keys.guardian_{index}",
+                32,
+            )
+        )
+        for index in range(5)
+    )
+    if any(left >= right for left, right in zip(guardian_keys, guardian_keys[1:])):
+        raise ValueError(
+            f"{label}.mint_breaker_guardian_keys must be strictly increasing"
+        )
     governed_hash_roles = tuple(hashes[field] for field in hash_fields) + (
         semantic_hash,
         anchor_hash,
@@ -1501,16 +1644,18 @@ def _ton_destination(value: Any, lane: Any, label: str) -> _SccpDestinationDeplo
         1,
         1,
     )
-    max_wrapped_supply = _integer(
-        deployment["max_wrapped_supply"],
-        f"{label}.max_wrapped_supply",
-        1,
-        _MAX_U128,
+    max_wrapped_supply = int(
+        _unsigned_decimal(
+            deployment["max_wrapped_supply"],
+            f"{label}.max_wrapped_supply",
+            _MAX_TON_COINS,
+            positive=True,
+        )
     )
     profile = lane[0][0]
-    if profile not in {"ton-mainnet", "ton-testnet"}:
+    if profile != "ton-mainnet":
         raise ValueError(f"{label} requires an exact TON source lane")
-    global_id = -239 if profile == "ton-mainnet" else -3
+    global_id = -239
     # Addresses and actual initial-data roots remain governed readback roles,
     # but D/R exclude them because both values are stored in the StateInit data.
     binding_payload = b"".join(
@@ -1529,6 +1674,7 @@ def _ton_destination(value: Any, lane: Any, label: str) -> _SccpDestinationDeplo
             hashes["verifier_circuit_hash"],
             hashes["verifier_key_hash"],
             hashes["proof_profile_commitment"],
+            *guardian_keys,
             semantic_hash,
             anchor_hash,
         )
@@ -1544,6 +1690,7 @@ def _ton_destination(value: Any, lane: Any, label: str) -> _SccpDestinationDeplo
                 hashes["verifier_circuit_hash"],
                 hashes["verifier_key_hash"],
                 hashes["proof_profile_commitment"],
+                *guardian_keys,
                 semantic_hash,
                 anchor_hash,
                 destination_binding_hash,
@@ -1561,12 +1708,20 @@ def _ton_destination(value: Any, lane: Any, label: str) -> _SccpDestinationDeplo
         finality_anchor_hash=anchor_hash,
         route_address=route_address,
         route_code_hash=hashes["route_code_hash"],
+        replay_verifier_address=b"",
+        replay_verifier_code_hash=b"",
+        mint_breaker_address=b"",
+        mint_breaker_code_hash=b"",
         taira_to_token_multiplier=multiplier,
         max_wrapped_supply=max_wrapped_supply,
         destination_binding_hash=destination_binding_hash,
         deployment_config_hash=deployment_config_hash,
         deployment_address_roles=(master_address, route_address),
         governed_hash_roles=governed_hash_roles,
+        execution_policy_hash_roles=(
+            hashes["jetton_master_initial_data_hash"],
+            hashes["route_initial_data_hash"],
+        ),
     )
 
 
@@ -1588,6 +1743,10 @@ def _destination(value: Any, lane: Any, label: str) -> _SccpDestinationDeploymen
             "outbound_proof_policy",
             "route_address",
             "route_code_hash",
+            "replay_verifier_address",
+            "replay_verifier_code_hash",
+            "mint_breaker_address",
+            "mint_breaker_code_hash",
             "taira_to_token_multiplier",
             "max_wrapped_supply",
         }
@@ -1595,14 +1754,32 @@ def _destination(value: Any, lane: Any, label: str) -> _SccpDestinationDeploymen
     deployment = _exact_fields(record["deployment"], fields, f"{label}.deployment")
     addresses = tuple(
         bytes.fromhex(_upper_hex(deployment[field], f"{label}.deployment.{field}", 20))
-        for field in ("token_address", "verifier_address", "route_address")
+        for field in (
+            "token_address",
+            "verifier_address",
+            "route_address",
+            "replay_verifier_address",
+            "mint_breaker_address",
+        )
     )
     hashes = tuple(
         bytes.fromhex(_upper_hex(deployment[field], f"{label}.deployment.{field}", 32))
-        for field in ("token_code_hash", "verifier_code_hash", "verifier_key_hash", "route_code_hash")
+        for field in (
+            "token_code_hash",
+            "verifier_code_hash",
+            "verifier_key_hash",
+            "route_code_hash",
+            "replay_verifier_code_hash",
+            "mint_breaker_code_hash",
+        )
     )
     if len(set(addresses)) != len(addresses) or len(set(hashes)) != len(hashes):
         raise ValueError(f"{label}.deployment reuses a role-separated address or hash")
+    for index in (0, 1, 3, 4, 5):
+        if hashes[index] == _KECCAK256_EMPTY_BYTES:
+            raise ValueError(
+                f"{label}.deployment runtime code hash must not identify empty bytecode"
+            )
     key_bytes = _verifying_key(deployment["verifying_key"], f"{label}.deployment.verifying_key")
     if _keccak_256(key_bytes) != hashes[2]:
         raise ValueError(f"{label}.deployment.verifier_key_hash does not match verifying_key")
@@ -1620,11 +1797,13 @@ def _destination(value: Any, lane: Any, label: str) -> _SccpDestinationDeploymen
         1_000_000_000,
         1_000_000_000,
     )
-    max_wrapped_supply = _integer(
-        deployment["max_wrapped_supply"],
-        f"{label}.deployment.max_wrapped_supply",
-        1,
-        _MAX_U128,
+    max_wrapped_supply = int(
+        _unsigned_decimal(
+            deployment["max_wrapped_supply"],
+            f"{label}.deployment.max_wrapped_supply",
+            _MAX_U128,
+            positive=True,
+        )
     )
     partial = _SccpDestinationDeployment(
         family=family,
@@ -1637,6 +1816,10 @@ def _destination(value: Any, lane: Any, label: str) -> _SccpDestinationDeploymen
         finality_anchor_hash=anchor_hash,
         route_address=addresses[2],
         route_code_hash=hashes[3],
+        replay_verifier_address=addresses[3],
+        replay_verifier_code_hash=hashes[4],
+        mint_breaker_address=addresses[4],
+        mint_breaker_code_hash=hashes[5],
         taira_to_token_multiplier=multiplier,
         max_wrapped_supply=max_wrapped_supply,
         destination_binding_hash=b"",
@@ -1653,6 +1836,10 @@ def _destination(value: Any, lane: Any, label: str) -> _SccpDestinationDeploymen
             partial.semantic_profile_hash,
             partial.finality_anchor_hash,
             destination_binding_hash if family == "tron" else b"",
+            _abi_address(partial.replay_verifier_address),
+            partial.replay_verifier_code_hash,
+            _abi_address(partial.mint_breaker_address),
+            partial.mint_breaker_code_hash,
         )
     )
     return _SccpDestinationDeployment(
@@ -1666,6 +1853,10 @@ def _destination(value: Any, lane: Any, label: str) -> _SccpDestinationDeploymen
         finality_anchor_hash=partial.finality_anchor_hash,
         route_address=partial.route_address,
         route_code_hash=partial.route_code_hash,
+        replay_verifier_address=partial.replay_verifier_address,
+        replay_verifier_code_hash=partial.replay_verifier_code_hash,
+        mint_breaker_address=partial.mint_breaker_address,
+        mint_breaker_code_hash=partial.mint_breaker_code_hash,
         taira_to_token_multiplier=partial.taira_to_token_multiplier,
         max_wrapped_supply=partial.max_wrapped_supply,
         destination_binding_hash=destination_binding_hash,
@@ -1681,7 +1872,6 @@ def _settlement(value: Any, label: str) -> int:
         frozenset(
             {
                 "asset_definition_id",
-                "custody_owner",
                 "payload_amount_scale",
                 "max_outstanding_liability",
             }
@@ -1693,16 +1883,14 @@ def _settlement(value: Any, label: str) -> int:
     )
     if asset_definition_id != "6TEAJqbb8oEPmLncoNiMRbLEK6tw":
         raise ValueError(f"{label}.asset_definition_id must be canonical Taira XOR")
-    authority = _text(record["custody_owner"], f"{label}.custody_owner", 512)
-    from .client import _decode_canonical_i105_string
-
-    _decode_canonical_i105_string(authority)
     _integer(record["payload_amount_scale"], f"{label}.payload_amount_scale", 9, 9)
-    return _integer(
-        record["max_outstanding_liability"],
-        f"{label}.max_outstanding_liability",
-        1,
-        _MAX_U128,
+    return int(
+        _unsigned_decimal(
+            record["max_outstanding_liability"],
+            f"{label}.max_outstanding_liability",
+            _MAX_U128,
+            positive=True,
+        )
     )
 
 
@@ -1719,7 +1907,7 @@ def _route_configuration_hash(
     if destination.family == "ton":
         if route_id != "taira_ton_xor":
             raise ValueError("SCCP TON route id does not match its exact deployment")
-        global_id = -239 if profile == "ton-mainnet" else -3
+        global_id = -239
         source_lane_hash = _lane_hash(lane[0], lane[1])
         destination_lane_hash = _lane_hash(lane[1], lane[0])
         roles = (
@@ -1758,12 +1946,8 @@ def _route_configuration_hash(
         ).digest()
     network_values = {
         "ethereum-mainnet": ("taira_eth_xor", 1),
-        "ethereum-sepolia": ("taira_eth_xor", 11_155_111),
         "bsc-mainnet": ("taira_bsc_xor", 56),
-        "bsc-testnet": ("taira_bsc_xor", 97),
         "tron-mainnet": ("taira_tron_xor", 0x2B66_53DC),
-        "tron-nile": ("taira_tron_xor", 0xCD86_90DC),
-        "tron-shasta": ("taira_tron_xor", 0x94A9_059E),
     }
     try:
         expected_route_id, network_value = network_values[profile]
@@ -1779,6 +1963,9 @@ def _route_configuration_hash(
         destination_lane_hash,
         destination.token_code_hash,
         destination.verifier_code_hash,
+        destination.route_code_hash,
+        destination.replay_verifier_code_hash,
+        destination.mint_breaker_code_hash,
         destination.verifier_key_hash,
         destination.semantic_profile_hash,
         destination.finality_anchor_hash,
@@ -1826,6 +2013,7 @@ def _route(
             "inbound_finality_cutoff",
             "source_identity",
             "destination",
+            "sora_outbound_execution_policy",
             "settlement",
         }
     )
@@ -1846,16 +2034,22 @@ def _route(
         raise ValueError(f"{label} enables inbound settlement without a native trust anchor")
     source = _source_identity(record["source_identity"], lane, f"{label}.source_identity")
     destination = _destination(record["destination"], lane, f"{label}.destination")
+    execution_policy = _sora_outbound_execution_policy(
+        record["sora_outbound_execution_policy"],
+        f"{label}.sora_outbound_execution_policy",
+    )
     max_outstanding_liability = _settlement(
         record["settlement"], f"{label}.settlement"
     )
+    expected_wrapped_supply = (
+        max_outstanding_liability * destination.taira_to_token_multiplier
+    )
     if (
-        destination.max_wrapped_supply
-        != max_outstanding_liability * destination.taira_to_token_multiplier
+        expected_wrapped_supply > _MAX_U128
+        or expected_wrapped_supply != destination.max_wrapped_supply
     ):
         raise ValueError(
-            f"{label}.destination.max_wrapped_supply must equal "
-            "settlement.max_outstanding_liability multiplied by the destination multiplier"
+            f"{label} destination wrapped-supply cap does not match the settlement liability cap"
         )
     source_roles_match = source[0] == destination.family
     if source[0] == "ton":
@@ -1875,6 +2069,22 @@ def _route(
     route_configuration_hash = _route_configuration_hash(
         lane, record["route_id"], record["asset_key"], revision, destination
     )
+    execution_policy_roles = (
+        execution_policy.contract_artifact_sha256,
+        execution_policy.vk_ref.commitment,
+        route_configuration_hash,
+        destination.destination_binding_hash,
+        destination.verifier_key_hash,
+        destination.semantic_profile_hash,
+        destination.finality_anchor_hash,
+        *destination.execution_policy_hash_roles,
+    )
+    if any(not any(role) for role in execution_policy_roles) or len(
+        set(execution_policy_roles)
+    ) != len(execution_policy_roles):
+        raise ValueError(
+            f"{label}.sora_outbound_execution_policy reuses a governed hash role"
+        )
     if source[3] != route_configuration_hash:
         raise ValueError(
             f"{label} source route_config_hash does not match the immutable deployment"
@@ -2091,8 +2301,8 @@ def _payload_projection(value: Any, expected_domain: int, label: str) -> Any:
     expected_route = {
         SCCP_DOMAIN_ETH: "taira_eth_xor",
         SCCP_DOMAIN_BSC: "taira_bsc_xor",
-        SCCP_DOMAIN_TON: "taira_ton_xor",
         SCCP_DOMAIN_TRON: "taira_tron_xor",
+        SCCP_DOMAIN_TON: "taira_ton_xor",
     }[domain]
     if route_id != expected_route:
         raise ValueError(f"{label}.Transfer.route_id does not match its destination domain")
@@ -2170,7 +2380,7 @@ def normalize_sccp_recent_messages(value: Any) -> SccpRecentMessages:
             != expected_request
         ):
             raise ValueError(f"{label}.links do not identify this exact message")
-        if _integer(record["target_domain"], f"{label}.target_domain", 1, 5) != target[2]:
+        if _protocol_domain(record["target_domain"], f"{label}.target_domain") != target[2]:
             raise ValueError(f"{label} profile and domain fields disagree")
 
         amount = _unsigned_decimal(record["amount"], f"{label}.amount", _MAX_U128, positive=True)
@@ -2277,7 +2487,7 @@ def normalize_sccp_recent_messages(value: Any) -> SccpRecentMessages:
 def _validate_codec_value(
     record: Mapping[str, Any], codec_field: str, value_field: str, domain: Optional[int] = None
 ) -> None:
-    codec = _integer(record[codec_field], f"SCCP transfer.{codec_field}", 1, 7)
+    codec = _integer(record[codec_field], f"SCCP transfer.{codec_field}", 0, 3)
     if codec not in SCCP_CODEC_KEYS:
         raise ValueError(f"SCCP transfer.{codec_field} is unsupported or retired")
     if domain is not None:
@@ -2449,7 +2659,7 @@ def _public_inputs(value: Any, label: str) -> Mapping[str, Any]:
     _integer(record["version"], f"{label}.version", 1, 1)
     for field in ("message_id", "payload_hash", "commitment_root", "finality_block_hash"):
         _lower_hex(record[field], f"{label}.{field}", 32, prefix=True)
-    _integer(record["target_domain"], f"{label}.target_domain", 1, 5)
+    _protocol_domain(record["target_domain"], f"{label}.target_domain")
     height = record["finality_height"]
     if not isinstance(height, str) or re.fullmatch(r"[1-9][0-9]*", height) is None:
         raise ValueError(f"{label}.finality_height must be a positive canonical u64 string")
@@ -2695,11 +2905,14 @@ def normalize_bridge_message_submit_payload(value: Any) -> Dict[str, Any]:
                 "signature_b64",
                 "transaction_payload_b64",
                 "native_proof_b64",
+                "replay_witness_b64",
                 "creation_time_ms",
             }
         ),
         "bridge message submit",
-        frozenset({"authority", "fee_payment", "native_proof_b64"}),
+        frozenset(
+            {"authority", "fee_payment", "native_proof_b64", "replay_witness_b64"}
+        ),
     )
     native_proof = _canonical_base64(
         record["native_proof_b64"], "bridge message submit.native_proof_b64"
@@ -2708,6 +2921,17 @@ def normalize_bridge_message_submit_payload(value: Any) -> Dict[str, Any]:
         native_proof,
         context="bridge message submit.native_proof_b64",
         expected_type_name=_NATIVE_INBOUND_PROOF_TYPE_NAME,
+        expected_padding_length=0,
+    )
+    replay_witness = _canonical_base64(
+        record["replay_witness_b64"],
+        "bridge message submit.replay_witness_b64",
+        maximum_bytes=_MAX_REPLAY_WITNESS_BYTES,
+    )
+    validate_norito_frame(
+        replay_witness,
+        context="bridge message submit.replay_witness_b64",
+        expected_type_name=_REPLAY_WITNESS_TYPE_NAME,
         expected_padding_length=0,
     )
     creation_time = (
@@ -2722,6 +2946,7 @@ def normalize_bridge_message_submit_payload(value: Any) -> Dict[str, Any]:
         ),
         **_detached_signing_state(record, "bridge message submit", creation_time),
         "native_proof_b64": record["native_proof_b64"],
+        "replay_witness_b64": record["replay_witness_b64"],
     }
     if creation_time is not None:
         result["creation_time_ms"] = creation_time
@@ -2772,12 +2997,12 @@ def normalize_sccp_bridge_submit_response(
     if record["payload_kind"] != "transfer":
         raise ValueError("bridge submit response.payload_kind must be transfer")
     counterparty = _profile(record["counterparty_chain"], "counterparty_chain")
-    domain = _integer(record["counterparty_domain"], "counterparty_domain", 1, 5)
+    domain = _protocol_domain(record["counterparty_domain"], "counterparty_domain")
     if counterparty[3] or counterparty[2] != domain:
         raise ValueError("bridge submit response counterparty profile/domain disagree")
     backend = _text(record["backend"], "backend", 128)
-    if re.fullmatch(r"bridge/[a-z0-9/_-]+", backend) is None:
-        raise ValueError("bridge submit response.backend is not canonical")
+    if backend not in _BRIDGE_RESPONSE_BACKENDS[counterparty[0]]:
+        raise ValueError("bridge submit response.backend does not match the counterparty")
     range_start = _integer(record["range_start_height"], "range_start_height", 1)
     range_end = _integer(record["range_end_height"], "range_end_height", range_start)
     creation_time = _integer(record["creation_time_ms"], "creation_time_ms", 1)
@@ -2904,8 +3129,8 @@ __all__ = [
     "SCCP_DOMAIN_SORA",
     "SCCP_DOMAIN_ETH",
     "SCCP_DOMAIN_BSC",
-    "SCCP_DOMAIN_TON",
     "SCCP_DOMAIN_TRON",
+    "SCCP_DOMAIN_TON",
     "SCCP_CODEC_CANONICAL_TEXT",
     "SCCP_CODEC_EVM_ADDRESS20",
     "SCCP_CODEC_TRON_ADDRESS21",
@@ -2913,10 +3138,14 @@ __all__ = [
     "SCCP_CODEC_KEYS",
     "SCCP_PAYLOAD_KINDS",
     "SCCP_NETWORK_PROFILES",
+    "SCCP_SORA_OUTBOUND_EXECUTION_SEMANTICS_V1",
+    "SCCP_MAX_SORA_OUTBOUND_GAS_LIMIT_V1",
     "SccpRegistryLimits",
     "SccpResourceLimits",
     "SccpCapabilities",
     "SccpRegistry",
+    "SccpPortableVerifyingKeyRef",
+    "SccpSoraOutboundExecutionPolicy",
     "SccpRecentMessages",
     "SccpRecentCursor",
     "SccpBridgeSubmitResponse",

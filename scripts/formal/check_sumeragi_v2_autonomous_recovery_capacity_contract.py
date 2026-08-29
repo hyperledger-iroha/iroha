@@ -111,6 +111,12 @@ STABLE_BINDING_IDENTITIES = {
         "method",
         "Queue::lane_reservation_reconciliation_snapshot",
     ),
+    "durable_reservation_reconciliation_snapshot_locked": (
+        "MLIncompleteCarrierNRecoverable",
+        "crates/iroha_core/src/queue.rs",
+        "method",
+        "Queue::lane_reservation_reconciliation_snapshot_locked",
+    ),
     "exact_incomplete_carrier_history_scan": (
         "MLIncompleteCarrierNRecoverable",
         "crates/iroha_core/src/kura/merge_ledger_latest_execution_index.rs",
@@ -273,6 +279,12 @@ STABLE_BINDING_IDENTITIES = {
         "method",
         "Kura::new_inner",
     ),
+    "geometry_restore_combined_capacity_publish": (
+        "MLDebugAppendReservationAndRestartAccounting",
+        "crates/iroha_core/src/kura.rs",
+        "method",
+        "Kura::finish_restored_lane_segments_with_geometry",
+    ),
     "entrypoint_claim_set_peak_projection": (
         "MLMutationPeaksAdmittedBeforeFirstWrite",
         "crates/iroha_core/src/kura/hot_path_capacity_preflight.rs",
@@ -373,7 +385,7 @@ STABLE_BINDING_IDENTITIES = {
         "MLDebugAppendReservationAndRestartAccounting",
         "crates/iroha_core/src/kura.rs",
         "method",
-        "Kura::blocks_root_total_bytes",
+        "Kura::blocks_root_usage_bytes",
     ),
     "debug_append_enforced_usage_chain": (
         "MLDebugAppendReservationAndRestartAccounting",
@@ -382,6 +394,12 @@ STABLE_BINDING_IDENTITIES = {
         "Kura::kura_disk_usage_bytes",
     ),
     "debug_append_total_usage_chain": (
+        "MLDebugAppendReservationAndRestartAccounting",
+        "crates/iroha_core/src/kura.rs",
+        "method",
+        "Kura::kura_disk_usage_bytes_with_total",
+    ),
+    "debug_append_total_usage_projection": (
         "MLDebugAppendReservationAndRestartAccounting",
         "crates/iroha_core/src/kura.rs",
         "method",
@@ -395,9 +413,9 @@ STABLE_BINDING_IDENTITIES = {
     ),
     "debug_append_startup_accounting_publish": (
         "MLDebugAppendReservationAndRestartAccounting",
-        "crates/iroha_core/src/kura.rs",
+        "crates/iroha_core/src/kura/autonomous_terminal_capacity.rs",
         "method",
-        "Kura::new_inner",
+        "Kura::validate_and_publish_configured_kura_capacity_after_startup_recovery",
     ),
 }
 
@@ -414,8 +432,18 @@ STABLE_BINDING_COVERAGE = {
 
 STABLE_BINDING_REQUIRED_ANCHORS = {
     "durable_reservation_reconciliation_snapshot": (
+        "self.transaction_selection_durability_faulted()",
+        "self.lane_reservation_transition_lock.lock()",
+        "self.push_remove_lock.lock()",
         "self.lane_reservation_journal.lock().is_none()",
+        "self.lane_reservation_reconciliation_snapshot_locked()",
+    ),
+    "durable_reservation_reconciliation_snapshot_locked": (
+        "let store = self.lane_reservations.lock()",
+        "self.validate_live_reservation_against_queue(record)?",
         "let ordered_owner_phases = self.lane_reservation_recovery_phases_locked()?",
+        "ordered_records.sort_by_key",
+        "LaneQueueReservationError::ReconciliationDuplicateFifoOrdinal",
         "Ok(LaneQueueReservationReconciliationSnapshotV1 {",
     ),
     "exact_incomplete_carrier_history_scan": (
@@ -483,7 +511,7 @@ STABLE_BINDING_REQUIRED_ANCHORS = {
     ),
     "certified_merge_stage_consumer": (
         "self.ensure_pristine_execution_control_stage()?",
-        "self.state_ref.validate_certified_merge_entry_for_global_order(entry)?",
+        "self.state_ref.validate_certified_merge_entry_for_global_order(entry, frozen_mode)?",
         "self.stage_merge_execution_markers(entry.epoch_id, batch)?",
         "self.staged_merge_entry = Some(entry.clone())",
     ),
@@ -627,8 +655,19 @@ STABLE_BINDING_REQUIRED_ANCHORS = {
         "kura.rebuild_certified_bundle_capacity_reservations_on_startup()?",
         "kura.repair_lane_merge_application_frontiers_on_startup()?",
         "kura.repair_autonomous_lane_merge_bundles_on_startup()?",
-        "kura.validate_configured_kura_capacity_after_startup_recovery()?",
+        "kura.validate_and_publish_configured_kura_capacity_after_startup_recovery(",
+        "!provisional_open",
+        "Kura emergency Fast mode skipped the full disk-usage inventory",
         "Ok((kura, BlockCount(block_count)))",
+    ),
+    "geometry_restore_combined_capacity_publish": (
+        "if self.emergency_fast_startup_enabled()",
+        "self.rebuild_post_wsv_lane_artifact_budget_reservations_on_startup()?",
+        "self.rebuild_certified_bundle_capacity_reservations_on_startup()?",
+        "self.repair_lane_merge_application_frontiers_on_startup()?",
+        "self.repair_autonomous_lane_merge_bundles_on_startup()?",
+        "self.validate_and_publish_configured_kura_capacity_after_startup_recovery(true)?",
+        "Ok(())",
     ),
     "entrypoint_claim_set_peak_projection": (
         "self.inspect_autonomous_lane_entrypoint_claim_inventory(max_files)?",
@@ -719,7 +758,7 @@ STABLE_BINDING_REQUIRED_ANCHORS = {
     ),
     "debug_append_file_accounting": (
         "let path = root.join(\"blocks.jsonl\")",
-        "std::fs::symlink_metadata(&path)",
+        "secure_file_metadata::from_path(&path)",
         "!Self::sidecar_is_single_link(&metadata)",
         "Ok(metadata.len())",
     ),
@@ -729,19 +768,31 @@ STABLE_BINDING_REQUIRED_ANCHORS = {
         "Ok(total)",
     ),
     "debug_append_total_root_accounting": (
-        "let mut total = Self::blocks_root_debug_file_bytes(root)?",
-        "Self::block_store_total_bytes_with_historical_budget",
-        "Ok(total)",
+        "let debug_bytes = Self::blocks_root_debug_file_bytes(root)?",
+        "let mut enforced = debug_bytes",
+        "let mut total = debug_bytes",
+        "Self::block_store_bytes_with_historical_budget",
+        "Self::block_store_supplemental_bytes",
+        "Ok((enforced, total))",
     ),
     "debug_append_enforced_usage_chain": (
+        "let blocks_root = self.store_root.join(\"blocks\")",
+        "let retired_blocks_root = self.store_root.join(\"retired\").join(\"blocks\")",
         "Self::blocks_root_bytes(&blocks_root",
         "Self::blocks_root_bytes(&retired_blocks_root",
-        "Ok(used)",
+        "self.kura_shared_disk_usage_bytes()?",
     ),
     "debug_append_total_usage_chain": (
-        "Self::blocks_root_total_bytes(&blocks_root",
-        "Self::blocks_root_total_bytes(&retired_blocks_root",
-        "Ok(used)",
+        "let blocks_root = self.store_root.join(\"blocks\")",
+        "let retired_blocks_root = self.store_root.join(\"retired\").join(\"blocks\")",
+        "Self::blocks_root_usage_bytes(&blocks_root",
+        "Self::blocks_root_usage_bytes(&retired_blocks_root",
+        "let shared = self.kura_shared_disk_usage_bytes()?",
+        "Ok((",
+    ),
+    "debug_append_total_usage_projection": (
+        "self.kura_disk_usage_bytes_with_total()",
+        ".map(|(_, total)| total)",
     ),
     "debug_append_total_cache_refresh": (
         "let scanned = self.kura_total_disk_usage_bytes()",
@@ -749,10 +800,25 @@ STABLE_BINDING_REQUIRED_ANCHORS = {
         "self.disk_usage_total_initialized",
     ),
     "debug_append_startup_accounting_publish": (
-        "match kura.kura_disk_usage_bytes()",
-        "kura.disk_usage.store(bytes, Ordering::Relaxed)",
-        "match kura.refresh_total_disk_usage_bytes()",
-        "Ok((kura, BlockCount(block_count)))",
+        "let publication = (|| -> Result<()> {",
+        "let _prune_guard = self.prune_lock.lock()",
+        "let _canonical_chain_guard = self.canonical_chain_lock.lock()",
+        "self.pending_canonical_capacity_bytes_under_prune_and_canonical_guards()?",
+        "let _geometry_guard = self.lane_geometry_lock.lock()",
+        "let _sidecar_guard = self.sidecar_lock.lock()",
+        "let (used, total) = self.kura_disk_usage_bytes_with_total()?",
+        "if capacity_recovery_complete",
+        "if required > self.max_disk_usage_bytes",
+        "self.disk_usage.store(used, Ordering::Relaxed)",
+        "self.disk_usage_initialized.store(true, Ordering::Relaxed)",
+        "self.disk_usage_total.store(total, Ordering::Relaxed)",
+        "self.disk_usage_total_initialized",
+        "match publication",
+        "self.disk_usage_initialized.store(false, Ordering::Relaxed)",
+        ".store(false, Ordering::Relaxed)",
+        "self.invalidate_durable_budget_snapshot()",
+        "Err(err)",
+        "Ok(())",
     ),
 }
 
@@ -1243,6 +1309,29 @@ def _validate_stable_bindings(
             errors.append(
                 f"stable binding {binding_id} ({symbol}) missing or reorders token {missing!r}"
             )
+        if binding_id == "debug_append_startup_accounting_publish":
+            scanner = "self.kura_disk_usage_bytes_with_total()"
+            if item.count(scanner) != 1:
+                errors.append(
+                    f"stable binding {binding_id} ({symbol}) must own exactly one combined disk scan"
+                )
+        combined_publish_call = {
+            "startup_carrier_envelope_reconstruction_order": (
+                "kura.validate_and_publish_configured_kura_capacity_after_startup_recovery("
+            ),
+            "geometry_restore_combined_capacity_publish": (
+                "self.validate_and_publish_configured_kura_capacity_after_startup_recovery("
+            ),
+        }.get(binding_id)
+        if combined_publish_call is not None:
+            if item.count(combined_publish_call) != 1:
+                errors.append(
+                    f"stable binding {binding_id} ({symbol}) must delegate exactly once to the combined capacity scan/publish owner"
+                )
+            if "kura_disk_usage_bytes_with_total" in item:
+                errors.append(
+                    f"stable binding {binding_id} ({symbol}) must not perform a second direct disk scan"
+                )
         if binding_id in {
             "autonomous_predecessor_role_dispatch",
             "autonomous_predecessor_global_application_gate",

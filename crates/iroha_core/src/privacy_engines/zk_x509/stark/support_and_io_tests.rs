@@ -1,17 +1,11 @@
 // Lexically included by `zk_x509::stark::tests` to preserve the existing libtest paths.
-use std::{
-    collections::BTreeSet,
-    sync::{Mutex, OnceLock},
-};
-use iroha_crypto::{Hash, HashOf};
-use rand::{RngCore, SeedableRng as _, rngs::StdRng};
-use sha2::{Digest as _, Sha256};
 use super::*;
 use crate::privacy_engines::zk_x509::{
     der_air::ZkX509DerEkuV1, der_stark::ZkX509DerStarkPrivateShapeV1, io_air::ZkX509IoEndpointV1,
     p256_aggregate_adapter::p256_main_base_source_fixture_for_test_v1,
     sha_call_bus_stark::ZkX509ShaCallPublicShapeV1,
 };
+use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
     NetworkId,
     block::BlockHeader,
@@ -23,6 +17,12 @@ use iroha_data_model::{
         PrivacyX509ExtendedKeyUsageV1, PrivacyZkX509CertificatePolicyRecordDigestV1,
         PrivacyZkX509CrlRecordDigestV1, PrivacyZkX509TrustAnchorRecordDigestV1,
     },
+};
+use rand::{RngCore, SeedableRng as _, rngs::StdRng};
+use sha2::{Digest as _, Sha256};
+use std::{
+    collections::BTreeSet,
+    sync::{Mutex, OnceLock},
 };
 static PROOF_TEST_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
 fn proof_guard() -> std::sync::MutexGuard<'static, ()> {
@@ -353,9 +353,10 @@ fn fixture_statement() -> ZkX509IoStarkStatementV1 {
 }
 fn io_challenges_fixture_v1() -> ZkX509IoChallengesV1 {
     let mut transcript = TransparentTranscriptV1::new(
+        ZK_X509_DIGEST_CONTEXT_V1,
         b"zk-x509-io-logical-active-tests-v1",
-        &[0x63; 32],
-        &[0xA7; 32],
+        &test_stark_digest_v1(0x63),
+        &test_stark_digest_v1(0xA7),
     )
     .expect("I/O test transcript");
     derive_zk_x509_io_challenges_v1(&mut transcript).expect("I/O test challenges")
@@ -1343,11 +1344,13 @@ fn projection_provider_post_base_v1(
         ZkX509CredentialMainPreAuxV1::fixture_for_test_v1(
             digest,
             [0x31; 32],
-            core::array::from_fn(|index| [u8::try_from(index + 1).expect("six roots"); 32]),
+            core::array::from_fn(|index| {
+                test_stark_digest_v1(u8::try_from(index + 1).expect("six roots"))
+            }),
         ),
-        [0x41; 32],
-        [0x51; 32],
-        [0x61; 32],
+        test_stark_digest_v1(0x41),
+        test_stark_digest_v1(0x51),
+        test_stark_digest_v1(0x61),
     )
     .expect("joint post-base challenge derivation")
     .main_post_base()
@@ -1389,9 +1392,13 @@ fn accumulator_aggregate_layout() -> AggregateProofLayoutV1 {
     AggregateProofLayoutV1::for_accumulators_v1().expect("accumulator aggregate layout")
 }
 fn p256_aggregate_challenges_fixture() -> P256AggregateChallengesV1 {
-    let mut transcript =
-        TransparentTranscriptV1::new(b"p256-aggregate-test", &[0x31; 32], &[0x57; 32])
-            .expect("P-256 aggregate transcript");
+    let mut transcript = TransparentTranscriptV1::new(
+        ZK_X509_DIGEST_CONTEXT_V1,
+        b"p256-aggregate-test",
+        &test_stark_digest_v1(0x31),
+        &test_stark_digest_v1(0x57),
+    )
+    .expect("P-256 aggregate transcript");
     derive_p256_aggregate_challenges_v1(&mut transcript)
         .expect("canonical P-256 aggregate challenges")
 }
@@ -1467,11 +1474,13 @@ fn p256_main_provider_post_base_fixture_v1() -> ZkX509CredentialMainPostBaseChal
         ZkX509CredentialMainPreAuxV1::fixture_for_test_v1(
             [0x71; 32],
             [0x72; 32],
-            core::array::from_fn(|index| [u8::try_from(index + 0x31).expect("six roots"); 32]),
+            core::array::from_fn(|index| {
+                test_stark_digest_v1(u8::try_from(index + 0x31).expect("six roots"))
+            }),
         ),
-        [0x73; 32],
-        [0x74; 32],
-        [0x75; 32],
+        test_stark_digest_v1(0x73),
+        test_stark_digest_v1(0x74),
+        test_stark_digest_v1(0x75),
     )
     .expect("canonical joint post-base challenges")
     .main_post_base()

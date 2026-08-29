@@ -5,7 +5,10 @@ use iroha_data_model::prelude::{
     DecimalValueV1, IntValueV1, NUMERIC_FRAME_HEADER_BYTES_V1, NumericAbiError, QuantityValueV1,
 };
 use ivm_abi::{
-    metadata::{LiteralKindV1, ProgramMetadata, decode_literal_descriptor},
+    SyscallPolicy,
+    metadata::{
+        EmbeddedContractInterfaceV1, LiteralKindV1, ProgramMetadata, decode_literal_descriptor,
+    },
     pointer_abi::{PointerType, validate_tlv_bytes},
 };
 use ivm_artifact_admission::{verify_contract_artifact, verify_contract_artifact_json};
@@ -69,6 +72,43 @@ fn current_fixture() -> CurrentFixture {
         entrypoint_count: usize_field("entrypoint_count"),
     }
 }
+
+fn rewrite_interface(
+    artifact: &[u8],
+    mutate: impl FnOnce(&mut EmbeddedContractInterfaceV1),
+) -> Vec<u8> {
+    let parsed = ProgramMetadata::parse(artifact).expect("parse contract fixture metadata");
+    let section_start = parsed.header_len;
+    assert_eq!(
+        artifact.get(section_start..section_start + 4),
+        Some(b"CNTR".as_slice()),
+        "contract fixture starts with its required CNTR section"
+    );
+    let payload_len = usize::try_from(u32::from_le_bytes(
+        artifact[section_start + 4..section_start + 8]
+            .try_into()
+            .expect("CNTR payload length is four bytes"),
+    ))
+    .expect("u32 CNTR payload length fits usize");
+    let section_end = section_start + 8 + payload_len;
+    let mut interface = parsed
+        .contract_interface
+        .expect("contract fixture carries CNTR");
+    mutate(&mut interface);
+    let replacement = interface.encode_section();
+    assert_eq!(
+        replacement.len(),
+        section_end - section_start,
+        "CNTR mutation must preserve artifact prefix geometry"
+    );
+    let mut rewritten =
+        Vec::with_capacity(artifact.len() - (section_end - section_start) + replacement.len());
+    rewritten.extend_from_slice(&artifact[..section_start]);
+    rewritten.extend_from_slice(&replacement);
+    rewritten.extend_from_slice(&artifact[section_end..]);
+    rewritten
+}
+
 fn numeric_fixtures() -> [(&'static str, &'static [u8], PointerType); 3] {
     [
         ("int", INTEGER_FIXTURE, PointerType::Int),
@@ -214,6 +254,179 @@ fn host_private_system_syscall_is_rejected() {
     let json = verify_contract_artifact_json(&mutated);
     assert!(json.starts_with("{\"ok\":false,"), "{json}");
 }
+
+#[test]
+fn stale_header_and_cntr_abi_hashes_are_rejected() {
+    let fixture = current_fixture();
+    let mut stale_header = fixture.artifact.clone();
+    stale_header[17] ^= 0x80;
+    let stale_cntr = rewrite_interface(&fixture.artifact, |interface| {
+        interface.abi_hash[0] ^= 0x80;
+    });
+    for (location, artifact) in [("header", stale_header), ("CNTR", stale_cntr)] {
+        let error = verify_contract_artifact(&artifact)
+            .err()
+            .unwrap_or_else(|| panic!("stale {location} ABI hash must fail shared admission"));
+        assert_eq!(
+            error.to_string(),
+            "invalid contract artifact: contract interface abi_hash does not match the runtime ABI descriptor",
+            "unexpected stale-{location} error"
+        );
+        assert_eq!(
+            verify_contract_artifact_json(&artifact),
+            format!("{{\"ok\":false,\"error\":\"{}\"}}", error)
+        );
+    }
+}
+
+#[test]
+fn cntr_return_type_schema_mismatch_is_rejected() {
+    let source = r#"
+        seiyaku SchemaBound {
+            view fn inspect() -> int { return 1; }
+        }
+    "#;
+    let (artifact, _) = kotodama_lang::compiler::Compiler::new()
+        .compile_source_with_manifest(source)
+        .expect("compile schema-bound contract");
+    let mutated = rewrite_interface(&artifact, |interface| {
+        let inspect = interface
+            .entrypoints
+            .iter_mut()
+            .find(|entrypoint| entrypoint.name == "inspect")
+            .expect("schema-bound fixture carries inspect entrypoint");
+        assert_eq!(inspect.return_type.as_deref(), Some("int"));
+        assert!(inspect.return_schema.is_some());
+        inspect.return_type = Some("Foo".to_owned());
+    });
+    let error = verify_contract_artifact(&mutated)
+        .expect_err("CNTR return type/schema mismatch must fail shared admission");
+    assert!(
+        error
+            .to_string()
+            .contains("entrypoint `inspect` has a return schema that does not match"),
+        "unexpected CNTR/schema error: {error}"
+    );
+    assert!(
+        verify_contract_artifact_json(&mutated).starts_with("{\"ok\":false,"),
+        "JSON admission must reject the same malformed CNTR"
+    );
+}
+
+#[test]
+fn unassigned_exact_json_getter_syscalls_are_rejected() {
+    let fixture = current_fixture();
+    for number in 0x01_0163..=0x01_0165 {
+        assert!(
+            !ivm_abi::syscalls::is_syscall_allowed(SyscallPolicy::AbiV1, number),
+            "reserved exact-number gap {number:#08x} must stay outside ABI V1"
+        );
+        let mut mutated = fixture.artifact.clone();
+        mutated[fixture.code_offset..fixture.code_offset + 4]
+            .copy_from_slice(&ivm_abi::encoding::wide::encode_syscallx(number).to_le_bytes());
+        let error = verify_contract_artifact(&mutated)
+            .expect_err("reserved exact-number syscall must fail shared admission");
+        assert!(
+            error
+                .to_string()
+                .contains(&format!("disallowed syscall {number:#08x}")),
+            "unexpected reserved-syscall error for {number:#08x}: {error}"
+        );
+        assert!(
+            verify_contract_artifact_json(&mutated).starts_with("{\"ok\":false,"),
+            "JSON admission must reject reserved syscall {number:#08x}"
+        );
+    }
+}
+
+#[test]
+fn malformed_numeric_pointer_envelopes_are_rejected() {
+    type EnvelopeMutation = fn(&mut [u8], &Range<usize>);
+    for (name, fixture, pointer_type) in numeric_fixtures() {
+        let envelope = pointer_literal_range(fixture, pointer_type);
+        let mutations: [(&str, EnvelopeMutation); 4] = [
+            ("type", |bytes: &mut [u8], range: &Range<usize>| {
+                bytes[range.start..range.start + 2].copy_from_slice(&u16::MAX.to_be_bytes());
+            }),
+            ("version", |bytes, range| bytes[range.start + 2] = 2),
+            ("length", |bytes, range| {
+                let offset = range.start + 3;
+                let length = u32::from_be_bytes(
+                    bytes[offset..offset + 4]
+                        .try_into()
+                        .expect("pointer length is four bytes"),
+                );
+                bytes[offset..offset + 4].copy_from_slice(&length.saturating_add(1).to_be_bytes());
+            }),
+            ("hash", |bytes, range| bytes[range.end - 1] ^= 0x01),
+        ];
+        for (fault, mutate) in mutations {
+            let mut mutated = fixture.to_vec();
+            mutate(&mut mutated, &envelope);
+            assert!(
+                validate_tlv_bytes(&mutated[envelope.clone()]).is_err(),
+                "{name} {fault} mutation must invalidate its outer envelope"
+            );
+            let error = verify_contract_artifact(&mutated).err().unwrap_or_else(|| {
+                panic!("malformed {name} {fault} envelope must fail shared admission")
+            });
+            assert_eq!(error.to_string(), SEMANTIC_LITERAL_ERROR);
+            assert_eq!(
+                verify_contract_artifact_json(&mutated),
+                format!("{{\"ok\":false,\"error\":\"{SEMANTIC_LITERAL_ERROR}\"}}")
+            );
+        }
+    }
+}
+
+#[test]
+fn canonical_durable_numeric_state_is_admitted() {
+    let source = r#"
+        seiyaku DurableNumericState {
+            state int Whole;
+            state decimal Rate;
+            state quantity Supply;
+
+            hajimari() {
+                let int zero_whole = 0;
+                let decimal zero_rate = 0;
+                let quantity zero_supply = 0;
+                Whole = zero_whole;
+                Rate = zero_rate;
+                Supply = zero_supply;
+            }
+
+            kotoage fn store() -> int authorize("WriteState") {
+                Whole = 1606938044258990275541962092341162602522202993782792835301376;
+                Rate = -12345678901234567890.125;
+                Supply = 12345678901234567890.0000000000000000000000000001;
+                return 1;
+            }
+        }
+    "#;
+    let (artifact, _) = kotodama_lang::compiler::Compiler::new()
+        .compile_source_with_manifest(source)
+        .expect("compile exact durable numeric-state artifact");
+    let verified = verify_contract_artifact(&artifact)
+        .expect("canonical exact durable numeric state must pass shared admission");
+    let states = verified
+        .manifest
+        .states
+        .expect("compiler artifact exposes durable state descriptors");
+    let state_types = states
+        .iter()
+        .map(|state| (state.name.as_str(), state.type_name.as_str()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        state_types,
+        [
+            ("Whole", "int"),
+            ("Rate", "decimal"),
+            ("Supply", "quantity")
+        ]
+    );
+}
+
 #[test]
 fn hash_valid_numeric_literals_with_inner_checksum_faults_are_rejected() {
     for (name, fixture, pointer_type) in numeric_fixtures() {

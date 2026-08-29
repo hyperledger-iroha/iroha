@@ -37,7 +37,7 @@ class SourceSpec:
 SOURCES = (
     SourceSpec(
         'crates/ivm/tests/kotodama.rs',
-        '286e12ff8e7c3b6cb0545be912abaa429059ef6c519bf59d4b96f43825256c33',
+        '5b5fc67bbd15da08d0fa3140c69d7518948e30bb8a441c68b850a44a14f5c752',
         (
             AssetSpec('001.ko', '2cd0d5b786b303f342a13799a5828a17903c4b3934b6b7332e994e080039d6ee', 225, True),
             AssetSpec('002.ko', '4b32085d63144de5a6d19634490994a0fadca60737bab8dfb5ef361d1ebd7135', 311, True),
@@ -45,7 +45,7 @@ SOURCES = (
             AssetSpec('004.ko', 'f382e02e14ed9425efacc2ad5aa3982295b108f808578700db2addebdcf68482', 170, True),
             AssetSpec('005.ko', '6acd0f9145754daf4ee414404ec42bb5f911bb15d76b1fc63a9440c6c5c82435', 165, True),
             AssetSpec('006.ko', '80f14302dcc42236cd45cbe6df02c6d8c47a6093ac439c0f5cd09c0ee9d0f145', 206, True),
-            AssetSpec('007.ko', '703941afbfd1814013131d4994b68e18db03116902b045638a448eb24025c76d', 784, True),
+            AssetSpec('007.ko', 'f272a218947dfa895db04c3d0cfd6433af9d82b95dcc2017c1b581a3733a0306', 784, True),
             AssetSpec('008.ko', '285f3d0cee63b9376b82f7d80a07bd1ed966725a9ede1fed7f20dc3ea6630cc4', 498, True),
             AssetSpec('009.ko', 'b9bb5a002b0ec67b259cc643efbfa231c92f000820b39e597c6b497a82c1dbda', 182, True),
             AssetSpec('010.ko', '993f32bca29416fec872303bf59624c871a3247c4c4de7e3511e6b51c8a3193c', 242, True),
@@ -70,7 +70,7 @@ SOURCES = (
             AssetSpec('029.ko', 'b5fed2a934b7531e36aee4926adfa6d138429bff91fede7c59222ca308d30b1f', 178, True),
             AssetSpec('030.ko', '0b659d2a00a6a674c0b1cf37a0e253f4d4ebdb2c07e61f8ef0695d693a94815a', 178, True),
             AssetSpec('031.ko', 'a737212afed59fe5a4dfb9ba3770364599efb525330e709bece80dd6d2755617', 193, True),
-            AssetSpec('032.ko', '3bdeef77f6b45fe6e90498f2aea766bc10f07a5cfc9f649d0dd92d7e240a9b6c', 607, True),
+            AssetSpec('032.ko', 'c234aebb84c948b9646efa22fe3341fcfddddfbb9195c2118f6a03ac7f7e86af', 607, True),
             AssetSpec('033.ko', '392f3dcbdc94c293fb1e2deed6d8dfd5bfb2969b9bf70c39ba09beed5bc2aab0', 342, True),
             AssetSpec('034.ko', '6d3e76782c07431125da993926e0d0d716b9de7214e3378a118fa16b27ac6fff', 308, True),
             AssetSpec('035.ko', '3da0613849606b1cf5695ad53a441f6425a86868fe04f399df232749e49d0a52', 130, True),
@@ -115,7 +115,7 @@ SOURCES = (
     ),
     SourceSpec(
         'crates/ivm/tests/kotodama_state_name_map_runtime.rs',
-        'ce7b5caf3cd1017ef7e8e59a5da3ae78aa34484318c753e18e333b518e25d70a',
+        '9aaab2323ce5a05f987364aa17679766484e861c4032fcd5d1959ff275944716',
         (
             AssetSpec('001.ko', 'c0d59dd29744c70955b883227fdd3d48e50bbabe387a71b85a62cc2feea227d3', 269, True),
             AssetSpec('002.ko', '5a82559e5cba3e2df840615c6385f3931602c3e9494bee83f3328c47e442e5ff', 396, True),
@@ -150,7 +150,7 @@ SOURCES = (
     ),
     SourceSpec(
         'crates/ivm/tests/kotodama_v1_runtime_acceptance.rs',
-        '3f439f0267ca186c043fd62575e6af2b0320ef767be4a430bdf726ae57f125f1',
+        '0c3464bfaa18d0601abdfc75edbc64b85f067bd8ad17cffaf9e00431e82da8f8',
         (
             AssetSpec('001.ko', 'e74a429259169313587e92db6f37a267ec784845a32bb273770952315beead8e', 309, False),
             AssetSpec('002.ko', '03ab49f13ad97b62a823f31fa261ee44841b2dd5ff95c7891fea8a3eaceea302', 566, False),
@@ -171,7 +171,7 @@ SOURCES = (
     ),
     SourceSpec(
         'crates/ivm/tests/kotodama_lists.rs',
-        '3e7b519ceb255f054e1c6fe97cecac9a6f4fd2de7d0dff1e796141ed2c112cc8',
+        '0dbe720a1a5465d09865480bc1fc716665d7ed200037ec13ab5f087751e8d1b4',
         (
             AssetSpec('001.ko', '3b4501aa4bc185ec588c95dab1cdba69b6af4ec811261c2193817c06762e089b', 551, True),
             AssetSpec('002.ko', '06544f9c17080965311c0537d02d2d8f97b34b20a14183cc08a476fca66da4b8', 412, True),
@@ -188,7 +188,7 @@ SOURCES = (
     ),
     SourceSpec(
         'crates/ivm/src/koto_test_driver_tests.rs',
-        '1bf013dbc7cf174bbeaff7e9c5ac2c1657eff7e3d870007a9c0172d79d060886',
+        '1eaa76514bd3b3682ff92888a5c231598411cb9f712123bd00bb9fe07caafbe0',
         (
             AssetSpec('001.ko', '7548b3a38f2c54eb30a4ea614e67ebc342db76efc18fad0366863f4e1518e800', 875, True),
             AssetSpec('002.ko', '63961644f937f1cc2e56f76506f3578fc93067ce0da0da17203855519f13394d', 217, True),
@@ -286,6 +286,66 @@ SOURCES = (
     ),
 )
 
+# These semantic anchors explain the reviewed Rust preimage changes instead
+# of allowing their skeleton seals to be advanced as opaque digest substitutions.
+SOURCE_REQUIRED_FRAGMENTS = {
+    'crates/ivm/tests/kotodama.rs': (
+        br'Json::parse(\"{\\\"cursor\\\":1,\\\"query\\\":\\\"sc_dummy\\\"}\")',
+    ),
+    'crates/ivm/tests/kotodama_v1_runtime_acceptance.rs': (
+        b'fn exact_numeric_state_survives_a_fresh_host_snapshot_roundtrip()',
+        b'1606938044258990275541962092341162602522202993782792835301376',
+        b'assert_eq!(writer.state_paths(), ["Rate", "Supply", "Whole"]);',
+    ),
+    'crates/ivm/tests/kotodama_lists.rs': (
+        b'{{"index":"{index}","operation":"{operation}"}}',
+    ),
+    'crates/ivm/src/koto_test_driver_tests.rs': (
+        b'{{\\"unexpected\\":true,\\"value\\":7}}',
+        b'WsvHost::new_with_subject(MockWorldStateView::default(), caller)',
+        b'WsvHost::new_with_subject(MockWorldStateView::default(), caller.clone())',
+        b'WsvHost::new_with_subject(MockWorldStateView::default(), controller.clone())',
+    ),
+    'crates/ivm/tests/kotodama_state_name_map_runtime.rs': (
+        b'use std::str::FromStr;',
+        b'WsvHost::new_with_subject(wsv, subject);',
+    ),
+}
+SOURCE_FORBIDDEN_FRAGMENTS = {
+    'crates/ivm/tests/kotodama.rs': (
+        b'ParsedAccountId',
+        br'Json::parse(\"{\\\"query\\\":\\\"sc_dummy\\\",\\\"cursor\\\":1}\")',
+    ),
+    'crates/ivm/tests/kotodama_lists.rs': (
+        b'{{"operation":"{operation}","index":"{index}"}}',
+    ),
+    'crates/ivm/src/koto_test_driver_tests.rs': (
+        b'{{\\"value\\":7,\\"unexpected\\":true}}',
+        b'WsvHost::new_with_subject(MockWorldStateView::default(), caller, HashMap::new())',
+        b'caller.clone(),\n            HashMap::new(),',
+        b'controller.clone(),\n            HashMap::new(),',
+    ),
+    'crates/ivm/tests/kotodama_state_name_map_runtime.rs': (
+        b'use std::{collections::HashMap, str::FromStr};',
+        b'WsvHost::new_with_subject(wsv, subject, HashMap::new());',
+    ),
+}
+
+# The two extracted fixtures changed for the same canonical object-key order as
+# their Rust source. Keep their readable contract coupled to the byte seals.
+ASSET_REQUIRED_FRAGMENTS = {
+    ('crates/ivm/tests/kotodama.rs', '007.ko'):
+        b'Json::parse("{\\"cursor\\":1,\\"query\\":\\"sc_dummy\\"}")',
+    ('crates/ivm/tests/kotodama.rs', '032.ko'):
+        b'Json::parse("{\\"cursor\\":1,\\"query\\":\\"sc_dummy\\"}")',
+}
+ASSET_FORBIDDEN_FRAGMENTS = {
+    ('crates/ivm/tests/kotodama.rs', '007.ko'):
+        b'Json::parse("{\\"query\\":\\"sc_dummy\\",\\"cursor\\":1}")',
+    ('crates/ivm/tests/kotodama.rs', '032.ko'):
+        b'Json::parse("{\\"query\\":\\"sc_dummy\\",\\"cursor\\":1}")',
+}
+
 _INCLUDE_RE = re.compile(
     rb'include_str!\([ \t\r\n]*"(?P<path>[^"\r\n]*fixtures/koto_v1/[^"\r\n]+)"[ \t\r\n]*\)'
     rb'(?P<sentinel>[ \t\r\n]*\.strip_suffix\([ \t\r\n]*\'\\n\'[ \t\r\n]*\)'
@@ -324,6 +384,13 @@ def _project_asset(spec: AssetSpec, stored: bytes) -> bytes:
 
 def _normalize_source(source: SourceSpec, data: bytes) -> bytes:
     """Replace checked include expressions with canonical preimage markers."""
+
+    for fragment in SOURCE_REQUIRED_FRAGMENTS.get(source.path, ()):
+        if fragment not in data:
+            raise GuardFailure(f"{source.path}: required reviewed source contract missing")
+    for fragment in SOURCE_FORBIDDEN_FRAGMENTS.get(source.path, ()):
+        if fragment in data:
+            raise GuardFailure(f"{source.path}: stale source contract returned")
 
     matches = list(_INCLUDE_RE.finditer(data))
     if len(matches) != len(source.assets):
@@ -376,7 +443,15 @@ def _validate_checkout() -> None:
         for asset in source.assets:
             repo_path = _asset_repo_path(source, asset)
             expected_assets.add(repo_path)
-            _project_asset(asset, (ROOT / repo_path).read_bytes())
+            stored = (ROOT / repo_path).read_bytes()
+            key = (source.path, asset.name)
+            required = ASSET_REQUIRED_FRAGMENTS.get(key)
+            if required is not None and required not in stored:
+                raise GuardFailure(f"{repo_path}: required canonical JSON spelling missing")
+            forbidden = ASSET_FORBIDDEN_FRAGMENTS.get(key)
+            if forbidden is not None and forbidden in stored:
+                raise GuardFailure(f"{repo_path}: stale noncanonical JSON spelling returned")
+            _project_asset(asset, stored)
     actual_assets: set[Path] = set()
     for crate in ("ivm", "kotodama_lang"):
         fixture_root = ROOT / "crates" / crate / "fixtures" / "koto_v1"

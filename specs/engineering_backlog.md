@@ -4630,7 +4630,7 @@ redistributable schemas, and official trust/revocation bundles.
 				  Soracloud BFV input-admission, bootstrap-key, full-bootstrap
 				  material, and execution proof attachments now pin the canonical
 				  BFV STARK/FRI backend
-				  (`stark/fri/sha256-goldilocks`) in validation and in the advertised
+				  (`stark/fri/poseidon-x7-goldilocks-6x64-v1`) in validation and in the advertised
 				  public-input schema descriptors, so alternate production STARK
 				  profiles cannot replay governed BFV attachments.
 				  BFV full-bootstrap proof-key profile validation now also rejects

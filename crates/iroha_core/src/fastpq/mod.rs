@@ -40,7 +40,7 @@ pub const ENTRY_HASH_METADATA_KEY: &str = "entry_hash";
 /// Metadata key storing the transcript count embedded in a batch.
 pub const TRANSCRIPT_COUNT_METADATA_KEY: &str = "transcript_count";
 /// Canonical FASTPQ parameter name used across the host and CLI helpers.
-pub const FASTPQ_CANONICAL_PARAMETER_SET: &str = "fastpq-lane-balanced";
+pub const FASTPQ_CANONICAL_PARAMETER_SET: &str = fastpq_prover::fastpq_isi_v1::FASTPQ_FINAL_V1_ID;
 const DIGEST_FINALIZE_PARALLEL_THRESHOLD: usize = 32;
 const DIGEST_FINALIZE_GPU_THRESHOLD: usize = 64;
 const POSEIDON_DIGEST_WORDS_PER_TRANSCRIPT_HINT: usize = 24;
@@ -1500,7 +1500,7 @@ mod tests {
     fn batch_from_transcripts_builds_transfer_rows() {
         let transcript = sample_transcript();
         let batch = batch_from_transcripts(
-            "fastpq-lane-balanced",
+            FASTPQ_CANONICAL_PARAMETER_SET,
             sample_public_inputs(),
             [&transcript],
         )
@@ -1741,7 +1741,7 @@ mod tests {
         transcript.deltas[0].to_balance_after =
             "0.5".parse().expect("non-negative FASTPQ quantity");
         let batch = batch_from_transcripts(
-            "fastpq-lane-balanced",
+            FASTPQ_CANONICAL_PARAMETER_SET,
             sample_public_inputs(),
             [&transcript],
         )

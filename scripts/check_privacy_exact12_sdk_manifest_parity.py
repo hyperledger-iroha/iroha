@@ -3,7 +3,8 @@
 
 ABI23 intentionally has exactly five privacy C exports.  Its no-argument
 compiled-profile getter can expose only immutable local build metadata; it
-cannot manufacture Torii's committed height, lifecycle, or activation state.
+cannot manufacture Torii's committed height, lifecycle, or registered release
+and network qualification.
 Consequently an SDK is release-ready only when it preserves Torii's canonical
 manifest bytes, validates them, and compares the selected row's complete
 compiled-profile tuple with the native local catalog before constructing a
@@ -104,7 +105,8 @@ SDK_CONTRACTS = (
             "operation_schema",
             "execution_mode",
             "privacy_feature_mask",
-            "activation_state",
+            "qualification",
+            "parsePrivacyExact12QualificationV1",
         ),
         (
             "privacyValidateExact12CapabilityManifestV1",
@@ -124,7 +126,7 @@ SDK_CONTRACTS = (
             "operation_schema",
             "execution_mode",
             "privacy_feature_mask",
-            "activation_state",
+            "ProductionQualified",
         ),
         (
             "privacy_validate_exact12_capability_manifest_v1",
@@ -157,7 +159,8 @@ SDK_CONTRACTS = (
             "operationSchema",
             "executionMode",
             "privacyFeatureMask",
-            "activationState",
+            "qualification",
+            "PrivacyExact12QualificationRecordV1",
         ),
         (
             "nativeValidateExact12CapabilityManifest",
@@ -180,7 +183,8 @@ SDK_CONTRACTS = (
             "OperationSchema",
             "ExecutionMode",
             "PrivacyFeatureMask",
-            "ActivationState",
+            "Qualification",
+            "PrivacyExact12QualificationRecordV1",
         ),
         ("ValidateExact12CapabilityManifestV1", "ValidateCompiledProfileCatalogV1"),
         ("RequireExact12CapabilityTupleV1", "CompiledProfileCatalogV1"),
@@ -201,7 +205,8 @@ SDK_CONTRACTS = (
             "operationSchema",
             "executionMode",
             "privacyFeatureMask",
-            "activationState",
+            "qualification",
+            "PrivacyExact12QualificationRecordV1",
         ),
         ("validateExact12CapabilityManifestV1", "validateCompiledProfileCatalogV1"),
         ("requireExact12CapabilityTupleV1", "compiledProfileCatalogV1"),
@@ -360,8 +365,10 @@ def _require_rust_manifest_contract(root: Path) -> None:
         "execution_mode",
         "privacy_feature_mask",
         "readiness",
-        "activation_state",
-        "MissingDistributionWideKnowledgeSoundnessEvidence",
+        "PrivacyCapabilityUnavailableReasonV1",
+        "qualification",
+        "PrivacyExact12QualificationRecordV1",
+        "InvalidProductionQualification",
     )
     if not all(marker in model for marker in required):
         raise AuditError("Rust canonical Exact12 manifest contract is incomplete")
@@ -369,6 +376,8 @@ def _require_rust_manifest_contract(root: Path) -> None:
         raise AuditError("Rust canonical Exact12 manifest archive validator is absent")
     if "exact12_capability_manifest_v1" not in torii:
         raise AuditError("Torii does not project committed state into the Exact12 manifest")
+    if "production_qualification" in model:
+        raise AuditError("Rust Exact12 activation still carries caller-owned qualification")
 
 
 def _javascript_cutover_gates(root: Path) -> dict[str, bool]:
@@ -410,8 +419,10 @@ def _javascript_cutover_gates(root: Path) -> dict[str, bool]:
             "operation_schema",
             "execution_mode",
             "privacy_feature_mask",
-            "activation_state",
-            "missing-distribution-wide-knowledge-soundness-evidence",
+            "qualification",
+            "parsePrivacyExact12QualificationV1",
+            "invalid-production-qualification",
+            "missing-production-qualification",
         )
     )
     authenticated_native_authority = all(
@@ -442,7 +453,9 @@ def _javascript_cutover_gates(root: Path) -> dict[str, bool]:
     exact_tuple_match = all(
         marker in capabilities
         for marker in (
-            "row.activation_state.activation_state !== \"active\"",
+            "readiness !== \"production-qualified\"",
+            "manifest.qualification === null",
+            "qualificationMatchesCapabilityRowV1",
             "row.compiled_profile.status !== \"available\"",
             "compiledProfileCatalogFromNativeV1(native)",
             '"privacyRequireExact12CapabilityTupleV1"',
@@ -499,8 +512,8 @@ def _python_cutover_gates(root: Path) -> dict[str, bool]:
             "operation_schema",
             "execution_mode",
             "privacy_feature_mask",
-            "activation_state",
-            "MissingDistributionWideKnowledgeSoundnessEvidence",
+            "ProductionQualified",
+            "MissingProductionQualification",
         )
     )
     native_validation = all(
@@ -574,7 +587,22 @@ def _jvm_cutover_gates(root: Path) -> dict[str, bool]:
             "privacyFeatureMask",
             "compiledProfile",
             "manifestDigest",
-            "MISSING_DISTRIBUTION_WIDE_KNOWLEDGE_SOUNDNESS_EVIDENCE",
+            "PrivacySecurityModelV1",
+            "PrivacySecurityClaimV1",
+            "PrivacyExact12QualificationRecordV1",
+            "PrivacyExact12ReleaseManifestV1",
+            "PrivacyExact12DeploymentQualificationV1",
+            "qualificationMatchesCapabilityRowV1",
+            "ProductionQualified",
+            "MissingProductionQualification",
+            "InvalidProductionQualification",
+        )
+    ) and all(
+        retired not in model
+        for retired in (
+            "PrivacyProtocolProductionQualificationV1",
+            "productionQualification",
+            '"production_qualification"',
         )
     )
     native_validation = all(
@@ -697,13 +725,27 @@ def _swift_cutover_gates(root: Path) -> dict[str, bool]:
             "lifecycle",
             "protocolLimits",
             "pendingProtocolLimitsTightening",
-            "assuranceExperimental",
+            "public let qualification: PrivacyExact12QualificationRecordV1?",
+            "PrivacySecurityModelV1",
+            "PrivacySecurityClaimV1",
+            "PrivacyExact12QualificationRecordV1",
+            "PrivacyExact12ReleaseManifestV1",
+            "PrivacyExact12DeploymentQualificationV1",
+            "qualificationMatches(",
+            "missingProductionQualification",
+            "invalidProductionQualification",
+            "productionQualified",
             "canonicalNorito",
             "protocols must contain exactly 12 rows",
             "protocol rows are missing, duplicated, or reordered",
             "manifest digest does not bind the canonical archive",
-            "missingDistributionWideKnowledgeSoundnessEvidence",
             "strictFrame(",
+        )
+    ) and all(
+        retired not in model
+        for retired in (
+            "PrivacyProtocolProductionQualificationV1",
+            "productionQualification",
         )
     )
     native_backed_validation = all(
@@ -826,6 +868,21 @@ def _sdk_result(root: Path, contract: SdkContract) -> dict[str, object]:
         tuple_match = tuple_match and swift["exact_native_local_tuple_match"]
         transaction_admission = (
             transaction_admission and swift["transaction_admission_guard"]
+        )
+    if contract.name == "csharp":
+        manifest_model = manifest_model and all(
+            marker in model
+            for marker in (
+                "ParseQualificationOption(",
+                "QualificationMatches(",
+                "InvalidProductionQualification",
+            )
+        ) and all(
+            retired not in model
+            for retired in (
+                "ValidateProductionQualificationOption",
+                "HasProductionQualification",
+            )
         )
     retained_builders = sorted(set(_RETAINED_BUILDER.findall(transactions)))
     fail_closed = not retained_builders or transaction_admission

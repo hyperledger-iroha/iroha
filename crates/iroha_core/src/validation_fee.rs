@@ -4014,6 +4014,7 @@ fn native_instruction_ds_effect_disposition(
         // privacy state and rollback-safe privacy budgets. Proof admission is
         // classified above because ZK-ACE can authorize a transparent transfer.
         iroha_data_model::isi::privacy::RegisterPrivacyProtocolActivationV1,
+        iroha_data_model::isi::privacy::RegisterPrivacyExact12QualificationV1,
         iroha_data_model::isi::privacy::TransitionPrivacyProtocolLifecycleV1,
         iroha_data_model::isi::privacy::PublishPrivacyRootV1,
         iroha_data_model::isi::privacy::BootstrapPrivacyOrchardPoolV1,

@@ -3468,7 +3468,7 @@ public final class HttpClientTransport implements IrohaClient {
       throw new IllegalStateException(
           errorContext + " request failed with status " + response.statusCode());
     }
-    requireExactHeader(response.headers(), "Content-Type", APPLICATION_JSON, errorContext);
+    requireUnambiguousApplicationJsonHeader(response.headers(), errorContext);
     if (body.length == 0) {
       throw new IllegalStateException(errorContext + " response must not be empty");
     }
@@ -4689,46 +4689,7 @@ public final class HttpClientTransport implements IrohaClient {
       throw new IllegalArgumentException("authority is required and must be canonical");
     }
     SccpSubmitEncoding.requireCanonicalAuthority((String) fields.get("authority"), "authority");
-    final FeePaymentIntent feePayment =
-        FeePaymentJson.parse(fields.get("fee_payment"), "bridge submit payload.fee_payment");
-    final boolean hasSignature = fields.containsKey("signature_b64");
-    final Object signature = fields.get("signature_b64");
-    if (hasSignature) {
-      if (!(signature instanceof String)) {
-        throw new IllegalArgumentException("signature_b64 must be canonical base64");
-      }
-      SccpSubmitEncoding.normalizeOptionalSignature((String) signature);
-    }
-    final boolean hasTransactionPayload = fields.containsKey("transaction_payload_b64");
-    final Object transactionPayload = fields.get("transaction_payload_b64");
-    if (hasTransactionPayload && !(transactionPayload instanceof String)) {
-      throw new IllegalArgumentException(
-          "transaction_payload_b64 must be canonical padded base64");
-    }
-    final Object creationTime = fields.get("creation_time_ms");
-    Long normalizedCreationTime = null;
-    if (fields.containsKey("creation_time_ms")) {
-      if (!(creationTime instanceof Number)) {
-        throw new IllegalArgumentException("creation_time_ms must be a positive integer");
-      }
-      final Number number = (Number) creationTime;
-      final long value = number.longValue();
-      if (value <= 0 || !number.toString().equals(Long.toString(value))) {
-        throw new IllegalArgumentException("creation_time_ms must be a positive integer");
-      }
-      normalizedCreationTime = value;
-    }
-    SccpSubmitEncoding.validateDetachedSigningState(
-        signature instanceof String ? (String) signature : null,
-        transactionPayload instanceof String ? (String) transactionPayload : null,
-        normalizedCreationTime);
-    if (transactionPayload instanceof String) {
-      SccpSubmitEncoding.normalizeOptionalTransactionPayload(
-          (String) transactionPayload,
-          normalizedCreationTime,
-          (String) fields.get("authority"),
-          feePayment);
-    }
+    FeePaymentJson.parse(fields.get("fee_payment"), "bridge submit payload.fee_payment");
     if ("/v1/bridge/messages".equals(path)) {
       final String nativeProof = requiredSccpArtifact(fields, "native_proof_b64");
       SccpSubmitEncoding.validateCanonicalNoritoBase64(
@@ -4736,6 +4697,10 @@ public final class HttpClientTransport implements IrohaClient {
           "native_proof_b64",
           SccpSubmitEncoding.MAX_NATIVE_PROOF_BYTES,
           SccpSubmitEncoding.NATIVE_INBOUND_PROOF_SCHEMA_NAME);
+      final String replayWitness = requiredSccpArtifact(fields, "replay_witness_b64");
+      SccpSubmitEncoding.validateCanonicalReplayWitnessBase64(
+          replayWitness,
+          "replay_witness_b64");
       return;
     }
     final String destinationProof = requiredSccpArtifact(fields, "destination_proof_b64");
@@ -4995,18 +4960,13 @@ public final class HttpClientTransport implements IrohaClient {
       java.util.Set.of(
           "authority",
           "fee_payment",
-          "signature_b64",
-          "transaction_payload_b64",
-          "destination_proof_b64",
-          "creation_time_ms");
+          "destination_proof_b64");
   private static final java.util.Set<String> SCCP_MESSAGE_SUBMIT_FIELDS =
       java.util.Set.of(
           "authority",
           "fee_payment",
-          "signature_b64",
-          "transaction_payload_b64",
           "native_proof_b64",
-          "creation_time_ms");
+          "replay_witness_b64");
   private static final long FEE_QUOTE_RESPONSE_MAX_BYTES = 64L * 1024L;
   private static final long FEE_SPONSOR_PROGRAM_RESPONSE_MAX_BYTES = 64L * 1024L;
   private static final long SCCP_CAPABILITIES_RESPONSE_MAX_BYTES = 64L * 1024L;

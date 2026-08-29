@@ -6,6 +6,7 @@ def test_tlapm_archive_precedence_only_falls_back_on_asset_unavailability() -> N
         ROOT_DIR / "scripts" / "formal" / "install_sumeragi_v2_tlapm.sh"
     ).read_text(encoding="utf-8")
     normalized = " ".join(installer.replace("\\\n", "").split())
+    assert "/usr/bin/curl --proto '=https' --http1.1" in normalized
 
     caller_index = normalized.index(
         'if [[ -n "${TLAPM_ARCHIVE_PATH:-}" ]]; then'

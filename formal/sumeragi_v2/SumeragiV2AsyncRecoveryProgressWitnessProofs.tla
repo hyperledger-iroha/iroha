@@ -1776,7 +1776,8 @@ PROOF
       BY <1>1, <2>12, ResumeTimeoutPreservesDecisionTimeoutFrontier
     <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>4, <2>5, <2>6,
                 <2>7, <2>8, <2>9, <2>10, <2>11, <2>12
-         DEF Next, DecisionTimeoutFrontierStutteringStep
+         DEF Next, ByzantineProposalJustificationDomain,
+             DecisionTimeoutFrontierStutteringStep
   <1> QED BY <1>1
 
 THEOREM CoreStutterPreservesDecisionTimeoutFrontier ==

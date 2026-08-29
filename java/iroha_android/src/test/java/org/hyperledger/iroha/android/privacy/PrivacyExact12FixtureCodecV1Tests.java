@@ -33,6 +33,25 @@ public final class PrivacyExact12FixtureCodecV1Tests {
       "fixtures/privacy/exact12_typed_fixture_bundle_v1.norito.b64";
 
   @Test
+  public void firstReleaseIdentifiersPreserveCanonicalOrdinalsAndLabels() {
+    assertEquals(0, PrivacyProtocolIdV1.ZK_ACE_PQ_AUTHORIZATION_V1.ordinal());
+    assertEquals(4, PrivacyProtocolIdV1.VEGA_EXISTING_CREDENTIAL_ZK_V1.ordinal());
+    assertEquals(5, PrivacyProtocolIdV1.IROHA_ZK_X509_STARK_P256_V1.ordinal());
+    assertEquals(6, PrivacyProtocolIdV1.IROHA_JINDO_POLYNOMIAL_COMMITMENT_V1.ordinal());
+    assertEquals(11, PrivacyProtocolIdV1.PQ_MASP_STARK_V1.ordinal());
+    assertEquals(
+        0, PrivacyProofSystemIdV1.STARK_FRI_POSEIDON_X7_GOLDILOCKS_6X64_V1.ordinal());
+    assertEquals(
+        "stark-fri-poseidon-x7-goldilocks-6x64-v1",
+        PrivacyProofSystemIdV1.STARK_FRI_POSEIDON_X7_GOLDILOCKS_6X64_V1.canonicalLabel());
+    assertEquals(
+        0, PrivacyEngineIdV1.NATIVE_GOLDILOCKS_POSEIDON_X7_STARK_FRI_6X64_V1.ordinal());
+    assertEquals(
+        "native-goldilocks-poseidon-x7-stark-fri-6x64-v1",
+        PrivacyEngineIdV1.NATIVE_GOLDILOCKS_POSEIDON_X7_STARK_FRI_6X64_V1.canonicalLabel());
+  }
+
+  @Test
   public void canonicalFixtureDecodesAndReencodesByteIdentically() throws IOException {
     final Fixture fixture = loadFixture();
     final PrivacyExact12FixtureBundleV1 bundle =

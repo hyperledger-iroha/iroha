@@ -1006,14 +1006,10 @@ async fn zk_ivm_prove_job_completes_for_stark_backend() {
         core.zk.halo2.enabled = false;
         core.zk.verify_timeout = Duration::ZERO;
     }
-    let backend = "stark/fri/sha256-goldilocks";
-    let circuit_id = "stark/fri/sha256-goldilocks:ivm-execution-v1";
+    let backend = "stark/fri/poseidon-x7-goldilocks-6x64-v1";
+    let circuit_id = "stark/fri/poseidon-x7-goldilocks-6x64-v1:ivm-execution-v1";
     let vk_id = VerifyingKeyId::new(backend, "ivm-exec-v1-stark");
-    let vk_box = sample_stark_vk_box(
-        backend,
-        circuit_id,
-        iroha_core::zk_stark::STARK_HASH_SHA256_V1,
-    );
+    let vk_box = sample_stark_vk_box(backend, circuit_id);
     let vk_commitment = iroha_core::zk::hash_vk(&vk_box);
     let mut vk_record = VerifyingKeyRecord::new(
         1,

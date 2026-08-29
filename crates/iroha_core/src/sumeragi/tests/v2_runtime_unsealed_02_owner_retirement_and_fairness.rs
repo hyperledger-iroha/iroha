@@ -429,6 +429,176 @@ fn ordinary_step_skips_only_blocked_prepare_qcs_to_install_matching_tc() {
 }
 
 #[test]
+fn ordinary_step_skips_future_prepare_qc_to_install_ahead_tc() {
+    let directory = TempDir::new().expect("temporary ahead-TC runtime directory");
+    let (mut runtime, context, keys) =
+        authenticated_network_runtime(&directory, RuntimeQueueConfig::new(8, 1, 1));
+    let blocked_prepare = signed_runtime_quorum_certificate_for_phase_at_view(
+        &context,
+        &keys,
+        0xC3,
+        wire::GlobalPhase::Prepare,
+        2,
+    );
+    runtime
+        .enqueue_network(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::QuorumCertificate(blocked_prepare),
+        ))
+        .expect("enqueue the future PrepareQC FIFO head");
+    let now = Instant::now();
+    runtime.arm_live_clocks(now).expect("arm ahead-TC runtime");
+
+    assert!(matches!(
+        runtime.step(now),
+        Ok(RuntimeStep::Advanced(ref effects)) if effects.is_empty()
+    ));
+    let retained = runtime
+        .take_last_scheduler_ownership()
+        .expect("future PrepareQC retry retains scheduler ownership");
+    assert_eq!(
+        retained.selected,
+        RuntimeSelectedOwnerKind::FifoRetryRetained
+    );
+    assert_eq!(retained.validate_exact(), Ok(()));
+    assert_eq!(runtime.take_effect_ownership(0), Ok(Vec::new()));
+    assert_eq!(runtime.round_tag().view(), 0);
+    assert_eq!(runtime.queued_commands(), 1);
+
+    let ahead_timeout = signed_runtime_timeout_certificate_for_view(&context, &keys, 1);
+    runtime
+        .enqueue_network(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::TimeoutCertificate(ahead_timeout.clone()),
+        ))
+        .expect("enqueue a TC which installs the blocked PrepareQC view");
+    runtime.schedule.fifo_owed = true;
+    runtime.ingress.next_class = CommandClass::Progress;
+
+    let RuntimeStep::Advanced(effects) = runtime
+        .step(now)
+        .expect("ordinary Progress service selects the ahead TC")
+    else {
+        panic!("ahead TC unexpectedly idled")
+    };
+    assert!(matches!(
+        effects.as_slice(),
+        [AdapterEffect::EnterView {
+            tag,
+            certificate,
+            ..
+        }] if tag.view() == 2 && certificate == &ahead_timeout
+    ));
+    let scheduler = runtime
+        .take_last_scheduler_ownership()
+        .expect("ahead TC retains scheduler ownership");
+    assert_eq!(
+        scheduler.selected,
+        RuntimeSelectedOwnerKind::PacemakerProgress
+    );
+    assert!(scheduler.view_blocked_progress_authorization.is_some());
+    let RuntimeSelectedCandidateOwnership::Exact(candidate) = &scheduler.candidate else {
+        panic!("ahead TC owns one exact authenticated candidate")
+    };
+    assert_eq!(
+        candidate.selection_seal.kind,
+        RuntimeQueueSelectionKind::OrdinaryViewProgress
+    );
+    assert_eq!(scheduler.validate_exact(), Ok(()));
+    runtime
+        .take_effect_ownership(effects.len())
+        .expect("consume the ahead TC EnterView ownership");
+    assert_eq!(runtime.round_tag().view(), 2);
+    assert_eq!(runtime.queued_commands(), 1);
+    assert!(!runtime.fail_closed);
+}
+
+#[test]
+fn ordinary_step_skips_future_prepare_qc_for_higher_view_commit_qc() {
+    let directory = TempDir::new().expect("temporary higher-CommitQC runtime directory");
+    let (mut runtime, context, keys) =
+        authenticated_network_runtime(&directory, RuntimeQueueConfig::new(8, 1, 1));
+    let blocked_prepare = signed_runtime_quorum_certificate_for_phase_at_view(
+        &context,
+        &keys,
+        0xC4,
+        wire::GlobalPhase::Prepare,
+        2,
+    );
+    runtime
+        .enqueue_network(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::QuorumCertificate(blocked_prepare),
+        ))
+        .expect("enqueue the future PrepareQC FIFO head");
+    let now = Instant::now();
+    runtime
+        .arm_live_clocks(now)
+        .expect("arm higher-CommitQC runtime");
+
+    assert!(matches!(
+        runtime.step(now),
+        Ok(RuntimeStep::Advanced(ref effects)) if effects.is_empty()
+    ));
+    let retained = runtime
+        .take_last_scheduler_ownership()
+        .expect("future PrepareQC retry retains scheduler ownership");
+    assert_eq!(
+        retained.selected,
+        RuntimeSelectedOwnerKind::FifoRetryRetained
+    );
+    assert_eq!(retained.validate_exact(), Ok(()));
+    assert_eq!(runtime.take_effect_ownership(0), Ok(Vec::new()));
+
+    let decision = signed_runtime_quorum_certificate_for_phase_at_view(
+        &context,
+        &keys,
+        0xC4,
+        wire::GlobalPhase::Commit,
+        2,
+    );
+    runtime
+        .enqueue_network(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::QuorumCertificate(decision.clone()),
+        ))
+        .expect("enqueue the higher-view terminal CommitQC");
+    runtime.schedule.fifo_owed = true;
+    runtime.ingress.next_class = CommandClass::Progress;
+
+    let RuntimeStep::Advanced(effects) = runtime
+        .step(now)
+        .expect("ordinary Progress service selects the terminal CommitQC")
+    else {
+        panic!("higher-view CommitQC unexpectedly idled")
+    };
+    assert!(matches!(
+        effects.as_slice(),
+        [AdapterEffect::FetchBody {
+            certificate: Some(certificate),
+            ..
+        }] if certificate == &decision
+    ));
+    let scheduler = runtime
+        .take_last_scheduler_ownership()
+        .expect("terminal CommitQC retains scheduler ownership");
+    assert_eq!(
+        scheduler.selected,
+        RuntimeSelectedOwnerKind::PacemakerProgress
+    );
+    assert!(scheduler.view_blocked_progress_authorization.is_some());
+    let RuntimeSelectedCandidateOwnership::Exact(candidate) = &scheduler.candidate else {
+        panic!("terminal CommitQC owns one exact authenticated candidate")
+    };
+    assert_eq!(
+        candidate.selection_seal.kind,
+        RuntimeQueueSelectionKind::OrdinaryViewProgress
+    );
+    assert_eq!(scheduler.validate_exact(), Ok(()));
+    runtime
+        .take_effect_ownership(effects.len())
+        .expect("consume the terminal CommitQC fetch ownership");
+    assert_eq!(runtime.queued_commands(), 1);
+    assert!(!runtime.fail_closed);
+}
+
+#[test]
 fn lock_retirement_releases_busy_deferred_leader_wire_runtime_owner() {
     let directory = TempDir::new().expect("temporary leader-wire lock directory");
     let (mut runtime, context, keys) =

@@ -5,7 +5,8 @@ package org.hyperledger.iroha.android.privacy;
 
 /** Closed first-release proof-system identity in canonical Norito discriminant order. */
 public enum PrivacyProofSystemIdV1 {
-  STARK_FRI_SHA256_GOLDILOCKS("stark-fri-sha256-goldilocks"),
+  STARK_FRI_POSEIDON_X7_GOLDILOCKS_6X64_V1(
+      "stark-fri-poseidon-x7-goldilocks-6x64-v1"),
   ZK_AMS_MASKED_RELAXED_SPARTAN_T256_RISTRETTO255_SHA3_512(
       "zk-ams-masked-relaxed-spartan-t256-ristretto255-sha3-512"),
   ANONYMOUS_PGC_P256("anonymous-pgc-p256"),

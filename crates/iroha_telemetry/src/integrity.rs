@@ -11,6 +11,7 @@ use std::{
     fs::OpenOptions,
     io::Read,
     os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt},
+    sync::atomic::{AtomicU64, Ordering},
 };
 use thiserror::Error;
 use tokio::io::AsyncWriteExt;
@@ -22,6 +23,97 @@ const SINK_FINGERPRINT_DOMAIN: &[u8] = b"iroha.telemetry.sink.v1";
 const RECORD_MAX_BYTES: usize = 256 * 1024;
 // JSON string escaping can nearly double an already serialized record.
 const STATE_FILE_MAX_BYTES: u64 = (RECORD_MAX_BYTES as u64 * 2) + 4096;
+const STATE_REQUIRED_FIELDS: [&str; 5] = [
+    "pending_record",
+    "prev_hash",
+    "seq",
+    "sink_fingerprint",
+    "version",
+];
+
+#[cfg(unix)]
+static OWNER_PROBE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+pub const TELEMETRY_O_NOFOLLOW_FLAG: i32 = 0x0000_0100;
+#[cfg(any(target_os = "linux", target_os = "android"))]
+pub const TELEMETRY_O_NOFOLLOW_FLAG: i32 = 0x0002_0000;
+#[cfg(any(
+    target_os = "freebsd",
+    target_os = "netbsd",
+    target_os = "openbsd",
+    target_os = "dragonfly"
+))]
+pub const TELEMETRY_O_NOFOLLOW_FLAG: i32 = 0x0000_0100;
+#[cfg(all(
+    unix,
+    not(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "openbsd",
+        target_os = "dragonfly"
+    ))
+))]
+compile_error!("telemetry custody requires a defined no-follow open flag on this Unix target");
+
+/// Determine the process file-owner identity on the target filesystem without
+/// adding a platform FFI dependency.
+///
+/// The file is created atomically inside the directory and removed before the
+/// function returns. Callers first reject directories writable by other users,
+/// then compare the returned owner with the directory owner.
+#[cfg(unix)]
+pub fn process_uid_in_directory(path: &Path) -> Result<u32, String> {
+    const MAX_ATTEMPTS: usize = 64;
+
+    for _ in 0..MAX_ATTEMPTS {
+        let sequence = OWNER_PROBE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let probe_path = path.join(format!(
+            ".iroha-telemetry-owner-probe-{}-{sequence}",
+            std::process::id()
+        ));
+        let file = match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&probe_path)
+        {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => {
+                return Err(format!(
+                    "failed to create ownership probe in {}: {error}",
+                    path.display()
+                ));
+            }
+        };
+        let metadata = file.metadata();
+        drop(file);
+        let cleanup = std::fs::remove_file(&probe_path);
+        let metadata = metadata.map_err(|error| {
+            format!(
+                "failed to inspect ownership probe in {}: {error}",
+                path.display()
+            )
+        })?;
+        cleanup.map_err(|error| {
+            format!(
+                "failed to remove ownership probe {}: {error}",
+                probe_path.display()
+            )
+        })?;
+        return Ok(metadata.uid());
+    }
+
+    Err(format!(
+        "could not allocate a unique ownership probe in {} after {MAX_ATTEMPTS} attempts",
+        path.display()
+    ))
+}
 
 struct IntegrityConfig {
     enabled: bool,
@@ -51,7 +143,7 @@ struct StateLock {
 }
 
 /// Integrity state shared by one telemetry exporter.
-pub(crate) struct ChainState {
+pub struct ChainState {
     config: IntegrityConfig,
     seq: u64,
     prev_hash: [u8; 32],
@@ -63,7 +155,7 @@ pub(crate) struct ChainState {
 
 impl ChainState {
     /// Restore a chain from an explicit state path.
-    pub(crate) fn new_with_state_path(
+    pub(super) fn new_with_state_path(
         config: TelemetryIntegrityConfig,
         state_path: Option<PathBuf>,
         kind: &str,
@@ -81,7 +173,7 @@ impl ChainState {
     }
 
     /// Restore the chain used by the named exporter kind.
-    pub(crate) fn new_with_kind(
+    pub(super) fn new_with_kind(
         config: TelemetryIntegrityConfig,
         kind: &str,
         sink_identity: &[u8],
@@ -108,28 +200,28 @@ impl ChainState {
     }
 
     /// Return the exact serialized record awaiting output confirmation.
-    pub(crate) fn pending_record(&self) -> Option<&[u8]> {
+    pub(super) fn pending_record(&self) -> Option<&[u8]> {
         self.pending
             .as_ref()
             .map(|pending| pending.bytes.as_slice())
     }
 
     /// Return whether the pending bytes have a durable journal entry.
-    pub(crate) fn pending_is_durable(&self) -> bool {
+    pub(super) fn pending_is_durable(&self) -> bool {
         self.pending
             .as_ref()
             .is_some_and(|pending| pending.durably_staged)
     }
 
     /// Return whether this process observed a successful output operation.
-    pub(crate) fn pending_output_is_confirmed(&self) -> bool {
+    pub(super) fn pending_output_is_confirmed(&self) -> bool {
         self.pending
             .as_ref()
             .is_some_and(|pending| pending.output_confirmed)
     }
 
     /// Mark the pending record as successfully emitted by this process.
-    pub(crate) fn confirm_pending_output(&mut self) -> Result<(), IntegrityError> {
+    pub(super) fn confirm_pending_output(&mut self) -> Result<(), IntegrityError> {
         let pending = self
             .pending
             .as_mut()
@@ -142,7 +234,7 @@ impl ChainState {
     }
 
     /// Retry journaling a record whose initial staging write failed.
-    pub(crate) async fn persist_pending(&mut self) -> Result<(), IntegrityError> {
+    pub(super) async fn persist_pending(&mut self) -> Result<(), IntegrityError> {
         let pending = self
             .pending
             .as_ref()
@@ -165,7 +257,7 @@ impl ChainState {
     ///
     /// A staged record must be committed or retried byte-for-byte. Refusing a
     /// second record prevents sequence reuse when output success is ambiguous.
-    pub(crate) async fn stage_record(
+    pub(super) async fn stage_record(
         &mut self,
         mut map: Map,
         trailing_newline: bool,
@@ -228,7 +320,7 @@ impl ChainState {
     ///
     /// Durable state is replaced before in-memory state advances. On failure,
     /// the exact pending record remains available for restart or retry.
-    pub(crate) async fn commit_pending(&mut self) -> Result<(), IntegrityError> {
+    pub(super) async fn commit_pending(&mut self) -> Result<(), IntegrityError> {
         let pending = self
             .pending
             .as_ref()
@@ -305,7 +397,7 @@ impl ChainState {
 }
 
 #[derive(Debug, Error)]
-pub(crate) enum IntegrityError {
+pub enum IntegrityError {
     #[error("failed to serialize telemetry payload for integrity hash: {0}")]
     Serialize(#[from] norito::json::Error),
     #[error("telemetry integrity sequence exhausted")]
@@ -450,7 +542,7 @@ fn ensure_private_state_directory(path: &Path) -> Result<std::fs::Metadata, Stri
             path.display()
         ));
     }
-    let effective_uid = rustix::process::geteuid().as_raw();
+    let effective_uid = process_uid_in_directory(path)?;
     if metadata.uid() != effective_uid {
         return Err(format!(
             "{} is not owned by the current process user",
@@ -518,7 +610,7 @@ fn open_private_file(path: &Path, directory_uid: u32, write: bool) -> Result<Opt
     options
         .read(true)
         .write(write)
-        .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW);
+        .custom_flags(TELEMETRY_O_NOFOLLOW_FLAG);
     let file = options
         .open(path)
         .map_err(|error| format!("failed to open {}: {error}", path.display()))?;
@@ -578,15 +670,8 @@ fn load_state_snapshot(path: &Path) -> Result<Option<ChainStateSnapshot>, String
     let map = value
         .as_object()
         .ok_or_else(|| "state file payload is not an object".to_string())?;
-    const REQUIRED_FIELDS: [&str; 5] = [
-        "pending_record",
-        "prev_hash",
-        "seq",
-        "sink_fingerprint",
-        "version",
-    ];
-    if map.len() != REQUIRED_FIELDS.len()
-        || REQUIRED_FIELDS
+    if map.len() != STATE_REQUIRED_FIELDS.len()
+        || STATE_REQUIRED_FIELDS
             .iter()
             .any(|field| !map.contains_key(*field))
     {
@@ -1200,6 +1285,30 @@ mod tests {
             0o600
         );
         drop(chain);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ownership_probe_matches_directory_owner_and_is_removed() {
+        use std::os::unix::fs::MetadataExt as _;
+
+        let dir = temp_dir("integrity-owner-probe");
+        create_private_dir(&dir);
+        let uid = process_uid_in_directory(&dir).expect("probe process file owner");
+        assert_eq!(
+            uid,
+            std::fs::metadata(&dir)
+                .expect("inspect private directory")
+                .uid()
+        );
+        assert_eq!(
+            std::fs::read_dir(&dir)
+                .expect("read private directory")
+                .count(),
+            0,
+            "ownership probe must be removed"
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 

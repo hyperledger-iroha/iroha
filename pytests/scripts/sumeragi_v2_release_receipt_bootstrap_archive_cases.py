@@ -182,6 +182,14 @@ def _fixture_validator_values(
         "--expected-allowed-signers-sha256": ("text", "3" * 64),
         "--expected-revocation-sha256": ("text", "4" * 64),
         "--expected-signer-fingerprint": ("text", expected_signer_fingerprint),
+        "--formal-replay-source-receipt": (
+            "path", str(invocation / "formal-replay-source-receipt.json")
+        ),
+        "--formal-replay-release-root": (
+            "path", str(invocation / "formal-replay-release")
+        ),
+        "--expected-formal-replay-signature-sha256": ("text", "9" * 64),
+        "--formal-replay-principal": ("text", "fixture-formal-replay"),
         "--scaling-evidence-manifest": ("path", str(scaling_evidence_manifest)),
         "--sdk-dependency-archive": (
             "path", str(source.parent / "sdk-dependency-bundle.tar")
@@ -260,6 +268,22 @@ def _fixture_receipt_for_validator(
             "release_signature_ssh_keygen": path("--signature-ssh-keygen"),
             "corridor_completion": path("--corridor-completion"),
             "formal_completion": path("--formal-completion"),
+            "formal_replay_release": {
+                "source_receipt": path("--formal-replay-source-receipt"),
+                "receipt": {
+                    "path": str(
+                        Path(values["--formal-replay-release-root"][1])
+                        / "replay-receipt-v1.json"
+                    ),
+                    "sha256": "1" * 64,
+                },
+                "signature": {
+                    "sha256": values[
+                        "--expected-formal-replay-signature-sha256"
+                    ][1]
+                },
+                "principal": values["--formal-replay-principal"][1],
+            },
             "seed_matrix_completion": path("--seed-completion"),
             "chaos_completion": path("--chaos-completion"),
             "g4p_multilane": {"completion": path("--g4p-completion")},
@@ -1216,9 +1240,9 @@ def test_receipt_rejects_external_cargo_home_configuration(tmp_path: Path) -> No
         assert runtime_document["schema_version"] == 2
         relocation = runtime_document["framework_python_relocation"]
         assert relocation["artifacts"]["launcher"]["derived"]["framework_dependency"] \
-            == "@executable_path/../Python"
+            == f"@executable_path/../{framework_name}"
         assert relocation["artifacts"]["trampoline"]["derived"]["framework_dependency"] \
-            == "@executable_path/../../../../Python"
+            == f"@executable_path/../../../../{framework_name}"
         stdlib_name = f"python{sys.version_info.major}.{sys.version_info.minor}"
         site_packages_path = f"lib/{stdlib_name}/site-packages"
         runtime_records = {

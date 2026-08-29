@@ -21,10 +21,7 @@ _HALO2_IPA_PASTA_REGISTRY_LABELS_V1: Final[frozenset[str]] = frozenset(
 )
 _STARK_REGISTRY_LABELS_V1: Final[frozenset[str]] = frozenset(
     {
-        "stark/fri",
-        "stark/fri/sha256-goldilocks",
-        "stark/fri/poseidon2-goldilocks",
-        "stark/fri/sha256_goldilocks.v1",
+        "stark/fri/poseidon-x7-goldilocks-6x64-v1",
     }
 )
 

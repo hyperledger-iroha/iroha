@@ -72,6 +72,7 @@ public sealed class SccpBridgeProofSubmitRequest
                 transactionPayloadBase64,
                 creationTimeMs,
                 destinationProof,
+                expectedReplayWitness: null,
                 expectedDestinationProof: true,
                 expectedFeePayment: feePayment);
     }
@@ -104,6 +105,7 @@ public sealed class SccpBridgeMessageSubmitRequest
     public SccpBridgeMessageSubmitRequest(
         string authority,
         string nativeProofBase64,
+        string replayWitnessBase64,
         FeePaymentIntent feePayment,
         string? signatureBase64 = null,
         string? transactionPayloadBase64 = null,
@@ -118,6 +120,13 @@ public sealed class SccpBridgeMessageSubmitRequest
             SccpSubmitValidation.MaximumNativeArtifactBytes,
             SccpSubmitValidation.NativeInboundProofSchemaName);
         NativeProofBase64 = nativeProofBase64;
+        var replayWitness = SccpSubmitValidation.CanonicalNoritoBase64(
+            replayWitnessBase64,
+            "replay_witness_b64",
+            SccpSubmitValidation.MaximumReplayWitnessBytes,
+            SccpSubmitValidation.ReplayWitnessSchemaName);
+        SccpSubmitValidation.RequireCanonicalReplayWitnessArchive(replayWitness);
+        ReplayWitnessBase64 = replayWitnessBase64;
         if (creationTimeMs == 0)
         {
             throw new ArgumentOutOfRangeException(nameof(creationTimeMs), "creation_time_ms must be positive.");
@@ -131,6 +140,7 @@ public sealed class SccpBridgeMessageSubmitRequest
                 transactionPayloadBase64,
                 creationTimeMs,
                 nativeProof,
+                replayWitness,
                 expectedDestinationProof: false,
                 expectedFeePayment: feePayment);
     }
@@ -151,6 +161,9 @@ public sealed class SccpBridgeMessageSubmitRequest
 
     [JsonPropertyName("native_proof_b64")]
     public string NativeProofBase64 { get; }
+
+    [JsonPropertyName("replay_witness_b64")]
+    public string ReplayWitnessBase64 { get; }
 
     [JsonPropertyName("creation_time_ms")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
@@ -182,7 +195,7 @@ public sealed record SccpBridgeResponseExpectation(
             SccpSubmitValidation.ResponseHash(MessageIdHex, nameof(MessageIdHex));
         }
 
-        if (CounterpartyDomain is not null and not (1 or 2 or 5))
+        if (CounterpartyDomain is not null and not (1 or 2 or 3 or 4))
         {
             throw new ArgumentOutOfRangeException(nameof(CounterpartyDomain));
         }
@@ -259,7 +272,8 @@ public sealed record SccpBridgeSubmitResponse(
         byte[] expectedProof,
         string? expectedTransactionPayloadBase64 = null,
         string? expectedSignatureBase64 = null,
-        FeePaymentIntent? expectedFeePayment = null) =>
+        FeePaymentIntent? expectedFeePayment = null,
+        byte[]? expectedReplayWitness = null) =>
         ParseCore(
             json,
             expectation,
@@ -267,7 +281,8 @@ public sealed record SccpBridgeSubmitResponse(
             expectedProof,
             expectedTransactionPayloadBase64,
             expectedSignatureBase64,
-            expectedFeePayment);
+            expectedFeePayment,
+            expectedReplayWitness);
 
     private static SccpBridgeSubmitResponse ParseCore(
         ReadOnlyMemory<byte> json,
@@ -276,7 +291,8 @@ public sealed record SccpBridgeSubmitResponse(
         byte[]? expectedProof,
         string? expectedTransactionPayloadBase64 = null,
         string? expectedSignatureBase64 = null,
-        FeePaymentIntent? requestFeePayment = null)
+        FeePaymentIntent? requestFeePayment = null,
+        byte[]? expectedReplayWitness = null)
     {
         using var document = SccpJson.Parse(json, "bridge submit response");
         var root = document.RootElement;
@@ -285,8 +301,8 @@ public sealed record SccpBridgeSubmitResponse(
         var payloadKind = SccpPayloadKindV1Extensions.ParseWireKey(SccpJson.Text(root, "payload_kind"));
         var messageId = SccpSubmitValidation.ResponseHash(SccpJson.Text(root, "message_id_hex"), "message_id_hex");
         var backend = SccpJson.Text(root, "backend");
-        var domain = SccpJson.UInt32(root, "counterparty_domain", 1, 5);
-        if (domain is not (1 or 2 or 5))
+        var domain = SccpJson.UInt32(root, "counterparty_domain", 1, 4);
+        if (domain is not (1 or 2 or 3 or 4))
         {
             throw new ArgumentException("counterparty_domain is unsupported or retired.");
         }
@@ -370,7 +386,8 @@ public sealed record SccpBridgeSubmitResponse(
                         end,
                         expectedAuthority!,
                         expectedProof,
-                        expectedFeePayment);
+                        expectedFeePayment,
+                        expectedReplayWitness);
                 if (!string.Equals(txHash, expectedTransactionHash, StringComparison.Ordinal))
                 {
                     throw new ArgumentException(
@@ -403,7 +420,8 @@ public sealed record SccpBridgeSubmitResponse(
                 end,
                 expectedAuthority,
                 expectedProof,
-                expectedFeePayment);
+                expectedFeePayment,
+                expectedReplayWitness);
             if (!signing.AsSpan().SequenceEqual(IrohaHash.Hash(payload)))
             {
                 throw new ArgumentException(
@@ -459,6 +477,8 @@ internal static class SccpSubmitValidation
         "iroha_data_model::bridge::BridgeSccpDestinationProofV1";
     internal const string NativeInboundProofSchemaName =
         "iroha_sccp::native_admission::SccpNativeInboundMessageProofV1";
+    internal const string ReplayWitnessSchemaName =
+        "iroha_data_model::bridge::sccp_replay::SccpSparseMerkleWitnessV1";
     internal static readonly string[] ProofRequestSchemaNames =
     [
         "iroha_sccp::SccpGroth16Bn254ProofRequestV1",
@@ -471,6 +491,7 @@ internal static class SccpSubmitValidation
     private const string TairaChainId = "fc56984b-2be7-431d-840e-21514d1883f0";
     private const ulong DefaultTransactionTimeToLiveMilliseconds = 100_000;
     internal const int MaximumNativeArtifactBytes = 16 * 1024 * 1024;
+    internal const int MaximumReplayWitnessBytes = 16 * 1024;
     internal const int MaximumGroth16ArtifactBytes = MaximumNativeArtifactBytes + 64 * 1024;
     internal const int MaximumDestinationArtifactBytes = MaximumGroth16ArtifactBytes + 64 * 1024;
     internal const int MaximumDestinationArtifactBase64Bytes = 22_544_384;
@@ -486,9 +507,11 @@ internal static class SccpSubmitValidation
             ? backend is
                 "evm-groth16-bn254-v1"
                     or "tron-groth16-bn254-v1"
+                    or "ton-groth16-bls12381-v1"
                     or "bridge/sccp/native/ethereum-beacon-v1"
                     or "bridge/sccp/native/bsc-parlia-v1"
                     or "bridge/sccp/native/tron-dpos-v1"
+                    or "bridge/sccp/native/ton-masterchain-v1"
             : BackendSupports(backend, chain.Value);
         if (!valid)
         {
@@ -500,9 +523,11 @@ internal static class SccpSubmitValidation
     {
         "evm-groth16-bn254-v1" => chain.DomainId() is 1 or 2,
         "tron-groth16-bn254-v1" => chain.DomainId() == 5,
+        "ton-groth16-bls12381-v1" => chain.DomainId() == 4,
         "bridge/sccp/native/ethereum-beacon-v1" => SccpNativeBackendV1.EthereumBeacon.Supports(chain),
         "bridge/sccp/native/bsc-parlia-v1" => SccpNativeBackendV1.BscParlia.Supports(chain),
         "bridge/sccp/native/tron-dpos-v1" => SccpNativeBackendV1.TronDpos.Supports(chain),
+        "bridge/sccp/native/ton-masterchain-v1" => SccpNativeBackendV1.TonMasterchain.Supports(chain),
         _ => false,
     };
 
@@ -542,6 +567,7 @@ internal static class SccpSubmitValidation
             string? transactionPayloadBase64,
             ulong? creationTimeMs,
             byte[] expectedProof,
+            byte[]? expectedReplayWitness,
             bool expectedDestinationProof,
             FeePaymentIntent expectedFeePayment)
     {
@@ -583,6 +609,7 @@ internal static class SccpSubmitValidation
             creationTimeMs.Value,
             authority,
             expectedProof,
+            expectedReplayWitness,
             expectedDestinationProof,
             expectedFeePayment);
         if (!Ed25519Signer.Verify(
@@ -624,7 +651,8 @@ internal static class SccpSubmitValidation
         ulong rangeEndHeight,
         string expectedAuthority,
         byte[]? expectedProof,
-        FeePaymentIntent? expectedFeePayment = null)
+        FeePaymentIntent? expectedFeePayment = null,
+        byte[]? expectedReplayWitness = null)
     {
         var payload = CanonicalBase64(
             transactionPayloadBase64,
@@ -642,7 +670,8 @@ internal static class SccpSubmitValidation
             rangeEndHeight,
             expectedAuthority,
             expectedProof,
-            expectedFeePayment);
+            expectedFeePayment,
+            expectedReplayWitness);
 
         var address = AccountAddress.Parse(
             expectedAuthority,
@@ -671,6 +700,7 @@ internal static class SccpSubmitValidation
         ulong creationTimeMs,
         string expectedAuthority,
         byte[] expectedProof,
+        byte[]? expectedReplayWitness,
         bool expectedDestinationProof,
         FeePaymentIntent expectedFeePayment)
     {
@@ -704,7 +734,10 @@ internal static class SccpSubmitValidation
                 "Transaction authority does not match the SCCP submit request.");
         }
 
-        var binding = InspectCanonicalDetachedExecutable(executable, expectedProof);
+        var binding = InspectCanonicalDetachedExecutable(
+            executable,
+            expectedProof,
+            expectedReplayWitness);
         RequireClosedBackend(binding.Backend);
         if (binding.IsDestination != expectedDestinationProof)
         {
@@ -722,7 +755,8 @@ internal static class SccpSubmitValidation
 
     private static DetachedBridgeBinding InspectCanonicalDetachedExecutable(
         ReadOnlySpan<byte> payload,
-        byte[] expectedProof)
+        byte[] expectedProof,
+        byte[]? expectedReplayWitness)
     {
         var executable = new CompactTransactionCursor(payload);
         if (executable.TakeUInt32("executable.kind") != 0)
@@ -761,12 +795,16 @@ internal static class SccpSubmitValidation
             "executable.instruction.payload",
             MaximumTransactionPayloadBytes,
             SubmitBridgeProofSchemaName);
-        return InspectCanonicalDetachedSubmitBridgeProof(archive, expectedProof);
+        return InspectCanonicalDetachedSubmitBridgeProof(
+            archive,
+            expectedProof,
+            expectedReplayWitness);
     }
 
     private static DetachedBridgeBinding InspectCanonicalDetachedSubmitBridgeProof(
         ReadOnlySpan<byte> archive,
-        byte[] expectedProof)
+        byte[] expectedProof,
+        byte[]? expectedReplayWitness)
     {
         if (archive[39] != 0x02)
         {
@@ -780,6 +818,7 @@ internal static class SccpSubmitValidation
             archive.Slice(NoritoHeader.EncodedLength, payloadLength));
         var proof = new CompactTransactionCursor(
             submit.TakeField("SubmitBridgeProof.proof"));
+        var replayWitness = submit.TakeField("SubmitBridgeProof.replay_witness");
         if (!submit.IsFinished)
         {
             throw new ArgumentException("SubmitBridgeProof contains trailing fields.");
@@ -813,6 +852,11 @@ internal static class SccpSubmitValidation
                 "SubmitBridgeProof uses an unknown bridge payload."),
         };
 
+        RequireExactReplayWitnessOption(
+            replayWitness,
+            expectedReplayWitness,
+            required: !binding.IsDestination);
+
         if (!proof.IsFinished)
         {
             throw new ArgumentException(
@@ -826,6 +870,44 @@ internal static class SccpSubmitValidation
         }
 
         return binding;
+    }
+
+    private static void RequireExactReplayWitnessOption(
+        ReadOnlySpan<byte> payload,
+        byte[]? expectedReplayWitness,
+        bool required)
+    {
+        var option = new CompactTransactionCursor(payload);
+        var tag = option.TakeByte("SubmitBridgeProof.replay_witness.tag");
+        if (!required)
+        {
+            if (tag != 0 || !option.IsFinished || expectedReplayWitness is not null)
+            {
+                throw new ArgumentException(
+                    "Destination SubmitBridgeProof must carry no replay witness.");
+            }
+            return;
+        }
+        if (tag != 1 || expectedReplayWitness is null)
+        {
+            throw new ArgumentException(
+                "Native SubmitBridgeProof requires the requested replay witness.");
+        }
+        var witness = option.TakeField("SubmitBridgeProof.replay_witness.value");
+        RequireCanonicalNoritoArchive(
+            expectedReplayWitness,
+            "replay_witness_b64",
+            MaximumReplayWitnessBytes,
+            ReplayWitnessSchemaName);
+        RequireCanonicalReplayWitnessArchive(expectedReplayWitness);
+        var expectedLength = checked((int)BinaryPrimitives.ReadUInt64LittleEndian(
+            expectedReplayWitness.AsSpan(23, 8)));
+        var expected = expectedReplayWitness.AsSpan(NoritoHeader.EncodedLength, expectedLength);
+        if (!option.IsFinished || !witness.SequenceEqual(expected))
+        {
+            throw new ArgumentException(
+                "SubmitBridgeProof replay witness does not match replay_witness_b64.");
+        }
     }
 
     private static DetachedBridgeBinding InspectCanonicalDetachedNativeProof(
@@ -846,6 +928,7 @@ internal static class SccpSubmitValidation
             0 => "bridge/sccp/native/ethereum-beacon-v1",
             1 => "bridge/sccp/native/bsc-parlia-v1",
             2 => "bridge/sccp/native/tron-dpos-v1",
+            3 => "bridge/sccp/native/ton-masterchain-v1",
             _ => throw new ArgumentException("SubmitBridgeProof native backend is unknown."),
         };
         var routeHash = DecodeFixedByteArray(
@@ -886,6 +969,7 @@ internal static class SccpSubmitValidation
         {
             0 => "evm-groth16-bn254-v1",
             1 => "tron-groth16-bn254-v1",
+            2 => "ton-groth16-bls12381-v1",
             _ => throw new ArgumentException("SubmitBridgeProof destination backend is unknown."),
         };
         var routeHash = DecodeFixedByteArray(
@@ -1070,7 +1154,8 @@ internal static class SccpSubmitValidation
         ulong rangeEndHeight,
         string? expectedAuthority,
         byte[]? expectedProof,
-        FeePaymentIntent? expectedFeePayment = null)
+        FeePaymentIntent? expectedFeePayment = null,
+        byte[]? expectedReplayWitness = null)
     {
         var cursor = new CompactTransactionCursor(payload);
         var chain = cursor.TakeField("chain_id");
@@ -1111,7 +1196,8 @@ internal static class SccpSubmitValidation
             routeConfigurationHash,
             rangeStartHeight,
             rangeEndHeight,
-            expectedProof);
+            expectedProof,
+            expectedReplayWitness);
         RequireDefaultTimeToLive(timeToLive);
         RequireAbsentOption(nonce, "nonce");
         RequireCanonicalFeePayment(feePayment, expectedFeePayment);
@@ -1342,7 +1428,8 @@ internal static class SccpSubmitValidation
         byte[] routeConfigurationHash,
         ulong rangeStartHeight,
         ulong rangeEndHeight,
-        byte[]? expectedProof)
+        byte[]? expectedProof,
+        byte[]? expectedReplayWitness)
     {
         var cursor = new CompactTransactionCursor(payload);
         switch (cursor.TakeUInt32("executable.kind"))
@@ -1354,7 +1441,8 @@ internal static class SccpSubmitValidation
                     routeConfigurationHash,
                     rangeStartHeight,
                     rangeEndHeight,
-                    expectedProof);
+                    expectedProof,
+                    expectedReplayWitness);
                 break;
             case 1 or 2 or 3:
                 throw new ArgumentException("SCCP transaction executable must contain instructions.");
@@ -1374,7 +1462,8 @@ internal static class SccpSubmitValidation
         byte[] routeConfigurationHash,
         ulong rangeStartHeight,
         ulong rangeEndHeight,
-        byte[]? expectedProof)
+        byte[]? expectedProof,
+        byte[]? expectedReplayWitness)
     {
         var cursor = new CompactTransactionCursor(payload);
         var count = cursor.TakeUInt64("executable.instructions.count");
@@ -1409,7 +1498,8 @@ internal static class SccpSubmitValidation
                 routeConfigurationHash,
                 rangeStartHeight,
                 rangeEndHeight,
-                expectedProof);
+                expectedProof,
+                expectedReplayWitness);
         }
 
         if (!cursor.IsFinished)
@@ -1442,7 +1532,8 @@ internal static class SccpSubmitValidation
         byte[] routeConfigurationHash,
         ulong rangeStartHeight,
         ulong rangeEndHeight,
-        byte[]? expectedProof)
+        byte[]? expectedProof,
+        byte[]? expectedReplayWitness)
     {
         if (archive[39] != 0x02)
         {
@@ -1454,6 +1545,7 @@ internal static class SccpSubmitValidation
         var submit = new CompactTransactionCursor(
             archive.Slice(NoritoHeader.EncodedLength, payloadLength));
         var proof = new CompactTransactionCursor(submit.TakeField("SubmitBridgeProof.proof"));
+        var replayWitness = submit.TakeField("SubmitBridgeProof.replay_witness");
         if (!submit.IsFinished)
         {
             throw new ArgumentException("SubmitBridgeProof contains trailing fields.");
@@ -1484,6 +1576,17 @@ internal static class SccpSubmitValidation
                     backend,
                     routeConfigurationHash,
                     expectedProof);
+                if (expectedReplayWitness is null)
+                {
+                    RequirePresentReplayWitnessOption(replayWitness);
+                }
+                else
+                {
+                    RequireExactReplayWitnessOption(
+                        replayWitness,
+                        expectedReplayWitness,
+                        required: true);
+                }
                 break;
             case 3:
                 RequireCanonicalDestinationBridgeProof(
@@ -1491,6 +1594,10 @@ internal static class SccpSubmitValidation
                     backend,
                     routeConfigurationHash,
                     expectedProof);
+                RequireExactReplayWitnessOption(
+                    replayWitness,
+                    expectedReplayWitness,
+                    required: false);
                 break;
             case 0 or 1:
                 throw new ArgumentException("SCCP SubmitBridgeProof cannot use generic bridge payloads.");
@@ -1502,6 +1609,71 @@ internal static class SccpSubmitValidation
         {
             throw new ArgumentException("SCCP SubmitBridgeProof must contain no trailing fields.");
         }
+    }
+
+    private static void RequirePresentReplayWitnessOption(ReadOnlySpan<byte> payload)
+    {
+        var option = new CompactTransactionCursor(payload);
+        if (option.TakeByte("SubmitBridgeProof.replay_witness.tag") != 1)
+        {
+            throw new ArgumentException(
+                "Native SubmitBridgeProof requires one canonical replay witness.");
+        }
+        var witness = option.TakeField("SubmitBridgeProof.replay_witness.value");
+        if (!option.IsFinished)
+        {
+            throw new ArgumentException(
+                "Native SubmitBridgeProof requires one canonical replay witness.");
+        }
+        RequireCanonicalReplayWitnessPayload(witness);
+    }
+
+    internal static void RequireCanonicalReplayWitnessArchive(ReadOnlySpan<byte> archive)
+    {
+        var payloadLength = checked((int)BinaryPrimitives.ReadUInt64LittleEndian(
+            archive.Slice(23, 8)));
+        RequireCanonicalReplayWitnessPayload(
+            archive.Slice(NoritoHeader.EncodedLength, payloadLength));
+    }
+
+    private static void RequireCanonicalReplayWitnessPayload(ReadOnlySpan<byte> payload)
+    {
+        var cursor = new CompactTransactionCursor(payload);
+        var expectedRoot = cursor.TakeField("replay_witness.expected_shard_root").ToArray();
+        var priorRecordDigest = cursor.TakeField("replay_witness.prior_record_digest").ToArray();
+        var siblingBitmap = cursor.TakeField("replay_witness.sibling_bitmap").ToArray();
+        var siblingSequence = new CompactTransactionCursor(
+            cursor.TakeField("replay_witness.siblings"));
+        if (!cursor.IsFinished)
+        {
+            throw new ArgumentException("Replay witness contains trailing fields.");
+        }
+        var siblingCount = siblingSequence.TakeUInt64("replay_witness.siblings.count");
+        if (siblingCount > SccpReplayV1.Depth)
+        {
+            throw new ArgumentException("Replay witness contains too many siblings.");
+        }
+        var siblings = new List<byte[]>(checked((int)siblingCount));
+        for (var index = 0UL; index < siblingCount; index++)
+        {
+            siblings.Add(siblingSequence.TakeField("replay_witness.sibling").ToArray());
+        }
+        if (!siblingSequence.IsFinished)
+        {
+            throw new ArgumentException("Replay witness sibling sequence contains trailing bytes.");
+        }
+        var witness = new SccpSparseMerkleWitnessV1(
+            expectedRoot,
+            priorRecordDigest,
+            siblingBitmap,
+            siblings);
+        if (priorRecordDigest.Any(static value => value != 0))
+        {
+            throw new ArgumentException(
+                "Replay witness request must prove non-membership with an all-zero prior record digest.");
+        }
+        var validationKey = Enumerable.Repeat((byte)1, 32).ToArray();
+        _ = SccpReplayV1.RootFromWitness(validationKey, null, witness);
     }
 
     private static void RequireCanonicalNativeBridgeProof(
@@ -1523,6 +1695,7 @@ internal static class SccpSubmitValidation
             0 => "bridge/sccp/native/ethereum-beacon-v1",
             1 => "bridge/sccp/native/bsc-parlia-v1",
             2 => "bridge/sccp/native/tron-dpos-v1",
+            3 => "bridge/sccp/native/ton-masterchain-v1",
             _ => throw new ArgumentException("SubmitBridgeProof native backend is unknown."),
         };
         var routeHash = DecodeFixedByteArray(
@@ -1569,6 +1742,7 @@ internal static class SccpSubmitValidation
         {
             0 => "evm-groth16-bn254-v1",
             1 => "tron-groth16-bn254-v1",
+            2 => "ton-groth16-bls12381-v1",
             _ => throw new ArgumentException("SubmitBridgeProof destination backend is unknown."),
         };
         var routeHash = DecodeFixedByteArray(

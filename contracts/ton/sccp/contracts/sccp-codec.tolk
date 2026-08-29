@@ -3,7 +3,8 @@ import "constants"
 import "errors"
 import "messages"
 
-/// Return the live TON network global id (mainnet `-239`, testnet `-3`).
+/// Return the live TON network global id. Canonical SCCP deployment requires
+/// the final-V1 mainnet identity (`-239`).
 /// # Safety
 /// `GLOBALID` only reads the current immutable execution configuration.
 fun getNetworkGlobalId(): int32
@@ -279,6 +280,121 @@ fun blake2bFive(a: slice, b: slice, c: slice, d: slice, e: slice): uint256 {
     return blake2b256(parts);
 }
 
+fun sccpBlake2bInitialStateV1(): Cell<SccpBlake2bStateV1> {
+    return SccpBlake2bStateV1 {
+        word0: (blake2bIv(0) ^ 0x01010020) as uint64,
+        word1: blake2bIv(1) as uint64,
+        word2: blake2bIv(2) as uint64,
+        word3: blake2bIv(3) as uint64,
+        word4: blake2bIv(4) as uint64,
+        word5: blake2bIv(5) as uint64,
+        word6: blake2bIv(6) as uint64,
+        word7: blake2bIv(7) as uint64,
+    }.toCell();
+}
+
+fun sccpBlake2bStateArrayV1(state: SccpBlake2bStateV1): array<int> {
+    var words: array<int> = [];
+    words.push(state.word0);
+    words.push(state.word1);
+    words.push(state.word2);
+    words.push(state.word3);
+    words.push(state.word4);
+    words.push(state.word5);
+    words.push(state.word6);
+    words.push(state.word7);
+    return words;
+}
+
+fun sccpBlake2bStateCellV1(words: array<int>): Cell<SccpBlake2bStateV1> {
+    assert (words.size() == 8) throw SccpErrors.InvalidPayload;
+    return SccpBlake2bStateV1 {
+        word0: words.get(0) as uint64,
+        word1: words.get(1) as uint64,
+        word2: words.get(2) as uint64,
+        word3: words.get(3) as uint64,
+        word4: words.get(4) as uint64,
+        word5: words.get(5) as uint64,
+        word6: words.get(6) as uint64,
+        word7: words.get(7) as uint64,
+    }.toCell();
+}
+
+fun sccpPayloadHashBlockCountV1(payload: CanonicalPayloadCells): int {
+    val prefix = "sccp:payload:v1".literalSlice();
+    assert (
+        prefix.remainingRefsCount() == 0 && prefix.remainingBitsCount() % 8 == 0
+    ) throw SccpErrors.InvalidPayload;
+    val total = prefix.remainingBitsCount() / 8 + assertCanonicalPayloadSegmentation(payload);
+    return (total + 127) / 128;
+}
+
+/// Compress exactly one block of the canonical SCCP payload commitment.
+/// The returned cell is accepted only from a self-authenticated bridge
+/// continuation, so an external caller can never inject a chaining state.
+fun sccpPayloadHashBlockV1(
+    payload: CanonicalPayloadCells,
+    stateCell: Cell<SccpBlake2bStateV1>,
+    blockIndex: int,
+): Cell<SccpBlake2bStateV1> {
+    val prefix = "sccp:payload:v1".literalSlice();
+    val payloadLength = assertCanonicalPayloadSegmentation(payload);
+    val prefixLength = prefix.remainingBitsCount() / 8;
+    val totalBytes = prefixLength + payloadLength;
+    val blockCount = (totalBytes + 127) / 128;
+    assert (blockIndex >= 0 && blockIndex < blockCount) throw SccpErrors.InvalidPayload;
+
+    var parts: array<slice> = [];
+    parts.push(prefix);
+    parts.push(payload.header.beginParse());
+    parts.push(payload.chunk1.beginParse());
+    parts.push(payload.chunk2.beginParse());
+    parts.push(payload.chunk3.beginParse());
+    var partIndex = 0;
+    var skipped = 0;
+    val blockStart = blockIndex * 128;
+    while (skipped < blockStart) {
+        nextHashByte(mutate parts, mutate partIndex);
+        skipped += 1;
+    }
+    assert (partIndex < parts.size()) throw SccpErrors.InvalidPayload;
+    val remaining = totalBytes - blockStart;
+    val blockBytes = remaining > 128 ? 128 : remaining;
+    var message: array<int> = [];
+    repeat (16) {
+        message.push(0);
+    }
+    var index = 0;
+    while (index < blockBytes) {
+        val wordIndex = index / 8;
+        val shift = (index % 8) * 8;
+        message.set(
+            message.get(wordIndex) | (nextHashByte(mutate parts, mutate partIndex) << shift),
+            wordIndex,
+        );
+        index += 1;
+    }
+    var chaining = sccpBlake2bStateArrayV1(stateCell.load());
+    val consumed = blockStart + blockBytes;
+    blake2bCompress(mutate chaining, message, consumed, consumed == totalBytes);
+    return sccpBlake2bStateCellV1(chaining);
+}
+
+fun sccpPayloadHashFromStateV1(stateCell: Cell<SccpBlake2bStateV1>): uint256 {
+    val chaining = sccpBlake2bStateArrayV1(stateCell.load());
+    var digest = 0;
+    var wordIndex = 0;
+    while (wordIndex < 4) {
+        var byteIndex = 0;
+        while (byteIndex < 8) {
+            digest = (digest << 8) | ((chaining.get(wordIndex) >> (byteIndex * 8)) & 0xff);
+            byteIndex += 1;
+        }
+        wordIndex += 1;
+    }
+    return digest as uint256;
+}
+
 /// # Safety
 /// The caller provides one byte-aligned, reference-free slice.
 @pure
@@ -366,7 +482,7 @@ fun canonicalTonAddress36(value: address): cell {
 
 /// Encode a standard TON address for an internal, domain-separated identity.
 ///
-/// Unlike the external SCCP account codec, internal replay/refund identities
+/// Unlike the external SCCP account codec, internal replay identities
 /// must accept masterchain owners as well as basechain owners. The workchain
 /// remains an explicit signed i32 so the same account hash cannot alias across
 /// workchains. This helper is never used to admit an external route address.
@@ -374,6 +490,64 @@ fun canonicalInternalTonAddress36(value: address): cell {
     val (workchain, accountHash) = value.getWorkchainAndHash();
     assert (accountHash != 0) throw SccpErrors.InvalidPayload;
     return beginCell().storeInt(workchain, 32).storeUint(accountHash, 256).endCell();
+}
+
+/// Exact final-V1 SORA Taira network identity. The 0x40 profile byte is
+/// independent of the little-endian transfer-domain id which follows it.
+fun canonicalSccpSoraNetworkBytesV1(): cell {
+    return beginCell()
+        .storeUint(1, 8)
+        .storeUint(SCCP_NETWORK_PROFILE_SORA_V1, 8)
+        .storeUint32Le(SCCP_DOMAIN_SORA)
+        .storeUint(SCCP_SORA_TAIRA_CHAIN_ID_V1, 128)
+        .endCell();
+}
+
+/// Exact final-V1 TON mainnet network identity including the governed zero
+/// state. No testnet or pre-release profile has a contract encoding.
+fun canonicalSccpTonMainnetNetworkBytesV1(): cell {
+    return beginCell()
+        .storeUint(1, 8)
+        .storeUint(SCCP_NETWORK_PROFILE_TON_V1, 8)
+        .storeUint32Le(SCCP_DOMAIN_TON)
+        .storeUint32Le(0xffffff11)
+        .storeUint32Le(0xffffffff)
+        .storeUint64Le(0x8000000000000000)
+        .storeUint32Le(0)
+        .storeUint(SCCP_TON_MAINNET_ZERO_STATE_ROOT_HASH_V1, 256)
+        .storeUint(SCCP_TON_MAINNET_ZERO_STATE_FILE_HASH_V1, 256)
+        .endCell();
+}
+
+fun canonicalSccpLaneBytesV1(source: cell, target: cell): cell {
+    val sourceSlice = source.beginParse();
+    val targetSlice = target.beginParse();
+    assert (
+        sourceSlice.remainingRefsCount() == 0 && targetSlice.remainingRefsCount() == 0 &&
+        sourceSlice.remainingBitsCount() % 8 == 0 &&
+        targetSlice.remainingBitsCount() % 8 == 0
+    ) throw SccpErrors.InvalidConfiguration;
+    return beginCell()
+        .storeUint(1, 8)
+        .storeUint32Le(sourceSlice.remainingBitsCount() / 8)
+        .storeSlice(sourceSlice)
+        .storeUint32Le(targetSlice.remainingBitsCount() / 8)
+        .storeSlice(targetSlice)
+        .endCell();
+}
+
+fun canonicalSccpTonToSoraLaneBytesV1(): cell {
+    return canonicalSccpLaneBytesV1(
+        canonicalSccpTonMainnetNetworkBytesV1(),
+        canonicalSccpSoraNetworkBytesV1(),
+    );
+}
+
+fun canonicalSccpSoraToTonLaneBytesV1(): cell {
+    return canonicalSccpLaneBytesV1(
+        canonicalSccpSoraNetworkBytesV1(),
+        canonicalSccpTonMainnetNetworkBytesV1(),
+    );
 }
 
 /// Decode exactly one canonical 36-byte basechain TON account.
@@ -765,6 +939,107 @@ fun i105ChecksumMatches(canonical: array<int>, digits: array<int>, payloadDigits
     return true;
 }
 
+const SCCP_I105_LIMB_BITS = 144
+const SCCP_I105_LIMB_MASK = 0xffffffffffffffffffffffffffffffffffff
+
+/// Decode the fixed 36-byte account as two 144-bit big-endian limbs. TVM
+/// integers cannot hold all 288 bits at once; two limbs make each base-105
+/// digit one checked multiply instead of walking all 36 bytes.
+fun decodeI105SingleKeyLimbs(
+    digits: array<int>,
+    payloadDigits: int,
+): (bool, int, int) {
+    if (
+        payloadDigits != SCCP_I105_SINGLE_KEY_PAYLOAD_DIGITS ||
+        digits.size() != payloadDigits + SCCP_I105_CHECKSUM_DIGITS ||
+        digits.get(0) == 0
+    ) {
+        return (false, 0, 0);
+    }
+    var high = 0;
+    var low = 0;
+    var index = 0;
+    while (index < payloadDigits) {
+        val scaledLow = low * SCCP_I105_BASE + digits.get(index);
+        val carry = scaledLow >> SCCP_I105_LIMB_BITS;
+        low = scaledLow & SCCP_I105_LIMB_MASK;
+        val scaledHigh = high * SCCP_I105_BASE + carry;
+        if ((scaledHigh >> SCCP_I105_LIMB_BITS) != 0) {
+            return (false, 0, 0);
+        }
+        high = scaledHigh;
+        index += 1;
+    }
+    // Bytes 0..3 are the exact single-key AccountAddress discriminants.
+    if ((high >> 112) != 0x02000120) {
+        return (false, 0, 0);
+    }
+    return (true, high, low);
+}
+
+fun i105LimbByte(high: int, low: int, index: int): int {
+    assert (index >= 0 && index < 36) throw SccpErrors.InvalidPayload;
+    if (index < 18) {
+        return (high >> ((17 - index) * 8)) & 0xff;
+    }
+    return (low >> ((35 - index) * 8)) & 0xff;
+}
+
+fun i105ChecksumMatchesLimbs(
+    high: int,
+    low: int,
+    digits: array<int>,
+    payloadDigits: int,
+): bool {
+    var polymod = 1;
+    polymod = i105PolymodStep(polymod, 3);
+    polymod = i105PolymodStep(polymod, 3);
+    polymod = i105PolymodStep(polymod, 3);
+    polymod = i105PolymodStep(polymod, 0);
+    polymod = i105PolymodStep(polymod, 19);
+    polymod = i105PolymodStep(polymod, 14);
+    polymod = i105PolymodStep(polymod, 24);
+    var accumulator = 0;
+    var bits = 0;
+    var index = 0;
+    while (index < 36) {
+        accumulator = (accumulator << 8) | i105LimbByte(high, low, index);
+        bits += 8;
+        while (bits >= 5) {
+            bits -= 5;
+            polymod = i105PolymodStep(polymod, (accumulator >> bits) & 31);
+        }
+        accumulator = bits == 0 ? 0 : accumulator & ((1 << bits) - 1);
+        index += 1;
+    }
+    if (bits != 0) {
+        polymod = i105PolymodStep(polymod, (accumulator << (5 - bits)) & 31);
+    }
+    repeat (SCCP_I105_CHECKSUM_DIGITS) {
+        polymod = i105PolymodStep(polymod, 0);
+    }
+    polymod = polymod ^ SCCP_I105_BECH32M_CONSTANT;
+    index = 0;
+    while (index < SCCP_I105_CHECKSUM_DIGITS) {
+        val expected = (polymod >> (5 * (SCCP_I105_CHECKSUM_DIGITS - 1 - index))) & 31;
+        if (digits.get(payloadDigits + index) != expected) {
+            return false;
+        }
+        index += 1;
+    }
+    return true;
+}
+
+fun encodedEd25519KeyFromLimbs(high: int, low: int): int {
+    var encoded = 0;
+    var index = 4;
+    while (index < 36) {
+        encoded = encoded | (i105LimbByte(high, low, index) << ((index - 4) * 8));
+        index += 1;
+    }
+    return encoded;
+}
+
 /// `mulDivMod` performs the 513-bit intermediate multiplication required for field arithmetic.
 fun fieldMul(a: int, b: int): int {
     val (_, remainder) = mulDivMod(a, b, SCCP_ED25519_FIELD);
@@ -832,6 +1107,89 @@ fun addEd25519(left: EdwardsPoint, right: EdwardsPoint): EdwardsPoint {
     };
 }
 
+fun ed25519PointCell(point: EdwardsPoint): Cell<SccpEdwardsPointV1> {
+    assert (
+        point.x >= 0 && point.x < SCCP_ED25519_FIELD && point.y >= 0 && point.y <
+        SCCP_ED25519_FIELD &&
+        point.z >= 0 &&
+        point.z <
+        SCCP_ED25519_FIELD &&
+        point.t >= 0 &&
+        point.t <
+        SCCP_ED25519_FIELD
+    ) throw SccpErrors.InvalidPayload;
+    return SccpEdwardsPointV1 {
+        x: point.x as uint255,
+        y: point.y as uint255,
+        z: point.z as uint255,
+        t: point.t as uint255,
+    }.toCell();
+}
+
+fun ed25519PointFromCell(value: Cell<SccpEdwardsPointV1>): EdwardsPoint {
+    val point = value.load();
+    assert (
+        point.x < SCCP_ED25519_FIELD && point.y < SCCP_ED25519_FIELD && point.z <
+        SCCP_ED25519_FIELD &&
+        point.t <
+        SCCP_ED25519_FIELD
+    ) throw SccpErrors.InvalidPayload;
+    return {
+        x: point.x,
+        y: point.y,
+        z: point.z,
+        t: point.t,
+    };
+}
+
+fun ed25519IdentityPoint(): EdwardsPoint {
+    return {
+        x: 0,
+        y: 1,
+        z: 1,
+        t: 0,
+    };
+}
+
+fun ed25519MultiplePoint(x: int, y: int): EdwardsPoint {
+    return {
+        x,
+        y,
+        z: 1,
+        t: fieldMul(x, y),
+    };
+}
+
+/// Execute at most `maximumBits` low-to-high bits of the fixed subgroup-order
+/// multiplication and return the exact continuation state.
+fun ed25519PrimeSubgroupStep(
+    resultValue: EdwardsPoint,
+    multipleValue: EdwardsPoint,
+    scalarValue: int,
+    maximumBits: int,
+): (EdwardsPoint, EdwardsPoint, int) {
+    assert (
+        scalarValue > 0 && scalarValue <= SCCP_ED25519_SUBGROUP_ORDER && maximumBits > 0
+    ) throw SccpErrors.InvalidPayload;
+    var result = resultValue;
+    var multiple = multipleValue;
+    var scalar = scalarValue;
+    var consumed = 0;
+    while (scalar != 0 && consumed < maximumBits) {
+        if ((scalar & 1) != 0) {
+            result = addEd25519(result, multiple);
+        }
+        multiple = addEd25519(multiple, multiple);
+        scalar = scalar >> 1;
+        consumed += 1;
+    }
+    return (result, multiple, scalar);
+}
+
+fun ed25519SubgroupResultIsIdentity(result: EdwardsPoint): bool {
+    return result.z != 0 && result.x == 0 && result.y == result.z;
+}
+
 fun isEd25519PrimeSubgroup(x: int, y: int): bool {
     var result: EdwardsPoint = {
         x: 0,
@@ -856,7 +1214,34 @@ fun isEd25519PrimeSubgroup(x: int, y: int): bool {
     return result.z != 0 && result.x == 0 && result.y == result.z;
 }
 
-fun isAdmittedEd25519Key(canonical: array<int>): bool {
+fun recoverAdmittedEd25519Point(encoded: int): (bool, int, int) {
+    val y = encoded & SCCP_ED25519_Y_MASK;
+    if (
+        y >= SCCP_ED25519_FIELD || y == 0 || y == 1 || y == SCCP_ED25519_FIELD - 1 ||
+        y == SCCP_ED25519_TORSION_Y_1 ||
+        y == SCCP_ED25519_TORSION_Y_2
+    ) {
+        return (false, 0, 0);
+    }
+    var decompressed = false;
+    var x = 0;
+    (decompressed, x) = recoverEd25519X(y);
+    if (!decompressed) {
+        return (false, 0, 0);
+    }
+    val sign = encoded >> 255;
+    if ((x & 1) != sign) {
+        x = SCCP_ED25519_FIELD - x;
+    }
+    return (true, x, y);
+}
+
+fun isAdmittedEd25519KeyEncoded(encoded: int): bool {
+    val (recovered, x, y) = recoverAdmittedEd25519Point(encoded);
+    return recovered && isEd25519PrimeSubgroup(x, y);
+}
+
+fun encodedEd25519Key(canonical: array<int>): int {
     var encoded = 0;
     var index = 4;
     var shift = 0;
@@ -865,25 +1250,30 @@ fun isAdmittedEd25519Key(canonical: array<int>): bool {
         shift += 8;
         index += 1;
     }
-    val y = encoded & SCCP_ED25519_Y_MASK;
-    if (
-        y >= SCCP_ED25519_FIELD || y == 0 || y == 1 || y == SCCP_ED25519_FIELD - 1 ||
-        y == SCCP_ED25519_TORSION_Y_1 ||
-        y == SCCP_ED25519_TORSION_Y_2
-    ) {
-        return false;
+    return encoded;
+}
+
+fun isAdmittedEd25519Key(canonical: array<int>): bool {
+    return isAdmittedEd25519KeyEncoded(encodedEd25519Key(canonical));
+}
+
+/// Decode every canonical I105 text and checksum rule without yet performing
+/// the expensive Edwards square root and prime-subgroup multiplication.
+fun decodeCanonicalTairaRecipientKey(value: cell): (bool, int) {
+    val (shapeValid, bytes) = readTairaRecipientBytes(value);
+    if (!shapeValid) {
+        return (false, 0);
     }
-    var decompressed = false;
-    var x = 0;
-    (decompressed, x) = recoverEd25519X(y);
-    if (!decompressed) {
-        return false;
+    val (symbolsValid, digits) = decodeI105Digits(bytes);
+    if (!symbolsValid) {
+        return (false, 0);
     }
-    val sign = encoded >> 255;
-    if ((x & 1) != sign) {
-        x = SCCP_ED25519_FIELD - x;
+    val payloadDigits = digits.size() - SCCP_I105_CHECKSUM_DIGITS;
+    val (decoded, high, low) = decodeI105SingleKeyLimbs(digits, payloadDigits);
+    if (!decoded || !i105ChecksumMatchesLimbs(high, low, digits, payloadDigits)) {
+        return (false, 0);
     }
-    return isEd25519PrimeSubgroup(x, y);
+    return (true, encodedEd25519KeyFromLimbs(high, low));
 }
 
 fun isCanonicalTairaRecipientBytes(value: array<int>): bool {
@@ -892,10 +1282,9 @@ fun isCanonicalTairaRecipientBytes(value: array<int>): bool {
         return false;
     }
     val payloadDigits = digits.size() - SCCP_I105_CHECKSUM_DIGITS;
-    val (decoded, canonical) = decodeI105SingleKey(digits, payloadDigits);
-    return decoded && base105ReencodesExactly(canonical, digits, payloadDigits) &&
-    i105ChecksumMatches(canonical, digits, payloadDigits) &&
-    isAdmittedEd25519Key(canonical);
+    val (decoded, high, low) = decodeI105SingleKeyLimbs(digits, payloadDigits);
+    return decoded && i105ChecksumMatchesLimbs(high, low, digits, payloadDigits) &&
+    isAdmittedEd25519KeyEncoded(encodedEd25519KeyFromLimbs(high, low));
 }
 
 /// Validate the exact discriminant-369 Taira I105 spelling, minimal base-105 representation,
@@ -939,9 +1328,30 @@ fun buildTonToTairaPayload(
     routeRevision: uint32,
     amount: uint128,
 ): CanonicalPayloadCells {
+    return buildTonToTairaPayloadFromValidatedRecipientBytes(
+        sender,
+        validateTairaRecipient(recipient),
+        nonce,
+        routeRevision,
+        amount,
+    );
+}
+
+/// Construct the transfer after an authenticated earlier stage validated the
+/// exact I105 bytes and Ed25519 key. This function is intentionally internal;
+/// callers must retain the original immutable recipient cell across stages.
+fun buildTonToTairaPayloadFromValidatedRecipientBytes(
+    sender: address,
+    recipientBytes: array<int>,
+    nonce: uint64,
+    routeRevision: uint32,
+    amount: uint128,
+): CanonicalPayloadCells {
     assert (routeRevision != 0) throw SccpErrors.InvalidPayload;
     assert (amount != 0 && amount <= SCCP_MAX_JETTON_AMOUNT) throw SccpErrors.InvalidAmount;
-    val recipientBytes = validateTairaRecipient(recipient);
+    assert (
+        recipientBytes.size() > 0 && recipientBytes.size() <= SCCP_MAX_TAIRA_RECIPIENT_BYTES
+    ) throw SccpErrors.InvalidPayload;
     val senderBytes = canonicalTonAddress36(sender);
 
     val header = beginCell()
@@ -1136,6 +1546,151 @@ fun parseTairaToTonPayload(
     payloadCell: cell,
     expectedRouteRevision: uint32,
 ): ParsedTairaToTonTransfer {
+    return parseTairaToTonPayloadImpl(payloadCell, expectedRouteRevision, true);
+}
+
+/// Parse a payload whose canonical source-account semantics are already bound
+/// by the governed destination-proof circuit. Framing, codecs, TON address,
+/// amount, route, and trailing-byte rejection remain local and exact.
+fun parseProvenTairaToTonPayload(
+    payloadCell: cell,
+    expectedRouteRevision: uint32,
+): ParsedTairaToTonTransfer {
+    return parseProvenTairaToTonPayloadCells(
+        decodeCanonicalPayloadCells(payloadCell),
+        expectedRouteRevision,
+    );
+}
+
+/// Read one byte from the unique three-cell canonical payload remainder.
+///
+/// Keeping the three ordinary slices on the TVM stack avoids materializing a
+/// second byte array while the destination proof already binds the source
+/// account spelling. Empty earlier chunks can occur only at the canonical end,
+/// but selecting the next non-empty slice here also makes truncation fail at
+/// the exact read that crossed the boundary.
+fun canonicalRemainderLoadByte(
+    mutate first: slice,
+    mutate second: slice,
+    mutate third: slice,
+): int {
+    if (first.remainingBitsCount() != 0) {
+        return first.loadUint(8);
+    }
+    if (second.remainingBitsCount() != 0) {
+        return second.loadUint(8);
+    }
+    assert (third.remainingBitsCount() != 0) throw SccpErrors.InvalidPayload;
+    return third.loadUint(8);
+}
+
+fun canonicalRemainderLoadUint32Le(
+    mutate first: slice,
+    mutate second: slice,
+    mutate third: slice,
+): uint32 {
+    val b0 = canonicalRemainderLoadByte(mutate first, mutate second, mutate third);
+    val b1 = canonicalRemainderLoadByte(mutate first, mutate second, mutate third);
+    val b2 = canonicalRemainderLoadByte(mutate first, mutate second, mutate third);
+    val b3 = canonicalRemainderLoadByte(mutate first, mutate second, mutate third);
+    return (b0 | (b1 << 8) | (b2 << 16) | (b3 << 24)) as uint32;
+}
+
+/// Strict destination-side parser for payloads already authenticated by the
+/// governed proof circuit. This parser deliberately has no call edge to the
+/// expensive I105 subgroup validator: it still checks every framing byte,
+/// every declared length, the canonical TON account, route literal, and exact
+/// end of all three payload chunks.
+fun parseProvenTairaToTonPayloadCells(
+    payload: CanonicalPayloadCells,
+    expectedRouteRevision: uint32,
+): ParsedTairaToTonTransfer {
+    assertCanonicalPayloadSegmentation(payload);
+    var header = payload.header.beginParse();
+    assert (
+        header.remainingBitsCount() == SCCP_CANONICAL_HEADER_BYTES * 8 &&
+        header.remainingRefsCount() == 0
+    ) throw SccpErrors.InvalidPayload;
+    assert (header.loadUint(8) == SCCP_PAYLOAD_DISCRIMINATOR) throw SccpErrors.InvalidPayload;
+    assert (header.loadUint(8) == SCCP_PAYLOAD_VERSION) throw SccpErrors.InvalidPayload;
+    assert (header.loadUint32Le() == SCCP_DOMAIN_SORA) throw SccpErrors.InvalidPayload;
+    assert (header.loadUint32Le() == SCCP_DOMAIN_TON) throw SccpErrors.InvalidPayload;
+    header.loadUint(64);
+    assert (header.loadUint32Le() == expectedRouteRevision) throw SccpErrors.InvalidPayload;
+    assert (header.loadUint32Le() == SCCP_DOMAIN_SORA) throw SccpErrors.InvalidPayload;
+    assert (header.loadUint(8) == SCCP_CODEC_CANONICAL_TEXT) throw SccpErrors.InvalidPayload;
+    assert (header.loadUint32Le() == 3) throw SccpErrors.InvalidPayload;
+    assert (header.loadBits(24).bitsEqual("xor".literalSlice())) throw SccpErrors.InvalidPayload;
+    val amount = header.loadUint128Le();
+    header.assertEnd();
+    assert (amount != 0 && amount <= SCCP_MAX_JETTON_AMOUNT) throw SccpErrors.InvalidAmount;
+
+    var first = payload.chunk1.beginParse();
+    var second = payload.chunk2.beginParse();
+    var third = payload.chunk3.beginParse();
+    assert (
+        canonicalRemainderLoadByte(mutate first, mutate second, mutate third) ==
+        SCCP_CODEC_CANONICAL_TEXT
+    ) throw SccpErrors.InvalidPayload;
+    val senderLength = canonicalRemainderLoadUint32Le(
+        mutate first,
+        mutate second,
+        mutate third,
+    ) as int;
+    assert (
+        senderLength > 0 && senderLength <= SCCP_MAX_TAIRA_RECIPIENT_BYTES
+    ) throw SccpErrors.InvalidPayload;
+    repeat (senderLength) {
+        canonicalRemainderLoadByte(mutate first, mutate second, mutate third);
+    }
+
+    assert (
+        canonicalRemainderLoadByte(mutate first, mutate second, mutate third) ==
+        SCCP_CODEC_TON_ADDRESS36
+    ) throw SccpErrors.InvalidPayload;
+    assert (
+        canonicalRemainderLoadUint32Le(mutate first, mutate second, mutate third) == 36
+    ) throw SccpErrors.InvalidPayload;
+    var workchain = 0;
+    repeat (4) {
+        workchain = (workchain << 8) |
+        canonicalRemainderLoadByte(mutate first, mutate second, mutate third);
+    }
+    assert (workchain == SCCP_WORKCHAIN) throw SccpErrors.WrongWorkchain;
+    var accountHash = 0;
+    repeat (32) {
+        accountHash = (accountHash << 8) |
+        canonicalRemainderLoadByte(mutate first, mutate second, mutate third);
+    }
+    assert (accountHash != 0) throw SccpErrors.InvalidPayload;
+    val recipient = address.fromWorkchainAndHash(SCCP_WORKCHAIN, accountHash);
+
+    assert (
+        canonicalRemainderLoadByte(mutate first, mutate second, mutate third) ==
+        SCCP_CODEC_CANONICAL_TEXT
+    ) throw SccpErrors.InvalidPayload;
+    assert (
+        canonicalRemainderLoadUint32Le(mutate first, mutate second, mutate third) == 13
+    ) throw SccpErrors.InvalidPayload;
+    var route = "taira_ton_xor".literalSlice();
+    repeat (13) {
+        assert (
+            canonicalRemainderLoadByte(mutate first, mutate second, mutate third) ==
+            route.loadUint(8)
+        ) throw SccpErrors.InvalidPayload;
+    }
+    route.assertEnd();
+    first.assertEnd();
+    second.assertEnd();
+    third.assertEnd();
+    return { recipient, amount };
+}
+
+fun parseTairaToTonPayloadImpl(
+    payloadCell: cell,
+    expectedRouteRevision: uint32,
+    validateSenderCryptography: bool,
+): ParsedTairaToTonTransfer {
     val payload = decodeCanonicalPayloadCells(payloadCell);
     var header = payload.header.beginParse();
     assert (
@@ -1162,9 +1717,13 @@ fun parseTairaToTonPayload(
         arrayLoadByte(remainder, mutate cursor) == SCCP_CODEC_CANONICAL_TEXT
     ) throw SccpErrors.InvalidPayload;
     val senderLength = arrayLoadUint32Le(remainder, mutate cursor) as int;
-    assert (senderLength <= SCCP_MAX_TAIRA_RECIPIENT_BYTES) throw SccpErrors.InvalidPayload;
+    assert (
+        senderLength > 0 && senderLength <= SCCP_MAX_TAIRA_RECIPIENT_BYTES
+    ) throw SccpErrors.InvalidPayload;
     val sender = arrayLoadBytes(remainder, mutate cursor, senderLength);
-    assert (isCanonicalTairaRecipientBytes(sender)) throw SccpErrors.InvalidPayload;
+    if (validateSenderCryptography) {
+        assert (isCanonicalTairaRecipientBytes(sender)) throw SccpErrors.InvalidPayload;
+    }
     assert (
         arrayLoadByte(remainder, mutate cursor) == SCCP_CODEC_TON_ADDRESS36
     ) throw SccpErrors.InvalidPayload;

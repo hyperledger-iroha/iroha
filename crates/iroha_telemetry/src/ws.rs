@@ -321,12 +321,12 @@ where
         if self.integrity.pending_record().is_none() {
             return;
         }
-        if !self.integrity.pending_is_durable() {
-            if let Err(error) = self.integrity.persist_pending().await {
-                iroha_logger::error!(%error, "failed to persist staged telemetry record");
-                self.schedule_checkpoint_retry();
-                return;
-            }
+        if !self.integrity.pending_is_durable()
+            && let Err(error) = self.integrity.persist_pending().await
+        {
+            iroha_logger::error!(%error, "failed to persist staged telemetry record");
+            self.schedule_checkpoint_retry();
+            return;
         }
         if self.integrity.pending_output_is_confirmed() {
             if let Err(error) = self.integrity.commit_pending().await {
@@ -406,15 +406,25 @@ impl WebsocketSinkFactory {
 impl SinkFactory for WebsocketSinkFactory {
     type Sink = WebsocketSink;
     fn create(&mut self, connection_id: u64) -> impl Future<Output = Result<Self::Sink>> + Send {
-        async move {
-            tokio::time::timeout(
-                CONNECT_TIMEOUT,
-                connect_websocket(&self.url, self.internal_sender.clone(), connection_id),
-            )
-            .await
-            .map_err(|_| eyre!("telemetry WebSocket connection timed out"))?
-        }
+        create_websocket_sink(
+            self.url.clone(),
+            self.internal_sender.clone(),
+            connection_id,
+        )
     }
+}
+
+async fn create_websocket_sink(
+    url: Url,
+    internal_sender: mpsc::Sender<InternalMessage>,
+    connection_id: u64,
+) -> Result<WebsocketSink> {
+    tokio::time::timeout(
+        CONNECT_TIMEOUT,
+        connect_websocket(&url, internal_sender, connection_id),
+    )
+    .await
+    .map_err(|_| eyre!("telemetry WebSocket connection timed out"))?
 }
 #[cfg(test)]
 mod tests {
@@ -694,13 +704,11 @@ mod tests {
             &mut self,
             _connection_id: u64,
         ) -> impl Future<Output = Result<Self::Sink>> + Send {
-            async move {
-                if self.fail.load(Ordering::SeqCst) {
-                    Err(eyre!("failed to create"))
-                } else {
-                    Ok(self.sender.clone())
-                }
-            }
+            std::future::ready(if self.fail.load(Ordering::SeqCst) {
+                Err(eyre!("failed to create"))
+            } else {
+                Ok(self.sender.clone())
+            })
         }
     }
     struct Suite {

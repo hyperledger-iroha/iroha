@@ -126,7 +126,7 @@ mod tests {
             norito::encode_canonical(&wrapper).expect("encode canonical STARK wrapper");
         let envelope = iroha_data_model::zk::OpenVerifyEnvelope {
             backend: iroha_data_model::zk::BackendTag::Stark,
-            circuit_id: "stark/fri/sha256-goldilocks:confidential-test".to_owned(),
+            circuit_id: "stark/fri/poseidon-x7-goldilocks-6x64-v1:confidential-test".to_owned(),
             vk_hash: [0x42; 32],
             public_inputs: b"confidential:test:schema:v1".to_vec(),
             proof_bytes: canonical_wrapper,

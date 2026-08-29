@@ -180,19 +180,27 @@ export const PRIVACY_EXACT12_FIXTURE_BUNDLE_SCHEMA_NAME_V1 =
   "iroha.privacy.exact12-typed-fixture-bundle.v1";
 export const PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1 = 2 * 1024 * 1024;
 export const PRIVACY_EXACT12_PROTOCOL_IDS_V1 = /* @__PURE__ */ Object.freeze([
-  "zk-ace-pq-authorization-v0",
+  "zk-ace-pq-authorization-v1",
   "anonymous-pgc-k-out-of-n-v1",
   "verange-transparent-range-v1",
   "iroha-zk-ams-v1",
-  "vega-existing-credential-zk-v0",
-  "iroha-zk-x509-stark-p256-v0",
-  "iroha-jindo-polynomial-commitment-v0",
+  "vega-existing-credential-zk-v1",
+  "iroha-zk-x509-stark-p256-v1",
+  "iroha-jindo-polynomial-commitment-v1",
   "iroha-bootle-lantern-anoncred-v1",
   "orchard-halo2-actions-v1",
   "monero-fcmp-plus-plus-v1",
   "iroha-ivm-private-note-stark-v1",
-  "pq-masp-stark-v0",
+  "pq-masp-stark-v1",
 ]);
+/** Exact bare-wire magic for `ConfidentialMemoEnvelopeV1`. */
+export const CONFIDENTIAL_MEMO_WIRE_MAGIC_V1 = /* @__PURE__ */ Object.freeze([
+  0x49, 0x52, 0x48, 0x43, 0x4d, 0x31, 0xa5, 0x5a,
+]);
+/** Every confidential memo has exactly eight real-or-padding slots. */
+export const CONFIDENTIAL_MEMO_RECIPIENT_SLOTS_V1 = 8;
+/** Maximum authenticated memo ciphertext accepted by the V1 wire. */
+export const CONFIDENTIAL_MEMO_MAX_CIPHERTEXT_BYTES_V1 = 64 * 1024;
 const PRIVACY_EXACT12_FIXTURE_BUNDLE_SCHEMA_HASH_V1 = /* @__PURE__ */ schemaHashForTypeName(
   PRIVACY_EXACT12_FIXTURE_BUNDLE_SCHEMA_NAME_V1,
 );
@@ -2027,6 +2035,34 @@ export function noritoDecodePrivacyExact12FixtureBundleV1(bytes) {
 export function noritoEncodePrivacyExact12FixtureBundleV1(value) {
   const bundle = normalizePrivacyExact12FixtureBundleInputV1(value);
   return Uint8Array.from(encodePrivacyExact12FixtureBundleCanonicalV1(bundle));
+}
+
+/**
+ * Encode the sole first-release confidential memo envelope.
+ *
+ * The input must use the exact snake-case V1 shape. No version aliases,
+ * recipient-count field, empty slots, or legacy X25519 payload are accepted.
+ *
+ * @param {object} value
+ * @returns {Uint8Array}
+ */
+export function noritoEncodeConfidentialMemoEnvelopeV1(value) {
+  return Uint8Array.from(
+    encodeConfidentialMemoEnvelopeV1Value(value, "ConfidentialMemoEnvelopeV1"),
+  );
+}
+
+/**
+ * Decode exactly one canonical first-release confidential memo envelope.
+ *
+ * @param {Uint8Array | Buffer | number[]} bytes
+ * @returns {object}
+ */
+export function noritoDecodeConfidentialMemoEnvelopeV1(bytes) {
+  const payload = Buffer.from(
+    normalizeFlexibleBytes(bytes, "ConfidentialMemoEnvelopeV1 wire"),
+  );
+  return decodeConfidentialMemoEnvelopeV1Value(payload, "ConfidentialMemoEnvelopeV1");
 }
 
 function decodePrivacyExact12FixtureBundlePayloadV1(payload) {
@@ -8395,8 +8431,8 @@ function decodeLanePrivacyWitnessValue(payload, context) {
 const [
   encodeMerkleProofValue,
   decodeMerkleProofValue,
-  encodeConfidentialEncryptedPayloadValue,
-  decodeConfidentialEncryptedPayloadValue,
+  encodeConfidentialMemoEnvelopeV1Value,
+  decodeConfidentialMemoEnvelopeV1Value,
 ] = /* @__PURE__ */ createNoritoProofValueCodecs(
   BufferReader, LANE_PRIVACY_MERKLE_MAX_DEPTH, decodeHashValue,
   decodeNoritoVec, decodeOptionValue, decodeTupleFields,

@@ -316,6 +316,14 @@ def test_source_policy_requires_abi_encoder_v2_only_for_typed_deployments() -> N
         )
 
 
+def test_compiler_lock_covers_shared_replay_forest_import_for_both_targets() -> None:
+    config = corridor.load_corridor_config()
+    replay_forest = "contracts/evm/sccp/SccpSha256ReplayForest.sol"
+    assert replay_forest in config.sources["evm"]
+    assert replay_forest in config.sources["tron"]
+    assert replay_forest in corridor.ABI_ENCODER_V2_SOURCES
+
+
 @pytest.mark.parametrize(
     ("target", "field", "replacement"),
     (

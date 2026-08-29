@@ -9567,6 +9567,17 @@
         ],
         "type": "object"
       },
+      "GoldilocksDigest384V1": {
+        "description": "Six canonical little-endian Goldilocks field elements (48 bytes total).",
+        "items": {
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "maxItems": 48,
+        "minItems": 48,
+        "type": "array"
+      },
       "GovernanceAtWindowV1": {
         "additionalProperties": false,
         "description": "Inclusive governance block-height window. The lower bound must not exceed the upper bound.",
@@ -22787,10 +22798,7 @@
           "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
           "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
           "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
-          "stark/fri",
-          "stark/fri/sha256-goldilocks",
-          "stark/fri/poseidon2-goldilocks",
-          "stark/fri/sha256_goldilocks.v1"
+          "stark/fri/poseidon-x7-goldilocks-6x64-v1"
         ],
         "type": "string"
       },
@@ -25078,67 +25086,6 @@
         ],
         "type": "object"
       },
-      "PrivacyAssuranceV1": {
-        "additionalProperties": false,
-        "properties": {
-          "assurance": {
-            "enum": [
-              "experimental"
-            ],
-            "type": "string"
-          },
-          "value": {
-            "type": "null"
-          }
-        },
-        "required": [
-          "assurance",
-          "value"
-        ],
-        "type": "object"
-      },
-      "PrivacyCapabilityActivationStateV1": {
-        "additionalProperties": false,
-        "properties": {
-          "activation_state": {
-            "enum": [
-              "not-registered",
-              "proposed",
-              "active",
-              "suspended",
-              "retired"
-            ],
-            "type": "string"
-          },
-          "detail": {
-            "type": "null"
-          }
-        },
-        "required": [
-          "activation_state",
-          "detail"
-        ],
-        "type": "object"
-      },
-      "PrivacyCapabilityLimitationV1": {
-        "additionalProperties": false,
-        "properties": {
-          "detail": {
-            "type": "null"
-          },
-          "limitation": {
-            "enum": [
-              "missing-distribution-wide-knowledge-soundness-evidence"
-            ],
-            "type": "string"
-          }
-        },
-        "required": [
-          "limitation",
-          "detail"
-        ],
-        "type": "object"
-      },
       "PrivacyCapabilityReadinessV1": {
         "oneOf": [
           {
@@ -25148,12 +25095,50 @@
                 "type": "null"
               },
               "readiness": {
-                "const": "available",
+                "const": "production-qualified",
                 "type": "string"
               }
             },
             "required": [
               "readiness",
+              "detail"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "detail": {
+                "$ref": "#/components/schemas/PrivacyCapabilityUnavailableReasonV1"
+              },
+              "readiness": {
+                "const": "unavailable",
+                "type": "string"
+              }
+            },
+            "required": [
+              "readiness",
+              "detail"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "PrivacyCapabilityUnavailableReasonV1": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "detail": {
+                "$ref": "#/components/schemas/PrivacyCompiledProfileUnavailableReasonV1"
+              },
+              "reason": {
+                "const": "compiled-profile",
+                "type": "string"
+              }
+            },
+            "required": [
+              "reason",
               "detail"
             ],
             "type": "object"
@@ -25164,13 +25149,13 @@
               "detail": {
                 "type": "null"
               },
-              "readiness": {
-                "const": "available-experimental",
+              "reason": {
+                "const": "not-registered",
                 "type": "string"
               }
             },
             "required": [
-              "readiness",
+              "reason",
               "detail"
             ],
             "type": "object"
@@ -25179,15 +25164,66 @@
             "additionalProperties": false,
             "properties": {
               "detail": {
-                "$ref": "#/components/schemas/PrivacyCompiledProfileUnavailableReasonV1"
+                "type": "null"
               },
-              "readiness": {
-                "const": "unavailable",
+              "reason": {
+                "const": "proposed",
                 "type": "string"
               }
             },
             "required": [
-              "readiness",
+              "reason",
+              "detail"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "detail": {
+                "type": "null"
+              },
+              "reason": {
+                "const": "suspended",
+                "type": "string"
+              }
+            },
+            "required": [
+              "reason",
+              "detail"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "detail": {
+                "type": "null"
+              },
+              "reason": {
+                "const": "retired",
+                "type": "string"
+              }
+            },
+            "required": [
+              "reason",
+              "detail"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "detail": {
+                "type": "null"
+              },
+              "reason": {
+                "const": "missing-production-qualification",
+                "type": "string"
+              }
+            },
+            "required": [
+              "reason",
               "detail"
             ],
             "type": "object"
@@ -25471,7 +25507,7 @@
         "properties": {
           "engine": {
             "enum": [
-              "native-goldilocks-stark-fri",
+              "native-goldilocks-poseidon-x7-stark-fri-6x64-v1",
               "native-zk-ams-masked-relaxed-spartan-t256-ristretto255",
               "native-anonymous-pgc-p256",
               "native-verange-p256",
@@ -25536,9 +25572,6 @@
                         ],
                         "type": "object"
                       },
-                      "limitation": {
-                        "type": "null"
-                      },
                       "operation_schema": {
                         "additionalProperties": false,
                         "properties": {
@@ -25563,7 +25596,7 @@
                         "additionalProperties": false,
                         "properties": {
                           "protocol": {
-                            "const": "zk-ace-pq-authorization-v0",
+                            "const": "zk-ace-pq-authorization-v1",
                             "type": "string"
                           },
                           "value": {
@@ -25581,8 +25614,7 @@
                       "protocol_id",
                       "operation_schema",
                       "execution_mode",
-                      "privacy_feature_mask",
-                      "limitation"
+                      "privacy_feature_mask"
                     ],
                     "type": "object"
                   }
@@ -25611,9 +25643,6 @@
                           "value"
                         ],
                         "type": "object"
-                      },
-                      "limitation": {
-                        "type": "null"
                       },
                       "operation_schema": {
                         "additionalProperties": false,
@@ -25657,8 +25686,7 @@
                       "protocol_id",
                       "operation_schema",
                       "execution_mode",
-                      "privacy_feature_mask",
-                      "limitation"
+                      "privacy_feature_mask"
                     ],
                     "type": "object"
                   }
@@ -25687,9 +25715,6 @@
                           "value"
                         ],
                         "type": "object"
-                      },
-                      "limitation": {
-                        "type": "null"
                       },
                       "operation_schema": {
                         "additionalProperties": false,
@@ -25733,8 +25758,7 @@
                       "protocol_id",
                       "operation_schema",
                       "execution_mode",
-                      "privacy_feature_mask",
-                      "limitation"
+                      "privacy_feature_mask"
                     ],
                     "type": "object"
                   }
@@ -25763,9 +25787,6 @@
                           "value"
                         ],
                         "type": "object"
-                      },
-                      "limitation": {
-                        "type": "null"
                       },
                       "operation_schema": {
                         "additionalProperties": false,
@@ -25809,8 +25830,7 @@
                       "protocol_id",
                       "operation_schema",
                       "execution_mode",
-                      "privacy_feature_mask",
-                      "limitation"
+                      "privacy_feature_mask"
                     ],
                     "type": "object"
                   }
@@ -25839,9 +25859,6 @@
                           "value"
                         ],
                         "type": "object"
-                      },
-                      "limitation": {
-                        "type": "null"
                       },
                       "operation_schema": {
                         "additionalProperties": false,
@@ -25867,7 +25884,7 @@
                         "additionalProperties": false,
                         "properties": {
                           "protocol": {
-                            "const": "vega-existing-credential-zk-v0",
+                            "const": "vega-existing-credential-zk-v1",
                             "type": "string"
                           },
                           "value": {
@@ -25885,8 +25902,7 @@
                       "protocol_id",
                       "operation_schema",
                       "execution_mode",
-                      "privacy_feature_mask",
-                      "limitation"
+                      "privacy_feature_mask"
                     ],
                     "type": "object"
                   }
@@ -25916,9 +25932,6 @@
                         ],
                         "type": "object"
                       },
-                      "limitation": {
-                        "type": "null"
-                      },
                       "operation_schema": {
                         "additionalProperties": false,
                         "properties": {
@@ -25943,7 +25956,7 @@
                         "additionalProperties": false,
                         "properties": {
                           "protocol": {
-                            "const": "iroha-zk-x509-stark-p256-v0",
+                            "const": "iroha-zk-x509-stark-p256-v1",
                             "type": "string"
                           },
                           "value": {
@@ -25961,8 +25974,7 @@
                       "protocol_id",
                       "operation_schema",
                       "execution_mode",
-                      "privacy_feature_mask",
-                      "limitation"
+                      "privacy_feature_mask"
                     ],
                     "type": "object"
                   }
@@ -25992,23 +26004,6 @@
                         ],
                         "type": "object"
                       },
-                      "limitation": {
-                        "additionalProperties": false,
-                        "properties": {
-                          "detail": {
-                            "type": "null"
-                          },
-                          "limitation": {
-                            "const": "missing-distribution-wide-knowledge-soundness-evidence",
-                            "type": "string"
-                          }
-                        },
-                        "required": [
-                          "limitation",
-                          "detail"
-                        ],
-                        "type": "object"
-                      },
                       "operation_schema": {
                         "additionalProperties": false,
                         "properties": {
@@ -26033,7 +26028,7 @@
                         "additionalProperties": false,
                         "properties": {
                           "protocol": {
-                            "const": "iroha-jindo-polynomial-commitment-v0",
+                            "const": "iroha-jindo-polynomial-commitment-v1",
                             "type": "string"
                           },
                           "value": {
@@ -26051,8 +26046,7 @@
                       "protocol_id",
                       "operation_schema",
                       "execution_mode",
-                      "privacy_feature_mask",
-                      "limitation"
+                      "privacy_feature_mask"
                     ],
                     "type": "object"
                   }
@@ -26081,9 +26075,6 @@
                           "value"
                         ],
                         "type": "object"
-                      },
-                      "limitation": {
-                        "type": "null"
                       },
                       "operation_schema": {
                         "additionalProperties": false,
@@ -26127,8 +26118,7 @@
                       "protocol_id",
                       "operation_schema",
                       "execution_mode",
-                      "privacy_feature_mask",
-                      "limitation"
+                      "privacy_feature_mask"
                     ],
                     "type": "object"
                   }
@@ -26157,9 +26147,6 @@
                           "value"
                         ],
                         "type": "object"
-                      },
-                      "limitation": {
-                        "type": "null"
                       },
                       "operation_schema": {
                         "additionalProperties": false,
@@ -26203,8 +26190,7 @@
                       "protocol_id",
                       "operation_schema",
                       "execution_mode",
-                      "privacy_feature_mask",
-                      "limitation"
+                      "privacy_feature_mask"
                     ],
                     "type": "object"
                   }
@@ -26233,9 +26219,6 @@
                           "value"
                         ],
                         "type": "object"
-                      },
-                      "limitation": {
-                        "type": "null"
                       },
                       "operation_schema": {
                         "additionalProperties": false,
@@ -26279,8 +26262,7 @@
                       "protocol_id",
                       "operation_schema",
                       "execution_mode",
-                      "privacy_feature_mask",
-                      "limitation"
+                      "privacy_feature_mask"
                     ],
                     "type": "object"
                   }
@@ -26309,9 +26291,6 @@
                           "value"
                         ],
                         "type": "object"
-                      },
-                      "limitation": {
-                        "type": "null"
                       },
                       "operation_schema": {
                         "additionalProperties": false,
@@ -26355,8 +26334,7 @@
                       "protocol_id",
                       "operation_schema",
                       "execution_mode",
-                      "privacy_feature_mask",
-                      "limitation"
+                      "privacy_feature_mask"
                     ],
                     "type": "object"
                   }
@@ -26386,9 +26364,6 @@
                         ],
                         "type": "object"
                       },
-                      "limitation": {
-                        "type": "null"
-                      },
                       "operation_schema": {
                         "additionalProperties": false,
                         "properties": {
@@ -26413,7 +26388,7 @@
                         "additionalProperties": false,
                         "properties": {
                           "protocol": {
-                            "const": "pq-masp-stark-v0",
+                            "const": "pq-masp-stark-v1",
                             "type": "string"
                           },
                           "value": {
@@ -26431,8 +26406,7 @@
                       "protocol_id",
                       "operation_schema",
                       "execution_mode",
-                      "privacy_feature_mask",
-                      "limitation"
+                      "privacy_feature_mask"
                     ],
                     "type": "object"
                   }
@@ -26469,24 +26443,11 @@
               }
             ]
           },
-          "activation_state": {
-            "$ref": "#/components/schemas/PrivacyCapabilityActivationStateV1"
-          },
           "compiled_profile": {
             "$ref": "#/components/schemas/PrivacyCompiledProfileResultV1"
           },
           "execution_mode": {
             "$ref": "#/components/schemas/PrivacyExecutionModeV1"
-          },
-          "limitation": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/PrivacyCapabilityLimitationV1"
-              },
-              {
-                "type": "null"
-              }
-            ]
           },
           "operation_schema": {
             "$ref": "#/components/schemas/PrivacyOperationSchemaV1"
@@ -26508,11 +26469,70 @@
           "privacy_feature_mask",
           "compiled_profile",
           "readiness",
-          "activation_state",
-          "activation",
-          "limitation"
+          "activation"
         ],
         "type": "object"
+      },
+      "PrivacyExact12CatalogCommitmentV1": {
+        "const": [
+          224,
+          55,
+          241,
+          57,
+          4,
+          160,
+          48,
+          124,
+          0,
+          219,
+          21,
+          216,
+          92,
+          251,
+          64,
+          107,
+          215,
+          151,
+          114,
+          210,
+          1,
+          68,
+          169,
+          73,
+          222,
+          240,
+          243,
+          253,
+          167,
+          142,
+          52,
+          46,
+          116,
+          127,
+          101,
+          120,
+          124,
+          191,
+          191,
+          250,
+          201,
+          79,
+          17,
+          195,
+          105,
+          226,
+          187,
+          255
+        ],
+        "description": "The sole pinned six-lane commitment to the ordered first-release Exact12 catalog.",
+        "items": {
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "maxItems": 48,
+        "minItems": 48,
+        "type": "array"
       },
       "PrivacyExecutionModeV1": {
         "additionalProperties": false,
@@ -26590,7 +26610,7 @@
         "properties": {
           "proof_system": {
             "enum": [
-              "stark-fri-sha256-goldilocks",
+              "stark-fri-poseidon-x7-goldilocks-6x64-v1",
               "zk-ams-masked-relaxed-spartan-t256-ristretto255-sha3-512",
               "anonymous-pgc-p256",
               "iroha-verange-p256",
@@ -26621,7 +26641,7 @@
                 "type": "null"
               },
               "protocol": {
-                "const": "zk-ace-pq-authorization-v0",
+                "const": "zk-ace-pq-authorization-v1",
                 "type": "string"
               }
             },
@@ -26743,7 +26763,7 @@
                 "type": "null"
               },
               "protocol": {
-                "const": "vega-existing-credential-zk-v0",
+                "const": "vega-existing-credential-zk-v1",
                 "type": "string"
               }
             },
@@ -26760,7 +26780,7 @@
                 "type": "null"
               },
               "protocol": {
-                "const": "iroha-zk-x509-stark-p256-v0",
+                "const": "iroha-zk-x509-stark-p256-v1",
                 "type": "string"
               }
             },
@@ -26788,7 +26808,7 @@
                 "type": "object"
               },
               "protocol": {
-                "const": "iroha-jindo-polynomial-commitment-v0",
+                "const": "iroha-jindo-polynomial-commitment-v1",
                 "type": "string"
               }
             },
@@ -26935,7 +26955,7 @@
                 "type": "object"
               },
               "protocol": {
-                "const": "pq-masp-stark-v0",
+                "const": "pq-masp-stark-v1",
                 "type": "string"
               }
             },
@@ -26950,9 +26970,6 @@
       "PrivacyProtocolActivationRecordV1": {
         "additionalProperties": false,
         "properties": {
-          "assurance": {
-            "$ref": "#/components/schemas/PrivacyAssuranceV1"
-          },
           "engine_id": {
             "$ref": "#/components/schemas/PrivacyEngineIdV1"
           },
@@ -26972,6 +26989,16 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/PrivacyProtocolLimitsTighteningV1"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "production_qualification": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PrivacyProtocolProductionQualificationV1"
               },
               {
                 "type": "null"
@@ -27006,7 +27033,7 @@
           "lifecycle",
           "protocol_limits",
           "pending_protocol_limits_tightening",
-          "assurance"
+          "production_qualification"
         ],
         "type": "object"
       },
@@ -27015,18 +27042,18 @@
         "properties": {
           "protocol": {
             "enum": [
-              "zk-ace-pq-authorization-v0",
+              "zk-ace-pq-authorization-v1",
               "anonymous-pgc-k-out-of-n-v1",
               "verange-transparent-range-v1",
               "iroha-zk-ams-v1",
-              "vega-existing-credential-zk-v0",
-              "iroha-zk-x509-stark-p256-v0",
-              "iroha-jindo-polynomial-commitment-v0",
+              "vega-existing-credential-zk-v1",
+              "iroha-zk-x509-stark-p256-v1",
+              "iroha-jindo-polynomial-commitment-v1",
               "iroha-bootle-lantern-anoncred-v1",
               "orchard-halo2-actions-v1",
               "monero-fcmp-plus-plus-v1",
               "iroha-ivm-private-note-stark-v1",
-              "pq-masp-stark-v0"
+              "pq-masp-stark-v1"
             ],
             "type": "string"
           },
@@ -27226,6 +27253,100 @@
           "scheduled_at_height",
           "effective_at_height",
           "next_limits"
+        ],
+        "type": "object"
+      },
+      "PrivacyProtocolProductionQualificationV1": {
+        "additionalProperties": false,
+        "properties": {
+          "deployment_qualification_digest": {
+            "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
+          },
+          "release_manifest_digest": {
+            "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
+          },
+          "security_claim": {
+            "$ref": "#/components/schemas/PrivacySecurityClaimV1"
+          },
+          "security_claim_digest": {
+            "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
+          }
+        },
+        "required": [
+          "security_claim",
+          "security_claim_digest",
+          "release_manifest_digest",
+          "deployment_qualification_digest"
+        ],
+        "type": "object"
+      },
+      "PrivacySecurityClaimV1": {
+        "additionalProperties": false,
+        "properties": {
+          "achieved_security_bits": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 128,
+            "type": "integer"
+          },
+          "audit_bundle_digest": {
+            "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
+          },
+          "catalog_commitment": {
+            "$ref": "#/components/schemas/PrivacyExact12CatalogCommitmentV1"
+          },
+          "parameter_digest": {
+            "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
+          },
+          "protocol_id": {
+            "$ref": "#/components/schemas/PrivacyProtocolIdV1"
+          },
+          "reduction_digest": {
+            "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
+          },
+          "security_model": {
+            "$ref": "#/components/schemas/PrivacySecurityModelV1"
+          },
+          "target_security_bits": {
+            "format": "uint16",
+            "maximum": 128,
+            "minimum": 128,
+            "type": "integer"
+          },
+          "verifier_digest": {
+            "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
+          }
+        },
+        "required": [
+          "catalog_commitment",
+          "protocol_id",
+          "security_model",
+          "target_security_bits",
+          "achieved_security_bits",
+          "parameter_digest",
+          "verifier_digest",
+          "reduction_digest",
+          "audit_bundle_digest"
+        ],
+        "type": "object"
+      },
+      "PrivacySecurityModelV1": {
+        "additionalProperties": false,
+        "properties": {
+          "security_model": {
+            "enum": [
+              "pq-qrom",
+              "classical-rom"
+            ],
+            "type": "string"
+          },
+          "value": {
+            "type": "null"
+          }
+        },
+        "required": [
+          "security_model",
+          "value"
         ],
         "type": "object"
       },
@@ -29211,6 +29332,11 @@
             "description": "Canonical Norito native SCCP admission proof bytes.",
             "maxLength": 22369624
           },
+          "replay_witness_b64": {
+            "$ref": "#/components/schemas/SccpCanonicalBase64",
+            "description": "Canonical Norito sparse replay non-membership witness bytes.",
+            "maxLength": 21848
+          },
           "signature_b64": {
             "description": "Preparation carries no detached signature; canonical DTO JSON may encode the absent optional field as null.",
             "type": "null"
@@ -29223,7 +29349,8 @@
         "required": [
           "authority",
           "fee_payment",
-          "native_proof_b64"
+          "native_proof_b64",
+          "replay_witness_b64"
         ],
         "type": "object"
       },
@@ -29248,6 +29375,11 @@
             "description": "Canonical Norito native SCCP admission proof bytes.",
             "maxLength": 22369624
           },
+          "replay_witness_b64": {
+            "$ref": "#/components/schemas/SccpCanonicalBase64",
+            "description": "Canonical Norito sparse replay non-membership witness bytes.",
+            "maxLength": 21848
+          },
           "signature_b64": {
             "$ref": "#/components/schemas/SccpCanonicalBase64",
             "description": "Canonical algorithm-specific detached signature bytes for authority.",
@@ -29265,6 +29397,7 @@
           "signature_b64",
           "transaction_payload_b64",
           "native_proof_b64",
+          "replay_witness_b64",
           "creation_time_ms"
         ],
         "type": "object"
@@ -29425,14 +29558,9 @@
           "counterparty_chain": {
             "enum": [
               "ethereum-mainnet",
-              "ethereum-sepolia",
               "bsc-mainnet",
-              "bsc-testnet",
               "ton-mainnet",
-              "ton-testnet",
-              "tron-mainnet",
-              "tron-nile",
-              "tron-shasta"
+              "tron-mainnet"
             ],
             "type": "string"
           },
@@ -29711,22 +29839,6 @@
             "additionalProperties": false,
             "properties": {
               "deployment": {
-                "$ref": "#/components/schemas/SccpSolanaDestinationDeploymentV1"
-              },
-              "family": {
-                "const": "solana"
-              }
-            },
-            "required": [
-              "family",
-              "deployment"
-            ],
-            "type": "object"
-          },
-          {
-            "additionalProperties": false,
-            "properties": {
-              "deployment": {
                 "$ref": "#/components/schemas/SccpTonDestinationDeploymentV1"
               },
               "family": {
@@ -29796,7 +29908,6 @@
                 "enum": [
                   "taira_eth_xor",
                   "taira_bsc_xor",
-                  "taira_sol_xor",
                   "taira_ton_xor",
                   "taira_tron_xor"
                 ],
@@ -29820,15 +29931,9 @@
           "network": {
             "enum": [
               "ethereum_mainnet",
-              "ethereum_sepolia",
               "bsc_mainnet",
-              "bsc_testnet",
-              "solana_testnet",
               "ton_mainnet",
-              "ton_testnet",
-              "tron_mainnet",
-              "tron_nile",
-              "tron_shasta"
+              "tron_mainnet"
             ],
             "type": "string"
           },
@@ -30241,12 +30346,8 @@
               "network": {
                 "enum": [
                   "ethereum_mainnet",
-                  "ethereum_sepolia",
                   "bsc_mainnet",
-                  "bsc_testnet",
-                  "tron_mainnet",
-                  "tron_nile",
-                  "tron_shasta"
+                  "tron_mainnet"
                 ],
                 "type": "string"
               },
@@ -30568,7 +30669,6 @@
             "enum": [
               "ethereum_beacon_v1",
               "bsc_parlia_v1",
-              "solana_agave_v1",
               "ton_masterchain_v1",
               "tron_dpos_v1"
             ],
@@ -30628,9 +30728,6 @@
           },
           {
             "$ref": "#/components/schemas/SccpEvmAddressValueV1"
-          },
-          {
-            "$ref": "#/components/schemas/SccpSolanaPubkeyValueV1"
           },
           {
             "$ref": "#/components/schemas/SccpTonAccountValueV1"
@@ -31051,7 +31148,6 @@
             "enum": [
               1,
               2,
-              3,
               4,
               5
             ],
@@ -31060,15 +31156,9 @@
           "target_profile": {
             "enum": [
               "ethereum-mainnet",
-              "ethereum-sepolia",
               "bsc-mainnet",
-              "bsc-testnet",
-              "solana-testnet",
               "ton-mainnet",
-              "ton-testnet",
-              "tron-mainnet",
-              "tron-nile",
-              "tron-shasta"
+              "tron-mainnet"
             ],
             "type": "string"
           }
@@ -31701,157 +31791,6 @@
         "pattern": "^[A-Za-z0-9+/]{43}=$",
         "type": "string"
       },
-      "SccpSolanaDestinationDeploymentV1": {
-        "additionalProperties": false,
-        "properties": {
-          "max_wrapped_supply": {
-            "description": "Positive immutable wrapped-token supply cap in destination base units.",
-            "format": "uint128",
-            "minimum": 1,
-            "type": "integer"
-          },
-          "native_verifier_config_hash": {
-            "$ref": "#/components/schemas/SccpNonzeroUpperHex32"
-          },
-          "native_verifier_material_account": {
-            "$ref": "#/components/schemas/SccpNonzeroUpperHex32"
-          },
-          "native_verifier_program_code_hash": {
-            "$ref": "#/components/schemas/SccpNonzeroUpperHex32"
-          },
-          "native_verifier_program_data_address": {
-            "$ref": "#/components/schemas/SccpNonzeroUpperHex32"
-          },
-          "native_verifier_program_data_slot": {
-            "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "native_verifier_program_id": {
-            "$ref": "#/components/schemas/SccpNonzeroUpperHex32"
-          },
-          "outbound_proof_policy": {
-            "$ref": "#/components/schemas/SccpOutboundProofPolicyV1"
-          },
-          "route_program_code_hash": {
-            "$ref": "#/components/schemas/SccpNonzeroUpperHex32"
-          },
-          "route_program_data_address": {
-            "$ref": "#/components/schemas/SccpNonzeroUpperHex32"
-          },
-          "route_program_data_slot": {
-            "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "route_program_id": {
-            "$ref": "#/components/schemas/SccpNonzeroUpperHex32"
-          },
-          "route_state_account": {
-            "$ref": "#/components/schemas/SccpNonzeroUpperHex32"
-          },
-          "taira_to_token_multiplier": {
-            "enum": [
-              1
-            ],
-            "format": "uint64",
-            "type": "integer"
-          },
-          "token_mint_address": {
-            "$ref": "#/components/schemas/SccpNonzeroUpperHex32"
-          },
-          "verifier_key_hash": {
-            "$ref": "#/components/schemas/SccpNonzeroUpperHex32"
-          },
-          "verifying_key": {
-            "$ref": "#/components/schemas/SccpGroth16Bn254VerifyingKeyV1"
-          }
-        },
-        "required": [
-          "token_mint_address",
-          "route_program_id",
-          "route_program_data_address",
-          "route_program_data_slot",
-          "route_state_account",
-          "route_program_code_hash",
-          "native_verifier_program_id",
-          "native_verifier_program_data_address",
-          "native_verifier_program_data_slot",
-          "native_verifier_material_account",
-          "native_verifier_program_code_hash",
-          "native_verifier_config_hash",
-          "verifying_key",
-          "verifier_key_hash",
-          "outbound_proof_policy",
-          "max_wrapped_supply",
-          "taira_to_token_multiplier"
-        ],
-        "type": "object"
-      },
-      "SccpSolanaPubkeyValueV1": {
-        "additionalProperties": false,
-        "properties": {
-          "SolanaPubkey32": {
-            "additionalProperties": false,
-            "properties": {
-              "bytes": {
-                "maxLength": 66,
-                "minLength": 66,
-                "not": {
-                  "pattern": "^0x0{64}$"
-                },
-                "pattern": "^0x[0-9a-f]{64}$",
-                "type": "string"
-              }
-            },
-            "required": [
-              "bytes"
-            ],
-            "type": "object"
-          }
-        },
-        "required": [
-          "SolanaPubkey32"
-        ],
-        "type": "object"
-      },
-      "SccpSolanaSourceEmitterIdentityV1": {
-        "additionalProperties": false,
-        "properties": {
-          "program_code_hash": {
-            "$ref": "#/components/schemas/SccpNonzeroUpperHex32"
-          },
-          "program_data_address": {
-            "$ref": "#/components/schemas/SccpNonzeroUpperHex32"
-          },
-          "program_data_slot": {
-            "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "program_id": {
-            "$ref": "#/components/schemas/SccpNonzeroUpperHex32"
-          },
-          "route_config_hash": {
-            "$ref": "#/components/schemas/SccpNonzeroUpperHex32"
-          },
-          "state_account": {
-            "$ref": "#/components/schemas/SccpNonzeroUpperHex32"
-          }
-        },
-        "required": [
-          "program_id",
-          "program_data_address",
-          "program_data_slot",
-          "state_account",
-          "program_code_hash",
-          "route_config_hash"
-        ],
-        "type": "object"
-      },
       "SccpSoraFinalityAnchorV1": {
         "additionalProperties": false,
         "properties": {
@@ -32071,22 +32010,6 @@
               },
               "identity": {
                 "$ref": "#/components/schemas/SccpSourceEmitterIdentityV1"
-              }
-            },
-            "required": [
-              "emitter",
-              "identity"
-            ],
-            "type": "object"
-          },
-          {
-            "additionalProperties": false,
-            "properties": {
-              "emitter": {
-                "const": "solana"
-              },
-              "identity": {
-                "$ref": "#/components/schemas/SccpSolanaSourceEmitterIdentityV1"
               }
             },
             "required": [
@@ -32419,8 +32342,7 @@
             "properties": {
               "network": {
                 "enum": [
-                  "ton_mainnet",
-                  "ton_testnet"
+                  "ton_mainnet"
                 ],
                 "type": "string"
               },
@@ -32557,35 +32479,6 @@
           {
             "properties": {
               "dest_domain": {
-                "const": 3
-              },
-              "recipient": {
-                "$ref": "#/components/schemas/SccpSolanaPubkeyValueV1"
-              },
-              "route_id": {
-                "properties": {
-                  "CanonicalText": {
-                    "properties": {
-                      "value": {
-                        "const": "taira_sol_xor"
-                      }
-                    },
-                    "required": [
-                      "value"
-                    ],
-                    "type": "object"
-                  }
-                },
-                "required": [
-                  "CanonicalText"
-                ],
-                "type": "object"
-              }
-            }
-          },
-          {
-            "properties": {
-              "dest_domain": {
                 "const": 4
               },
               "recipient": {
@@ -32661,7 +32554,6 @@
             "enum": [
               1,
               2,
-              3,
               4,
               5
             ],
@@ -32678,9 +32570,6 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/SccpEvmAddressValueV1"
-              },
-              {
-                "$ref": "#/components/schemas/SccpSolanaPubkeyValueV1"
               },
               {
                 "$ref": "#/components/schemas/SccpTonAccountValueV1"
@@ -73259,7 +73148,7 @@
     },
     "/v1/privacy/capabilities": {
       "get": {
-        "description": "Return the canonical self-digesting Exact12 operation mapping, locally compiled profile evidence, governed activation state, explicit readiness and limitations, and singleton consensus policy from one authoritative committed state view.",
+        "description": "Return the canonical self-digesting Exact12 operation mapping, locally compiled profile evidence, governed activation and production-qualification evidence, evidence-derived readiness, and singleton consensus policy from one authoritative committed state view.",
         "parameters": [
           {
             "description": "Authorizing canonical account. Required with the signature/timestamp/nonce proof set; optional when X-Iroha-Witness identifies the subject account.",
@@ -75153,7 +75042,7 @@
         "operationId": "sccpSoraOutboundMaterial",
         "parameters": [
           {
-            "description": "Exact external SCCP source profile, for example solana-testnet.",
+            "description": "Exact external SCCP source profile, for example ethereum-mainnet.",
             "in": "path",
             "name": "source_profile",
             "required": true,

@@ -245,8 +245,8 @@ _TWO_STAGE_RELAY_RETRY_SOURCE_ITEM_SEALS = (
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "production_two_stage_relay_retry_trace_body", "fda81d366704ada4700101cb7ee870acfec2fabe141133ece61c5d9eb1d84ea9", "macro"),
     CrossToolSourceItemSeal("crates/iroha_sumeragi_core/src/verus_proofs.rs", "ProductionTwoStageRelayRetryTraceProjection", "d57f9345ce3300bdbf9676f2d2672c5119d4e75c5eb44b8724d3ae500d1c1ebe", "struct", (("verus", "!"),)),
     CrossToolSourceItemSeal("crates/iroha_p2p/src/network.rs", "inbound_source_credit_capacity", "f842d672d209cbcaefccb037b5699832b4775813eb02af0d8fa3c427ace221eb"),
-    CrossToolSourceItemSeal("crates/iroha_p2p/src/network.rs", "reply_route_source_capacity", "118a3c85c1e4faa0dac128e48981d346085cfb0b90110c0123414f8e8bb0a770", brace_context=(("impl", "<", "T", ":", "Pload", "+", "message", "::", "ClassifyTopic", ",", "E", ":", "Enc", "+", "Sync", ">", "NetworkBaseHandle", "<", "T", ",", "E", ">"),)),
-    CrossToolSourceItemSeal("crates/iroha_p2p/src/network.rs", "authenticated_source_credit_capacity", "2c9a309017b0f51e9e3e9a6e3604ce9819c9eb4fed1fb9f004eb653b7354dbaa", brace_context=(("impl", "<", "T", ":", "Pload", "+", "message", "::", "ClassifyTopic", ",", "E", ":", "Enc", "+", "Sync", ">", "NetworkBaseHandle", "<", "T", ",", "E", ">"),)),
+    CrossToolSourceItemSeal("crates/iroha_p2p/src/network.rs", "reply_route_source_capacity", "118a3c85c1e4faa0dac128e48981d346085cfb0b90110c0123414f8e8bb0a770", brace_context=(("impl", "<", "T", ":", "Pload", "+", "message", "::", "ClassifyTopic", "+", "Sync", ",", "E", ":", "Enc", "+", "Sync", ">", "NetworkBaseHandle", "<", "T", ",", "E", ">"),)),
+    CrossToolSourceItemSeal("crates/iroha_p2p/src/network.rs", "authenticated_source_credit_capacity", "2c9a309017b0f51e9e3e9a6e3604ce9819c9eb4fed1fb9f004eb653b7354dbaa", brace_context=(("impl", "<", "T", ":", "Pload", "+", "message", "::", "ClassifyTopic", "+", "Sync", ",", "E", ":", "Enc", "+", "Sync", ">", "NetworkBaseHandle", "<", "T", ",", "E", ">"),)),
     CrossToolSourceItemSeal("crates/irohad/src/main.rs", "SumeragiRelayCapacityGeometry", "fd24144fb9fd13a9964e0e74742da6afd2a2537c9447b5dcd756e8f0646288dd", "struct"),
     CrossToolSourceItemSeal("crates/irohad/src/main.rs", "checked", "437cc7139737ea555afc202dcd74399007ec6be43117bbce7dec68a6cc51f4bd", brace_context=(("impl", "SumeragiRelayCapacityGeometry"),)),
     CrossToolSourceItemSeal("crates/irohad/src/main.rs", "daemon_source_capacity_matches_two_upstream_lanes", "e076da72adb47662a2908743a343731b0668f8061eb4645365ab1cb40e9d0d9b", brace_context=(("impl", "SumeragiRelayCapacityGeometry"),)),
@@ -1126,11 +1126,11 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                     CrossToolLinkedConsumerContract(
                         source="crates/iroha_core/src/sumeragi/v2_effects.rs",
                         item="install_view",
-                        item_token_sha256="09d31e09f4aa305f555b38165e6a27646096c9e2f858c06d3e43191f8d5bbdc8",
+                        item_token_sha256="4394b964c82c9143a1e5c8056723a2775c7b33de457eb0f26ea790cd51cfc5ba",
                         required_expression="""
                             let stale_body_cleanup =
                                 self.plan_certified_view_body_cleanup(
-                                    tag, protected_body
+                                    tag, protected_body, highest_prepare_body
                                 )?;
                         """,
                         mutation_boundaries=(
@@ -3161,7 +3161,7 @@ _CHECKED_PRODUCTION_TOKEN_DEFINITION_SOURCE = (
     "crates/iroha_core/src/sumeragi/v2_core/refinement/first_release_witness.rs"
 )
 _CHECKED_PRODUCTION_TOKEN_CLOSURE_SHA256 = (
-    "a4bf41d3a4389122cad3e4aafa0c86b159ec5cc6ea245756d28ecca446d23819"
+    "09d72fdf8e47b84799a1621112ddc3dd77a9f44934ea6a053c9730fee9b1ee65"
 )
 _CHECKED_PRODUCTION_TOKEN_STRUCT_SHA256 = (
     "c79d22d356c0f53aceb7b771cb14660ea68ab6da856d46e186506bb5e570a9aa"
@@ -3253,7 +3253,7 @@ _CHECKED_PRODUCTION_COMPLETION_PRODUCT_RANK_SHA256 = (
     "5cec83a64f58fe1751a5f60a7b3a0ad5d80512adb16a00132fd8242457f77d8f"
 )
 _CHECKED_PRODUCTION_COMPLETION_PRODUCT_RANK_DESCENT_SHA256 = (
-    "c99a968bf360ff9d32fd9813addefeb8e10562acd341d24d7b9479ba057589f9"
+    "82e6313ddc4f3ac90075240a756d6a87223bc28011051c904fb8abf7bb091934"
 )
 _TOTAL_GATE_THEOREM_ITEM_SHA256 = {
     "ProductionDurableIntentTraceRefinesProgressWitness": "129a6981dfcf42f154616ba6569eea2b671902267b2dfbddf4ede6add37560d0",

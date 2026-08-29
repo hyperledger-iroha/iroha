@@ -163,3 +163,160 @@ def test_serviced_candidate_read_discriminator_fails_closed_without_crashing(
         and f"discriminator_counts={expected_counts}" in error
         for error in errors
     ), errors
+
+
+@pytest.mark.parametrize(
+    ("kind", "symbol", "old", "new"),
+    (
+        (
+            "operator",
+            "AsyncIngressSchedulerBarrierActive",
+            "  \\/ AsyncOrdinaryIngressProtectedRecordsAt(node) # {}",
+            "  \\/ FALSE",
+        ),
+        (
+            "operator",
+            "AsyncEarliestIngressSchedulerOrdinal",
+            "       ELSE AsyncOrdinaryIngressEarliestPhysicalRecord(\n"
+            "              node).schedulerOrdinal",
+            "       ELSE AsyncLeaderWireEarliestPhysicalIngressRecord(\n"
+            "              node).schedulerOrdinal",
+        ),
+        (
+            "operator",
+            "AsyncOlderRuntimeLifecyclePrecedesIngressScheduler",
+            "  /\\ AsyncSelectedRuntimeSourcePhysicalOrdinal(node)\n"
+            "       < AsyncEarliestIngressPhysicalOrdinal(node)",
+            "  /\\ TRUE",
+        ),
+        (
+            "operator",
+            "AsyncOlderLocalLifecyclePrecedesServeIngress",
+            "  /\\ LocalSourceLifecyclePhysicalOrdinal(\n"
+            "       node, SelectedLocalSource(node))\n"
+            "       < AsyncEarliestIngressPhysicalOrdinal(node)",
+            "  /\\ TRUE",
+        ),
+        (
+            "operator",
+            "AsyncCandidateLifecycleStateAfterServeIngressAdmission",
+            "     !.retransmitLifecycleOrdinal =",
+            "     !.timeoutLifecycleOrdinal =",
+        ),
+        (
+            "operator",
+            "AsyncSharedSchedulerOrdinalInjectionInvariant",
+            "  /\\ \\A admission \\in asyncServeIngressAdmissions:\n"
+            "       AsyncRetransmitLifecycleOwned(admission.node)\n"
+            "         => admission.schedulerOrdinal #\n"
+            "              AsyncRetransmitLifecycleOrdinal(admission.node)\n",
+            "",
+        ),
+        (
+            "theorem",
+            "SerializedLocalPrecedesServeIngressExactFrame",
+            "         /\\ LocalSourceLifecyclePhysicalOrdinal(\n"
+            "              node, SelectedLocalSource(node))\n"
+            "              < AsyncEarliestIngressPhysicalOrdinal(node)",
+            "         /\\ TRUE",
+        ),
+        (
+            "theorem",
+            "AsyncLaterServeTicketInterleavesOlderRuntimeEpisode",
+            "    /\\ AsyncSelectedRuntimeSourcePhysicalOrdinal(node)\n"
+            "         < AsyncEarliestIngressPhysicalOrdinal(node)",
+            "    /\\ TRUE",
+        ),
+        (
+            "theorem",
+            "AsyncLaterServeTicketInterleavesOlderLocalEpisode",
+            "    /\\ LocalSourceLifecyclePhysicalOrdinal(\n"
+            "         node, SelectedLocalSource(node))\n"
+            "         < AsyncEarliestIngressPhysicalOrdinal(node)",
+            "    /\\ TRUE",
+        ),
+    ),
+)
+def test_serve_scheduler_ordinal_release_contract_rejects_current_weakening(
+    tmp_path: Path,
+    kind: str,
+    symbol: str,
+    old: str,
+    new: str,
+) -> None:
+    module = load_checker()
+    repo_root, formal_dir = copy_serve_scheduler_ordinal_mutation_fixture(
+        tmp_path, module
+    )
+    path = formal_dir / "SumeragiV2AsyncNetwork.tla"
+    source = path.read_text(encoding="utf-8")
+    mutate = mutate_tla_operator if kind == "operator" else mutate_tla_theorem
+    path.write_text(mutate(source, symbol, old, new), encoding="utf-8")
+    module.SERVE_SCHEDULER_ORDINAL_RELEASE_SOURCE_SHA256[path.name] = (
+        hashlib.sha256(path.read_bytes()).hexdigest()
+    )
+
+    errors = module._serve_scheduler_ordinal_mutation_source_fidelity_errors(
+        formal_dir, repo_root
+    )
+
+    prefix = "theorem " if kind == "theorem" else ""
+    assert any(
+        f"{prefix}{symbol} must equal only" in error for error in errors
+    ), errors
+
+
+def _assert_commit_import_release_or_stale_artifact(
+    tmp_path: Path, artifact_name: str
+) -> None:
+    module = load_checker()
+    repo_root, formal_dir = copy_commit_import_provenance_mutation_fixture(
+        tmp_path, module
+    )
+    path = repo_root / artifact_name if "/" in artifact_name else formal_dir / artifact_name
+    release_mutations = {
+        "SumeragiV2AsyncNetwork.tla": (
+            "DirectCommitQcCandidateHasExactImportLineage",
+            "    /\\ item.envelope.qc.context = context\n",
+            "    /\\ TRUE\n",
+        ),
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs.tla": (
+            "IndexedChainSpecClosesHistoricalCertificateLocalImportCandidateEntry",
+            "  IndexedChainSpec\n"
+            "    => IndexedHistoricalCertificateLocalImportCandidateEntryProperty\n",
+            "  IndexedChainSpec\n    => TRUE\n",
+        ),
+    }
+    release_mutation = release_mutations.get(artifact_name)
+    if release_mutation is None:
+        path.write_text(
+            path.read_text(encoding="utf-8") + "\n\\* stale import provenance\n",
+            encoding="utf-8",
+        )
+    else:
+        symbol, old, new = release_mutation
+        source = path.read_text(encoding="utf-8")
+        path.write_text(
+            mutate_tla_theorem(source, symbol, old, new), encoding="utf-8"
+        )
+        module.COMMIT_IMPORT_PROVENANCE_RELEASE_SOURCE_SHA256[path.name] = (
+            hashlib.sha256(path.read_bytes()).hexdigest()
+        )
+
+    errors = module._commit_import_provenance_mutation_source_fidelity_errors(
+        formal_dir, repo_root
+    )
+    if release_mutation is None:
+        assert any(
+            str(path) in error
+            and (
+                "must match exact reviewed SHA-256" in error
+                or "must match frozen SHA-256" in error
+            )
+            for error in errors
+        ), errors
+    else:
+        assert any(
+            f"Commit-import release theorem {symbol} must state only" in error
+            for error in errors
+        ), errors

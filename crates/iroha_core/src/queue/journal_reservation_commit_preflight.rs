@@ -24,6 +24,22 @@ impl QueuePlanJournal {
         phases: &[LaneQueueReservationRecoveryPhaseV1],
         finalized_keys: &[LaneQueueReservationKeyV1],
     ) -> io::Result<QueuePlanStartupReplayReceiptV1> {
+        self.observe_startup_replay_receipt_with_terminal_cuts(phases, finalized_keys, &[])
+    }
+    /// Validate one immutable V1 image across reservation owners, finalized
+    /// absence, and ordinary-FIFO replica owners.
+    ///
+    /// Unlike `finalized_keys`, every `replica_key` must still be a live exact
+    /// global-admission record. This is the read-only journal half of replica
+    /// Queue disposition authorization: a stale in-memory FIFO copy cannot be
+    /// treated as durable after its QueuePlan record was tombstoned, replaced,
+    /// or lost.
+    pub(super) fn observe_startup_replay_receipt_with_terminal_cuts(
+        &self,
+        phases: &[LaneQueueReservationRecoveryPhaseV1],
+        finalized_keys: &[LaneQueueReservationKeyV1],
+        replica_keys: &[LaneQueueReservationKeyV1],
+    ) -> io::Result<QueuePlanStartupReplayReceiptV1> {
         self.ensure_healthy()?;
         #[cfg(test)]
         if self.take_fault(QueuePlanJournalTestFault::StartupReplayReceiptObserve) {
@@ -32,9 +48,13 @@ impl QueuePlanJournal {
                 "injected queue-plan startup replay receipt observation failure",
             ));
         }
-        if phases.len() > self.limits.max_live_records {
+        if phases
+            .len()
+            .checked_add(replica_keys.len())
+            .is_none_or(|count| count > self.limits.max_live_records)
+        {
             return Err(invalid_data(
-                "queue-plan startup phase coverage exceeds the configured owner bound",
+                "queue-plan startup live-owner coverage exceeds the configured owner bound",
             ));
         }
         let mut owner_hashes = BTreeSet::new();
@@ -86,6 +106,19 @@ impl QueuePlanJournal {
                 ));
             }
         }
+        for key in replica_keys {
+            key.validate().map_err(invalid_data)?;
+            if !owner_hashes.insert(key.entrypoint_hash) {
+                return Err(invalid_data(
+                    "ordinary replica preflight contains a duplicate owner",
+                ));
+            }
+            if !entrypoints.insert(key.entrypoint_hash.clone()) {
+                return Err(invalid_data(
+                    "ordinary replica preflight contains a duplicate entrypoint",
+                ));
+            }
+        }
         let mut replay = self.prepare_replay_with_removed_entrypoints(Some(&entrypoints))?;
         replay.verify_snapshot_content()?;
         for phase in phases {
@@ -123,6 +156,17 @@ impl QueuePlanJournal {
             if let Some(removed) = replay.removed_positions.get(&key.entrypoint_hash) {
                 removed.validate_global_admission_for_reservation_commit(key)?;
             }
+        }
+        for key in replica_keys {
+            let Some(live) = replay.live_positions.get(&key.entrypoint_hash) else {
+                if let Some(removed) = replay.removed_positions.get(&key.entrypoint_hash) {
+                    removed.validate_global_admission_for_reservation_commit(key)?;
+                }
+                return Err(invalid_data(
+                    "ordinary replica lacks its exact live V1 QueuePlan owner",
+                ));
+            };
+            live.validate_global_admission_for_reservation_commit(key)?;
         }
         let live_claims =
             replay

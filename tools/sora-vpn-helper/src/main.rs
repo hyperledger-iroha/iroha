@@ -11,8 +11,8 @@ use iroha_crypto::{
         },
         constant_rate::{
             CONSTANT_RATE_CELL_BYTES, CONSTANT_RATE_MAX_PAYLOAD_BYTES,
-            CellClass as ConstantRateCellClass, FixedRateScheduler, MuxChannel, MuxFlags, MuxFrame,
-            MuxLifecycle, codec as constant_rate_codec,
+            CellClass as ConstantRateCellClass, ConstantRateReceivePacer, FixedRateScheduler,
+            MuxChannel, MuxFlags, MuxFrame, MuxLifecycle, codec as constant_rate_codec,
         },
         handshake::{
             DEFAULT_CLIENT_CAPABILITIES, DEFAULT_RELAY_CAPABILITIES, RelayAuthenticationVerifierV1,
@@ -4907,15 +4907,22 @@ async fn strict_vpn_producer(
             buffer[..read].to_vec(),
         )
         .map_err(|error| error.to_string())?;
-        outbound
-            .try_send(frame)
-            .map_err(|_| "strict VPN producer queue is full or closed".to_owned())?;
+        try_enqueue_strict_vpn_frame(&outbound, frame)?;
         first = false;
         if read == 0 {
             let _ = connection.closed().await;
             return Ok(());
         }
     }
+}
+
+fn try_enqueue_strict_vpn_frame(
+    outbound: &mpsc::Sender<MuxFrame>,
+    frame: MuxFrame,
+) -> Result<(), String> {
+    outbound
+        .try_send(frame)
+        .map_err(|_| "strict VPN producer queue is full or closed".to_owned())
 }
 
 async fn strict_vpn_sender(
@@ -4964,6 +4971,9 @@ async fn strict_vpn_receiver(
 ) -> Result<(), String> {
     let mut lifecycle = MuxLifecycle::new(1);
     let receive_deadline = strict_constant_rate_receive_deadline(STRICT_CONSTANT_RATE_TICK);
+    let mut pacing = ConstantRateReceivePacer::new(STRICT_CONSTANT_RATE_TICK)
+        .expect("the strict VPN tick is non-zero");
+    let mut first_cell_at = None;
     loop {
         let datagram = strict_vpn_receive_with_deadline(receive_deadline, async {
             tokio::select! {
@@ -4986,6 +4996,13 @@ async fn strict_vpn_receiver(
             }
         })
         .await?;
+        let arrived_at = Instant::now();
+        let first_cell_at = *first_cell_at.get_or_insert(arrived_at);
+        if !pacing.admit(arrived_at.saturating_duration_since(first_cell_at)) {
+            return Err(
+                "relay sent a cell ahead of the negotiated strict VPN pacing envelope".to_owned(),
+            );
+        }
         let frame = opener.open(&datagram).map_err(|error| error.to_string())?;
         lifecycle
             .accept(&frame)
@@ -11241,6 +11258,31 @@ mod tests {
         assert_eq!(
             error,
             format!("strict VPN receiver observed no cell within {deadline:?}")
+        );
+    }
+
+    #[test]
+    fn dormant_strict_receiver_rejects_a_burst_ahead_of_its_pacing_envelope() {
+        let mut pacing = ConstantRateReceivePacer::new(STRICT_CONSTANT_RATE_TICK)
+            .expect("strict tick is non-zero");
+        assert!(pacing.admit(Duration::ZERO));
+        assert!(pacing.admit(Duration::ZERO));
+        assert!(pacing.admit(Duration::ZERO));
+        assert!(
+            !pacing.admit(Duration::ZERO),
+            "a fourth immediate cell must exceed the two-tick jitter allowance"
+        );
+    }
+
+    #[test]
+    fn dormant_strict_producer_queue_fails_closed_at_capacity() {
+        let (outbound, _inbound) = mpsc::channel(1);
+        try_enqueue_strict_vpn_frame(&outbound, MuxFrame::cover())
+            .expect("first frame fits the bounded producer queue");
+        assert_eq!(
+            try_enqueue_strict_vpn_frame(&outbound, MuxFrame::cover())
+                .expect_err("a full producer queue must reject instead of waiting"),
+            "strict VPN producer queue is full or closed"
         );
     }
 

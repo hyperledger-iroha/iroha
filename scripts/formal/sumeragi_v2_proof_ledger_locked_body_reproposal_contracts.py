@@ -1154,17 +1154,32 @@ if loaded.tag() != current.tag()
     require_sequence(
         "schedule_local_proposal",
         """
+let current_owner = proposal_state.reconcile(LocalProposalOwner::from(current));
+let can_admit_local_proposal = executor.can_admit_local_proposal();
+let can_schedule_local_proposal = executor.can_schedule_local_proposal()?;
 let current_recovery_plan = locked_body_recovery_plan(
     current,
     local_validator,
     proposal_state.attempted,
-    executor.can_schedule_local_proposal()?,
+    can_schedule_local_proposal,
 );
 if !current_recovery_plan.may_repropose {
+    if locked_body_reproposal_is_capacity_blocked(
+        current_recovery_plan,
+        current,
+        local_validator,
+        proposal_state.attempted,
+        can_admit_local_proposal,
+    ) {
+        services
+            .rearm_loaded_candidate_delivery(current.tag(), loaded_round, loaded_subject)
+            .map_err(V2RunnerError::Service)?;
+        return Ok(());
+    }
     continue;
 }
 """,
-        "loaded locked-body reproposal must recheck the current leader, owner, and capacity gates",
+        "loaded locked-body reproposal must recheck the current leader, owner, and capacity gates and retain a saturated exact body for later delivery",
     )
     require_sequence(
         "schedule_local_proposal",
@@ -1421,7 +1436,7 @@ _LOCKED_BODY_REPROPOSAL_RUST_ITEM_SHA256 = {
     "proposal_is_safe_for_durable_lock": "612b97156d1c4a80df60024efa73404adc5df4265464b116be5c8b11b9247619",
     "safe_to_prepare": "9a6ac51a6cfcd6ffb4a7327372330e5754c5451fbd0a2a2cfb3218a42475c3df",
     "wal_apply": "ace7adf6ef605c6a1e37fb087522cc91e8bb66b55b62f45a22a44b101571c3f8",
-    "wal_apply_in_place": "7473b0680ec743e30070bc5dcb5ca9d1c7934199852c861fb5e0e9796e7ab709",
+    "wal_apply_in_place": "54961435ad0487b9c7d320ba4910351f8aacb9fc2bd14f9ec8df94d4dfb4feac",
     "local_proposal_directive": "ae8489fea82bd72963f4343745cd838bdc30be67e8f95e0a5e4c1b76a003796e",
     "local_proposal_directive_for_test": "9bb8bae3eeab780523915b4a196526ae4c45cba8f27336c093bbaa5420ae1709",
     "recovered_local_proposal_attempt_from_durable_round": "c7b029d9129f9dd338b0eac4bb9467b4424961a9dc925e9b77ef1e62fee1af5a",
@@ -1433,11 +1448,11 @@ _LOCKED_BODY_REPROPOSAL_RUST_ITEM_SHA256 = {
     "initialize_recovered_local_proposal": "8295ba9249430d0f8f6c3ecc65b11b48873adc3b9f3408c313f1425f2a68ff01",
     "prepared_local_proposal_exactly_matches": "666d62c1d4104e6f0e07548434bd2d789514d23531e598032b743ed66e2afc5a",
     "activate_with_prepared_local_proposal": "dbfce16c82f866d3f833f0d04c490851d72ce48fad28e178e16ef059355ddadc",
-    "run_non_pending_lifecycle_loop": "fe38b2b2ab597569383e9b693deabb75346eee956713ec26e3c5174eca38f767",
-    "run_lifecycle_active_height": "4d1c7cb3ef26735bfefbeef2d8b44da64d52965418d6d876f8f404174ffa0acb",
+    "run_non_pending_lifecycle_loop": "7cfd09f0dfb3f531296e49f8d26795a9132c89c7561422aaa2bee52a75972fce",
+    "run_lifecycle_active_height": "e1ff5a7029427519aeedb89a95a6f42186de6efcdf73b2dad72f0b5552018251",
     "recovered_lifecycle_proposal_attempt_suppresses_same_view_after_lock_upgrade": "e82974c532219438b4b7af86dbd17c2c3ffeea7631b591b28708c5c3c66da452",
     "prepared_local_proposal_state_is_affine_and_context_directive_bound": "e2e8af92151f3b187cdb8eca6f40bb67a5472060ed6fdc79b5fea0127d02c3b3",
-    "schedule_local_proposal": "f83b871c9f775d84674d6b536f7ff41396a563583bbd1906bcb33b8446c21c43",
+    "schedule_local_proposal": "28f25bf4b1649093de81e51070a9a21ceb1ee8d9398a7dfc835f7c2b168b0d67",
     "locked_body_recovery_plan": "9f3f04e35b943a2bc09756833f08a782c050cccdd6c59aa2997eb1e9f0c1cf7b",
     "local_consensus_duties": "32480f07ba6f9eed6bbdfad70fc53c07e9e6d53c79cf7f0a80ff68ced7621c8e",
     "locked_body_recovery_is_independent_of_reproposal_gates": "e25524bcbcb9fba0308bdec85d063850b46285a00445ce49cedcca399a0ec0ec",

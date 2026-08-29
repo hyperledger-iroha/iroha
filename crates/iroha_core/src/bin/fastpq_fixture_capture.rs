@@ -103,7 +103,7 @@ fn capture_transfer_batch(
         return Err("execution capture produced an unexpected transcript set".into());
     }
     let batch = fastpq::batch_from_transcript_bundle(
-        "fastpq-lane-balanced",
+        fastpq::FASTPQ_CANONICAL_PARAMETER_SET,
         public_inputs,
         entry_hash,
         &transcripts,
@@ -166,7 +166,7 @@ fn capture_opaque_effect_batch(
         .as_bytes()
         .to_vec();
     transaction.apply();
-    let mut batch = TransitionBatch::new("fastpq-lane-balanced", public_inputs);
+    let mut batch = TransitionBatch::new(fastpq::FASTPQ_CANONICAL_PARAMETER_SET, public_inputs);
     batch.push(StateTransition::new(
         b"axt/pkdeploy/proof-budget/opaque-effect".to_vec(),
         old_value,

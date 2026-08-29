@@ -64,6 +64,12 @@ pub enum Error {
         /// Actual number advertised by the proof.
         actual: usize,
     },
+    /// A proof-carried AIR composition challenge differs from transcript replay.
+    #[error("AIR challenge mismatch at index {index}")]
+    AirChallengeMismatch {
+        /// Index of the mismatched AIR composition challenge.
+        index: usize,
+    },
     /// AIR row or composition opening did not match the sampled statement.
     #[error("AIR opening mismatch at position {index}")]
     AirOpeningMismatch {
@@ -89,12 +95,6 @@ pub enum Error {
         expected: usize,
         /// Actual number advertised by the proof.
         actual: usize,
-    },
-    /// Specific FRI layer root mismatch.
-    #[error("FRI layer mismatch at round {round}")]
-    FriLayerMismatch {
-        /// Round exhibiting the mismatch.
-        round: usize,
     },
     /// FRI challenge vector length mismatch.
     #[error("FRI challenge length mismatch: expected {expected}, got {actual}")]
@@ -224,7 +224,7 @@ pub enum Error {
     #[error("trace column `{0}` missing from layout")]
     MissingColumn(String),
     /// Unsupported FRI arity advertised by the parameter set.
-    #[error("unsupported FRI arity {0}; expected 8")]
+    #[error("unsupported FRI arity {0}; first-release FASTPQ requires binary arity 2")]
     FriArity(u32),
     /// A FRI layer cannot be partitioned into complete multiplicative cosets.
     #[error("FRI layer length {length} is not compatible with effective arity {arity}")]

@@ -453,6 +453,20 @@ impl KuraSeed {
         let transactions = take_required(&mut map, "transactions")?;
         let commit_topology = take_topology_cell(&mut map, "commit_topology")?;
         let prev_commit_topology = take_topology_cell(&mut map, "prev_commit_topology")?;
+        if let Some(qualification) = world.privacy_exact12_qualification.view().get() {
+            crate::privacy_state::validate_privacy_exact12_qualification_registration_v1(
+                qualification,
+                &chain_id,
+                network_id,
+                committed_height,
+                &world.privacy_activations.view(),
+                commit_topology.view().get(),
+            )
+            .map_err(|message| json::Error::InvalidField {
+                field: "state.world.privacy_exact12_qualification".to_owned(),
+                message,
+            })?;
+        }
         let snapshot_v2_bootstrap_candidate: Option<SnapshotV2BootstrapRecord> =
             take_optional(&mut map, "sumeragi_v2_bootstrap")?;
         reject_unknown(&map, "state")?;
@@ -1389,31 +1403,28 @@ pub(super) fn validate_ram_lfe_program_policies(
     }
     Ok(())
 }
-fn validate_sccp_inbound_messages(
-    messages: &Storage<SccpInboundMessageKeyV1, SccpInboundMessageRecordV1>,
+fn validate_sccp_replay_forests(
+    forests: &Storage<SccpReplayAccumulatorIdV1, SccpReplayForestV1>,
 ) -> Result<(), json::Error> {
-    for (key, record) in messages.view().iter() {
-        if !key.is_well_formed() {
+    for (id, forest) in forests.view().iter() {
+        if id.route_key.validate().is_err()
+            || !matches!(
+                id.boundary,
+                iroha_data_model::bridge::SccpReplayBoundaryV1::SoraOutboundLock
+                    | iroha_data_model::bridge::SccpReplayBoundaryV1::SoraInboundRelease
+            )
+            || forest.validate().is_err()
+            || forest.leaf_count == 0
+        {
             return Err(json::Error::InvalidField {
-                field: "world.sccp_inbound_messages".to_owned(),
-                message:
-                    "replay key is not an exact external-to-SORA lane with a nonzero message id"
-                        .to_owned(),
-            });
-        }
-        if !record.is_well_formed_for_lane(key.lane) {
-            return Err(json::Error::InvalidField {
-                field: "world.sccp_inbound_messages".to_owned(),
-                message: format!(
-                    "replay record for {} -> {} contains invalid evidence or a mismatched native backend",
-                    key.lane.source.profile_key(),
-                    key.lane.target.profile_key()
-                ),
+                field: "world.sccp_replay_forests".to_owned(),
+                message: "replay forest must use a canonical SORA boundary, valid route key, nonempty root set, and checked monotonic counters".to_owned(),
             });
         }
     }
     Ok(())
 }
+
 fn validate_sccp_outbound_pending_messages(
     messages: &Storage<SccpOutboundMessageKeyV1, SccpOutboundPendingMessageRecordV1>,
 ) -> Result<(), json::Error> {
@@ -1451,59 +1462,24 @@ fn validate_sccp_outbound_pending_usage(
     }
     Ok(())
 }
-fn validate_sccp_outbound_proofs(
-    proofs: &Storage<SccpOutboundMessageKeyV1, SccpOutboundProofRecordV1>,
-    locator: &Storage<[u8; 32], SccpOutboundMessageKeyV1>,
-) -> Result<(), json::Error> {
-    let locator = locator.view();
-    for (key, proof) in proofs.view().iter() {
-        if !proof.is_well_formed_for_key(key) {
-            return Err(json::Error::InvalidField {
-                field: "world.sccp_outbound_proofs".to_owned(),
-                message: "outbound proof replay entry must use one exact outbound lane/message key, ordered nonzero heights, and six distinct nonzero hash roles".to_owned(),
-            });
-        }
-        if locator.get(&key.message_id) != Some(key) {
-            return Err(json::Error::InvalidField {
-                field: "world.sccp_outbound_proofs".to_owned(),
-                message: "outbound proof replay key is inconsistent with the global outbound message locator".to_owned(),
-            });
-        }
-    }
-    Ok(())
-}
 fn validate_sccp_outbound_indexes(
     pending: &Storage<SccpOutboundMessageKeyV1, SccpOutboundPendingMessageRecordV1>,
-    terminal: &Storage<SccpOutboundMessageKeyV1, SccpOutboundProofRecordV1>,
     locator: &Storage<[u8; 32], SccpOutboundMessageKeyV1>,
     ordered: &Storage<SccpOutboundMessageIndexKeyV1, ()>,
 ) -> Result<(), json::Error> {
     let pending = pending.view();
-    let terminal = terminal.view();
     let locator = locator.view();
     let ordered = ordered.view();
-    let union_len = pending
-        .iter()
-        .count()
-        .checked_add(terminal.iter().count())
-        .ok_or_else(|| json::Error::InvalidField {
-            field: "world.sccp_outbound_message_index".to_owned(),
-            message: "outbound replay union cardinality overflows".to_owned(),
-        })?;
-    if union_len != locator.iter().count() || union_len != ordered.iter().count() {
+    let pending_len = pending.iter().count();
+    if pending_len != locator.iter().count() || pending_len != ordered.iter().count() {
         return Err(json::Error::InvalidField {
             field: "world.sccp_outbound_message_index".to_owned(),
-            message: "pending/terminal outbound replay union, global locator, and ordered index cardinalities differ".to_owned(),
+            message:
+                "pending outbound registry, global locator, and ordered index cardinalities differ"
+                    .to_owned(),
         });
     }
     for (key, record) in pending.iter() {
-        if terminal.get(key).is_some() {
-            return Err(json::Error::InvalidField {
-                field: "world.sccp_outbound_proofs".to_owned(),
-                message: "one outbound replay key appears in both pending and terminal state"
-                    .to_owned(),
-            });
-        }
         if locator.get(&key.message_id) != Some(key) {
             return Err(json::Error::InvalidField {
                 field: "world.sccp_outbound_message_locator".to_owned(),
@@ -1525,38 +1501,11 @@ fn validate_sccp_outbound_indexes(
             });
         }
     }
-    for (key, record) in terminal.iter() {
-        if locator.get(&key.message_id) != Some(key) {
-            return Err(json::Error::InvalidField {
-                field: "world.sccp_outbound_message_locator".to_owned(),
-                message:
-                    "global message-id locator is missing or aliases another terminal replay key"
-                        .to_owned(),
-            });
-        }
-        let index_key =
-            SccpOutboundMessageIndexKeyV1::from_terminal(*key, record).ok_or_else(|| {
-                json::Error::InvalidField {
-                    field: "world.sccp_outbound_message_index".to_owned(),
-                    message: "terminal outbound entry cannot form a valid ordered locator"
-                        .to_owned(),
-                }
-            })?;
-        if ordered.get(&index_key).is_none() {
-            return Err(json::Error::InvalidField {
-                field: "world.sccp_outbound_message_index".to_owned(),
-                message: "ordered terminal outbound locator is missing".to_owned(),
-            });
-        }
-    }
     for (message_id, key) in locator.iter() {
-        let present =
-            usize::from(pending.get(key).is_some()) + usize::from(terminal.get(key).is_some());
-        if *message_id != key.message_id || present != 1 {
+        if *message_id != key.message_id || pending.get(key).is_none() {
             return Err(json::Error::InvalidField {
                 field: "world.sccp_outbound_message_locator".to_owned(),
-                message: "global locator must name exactly one pending or terminal replay entry"
-                    .to_owned(),
+                message: "global locator must name exactly one pending outbound entry".to_owned(),
             });
         }
     }
@@ -1600,11 +1549,7 @@ fn validate_sccp_outbound_indexes(
         let pending_index = pending
             .get(&key)
             .and_then(|record| SccpOutboundMessageIndexKeyV1::new(key, record));
-        let terminal_index = terminal
-            .get(&key)
-            .and_then(|record| SccpOutboundMessageIndexKeyV1::from_terminal(key, record));
-        if !matches!((pending_index, terminal_index), (Some(actual), None) | (None, Some(actual)) if actual == *index_key)
-        {
+        if pending_index != Some(*index_key) {
             return Err(json::Error::InvalidField {
                 field: "world.sccp_outbound_message_index".to_owned(),
                 message: "ordered locator height, commitment index, or replay key is inconsistent"

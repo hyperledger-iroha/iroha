@@ -13,18 +13,11 @@ enum class SccpNetworkV1(
     val domainId: Int,
     val production: Boolean,
 ) {
-    // Tag 0 is permanently reserved for the removed pre-release SORA profile.
-    SORA_TAIRA("sora-taira", 1, 0, true),
-    ETHEREUM_MAINNET("ethereum-mainnet", 2, 1, true),
-    ETHEREUM_SEPOLIA("ethereum-sepolia", 3, 1, false),
-    BSC_MAINNET("bsc-mainnet", 4, 2, true),
-    BSC_TESTNET("bsc-testnet", 5, 2, false),
-    // Tags 6 through 9 are permanently reserved for retired prerelease profiles.
-    TRON_MAINNET("tron-mainnet", 10, 5, true),
-    TRON_NILE("tron-nile", 11, 5, false),
-    TRON_SHASTA("tron-shasta", 12, 5, false),
-    TON_MAINNET("ton-mainnet", 14, 4, true),
-    TON_TESTNET("ton-testnet", 15, 4, false);
+    SORA_TAIRA("sora-taira", 0x40, 0, true),
+    ETHEREUM_MAINNET("ethereum-mainnet", 0x41, 1, true),
+    BSC_MAINNET("bsc-mainnet", 0x42, 2, true),
+    TRON_MAINNET("tron-mainnet", 0x43, 3, true),
+    TON_MAINNET("ton-mainnet", 0x44, 4, true);
 
     val isSora: Boolean get() = this == SORA_TAIRA
     val isExternal: Boolean get() = !isSora
@@ -91,7 +84,7 @@ class SccpOutboundMessageContextV1(
 
 /** The sole stable hub-commitment kind shipped in SCCP V1. */
 enum class SccpHubMessageKindV1(val tag: Int) {
-    TRANSFER(5);
+    TRANSFER(0);
 
     companion object {
         @JvmStatic fun fromTag(tag: Int): SccpHubMessageKindV1? =
@@ -111,7 +104,7 @@ sealed class SccpPayloadV1 protected constructor(val kind: SccpHubMessageKindV1)
     }.toByteArray()
 
     private companion object {
-        const val TRANSFER_DISCRIMINANT = 2
+        const val TRANSFER_DISCRIMINANT = 0
     }
 }
 
@@ -246,24 +239,13 @@ object SccpV1 {
                 SccpNetworkV1.SORA_TAIRA ->
                     out.write(hex("fc56984b2be7431d840e21514d1883f0"))
                 SccpNetworkV1.ETHEREUM_MAINNET -> writeUnsignedLe(out, BigInteger.ONE, 8)
-                SccpNetworkV1.ETHEREUM_SEPOLIA ->
-                    writeUnsignedLe(out, BigInteger.valueOf(11_155_111L), 8)
                 SccpNetworkV1.BSC_MAINNET -> writeUnsignedLe(out, BigInteger.valueOf(56), 8)
-                SccpNetworkV1.BSC_TESTNET -> writeUnsignedLe(out, BigInteger.valueOf(97), 8)
                 SccpNetworkV1.TRON_MAINNET -> writeU32Bits(out, 0x2b6653dcL)
-                SccpNetworkV1.TRON_NILE -> writeU32Bits(out, 0xcd8690dcL)
-                SccpNetworkV1.TRON_SHASTA -> writeU32Bits(out, 0x94a9059eL)
                 SccpNetworkV1.TON_MAINNET -> writeTonNetwork(
                     out,
                     -239,
                     "17a3a92992aabea785a7a090985a265cd31f323d849da51239737e321fb05569",
                     "5e994fcf4d425c0a6ce6a792594b7173205f740a39cd56f537defd28b48a0f6e",
-                )
-                SccpNetworkV1.TON_TESTNET -> writeTonNetwork(
-                    out,
-                    -3,
-                    "823f81f306ff02694f935cf5021548e3ce2b86b529812af6a12148879e95a128",
-                    "67e20ac184b9e039a62667acc3f9c00f90f359a76738233379efa47604980ce8",
                 )
             }
         }.toByteArray()
@@ -301,7 +283,7 @@ object SccpV1 {
     /** Decode exactly one canonical transfer payload and reject trailing or retired variants. */
     @JvmStatic fun decodeCanonicalPayload(bytes: ByteArray): SccpTransferPayloadV1 {
         val cursor = Cursor(bytes)
-        require(cursor.u8() == 2) { "unsupported or retired SCCP payload discriminant" }
+        require(cursor.u8() == 0) { "unsupported or retired SCCP payload discriminant" }
         require(cursor.u8() == 1) { "unsupported SCCP transfer version" }
         val source = cursor.u32Domain("source")
         val destination = cursor.u32Domain("destination")
@@ -485,16 +467,16 @@ private class Cursor(private val input: ByteArray) {
 }
 
 private fun requireDomain(value: Int, field: String) {
-    require(value == 0 || value == 1 || value == 2 || value == 4 || value == 5) {
+    require(value in 0..4) {
         "$field must be a supported SCCP domain"
     }
 }
 
 private fun accountCodec(domain: Int): Int = when (domain) {
-    0 -> 1
-    1, 2 -> 2
-    4 -> 7
-    5 -> 5
+    0 -> 0
+    1, 2 -> 1
+    3 -> 2
+    4 -> 3
     else -> throw IllegalArgumentException("unsupported SCCP domain")
 }
 
@@ -520,11 +502,11 @@ private fun requireUnsigned(value: BigInteger, bits: Int, field: String): BigInt
 
 private fun requireCodecValue(codec: Int, value: ByteArray, field: String): ByteArray {
     val valid = when (codec) {
-        1 -> isCanonicalText(value, field)
-        2 -> value.size == 20 && value.any { it.toInt() != 0 }
-        5 -> value.size == 21 && (value[0].toInt() and 0xff) == 0x41 &&
+        0 -> isCanonicalText(value, field)
+        1 -> value.size == 20 && value.any { it.toInt() != 0 }
+        2 -> value.size == 21 && (value[0].toInt() and 0xff) == 0x41 &&
             value.copyOfRange(1, 21).any { it.toInt() != 0 }
-        7 -> value.size == 36 && value.copyOfRange(0, 4).all { it.toInt() == 0 } &&
+        3 -> value.size == 36 && value.copyOfRange(0, 4).all { it.toInt() == 0 } &&
             value.copyOfRange(4, 36).any { it.toInt() != 0 }
         else -> false
     }

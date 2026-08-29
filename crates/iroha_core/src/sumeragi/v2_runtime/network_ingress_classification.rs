@@ -64,6 +64,53 @@ fn wire_payload_matches_current_strict_timeout_recovery_round(
     };
     round.context_id == context.id() && round.height == tag.height() && round.view == tag.view()
 }
+/// Whether one authenticated Progress payload can make a retained future
+/// PrepareQC runnable or terminally supersede it.
+///
+/// This predicate is deliberately separate from the strict current-round
+/// timeout-recovery cut above. Adjacent TimeoutVotes belong to the reducer's
+/// bounded catch-up window, an at-or-ahead TC installs a newer view, and any
+/// CommitQC for this exact height is already a terminal decision. Full
+/// certificate and signature validation remains downstream in the adapter and
+/// reducer.
+fn wire_payload_advances_or_supersedes_future_prepare_qc_fifo_block(
+    payload: &wire::ConsensusMessageV2Payload,
+    context: &wire::HeightContext,
+    tag: EventTag,
+) -> bool {
+    let round = match payload {
+        wire::ConsensusMessageV2Payload::TimeoutVote(vote)
+            if timeout_vote_view_is_admissible(tag.view(), vote.round.view) =>
+        {
+            vote.round
+        }
+        wire::ConsensusMessageV2Payload::TimeoutCertificate(certificate)
+            if certificate.round.view >= tag.view() =>
+        {
+            certificate.round
+        }
+        wire::ConsensusMessageV2Payload::QuorumCertificate(certificate)
+            if certificate.phase == wire::GlobalPhase::Commit =>
+        {
+            certificate.round
+        }
+        wire::ConsensusMessageV2Payload::Proposal(_)
+        | wire::ConsensusMessageV2Payload::Vote(_)
+        | wire::ConsensusMessageV2Payload::TimeoutVote(_)
+        | wire::ConsensusMessageV2Payload::QuorumCertificate(_)
+        | wire::ConsensusMessageV2Payload::TimeoutCertificate(_)
+        | wire::ConsensusMessageV2Payload::PayloadManifest(_)
+        | wire::ConsensusMessageV2Payload::PayloadChunk(_)
+        | wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)
+        | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
+        | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
+        | wire::ConsensusMessageV2Payload::CommitCertificateResponse(_)
+        | wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => return false,
+    };
+    round.context_id == context.id()
+        && round.height == context.height
+        && round.height == tag.height()
+}
 fn network_command_class(payload: &wire::ConsensusMessageV2Payload) -> Option<CommandClass> {
     match payload {
         wire::ConsensusMessageV2Payload::QuorumCertificate(_)

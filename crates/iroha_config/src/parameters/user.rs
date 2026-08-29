@@ -6782,7 +6782,7 @@ impl SoranetHandshake {
             kem_id: resolved_kem_id,
             sig_id: resolved_sig_id,
             resume_hash: resume_hash.map(|value| value.map(Vec::<u8>::from)),
-            pow: pow.parse(),
+            pow: pow.parse(emitter),
         }
     }
 }
@@ -6853,14 +6853,6 @@ impl SoranetHandshakePow {
     const fn default_puzzle_work_capacity() -> NonZeroUsize {
         actual::SoranetPow::DEFAULT_PUZZLE_WORK_CAPACITY_PER_DIRECTION
     }
-    fn bound_puzzle_work_capacity(capacity: NonZeroUsize) -> NonZeroUsize {
-        NonZeroUsize::new(
-            capacity
-                .get()
-                .min(actual::SoranetPow::MAX_PUZZLE_WORK_CAPACITY_PER_DIRECTION),
-        )
-        .expect("bounded SoraNet puzzle-work capacity is non-zero")
-    }
     const fn default_revocation_store_capacity() -> u64 {
         8_192
     }
@@ -6870,7 +6862,7 @@ impl SoranetHandshakePow {
     fn default_revocation_store_path() -> PathBuf {
         PathBuf::from("./storage/soranet/ticket_revocations.norito")
     }
-    fn parse(self) -> actual::SoranetPow {
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::SoranetPow {
         let Self {
             difficulty,
             max_future_skew_secs,
@@ -6883,33 +6875,147 @@ impl SoranetHandshakePow {
             revocation_store_path,
             puzzle,
         } = self;
-        let min_ticket_ttl = Duration::from_secs(min_ticket_ttl_secs.max(1));
-        let mut max_future_skew = Duration::from_secs(max_future_skew_secs.max(1));
-        if max_future_skew < min_ticket_ttl {
-            max_future_skew = min_ticket_ttl;
+        let emit = |emitter: &mut Emitter<ParseError>, message: String| {
+            emitter.emit(Report::new(ParseError::InvalidSoranetHandshakeConfig).attach(message));
+        };
+        let defaults = actual::SoranetPow::default_const();
+
+        let configured_difficulty = difficulty.get();
+        let difficulty = if configured_difficulty
+            <= u16::from(iroha_crypto::soranet::puzzle::MAX_DIFFICULTY)
+        {
+            u8::try_from(configured_difficulty)
+                .expect("validated SoraNet puzzle difficulty fits in u8")
+        } else {
+            emit(
+                emitter,
+                format!(
+                    "network.soranet_handshake.pow.difficulty {configured_difficulty} exceeds the supported maximum {}",
+                    iroha_crypto::soranet::puzzle::MAX_DIFFICULTY
+                ),
+            );
+            defaults.difficulty
+        };
+
+        let mut ticket_timing_valid = true;
+        if min_ticket_ttl_secs == 0 {
+            emit(
+                emitter,
+                "network.soranet_handshake.pow.min_ticket_ttl_secs must be greater than zero"
+                    .to_owned(),
+            );
+            ticket_timing_valid = false;
         }
-        let mut ticket_ttl = Duration::from_secs(ticket_ttl_secs.max(1));
-        if ticket_ttl < min_ticket_ttl {
-            ticket_ttl = min_ticket_ttl;
+        if max_future_skew_secs <= min_ticket_ttl_secs {
+            emit(
+                emitter,
+                format!(
+                    "network.soranet_handshake.pow.max_future_skew_secs {max_future_skew_secs} must exceed min_ticket_ttl_secs {min_ticket_ttl_secs}"
+                ),
+            );
+            ticket_timing_valid = false;
         }
-        if ticket_ttl > max_future_skew {
-            ticket_ttl = max_future_skew;
+        if ticket_ttl_secs <= min_ticket_ttl_secs {
+            emit(
+                emitter,
+                format!(
+                    "network.soranet_handshake.pow.ticket_ttl_secs {ticket_ttl_secs} must exceed min_ticket_ttl_secs {min_ticket_ttl_secs}"
+                ),
+            );
+            ticket_timing_valid = false;
         }
-        let difficulty = u8::try_from(difficulty.get().min(u16::from(u8::MAX))).unwrap_or(u8::MAX);
-        let revocation_store_capacity =
-            usize::try_from(revocation_store_capacity.max(1)).unwrap_or(usize::MAX);
-        let revocation_max_ttl = Duration::from_secs(revocation_store_ttl_secs.max(1));
+        if ticket_ttl_secs > max_future_skew_secs {
+            emit(
+                emitter,
+                format!(
+                    "network.soranet_handshake.pow.ticket_ttl_secs {ticket_ttl_secs} must not exceed max_future_skew_secs {max_future_skew_secs}"
+                ),
+            );
+            ticket_timing_valid = false;
+        }
+        let (max_future_skew, min_ticket_ttl, ticket_ttl) = if ticket_timing_valid {
+            (
+                Duration::from_secs(max_future_skew_secs),
+                Duration::from_secs(min_ticket_ttl_secs),
+                Duration::from_secs(ticket_ttl_secs),
+            )
+        } else {
+            (
+                defaults.max_future_skew,
+                defaults.min_ticket_ttl,
+                defaults.ticket_ttl,
+            )
+        };
+
+        let validate_work_capacity =
+            |name: &str, capacity: NonZeroUsize, emitter: &mut Emitter<ParseError>| {
+                if capacity.get() <= actual::SoranetPow::MAX_PUZZLE_WORK_CAPACITY_PER_DIRECTION {
+                    capacity
+                } else {
+                    emit(
+                        emitter,
+                        format!(
+                            "network.soranet_handshake.pow.{name} {} exceeds the supported maximum {}",
+                            capacity,
+                            actual::SoranetPow::MAX_PUZZLE_WORK_CAPACITY_PER_DIRECTION
+                        ),
+                    );
+                    actual::SoranetPow::DEFAULT_PUZZLE_WORK_CAPACITY_PER_DIRECTION
+                }
+            };
+        let outbound_mint_capacity =
+            validate_work_capacity("outbound_mint_capacity", outbound_mint_capacity, emitter);
+        let inbound_verify_capacity =
+            validate_work_capacity("inbound_verify_capacity", inbound_verify_capacity, emitter);
+
+        let revocation_capacity_limit =
+            iroha_crypto::soranet::pow::TICKET_REVOCATION_STORE_MAX_ENTRIES_V1;
+        let revocation_store_capacity = match usize::try_from(revocation_store_capacity) {
+            Ok(capacity) if (1..=revocation_capacity_limit).contains(&capacity) => capacity,
+            _ => {
+                emit(
+                    emitter,
+                    format!(
+                        "network.soranet_handshake.pow.revocation_store_capacity {revocation_store_capacity} must be in 1..={revocation_capacity_limit}"
+                    ),
+                );
+                defaults.revocation_store_capacity
+            }
+        };
+        let revocation_ttl_valid = if revocation_store_ttl_secs == 0 {
+            emit(
+                emitter,
+                "network.soranet_handshake.pow.revocation_store_ttl_secs must be greater than zero"
+                    .to_owned(),
+            );
+            false
+        } else if revocation_store_ttl_secs < max_future_skew_secs {
+            emit(
+                emitter,
+                format!(
+                    "network.soranet_handshake.pow.revocation_store_ttl_secs {revocation_store_ttl_secs} must cover max_future_skew_secs {max_future_skew_secs}"
+                ),
+            );
+            false
+        } else {
+            true
+        };
+        let revocation_max_ttl = if revocation_ttl_valid {
+            Duration::from_secs(revocation_store_ttl_secs)
+        } else {
+            defaults.revocation_max_ttl
+        };
         actual::SoranetPow {
             difficulty,
             max_future_skew,
             min_ticket_ttl,
             ticket_ttl,
-            outbound_mint_capacity: Self::bound_puzzle_work_capacity(outbound_mint_capacity),
-            inbound_verify_capacity: Self::bound_puzzle_work_capacity(inbound_verify_capacity),
+            outbound_mint_capacity,
+            inbound_verify_capacity,
             revocation_store_capacity,
             revocation_max_ttl,
             revocation_store_path: revocation_store_path.to_string_lossy().into_owned().into(),
-            puzzle: puzzle.parse(),
+            puzzle: puzzle.parse(emitter),
         }
     }
 }
@@ -6933,22 +7039,56 @@ impl SoranetHandshakePuzzle {
     const fn default_lanes() -> u32 {
         1
     }
-    fn parse(self) -> actual::SoranetPuzzle {
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::SoranetPuzzle {
         let Self {
             memory_kib,
             time_cost,
             lanes,
         } = self;
-        let memory = NonZeroU32::new(memory_kib.clamp(
-            iroha_crypto::soranet::puzzle::MIN_MEMORY_KIB,
-            iroha_crypto::soranet::puzzle::MAX_MEMORY_KIB,
-        ))
-        .expect("bounded SoraNet puzzle memory is non-zero");
-        let time_cost =
-            NonZeroU32::new(time_cost.clamp(1, iroha_crypto::soranet::puzzle::MAX_TIME_COST))
-                .expect("bounded SoraNet puzzle time cost is non-zero");
-        let lanes = NonZeroU32::new(lanes.clamp(1, iroha_crypto::soranet::puzzle::MAX_LANES))
-            .expect("bounded SoraNet puzzle lane count is non-zero");
+        let emit = |emitter: &mut Emitter<ParseError>, message: String| {
+            emitter.emit(Report::new(ParseError::InvalidSoranetHandshakeConfig).attach(message));
+        };
+        let defaults = actual::SoranetPuzzle::default_const();
+        let memory = if (iroha_crypto::soranet::puzzle::MIN_MEMORY_KIB
+            ..=iroha_crypto::soranet::puzzle::MAX_MEMORY_KIB)
+            .contains(&memory_kib)
+        {
+            NonZeroU32::new(memory_kib).expect("validated SoraNet puzzle memory is non-zero")
+        } else {
+            emit(
+                emitter,
+                format!(
+                    "network.soranet_handshake.pow.puzzle.memory_kib {memory_kib} must be in {}..={}",
+                    iroha_crypto::soranet::puzzle::MIN_MEMORY_KIB,
+                    iroha_crypto::soranet::puzzle::MAX_MEMORY_KIB
+                ),
+            );
+            defaults.memory_kib
+        };
+        let time_cost = if (1..=iroha_crypto::soranet::puzzle::MAX_TIME_COST).contains(&time_cost) {
+            NonZeroU32::new(time_cost).expect("validated SoraNet puzzle time cost is non-zero")
+        } else {
+            emit(
+                emitter,
+                format!(
+                    "network.soranet_handshake.pow.puzzle.time_cost {time_cost} must be in 1..={}",
+                    iroha_crypto::soranet::puzzle::MAX_TIME_COST
+                ),
+            );
+            defaults.time_cost
+        };
+        let lanes = if (1..=iroha_crypto::soranet::puzzle::MAX_LANES).contains(&lanes) {
+            NonZeroU32::new(lanes).expect("validated SoraNet puzzle lanes are non-zero")
+        } else {
+            emit(
+                emitter,
+                format!(
+                    "network.soranet_handshake.pow.puzzle.lanes {lanes} must be in 1..={}",
+                    iroha_crypto::soranet::puzzle::MAX_LANES
+                ),
+            );
+            defaults.lanes
+        };
         actual::SoranetPuzzle {
             memory_kib: memory,
             time_cost,
@@ -7782,7 +7922,7 @@ pub struct Network {
     /// Request QUIC transport (feature-gated).
     ///
     /// Runtime startup rejects `true` before binding while the lockfile resolves
-    /// vulnerable quinn-proto 0.11.15. TLS-over-TCP remains available.
+    /// `quinn 0.11.9` / vulnerable `quinn-proto 0.11.15`. TLS-over-TCP remains available.
     #[config(env = "P2P_QUIC", default)]
     pub quic_enabled: bool,
     /// Request QUIC DATAGRAM support for best-effort topics (feature-gated by QUIC).
@@ -7955,7 +8095,8 @@ pub struct Network {
     pub low_priority_bytes_per_sec: Option<NonZeroU32>,
     /// Low-priority per-peer bytes burst.
     pub low_priority_bytes_burst: Option<NonZeroU32>,
-    /// Only allow peers explicitly listed in `allow_keys` and addresses in `allow_cidrs`.
+    /// Require peer keys to appear in `allow_keys`; a non-empty `allow_cidrs`
+    /// independently restricts inbound addresses in either mode.
     #[config(default)]
     pub allowlist_only: bool,
     /// Allowlist of peer public keys.
@@ -14500,6 +14641,9 @@ pub struct Torii {
     /// Authenticated native Bootle/Lantern blind-issuance service.
     #[config(nested)]
     pub privacy_bootle_lantern_issuer: ToriiBootleLanternIssuer,
+    /// Independently rebuilt SCCP replay archive service.
+    #[config(nested)]
+    pub sccp_replay_archive: ToriiSccpReplayArchive,
     /// Emit filter-match debug traces (developer diagnostics only).
     #[config(default = "defaults::torii::DEBUG_MATCH_FILTERS")]
     pub debug_match_filters: bool,
@@ -14764,6 +14908,7 @@ pub struct Torii {
 }
 include!("user/torii_peer_geo.rs");
 include!("user/torii_soranet_privacy_ingest.rs");
+include!("user/torii_sccp_replay_archive.rs");
 /// User configuration for authenticated native Bootle/Lantern blind issuance.
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
 pub struct ToriiBootleLanternIssuer {
@@ -15559,6 +15704,7 @@ impl Torii {
         let webhook_security = self.webhook_security.parse();
         let push = self.push.parse();
         let privacy_bootle_lantern_issuer = self.privacy_bootle_lantern_issuer.parse(emitter);
+        let sccp_replay_archive = self.sccp_replay_archive.parse(emitter);
         let (
             sorafs_storage,
             sorafs_discovery,
@@ -15676,6 +15822,7 @@ impl Torii {
             peer_geo: self.peer_geo.parse(),
             soranet_privacy_ingest: self.soranet_privacy_ingest.parse(),
             privacy_bootle_lantern_issuer,
+            sccp_replay_archive,
             debug_match_filters: self.debug_match_filters,
             operator_auth,
             operator_signatures: self.operator_signatures.parse(),

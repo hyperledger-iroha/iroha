@@ -81,6 +81,7 @@ use iroha_data_model::{
         LaneLifecyclePlan, LaneLifecycleStatusV1, UniversalAccountId,
     },
     privacy::PrivacyExact12CapabilityManifestV1,
+    query::error::QueryExecutionFail,
     soracloud::{CANONICAL_REQUEST_WITNESS_VERSION_V1, CanonicalRequestWitnessV1},
     sorafs::orderbook_submission::{
         SorafsOrderbookSubmissionIdentityV1,
@@ -138,7 +139,8 @@ use iroha_torii_shared::{
     AccountOnboardingCurrentStateRequestV1, AccountOnboardingCurrentStateResponseV1,
     AccountReadResponse, ErrorEnvelope, FeeQuoteRequest, FeeQuoteResponse,
     FeeSponsorProgramByIdRequest, NORITO_V1_WEBSOCKET_SUBPROTOCOL,
-    PipelineTransactionStatusResponse, TriggerCompletionListResponse,
+    PipelineTransactionDetailsResponse, PipelineTransactionStatusResponse,
+    TriggerCompletionListResponse,
     offline_api::{
         OfflineOperationKind, OfflineOperationReference, OfflineOperationResult,
         OfflineOperationState, OfflineOperationStatus, OfflineRedeemRequest, OfflineStatus,
@@ -3055,6 +3057,17 @@ pub struct SccpRecentMessages {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub next: Option<SccpRecentCursor>,
 }
+const fn is_final_v1_external_sccp_network(
+    network: iroha_data_model::bridge::SccpNetworkV1,
+) -> bool {
+    matches!(
+        network,
+        iroha_data_model::bridge::SccpNetworkV1::EthereumMainnet
+            | iroha_data_model::bridge::SccpNetworkV1::BscMainnet
+            | iroha_data_model::bridge::SccpNetworkV1::TronMainnet
+            | iroha_data_model::bridge::SccpNetworkV1::TonMainnet
+    )
+}
 fn sccp_recent_projection_text(value: &iroha_sccp::SccpNormalizedCodecValueV1) -> Option<&str> {
     match value {
         iroha_sccp::SccpNormalizedCodecValueV1::CanonicalText { value } => Some(value.as_str()),
@@ -3064,36 +3077,32 @@ fn sccp_recent_projection_text(value: &iroha_sccp::SccpNormalizedCodecValueV1) -
 fn sccp_recent_projection_value_is_canonical(
     value: &iroha_sccp::SccpNormalizedCodecValueV1,
 ) -> bool {
-    let (codec, bytes): (u8, &[u8]) = match value {
-        iroha_sccp::SccpNormalizedCodecValueV1::CanonicalText { value } => {
+    if let iroha_sccp::SccpNormalizedCodecValueV1::TonAccount36 { workchain, account } = value {
+        let Some(bytes) = iroha_sccp::canonical_sccp_ton_account36_bytes_v1(
+            iroha_data_model::bridge::SccpTonAddressV1 {
+                workchain: *workchain,
+                account: *account,
+            },
+        ) else {
+            return false;
+        };
+        return iroha_sccp::decode_sccp_normalized_codec_value(
+            iroha_sccp::SCCP_CODEC_TON_ACCOUNT36,
+            &bytes,
+        )
+        .as_ref()
+            == Some(value);
+    }
+    let (codec, bytes): (u8, &[u8]) =
+        if let iroha_sccp::SccpNormalizedCodecValueV1::CanonicalText { value } = value {
             (iroha_sccp::SCCP_CODEC_CANONICAL_TEXT, value.as_bytes())
-        }
-        iroha_sccp::SccpNormalizedCodecValueV1::EvmAddress20 { bytes } => {
+        } else if let iroha_sccp::SccpNormalizedCodecValueV1::EvmAddress20 { bytes } = value {
             (iroha_sccp::SCCP_CODEC_EVM_ADDRESS20, bytes)
-        }
-        iroha_sccp::SccpNormalizedCodecValueV1::TronAddress21 { bytes } => {
+        } else if let iroha_sccp::SccpNormalizedCodecValueV1::TronAddress21 { bytes } = value {
             (iroha_sccp::SCCP_CODEC_TRON_ADDRESS21, bytes)
-        }
-        iroha_sccp::SccpNormalizedCodecValueV1::SolanaPubkey32 { bytes } => {
-            (iroha_sccp::SCCP_CODEC_SOLANA_PUBKEY32, bytes)
-        }
-        iroha_sccp::SccpNormalizedCodecValueV1::TonAccount36 { workchain, account } => {
-            let Some(bytes) = iroha_sccp::canonical_sccp_ton_account36_bytes_v1(
-                iroha_data_model::bridge::SccpTonAddressV1 {
-                    workchain: *workchain,
-                    account: *account,
-                },
-            ) else {
-                return false;
-            };
-            return iroha_sccp::decode_sccp_normalized_codec_value(
-                iroha_sccp::SCCP_CODEC_TON_ACCOUNT36,
-                &bytes,
-            )
-            .as_ref()
-                == Some(value);
-        }
-    };
+        } else {
+            return false;
+        };
     iroha_sccp::decode_sccp_normalized_codec_value(codec, bytes).as_ref() == Some(value)
 }
 fn validate_sccp_recent_projection(
@@ -3107,21 +3116,13 @@ fn validate_sccp_recent_projection(
         (target, &transfer.recipient),
         (
             iroha_data_model::bridge::SccpNetworkV1::EthereumMainnet
-                | iroha_data_model::bridge::SccpNetworkV1::EthereumSepolia
-                | iroha_data_model::bridge::SccpNetworkV1::BscMainnet
-                | iroha_data_model::bridge::SccpNetworkV1::BscTestnet,
+                | iroha_data_model::bridge::SccpNetworkV1::BscMainnet,
             iroha_sccp::SccpNormalizedCodecValueV1::EvmAddress20 { .. },
         ) | (
-            iroha_data_model::bridge::SccpNetworkV1::TronMainnet
-                | iroha_data_model::bridge::SccpNetworkV1::TronNile
-                | iroha_data_model::bridge::SccpNetworkV1::TronShasta,
+            iroha_data_model::bridge::SccpNetworkV1::TronMainnet,
             iroha_sccp::SccpNormalizedCodecValueV1::TronAddress21 { .. },
         ) | (
-            iroha_data_model::bridge::SccpNetworkV1::SolanaTestnet,
-            iroha_sccp::SccpNormalizedCodecValueV1::SolanaPubkey32 { .. },
-        ) | (
-            iroha_data_model::bridge::SccpNetworkV1::TonMainnet
-                | iroha_data_model::bridge::SccpNetworkV1::TonTestnet,
+            iroha_data_model::bridge::SccpNetworkV1::TonMainnet,
             iroha_sccp::SccpNormalizedCodecValueV1::TonAccount36 { .. },
         )
     );
@@ -3219,7 +3220,7 @@ fn validate_sccp_recent_messages(messages: &SccpRecentMessages) -> Result<()> {
                 .ok_or_else(|| eyre!("{label} has an unsupported target profile"))?;
         let lane = iroha_data_model::bridge::SccpLaneIdV1 { source, target };
         if source != iroha_data_model::bridge::SccpNetworkV1::SoraTaira
-            || !target.is_external()
+            || !is_final_v1_external_sccp_network(target)
             || !lane.is_well_formed()
             || item.target_domain != target.domain_id()
         {
@@ -3375,6 +3376,8 @@ pub struct SccpNativeMessageSubmitRequest {
     pub transaction_payload_b64: Option<String>,
     /// Canonical padded-base64 Norito native inbound SCCP proof.
     pub native_proof_b64: String,
+    /// Canonical padded-base64 Norito sparse replay non-membership witness.
+    pub replay_witness_b64: String,
     /// Optional fixed creation timestamp for deterministic detached signing.
     #[norito(default)]
     pub creation_time_ms: Option<u64>,
@@ -4029,6 +4032,7 @@ struct SccpBridgeSubmitExpectation {
     range_start_height: u64,
     range_end_height: u64,
     proof_payload: SccpBridgeExpectedProofPayload,
+    replay_witness: Option<iroha_data_model::bridge::SccpSparseMerkleWitnessV1>,
 }
 fn resolve_sccp_expected_route_configuration_hash(
     expectation: &SccpBridgeSubmitExpectation,
@@ -4125,7 +4129,7 @@ fn validate_taira_only_sccp_registry(
         .map_err(|error| eyre!("node returned an invalid SCCP registry: {error}"))?;
     if registry.lanes.iter().any(|lane| {
         lane.lane_id.target != iroha_data_model::bridge::SccpNetworkV1::SoraTaira
-            || !lane.lane_id.source.is_external()
+            || !is_final_v1_external_sccp_network(lane.lane_id.source)
             || lane.routes.iter().any(|route| {
                 route.lane_id.target != iroha_data_model::bridge::SccpNetworkV1::SoraTaira
             })
@@ -4260,7 +4264,7 @@ fn preflight_sccp_destination_submit(
     let lane = bundle.commitment.context.lane;
     if !lane.is_well_formed()
         || !lane.source.is_sora()
-        || !lane.target.is_external()
+        || !is_final_v1_external_sccp_network(lane.target)
         || destination.backend != parsed.backend()
         || destination.route_configuration_hash
             != bundle.commitment.context.route_configuration_hash
@@ -4285,6 +4289,7 @@ fn preflight_sccp_destination_submit(
         range_start_height: height,
         range_end_height: height,
         proof_payload: SccpBridgeExpectedProofPayload::Destination(destination),
+        replay_witness: None,
     })
 }
 fn preflight_sccp_native_submit(
@@ -4301,10 +4306,11 @@ fn preflight_sccp_native_submit(
         request.creation_time_ms,
     )?;
     let (native, encoded_envelope) = decode_sccp_native_proof_b64(&request.native_proof_b64)?;
+    let replay_witness = decode_sccp_replay_witness_b64(&request.replay_witness_b64)?;
     validate_sccp_taira_transfer_recipient(&native.payload)?;
     let lane = native.source.lane;
     if !lane.is_well_formed()
-        || !lane.source.is_external()
+        || !is_final_v1_external_sccp_network(lane.source)
         || lane.target != iroha_data_model::bridge::SccpNetworkV1::SoraTaira
         || iroha_sccp::sccp_message_source_domain(&native.payload) != lane.source.domain_id()
         || iroha_sccp::sccp_message_target_domain(&native.payload) != lane.target.domain_id()
@@ -4339,6 +4345,7 @@ fn preflight_sccp_native_submit(
             encoded_envelope,
             backend,
         },
+        replay_witness: Some(replay_witness),
     })
 }
 fn decode_canonical_sccp_base64(encoded: &str, field: &str, maximum: usize) -> Result<Vec<u8>> {
@@ -4369,6 +4376,37 @@ fn decode_sccp_native_proof_b64(
     let proof = iroha_sccp::decode_sccp_native_inbound_message_proof_v1(&bytes)
         .map_err(|error| eyre!("invalid native SCCP proof: {error}"))?;
     Ok((proof, bytes))
+}
+fn decode_sccp_replay_witness_b64(
+    encoded: &str,
+) -> Result<iroha_data_model::bridge::SccpSparseMerkleWitnessV1> {
+    let bytes = decode_canonical_sccp_base64(
+        encoded,
+        "replay_witness_b64",
+        iroha_data_model::bridge::SCCP_REPLAY_WITNESS_MAX_BASE64_BYTES_V1,
+    )?;
+    if bytes.len() > iroha_data_model::bridge::SCCP_REPLAY_WITNESS_MAX_ENCODED_BYTES_V1 {
+        return Err(eyre!(
+            "replay_witness_b64 exceeds the canonical sparse replay witness bound"
+        ));
+    }
+    let witness =
+        norito::decode_from_bytes::<iroha_data_model::bridge::SccpSparseMerkleWitnessV1>(&bytes)
+            .map_err(|error| eyre!("invalid canonical sparse replay witness: {error}"))?;
+    if norito::to_bytes(&witness).ok().as_deref() != Some(bytes.as_slice()) {
+        return Err(eyre!(
+            "replay_witness_b64 must contain exactly one canonical sparse replay witness"
+        ));
+    }
+    witness
+        .validate()
+        .map_err(|error| eyre!("invalid canonical sparse replay witness: {error}"))?;
+    if witness.prior_record_digest != [0; 32] {
+        return Err(eyre!(
+            "replay_witness_b64 must contain a replay non-membership witness"
+        ));
+    }
+    Ok(witness)
 }
 fn decode_exact_nonzero_sccp_hex32(value: &str, field: &str) -> Result<[u8; 32]> {
     if value.len() != 64
@@ -4406,7 +4444,7 @@ fn validate_sccp_message_bundle_for_request(
     }
     let lane = bundle.commitment.context.lane;
     if lane.source != iroha_data_model::bridge::SccpNetworkV1::SoraTaira
-        || !lane.target.is_external()
+        || !is_final_v1_external_sccp_network(lane.target)
         || !lane.is_well_formed()
     {
         return Err(eyre!(
@@ -4430,7 +4468,7 @@ fn validate_sccp_proof_request_for_message(
         ));
     }
     if request.source_network() != iroha_data_model::bridge::SccpNetworkV1::SoraTaira
-        || !request.target_network().is_external()
+        || !is_final_v1_external_sccp_network(request.target_network())
     {
         return Err(eyre!(
             "node returned an SCCP Groth16 proof request outside the exact Taira-to-external surface"
@@ -4568,6 +4606,11 @@ fn validate_sccp_bridge_transaction_payload(
         .ok_or_else(|| {
             eyre!("bridge submit response transaction payload must contain only SubmitBridgeProof")
         })?;
+    if submit.replay_witness != expectation.replay_witness {
+        return Err(eyre!(
+            "SCCP transaction payload replay witness does not match the request"
+        ));
+    }
     let proof = &submit.proof;
     let route_configuration_hash = match &proof.payload {
         BridgeProofPayload::NativeProtocol(native) => native.route_configuration_hash,
@@ -4737,7 +4780,7 @@ fn decode_sccp_bridge_submit_response(
     }
     if response.counterparty_chain != expectation.counterparty.profile_key()
         || response.counterparty_domain != expectation.counterparty.domain_id()
-        || !expectation.counterparty.is_external()
+        || !is_final_v1_external_sccp_network(expectation.counterparty)
     {
         return Err(eyre!(
             "bridge submit response counterparty does not match the request's exact external network"
@@ -13118,6 +13161,39 @@ mod evidence_http_tests {
     fn transaction_hash(seed: u8) -> HashOf<SignedTransaction> {
         HashOf::from_untyped_unchecked(Hash::prehashed([seed; Hash::LENGTH]))
     }
+    fn committed_transaction_details_fixture(
+        client: &Client,
+        result: iroha_data_model::transaction::TransactionResult,
+    ) -> (SignedTransaction, PipelineTransactionDetailsResponse) {
+        use crate::crypto::MerkleProof;
+        use iroha_data_model::query::CommittedTransaction;
+        let signed = client.build_transaction(
+            Vec::<InstructionBox>::new(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            Metadata::default(),
+        );
+        let entrypoint = TransactionEntrypoint::External(signed.clone());
+        let entrypoint_hash = signed.hash_as_entrypoint();
+        assert_eq!(entrypoint.hash(), entrypoint_hash);
+        let transaction = CommittedTransaction {
+            block_hash: HashOf::from_untyped_unchecked(Hash::prehashed([0x77; Hash::LENGTH])),
+            entrypoint_hash,
+            entrypoint_proof: MerkleProof::from_audit_path(0, Vec::new()),
+            entrypoint,
+            result_hash: result.hash(),
+            result_proof: MerkleProof::from_audit_path(0, Vec::new()),
+            result,
+            merge_inclusion: None,
+        };
+        (
+            signed,
+            PipelineTransactionDetailsResponse {
+                hash: entrypoint_hash.to_string(),
+                transaction,
+                trigger_completions: Vec::new(),
+            },
+        )
+    }
     fn captured_pipeline_status(
         seed: u8,
         response: HttpResponse<Vec<u8>>,
@@ -13244,6 +13320,284 @@ mod evidence_http_tests {
         );
         assert_request_paths(&snapshots, &["/v1/pipeline/transactions/status"]);
         assert_status_scope(&snapshots[0], "global");
+    }
+    #[test]
+    fn state_rejection_recovers_exact_nested_reason_from_authenticated_details() {
+        use iroha_data_model::{
+            isi::error::{InstructionExecutionError, InvalidParameterError},
+            transaction::{TransactionResult, error::TransactionRejectionReason},
+        };
+        let client = client_with_base_url(base_url());
+        mark_data_model_compatible(&client);
+        let message =
+            "privacy activation at 306 is too early after height 7; earliest is 307".to_owned();
+        let rejection = TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                message.clone(),
+            )),
+        ));
+        let (transaction, details) = committed_transaction_details_fixture(
+            &client,
+            TransactionResult::new(Err(rejection.clone())),
+        );
+        let signed_hash = transaction.hash();
+        let entrypoint_hash = transaction.hash_as_entrypoint();
+        let status_response = pipeline_response(
+            &signed_hash.to_string(),
+            &norito::json!({ "kind": "Rejected", "block_height": 9 }),
+            "global",
+            "state",
+        );
+        let details_response = norito_response(StatusCode::OK, &details);
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let responder = {
+            let snapshots = Arc::clone(&snapshots);
+            move |snapshot: RequestSnapshot| {
+                let path = snapshot.url.path().to_owned();
+                snapshots.lock().expect("snapshot lock").push(snapshot);
+                match path.as_str() {
+                    "/v1/pipeline/transactions/status" => Ok(status_response.clone()),
+                    torii_uri::TRANSACTION_DETAILS => Ok(details_response.clone()),
+                    _ => panic!("unexpected rejection-details request path: {path}"),
+                }
+            }
+        };
+        let status = with_mock_http(responder, || {
+            client.transaction_confirmation_status_with_rejection_details(
+                signed_hash,
+                entrypoint_hash,
+            )
+        })
+        .expect("authoritative rejection status")
+        .expect("terminal rejection");
+        let TxConfirmationStatus::Rejected(Some(actual)) = status else {
+            panic!("expected detailed rejection status, got {status:?}");
+        };
+        assert_eq!(actual, rejection);
+        let report = tx_rejection_to_report(&actual);
+        assert!(
+            report
+                .chain()
+                .any(|cause| cause.to_string().contains(&message)),
+            "exact nested rejection was absent from error chain: {report:#}"
+        );
+        let snapshots = snapshots.lock().expect("snapshot lock");
+        assert_request_paths(
+            &snapshots,
+            &[
+                "/v1/pipeline/transactions/status",
+                torii_uri::TRANSACTION_DETAILS,
+            ],
+        );
+    }
+    #[test]
+    fn unauthorized_rejection_details_are_final() {
+        use iroha_data_model::{
+            isi::error::{InstructionExecutionError, InvalidParameterError},
+            transaction::{TransactionResult, error::TransactionRejectionReason},
+        };
+        let client = client_with_base_url(base_url());
+        mark_data_model_compatible(&client);
+        let rejection = TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                "private rejection".to_owned(),
+            )),
+        ));
+        let (transaction, _) =
+            committed_transaction_details_fixture(&client, TransactionResult::new(Err(rejection)));
+        let signed_hash = transaction.hash();
+        let entrypoint_hash = transaction.hash_as_entrypoint();
+        let status_response = pipeline_response(
+            &signed_hash.to_string(),
+            &norito::json!({ "kind": "Rejected", "block_height": 9 }),
+            "global",
+            "state",
+        );
+        let details_response = norito_response(
+            StatusCode::FORBIDDEN,
+            &ValidationFail::NotPermitted("private transaction details".to_owned()),
+        );
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let responder = {
+            let snapshots = Arc::clone(&snapshots);
+            move |snapshot: RequestSnapshot| {
+                let path = snapshot.url.path().to_owned();
+                snapshots.lock().expect("snapshot lock").push(snapshot);
+                match path.as_str() {
+                    "/v1/pipeline/transactions/status" => Ok(status_response.clone()),
+                    torii_uri::TRANSACTION_DETAILS => Ok(details_response.clone()),
+                    _ => panic!("unexpected rejection-details request path: {path}"),
+                }
+            }
+        };
+        let error = with_mock_http(responder, || {
+            client.transaction_confirmation_status_with_rejection_details(
+                signed_hash,
+                entrypoint_hash,
+            )
+        })
+        .expect_err("authenticated authorization failure must be final");
+        assert!(is_final_tx_confirmation_error(&error));
+        assert!(
+            error
+                .chain()
+                .any(|cause| cause.to_string().contains("private transaction details")),
+            "authenticated authorization reason was absent: {error:#}"
+        );
+        let snapshots = snapshots.lock().expect("snapshot lock");
+        assert_request_paths(
+            &snapshots,
+            &[
+                "/v1/pipeline/transactions/status",
+                torii_uri::TRANSACTION_DETAILS,
+            ],
+        );
+    }
+    #[test]
+    fn undecodable_rejection_details_error_remains_nonfinal() {
+        use iroha_data_model::transaction::{TransactionResult, error::TransactionRejectionReason};
+        let client = client_with_base_url(base_url());
+        mark_data_model_compatible(&client);
+        let rejection = TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
+            "private rejection".to_owned(),
+        ));
+        let (transaction, _) =
+            committed_transaction_details_fixture(&client, TransactionResult::new(Err(rejection)));
+        let signed_hash = transaction.hash();
+        let entrypoint_hash = transaction.hash_as_entrypoint();
+        let status_response = pipeline_response(
+            &signed_hash.to_string(),
+            &norito::json!({ "kind": "Rejected", "block_height": 9 }),
+            "global",
+            "state",
+        );
+        let responder = move |snapshot: RequestSnapshot| match snapshot.url.path() {
+            "/v1/pipeline/transactions/status" => Ok(status_response.clone()),
+            torii_uri::TRANSACTION_DETAILS => Ok(empty_response(StatusCode::FORBIDDEN)),
+            path => panic!("unexpected rejection-details request path: {path}"),
+        };
+        let error = with_mock_http(responder, || {
+            client.transaction_confirmation_status_with_rejection_details(
+                signed_hash,
+                entrypoint_hash,
+            )
+        })
+        .expect_err("undecodable details error must propagate");
+        assert!(
+            !is_final_tx_confirmation_error(&error),
+            "QueryError::Other must remain retryable: {error:#}"
+        );
+    }
+    #[test]
+    fn missing_rejection_details_retry_then_return_exact_details() {
+        use iroha_data_model::transaction::{TransactionResult, error::TransactionRejectionReason};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let client = client_with_base_url(base_url());
+        mark_data_model_compatible(&client);
+        let rejection = TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
+            "private rejection".to_owned(),
+        ));
+        let (transaction, details) = committed_transaction_details_fixture(
+            &client,
+            TransactionResult::new(Err(rejection.clone())),
+        );
+        let signed_hash = transaction.hash();
+        let entrypoint_hash = transaction.hash_as_entrypoint();
+        let status_response = pipeline_response(
+            &signed_hash.to_string(),
+            &norito::json!({ "kind": "Rejected", "block_height": 9 }),
+            "global",
+            "state",
+        );
+        let details_response = norito_response(StatusCode::OK, &details);
+        let detail_attempts = Arc::new(AtomicUsize::new(0));
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let responder = {
+            let snapshots = Arc::clone(&snapshots);
+            let detail_attempts = Arc::clone(&detail_attempts);
+            move |snapshot: RequestSnapshot| {
+                let path = snapshot.url.path().to_owned();
+                snapshots.lock().expect("snapshot lock").push(snapshot);
+                match path.as_str() {
+                    "/v1/pipeline/transactions/status" => Ok(status_response.clone()),
+                    torii_uri::TRANSACTION_DETAILS
+                        if detail_attempts.fetch_add(1, Ordering::SeqCst) == 0 =>
+                    {
+                        Ok(empty_response(StatusCode::NOT_FOUND))
+                    }
+                    torii_uri::TRANSACTION_DETAILS => Ok(details_response.clone()),
+                    _ => panic!("unexpected rejection-details request path: {path}"),
+                }
+            }
+        };
+        let (retryable, resolved) = with_mock_http(responder, || {
+            let retryable = client.transaction_confirmation_status_with_rejection_details(
+                signed_hash,
+                entrypoint_hash,
+            );
+            let resolved = client.transaction_confirmation_status_with_rejection_details(
+                signed_hash,
+                entrypoint_hash,
+            );
+            (retryable, resolved)
+        });
+        assert_eq!(
+            retryable.expect("not-found details lookup must remain retryable"),
+            None
+        );
+        assert_eq!(
+            resolved.expect("second authenticated lookup must resolve"),
+            Some(TxConfirmationStatus::Rejected(Some(rejection)))
+        );
+        assert_eq!(detail_attempts.load(Ordering::SeqCst), 2);
+        let snapshots = snapshots.lock().expect("snapshot lock");
+        assert_request_paths(
+            &snapshots,
+            &[
+                "/v1/pipeline/transactions/status",
+                torii_uri::TRANSACTION_DETAILS,
+                "/v1/pipeline/transactions/status",
+                torii_uri::TRANSACTION_DETAILS,
+            ],
+        );
+    }
+    #[test]
+    fn successful_authenticated_details_for_rejected_status_are_final() {
+        use iroha_data_model::transaction::{DataTriggerSequence, TransactionResult};
+        let client = client_with_base_url(base_url());
+        mark_data_model_compatible(&client);
+        let (transaction, details) = committed_transaction_details_fixture(
+            &client,
+            TransactionResult::new(Ok(DataTriggerSequence::default())),
+        );
+        let signed_hash = transaction.hash();
+        let entrypoint_hash = transaction.hash_as_entrypoint();
+        let status_response = pipeline_response(
+            &signed_hash.to_string(),
+            &norito::json!({ "kind": "Rejected", "block_height": 9 }),
+            "global",
+            "state",
+        );
+        let details_response = norito_response(StatusCode::OK, &details);
+        let responder = move |snapshot: RequestSnapshot| match snapshot.url.path() {
+            "/v1/pipeline/transactions/status" => Ok(status_response.clone()),
+            torii_uri::TRANSACTION_DETAILS => Ok(details_response.clone()),
+            path => panic!("unexpected rejection-details request path: {path}"),
+        };
+        let error = with_mock_http(responder, || {
+            client.transaction_confirmation_status_with_rejection_details(
+                signed_hash,
+                entrypoint_hash,
+            )
+        })
+        .expect_err("authenticated success contradicting rejected status must be final");
+        assert!(is_final_tx_confirmation_error(&error));
+        assert!(
+            error
+                .chain()
+                .any(|cause| cause.to_string().contains("successful transaction result")),
+            "authenticated inconsistency was absent: {error:#}"
+        );
     }
     #[test]
     fn pipeline_status_cached_failures_are_not_confirmation() {
@@ -15617,6 +15971,7 @@ impl Client {
         let outcome_unknown = Arc::new(OnceLock::new());
         let submitter_outcome_unknown = Arc::clone(&outcome_unknown);
         let hash = transaction.hash();
+        let entrypoint_hash = transaction.hash_as_entrypoint();
         tracing::debug!(%hash, ?transaction, "Submitting transaction");
         thread::scope(|spawner| {
             let submitter_handle = spawner.spawn(move || {
@@ -15635,6 +15990,7 @@ impl Client {
                 init_sender,
                 submit_result_receiver,
                 hash,
+                entrypoint_hash,
                 Arc::clone(&outcome_unknown),
             );
             match submitter_handle.join() {
@@ -15664,6 +16020,7 @@ impl Client {
             Result<TransactionSubmissionDisposition>,
         >,
         hash: HashOf<SignedTransaction>,
+        entrypoint_hash: HashOf<TransactionEntrypoint>,
         outcome_unknown: Arc<OnceLock<QueuePlanOutcomeUnknownContext>>,
     ) -> Result<HashOf<SignedTransaction>> {
         debug!(
@@ -15728,7 +16085,12 @@ impl Client {
                                     max_queued_duration,
                                     poll_interval,
                                     submit_result_receiver.take(),
-                                    || client.transaction_confirmation_status(hash_for_check),
+                                    || {
+                                        client.transaction_confirmation_status_with_rejection_details(
+                                            hash_for_check,
+                                            entrypoint_hash,
+                                        )
+                                    },
                                 ),
                             )
                             .await
@@ -15742,7 +16104,12 @@ impl Client {
                                     max_queued_duration,
                                     poll_interval,
                                     submit_result_receiver.take(),
-                                    || client.transaction_confirmation_status(hash_for_check),
+                                    || {
+                                        client.transaction_confirmation_status_with_rejection_details(
+                                            hash_for_check,
+                                            entrypoint_hash,
+                                        )
+                                    },
                                 ),
                             )
                             .await
@@ -15778,7 +16145,12 @@ impl Client {
                                         "tx confirmation stream returned error; falling back to pipeline status query"
                                     );
                                     Self::resolve_global_status_fallback(
-                                        || client.transaction_confirmation_status(hash),
+                                        || {
+                                            client.transaction_confirmation_status_with_rejection_details(
+                                                hash,
+                                                entrypoint_hash,
+                                            )
+                                        },
                                         hash,
                                         Duration::from_millis(200),
                                         3,
@@ -15795,7 +16167,12 @@ impl Client {
                                     "tx confirmation timed out; falling back to pipeline status query"
                                 );
                                 Self::resolve_global_status_fallback(
-                                    || client.transaction_confirmation_status(hash),
+                                    || {
+                                        client.transaction_confirmation_status_with_rejection_details(
+                                            hash,
+                                            entrypoint_hash,
+                                        )
+                                    },
                                     hash,
                                     Duration::from_millis(200),
                                     3,
@@ -15892,6 +16269,7 @@ impl Client {
     {
         let outcome = match Self::retry_transaction_final_status(check, delay, retries).await {
             Ok(outcome) => outcome,
+            Err(error) if is_final_tx_confirmation_error(&error) => return Err(error),
             Err(error) => {
                 return Err(unresolved_tx_confirmation_report(
                     error.wrap_err(context),
@@ -15967,7 +16345,7 @@ impl Client {
                 }
                 Err(err) => {
                     if is_final_tx_confirmation_error(&err) {
-                        return Err(unwrap_final_tx_confirmation_error(err));
+                        return Err(err);
                     }
                     debug!(attempt, ?delay, ?err, "tx confirmation status check failed");
                     last_err = Some(err);
@@ -15993,6 +16371,48 @@ impl Client {
                 err
             }
         })
+    }
+    fn transaction_confirmation_status_with_rejection_details(
+        &self,
+        hash: HashOf<SignedTransaction>,
+        entrypoint_hash: HashOf<TransactionEntrypoint>,
+    ) -> Result<Option<TxConfirmationStatus>> {
+        let status = self.transaction_confirmation_status(hash)?;
+        if !matches!(&status, Some(TxConfirmationStatus::Rejected(None))) {
+            return Ok(status);
+        }
+
+        // The public status route intentionally carries no rejection payload. Resolve it through
+        // the signed, authority-checked details route without weakening that public contract.
+        let details = match self.get_transaction_details(entrypoint_hash) {
+            Ok(details) => details,
+            Err(QueryError::Validation(ValidationFail::QueryFailed(
+                QueryExecutionFail::NotFound | QueryExecutionFail::CapacityLimit,
+            ))) => {
+                debug!(
+                    %hash,
+                    %entrypoint_hash,
+                    "authenticated transaction rejection details are not yet available; retrying"
+                );
+                return Ok(None);
+            }
+            Err(error @ (QueryError::Validation(_) | QueryError::ResponseShape(_))) => {
+                return Err(tx_confirmation_final_report(eyre::Report::new(error)));
+            }
+            Err(QueryError::Other(error)) => return Err(error),
+        };
+        match rejection_reason_from_transaction_details(&details, hash, entrypoint_hash) {
+            Ok(reason) => Ok(Some(TxConfirmationStatus::Rejected(Some(reason)))),
+            Err(error) => {
+                warn!(
+                    %hash,
+                    %entrypoint_hash,
+                    ?error,
+                    "authenticated transaction rejection details were inconsistent"
+                );
+                Err(tx_confirmation_final_report(error))
+            }
+        }
     }
     fn transaction_pipeline_status(
         &self,
@@ -22924,6 +23344,41 @@ impl Client {
         Self::decode_json_http_status(resp, StatusCode::OK, "Failed to get VK with HTTP status")
     }
 }
+fn rejection_reason_from_transaction_details(
+    details: &PipelineTransactionDetailsResponse,
+    signed_hash: HashOf<SignedTransaction>,
+    entrypoint_hash: HashOf<TransactionEntrypoint>,
+) -> Result<TransactionRejectionReason> {
+    let transaction = &details.transaction;
+    if details.hash != entrypoint_hash.to_string()
+        || transaction.entrypoint_hash() != &entrypoint_hash
+        || transaction.entrypoint().hash() != entrypoint_hash
+        || transaction.result_hash() != &transaction.result().hash()
+    {
+        return Err(eyre!(
+            "transaction-details response does not match the requested entrypoint/result hash"
+        ));
+    }
+    let TransactionEntrypoint::External(committed) = transaction.entrypoint() else {
+        return Err(eyre!(
+            "transaction-details response is not for an external signed transaction"
+        ));
+    };
+    if committed.hash() != signed_hash {
+        return Err(eyre!(
+            "transaction-details response does not match the requested signed transaction hash"
+        ));
+    }
+    transaction
+        .result()
+        .0
+        .as_ref()
+        .err()
+        .cloned()
+        .ok_or_else(|| {
+            eyre!("transaction-details response contains a successful transaction result")
+        })
+}
 fn tx_confirmation_status_from_pipeline_response(
     payload: &PipelineTransactionStatusResponse,
 ) -> Option<TxConfirmationStatus> {
@@ -23148,6 +23603,9 @@ where
                     },
                     Ok(None) => {}
                     Err(err) => {
+                        if is_final_tx_confirmation_error(&err) {
+                            return Err(err);
+                        }
                         debug!(%hash, ?err, "pipeline status poll failed; retrying");
                     }
                 }
@@ -23273,6 +23731,9 @@ where
                                     },
                                     Ok(None) => {}
                                     Err(err) => {
+                                        if is_final_tx_confirmation_error(&err) {
+                                            return Some(Err(err));
+                                        }
                                         debug!(
                                             %hash,
                                             ?err,
@@ -23328,6 +23789,9 @@ where
                                                 );
                                             }
                                             Err(err) => {
+                                                if is_final_tx_confirmation_error(&err) {
+                                                    return Some(Err(err));
+                                                }
                                                 debug!(
                                                     %hash,
                                                     ?err,
@@ -23647,6 +24111,34 @@ mod tx_hash_tests {
             "missing original timeout cause: {err:?}"
         );
     }
+    #[tokio::test]
+    async fn terminal_fallback_error_is_not_reclassified_as_ambiguous() {
+        let hash: HashOf<SignedTransaction> =
+            HashOf::from_untyped_unchecked(Hash::prehashed([6_u8; Hash::LENGTH]));
+        let identity = outcome_unknown_identity(0x36);
+        let context = super::QueuePlanOutcomeUnknownContext::exact(identity);
+        let err = super::Client::resolve_global_status_fallback(
+            || {
+                Err(super::tx_confirmation_final_report(eyre!(
+                    "authenticated rejection details are invalid"
+                )))
+            },
+            hash,
+            Duration::ZERO,
+            0,
+            "fallback context",
+            eyre!("confirmation deadline elapsed"),
+            Some(&context),
+        )
+        .await
+        .expect_err("an authoritative terminal error must stop fallback");
+        assert!(super::is_final_tx_confirmation_error(&err));
+
+        let err = super::finalize_transaction_confirmation_error(err, Some(&context));
+        let report = format!("{err:#}");
+        assert!(report.contains("authenticated rejection details are invalid"));
+        assert!(!report.contains("admission remains ambiguous"));
+    }
     #[test]
     fn late_outcome_unknown_is_merged_after_an_unresolved_fallback() {
         use std::{
@@ -23890,6 +24382,104 @@ mod tx_confirmation_stream_tests {
         )
         .await;
         assert!(closed);
+    }
+    #[tokio::test]
+    async fn final_status_error_propagates_from_periodic_poll() {
+        let hash: HashOf<SignedTransaction> =
+            HashOf::from_untyped_unchecked(Hash::prehashed([0x31; Hash::LENGTH]));
+        let mut events = stream::pending::<Result<EventBox, eyre::Report>>();
+        let error = tokio::time::timeout(
+            Duration::from_millis(50),
+            listen_for_tx_confirmation_stream_with_status_check(
+                &mut events,
+                hash,
+                Duration::from_secs(1),
+                Duration::from_millis(1),
+                None,
+                || {
+                    Err(super::tx_confirmation_final_report(eyre!(
+                        "final polling status error"
+                    )))
+                },
+            ),
+        )
+        .await
+        .expect("final polling error must stop the stream wait")
+        .expect_err("final polling error must propagate");
+        assert!(super::is_final_tx_confirmation_error(&error));
+        assert!(error.to_string().contains("final polling status error"));
+    }
+    #[tokio::test]
+    async fn final_status_error_propagates_from_uncorrelated_block_check() {
+        let hash: HashOf<SignedTransaction> =
+            HashOf::from_untyped_unchecked(Hash::prehashed([0x32; Hash::LENGTH]));
+        let height = std::num::NonZeroU64::new(8).expect("nonzero height");
+        let mut events = stream::iter([Ok::<_, eyre::Report>(block_event(
+            height,
+            BlockStatus::Committed,
+        ))]);
+        let error = tokio::time::timeout(
+            Duration::from_millis(50),
+            listen_for_tx_confirmation_stream_with_status_check(
+                &mut events,
+                hash,
+                Duration::from_secs(1),
+                Duration::from_secs(1),
+                None,
+                || {
+                    Err(super::tx_confirmation_final_report(eyre!(
+                        "final block-correlation status error"
+                    )))
+                },
+            ),
+        )
+        .await
+        .expect("uncorrelated-block branch must stop before the first poll")
+        .expect_err("final uncorrelated-block status error must propagate");
+        assert!(super::is_final_tx_confirmation_error(&error));
+        assert!(
+            error
+                .to_string()
+                .contains("final block-correlation status error")
+        );
+    }
+    #[tokio::test]
+    async fn final_status_error_propagates_from_applied_block_check() {
+        let hash: HashOf<SignedTransaction> =
+            HashOf::from_untyped_unchecked(Hash::prehashed([0x33; Hash::LENGTH]));
+        let height = std::num::NonZeroU64::new(9).expect("nonzero height");
+        let mut events = stream::iter([
+            Ok::<_, eyre::Report>(transaction_event(
+                hash,
+                Some(height),
+                TransactionStatus::Approved,
+            )),
+            Ok::<_, eyre::Report>(block_event(height, BlockStatus::Applied)),
+        ]);
+        let error = tokio::time::timeout(
+            Duration::from_millis(50),
+            listen_for_tx_confirmation_stream_with_status_check(
+                &mut events,
+                hash,
+                Duration::from_secs(1),
+                Duration::from_secs(1),
+                None,
+                || {
+                    Err(super::tx_confirmation_final_report(eyre!(
+                        "final applied-block status error"
+                    )))
+                },
+            ),
+        )
+        .await
+        .expect("applied-block branch must stop before the first poll")
+        .expect_err("final applied-block status error must propagate");
+        assert!(super::is_final_tx_confirmation_error(&error));
+        assert!(
+            error
+                .to_string()
+                .contains("final applied-block status error")
+        );
     }
     #[tokio::test]
     async fn queued_timeout_honors_max_duration() {
@@ -25079,10 +25669,7 @@ mod tests {
         fs,
         io::{Read, Write},
         net::TcpListener,
-        sync::{
-            Arc, Mutex,
-            atomic::{AtomicUsize, Ordering},
-        },
+        sync::{Arc, Mutex},
         time::{Duration, Instant},
     };
     use tempfile::tempdir;
@@ -34788,6 +35375,7 @@ mod tests {
             version: PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1,
             committed_height: 42,
             consensus_policy: PrivacyConsensusPolicyV1::taira_default(),
+            qualification: None,
             protocols: PrivacyProtocolIdV1::ALL
                 .into_iter()
                 .map(|protocol_id| PrivacyCapabilityRowV1 {
@@ -34811,7 +35399,7 @@ mod tests {
                 message_id_hex: "67".repeat(32),
                 kind: "transfer".to_owned(),
                 source_profile: "sora-taira".to_owned(),
-                target_profile: "tron-nile".to_owned(),
+                target_profile: "tron-mainnet".to_owned(),
                 destination_binding_hash: format!("0x{}", "56".repeat(32)),
                 route_configuration_hash: format!("0x{}", "57".repeat(32)),
                 target_domain: iroha_sccp::SCCP_DOMAIN_TRON,
@@ -35852,6 +36440,36 @@ mod tests {
         assert!(error.to_string().contains("invalid SCCP registry"));
     }
     #[test]
+    fn final_v1_external_sccp_network_allowlist_is_exact() {
+        for retained in [
+            "ethereum-mainnet",
+            "bsc-mainnet",
+            "tron-mainnet",
+            "ton-mainnet",
+        ] {
+            let network = iroha_data_model::bridge::SccpNetworkV1::from_profile_key(retained)
+                .expect("retained final V1 profile");
+            assert!(is_final_v1_external_sccp_network(network));
+        }
+        assert!(!is_final_v1_external_sccp_network(
+            iroha_data_model::bridge::SccpNetworkV1::SoraTaira
+        ));
+        for retired in [
+            "ethereum-sepolia",
+            "bsc-testnet",
+            "tron-nile",
+            "tron-shasta",
+            "ton-testnet",
+            "solana-testnet",
+        ] {
+            assert!(
+                !iroha_data_model::bridge::SccpNetworkV1::from_profile_key(retired)
+                    .is_some_and(is_final_v1_external_sccp_network),
+                "retired profile `{retired}` must not enter the final V1 external allowlist"
+            );
+        }
+    }
+    #[test]
     fn get_sccp_recent_messages_uses_only_canonical_window_fields() {
         let payload = sample_sccp_recent_messages();
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
@@ -35925,22 +36543,6 @@ mod tests {
     fn sccp_recent_messages_reject_bounds_duplicates_aliases_and_malformed_items() {
         let valid = sample_sccp_recent_messages();
         validate_sccp_recent_messages(&valid).expect("valid recent response");
-        let mut solana = valid.clone();
-        solana.items[0].target_profile = iroha_data_model::bridge::SccpNetworkV1::SolanaTestnet
-            .profile_key()
-            .to_owned();
-        solana.items[0].target_domain = iroha_sccp::SCCP_DOMAIN_SOLANA;
-        solana.items[0].route_id = Some(iroha_sccp::SCCP_TAIRA_SOL_XOR_ROUTE_ID_V1.to_owned());
-        let iroha_sccp::SccpPayloadProjectionV1::Transfer(transfer) =
-            &mut solana.items[0].payload_projection;
-        transfer.dest_domain = iroha_sccp::SCCP_DOMAIN_SOLANA;
-        transfer.recipient =
-            iroha_sccp::SccpNormalizedCodecValueV1::SolanaPubkey32 { bytes: [0x93; 32] };
-        transfer.route_id = iroha_sccp::SccpNormalizedCodecValueV1::CanonicalText {
-            value: iroha_sccp::SCCP_TAIRA_SOL_XOR_ROUTE_ID_V1.to_owned(),
-        };
-        validate_sccp_recent_messages(&solana).expect("valid Solana recent response");
-
         let mut ton = valid.clone();
         ton.items[0].target_profile = iroha_data_model::bridge::SccpNetworkV1::TonMainnet
             .profile_key()
@@ -35967,12 +36569,6 @@ mod tests {
         };
         assert!(validate_sccp_recent_messages(&wrong_ton_workchain).is_err());
 
-        let mut zero_solana_recipient = solana.clone();
-        let iroha_sccp::SccpPayloadProjectionV1::Transfer(transfer) =
-            &mut zero_solana_recipient.items[0].payload_projection;
-        transfer.recipient =
-            iroha_sccp::SccpNormalizedCodecValueV1::SolanaPubkey32 { bytes: [0; 32] };
-        assert!(validate_sccp_recent_messages(&zero_solana_recipient).is_err());
         let mut duplicate = valid.clone();
         duplicate.items.push(duplicate.items[0].clone());
         assert!(validate_sccp_recent_messages(&duplicate).is_err());
@@ -35998,9 +36594,22 @@ mod tests {
         let mut overflow = valid.clone();
         overflow.items[0].amount = u128::MAX.into();
         assert!(validate_sccp_recent_messages(&overflow).is_err());
-        let mut retired = valid.clone();
-        retired.items[0].target_profile = "solana-mainnet-beta".to_owned();
-        assert!(validate_sccp_recent_messages(&retired).is_err());
+        for target_profile in [
+            "ethereum-sepolia",
+            "bsc-testnet",
+            "tron-nile",
+            "tron-shasta",
+            "ton-testnet",
+            "solana-testnet",
+            "solana-mainnet-beta",
+        ] {
+            let mut retired = valid.clone();
+            retired.items[0].target_profile = target_profile.to_owned();
+            assert!(
+                validate_sccp_recent_messages(&retired).is_err(),
+                "retired target profile `{target_profile}` must reject"
+            );
+        }
         let mut wrong_link = valid.clone();
         wrong_link.items[0].links.proof_request_path = "/v1/sccp/jobs/retired".to_owned();
         assert!(validate_sccp_recent_messages(&wrong_link).is_err());
@@ -36818,12 +37427,39 @@ mod tests {
     }
     #[test]
     fn native_submit_preflight_rejects_malformed_envelopes_before_http() {
+        for (mut witness, label) in [
+            (
+                iroha_data_model::bridge::SccpSparseMerkleWitnessV1::empty_shard(),
+                "zero expected root",
+            ),
+            (
+                iroha_data_model::bridge::SccpSparseMerkleWitnessV1::empty_shard(),
+                "membership witness",
+            ),
+        ] {
+            if label == "zero expected root" {
+                witness.expected_shard_root = [0; 32];
+            } else {
+                witness.prior_record_digest = [0xA5; 32];
+            }
+            let encoded = base64::engine::general_purpose::STANDARD
+                .encode(norito::to_bytes(&witness).expect("encode invalid replay witness fixture"));
+            assert!(
+                decode_sccp_replay_witness_b64(&encoded).is_err(),
+                "{label} must reject"
+            );
+        }
+        let replay_witness_b64 = base64::engine::general_purpose::STANDARD.encode(
+            norito::to_bytes(&iroha_data_model::bridge::SccpSparseMerkleWitnessV1::empty_shard())
+                .expect("encode empty replay witness"),
+        );
         let mut request = SccpNativeMessageSubmitRequest {
             authority: ALICE_ID.clone(),
             fee_payment: FeePaymentIntent::authority(Vec::new(), None),
             signature_b64: None,
             transaction_payload_b64: None,
             native_proof_b64: "AQ==".to_owned(),
+            replay_witness_b64,
             creation_time_ms: Some(1),
         };
         let error = sccp_client_with_base_url(base_url())
@@ -36887,6 +37523,12 @@ mod tests {
             signature_b64: None,
             transaction_payload_b64: None,
             native_proof_b64: base64::engine::general_purpose::STANDARD.encode(&proof_bytes),
+            replay_witness_b64: base64::engine::general_purpose::STANDARD.encode(
+                norito::to_bytes(
+                    &iroha_data_model::bridge::SccpSparseMerkleWitnessV1::empty_shard(),
+                )
+                .expect("encode empty replay witness"),
+            ),
             creation_time_ms: Some(1_700_000_000_321),
         };
         (
@@ -36927,7 +37569,11 @@ mod tests {
         builder.set_creation_time(Duration::from_millis(
             request.creation_time_ms.expect("fixed creation time"),
         ));
-        let builder = builder.with_instructions([SubmitBridgeProof::new(bridge_proof)]);
+        let replay_witness = decode_sccp_replay_witness_b64(&request.replay_witness_b64)
+            .expect("decode fixture replay witness");
+        let builder = builder.with_instructions([
+            SubmitBridgeProof::new(bridge_proof).with_replay_witness(replay_witness)
+        ]);
         let response_payload = SccpBridgeSubmitResponse {
             submitted: false,
             payload_kind: "transfer".to_owned(),
@@ -37069,7 +37715,7 @@ mod tests {
             creation_time_ms: Some(9),
             payload_kind: "transfer".to_owned(),
             message_id: [1; 32],
-            counterparty: iroha_data_model::bridge::SccpNetworkV1::TronNile,
+            counterparty: iroha_data_model::bridge::SccpNetworkV1::TronMainnet,
             backend: "bridge/sccp/native/tron-dpos-v1".to_owned(),
             route_binding: SccpBridgeExpectedRouteBinding::Exact([2; 32]),
             range_start_height: 7,
@@ -37078,6 +37724,9 @@ mod tests {
                 encoded_envelope: vec![1],
                 backend: iroha_data_model::bridge::BridgeNativeProofBackendV1::TronDpos,
             },
+            replay_witness: Some(
+                iroha_data_model::bridge::SccpSparseMerkleWitnessV1::empty_shard(),
+            ),
         };
         let valid = JsonValue::Object(JsonMap::from_iter([
             ("submitted".into(), JsonValue::from(true)),
@@ -37091,7 +37740,7 @@ mod tests {
                 JsonValue::from("bridge/sccp/native/tron-dpos-v1"),
             ),
             ("counterparty_domain".into(), JsonValue::from(5_u64)),
-            ("counterparty_chain".into(), JsonValue::from("tron-nile")),
+            ("counterparty_chain".into(), JsonValue::from("tron-mainnet")),
             (
                 "route_configuration_hash_hex".into(),
                 JsonValue::from(hex::encode([2; 32])),

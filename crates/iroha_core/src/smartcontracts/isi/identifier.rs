@@ -781,7 +781,10 @@ pub mod isi {
             );
             for (backend, expected_message) in [
                 ("halo2/ipa:production-ready", "native verifier registry"),
-                ("stark/fri/sha256-goldilocks", "must use Halo2 IPA Pasta"),
+                (
+                    "stark/fri/poseidon-x7-goldilocks-6x64-v1",
+                    "must use Halo2 IPA Pasta",
+                ),
             ] {
                 let mut backend_verifier = verifier.clone();
                 backend_verifier.proof_backend = backend.to_owned();

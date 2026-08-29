@@ -1,11 +1,72 @@
 //! Cross-language SCCP codec, I105 admission, and BLS12-381 signal vectors.
 
+import "@acton/build"
+import "@acton/crypto"
 import "@acton/testing/expect"
 import "@contracts/constants"
 import "@contracts/jetton-utils"
+import "@contracts/messages"
 import "@contracts/proof-verifier"
 import "@contracts/sccp-codec"
 import "@contracts/storage"
+
+fun repeatedRouteByte(value: uint8): uint256 {
+    var word = 0;
+    repeat (32) {
+        word = (word << 8) | value;
+    }
+    return word;
+}
+
+fun routeHashGoldenConfig(): BridgeConfig {
+    val codes = DeploymentCodeHashes {
+        jettonMasterCodeHash: repeatedRouteByte(0x11),
+        jettonWalletCodeHash: repeatedRouteByte(0x12),
+        routeCodeHash: repeatedRouteByte(0x13),
+    }.toCell();
+    val guardians = MintBreakerGuardians {
+        guardian0: repeatedRouteByte(0x21),
+        guardian1: repeatedRouteByte(0x22),
+        guardian2: repeatedRouteByte(0x23),
+        tail: (MintBreakerGuardiansTail {
+            guardian3: repeatedRouteByte(0x24),
+            guardian4: repeatedRouteByte(0x25),
+        }).toCell(),
+    }.toCell();
+    val sourceLaneBytes = canonicalSccpTonToSoraLaneBytesV1();
+    val destinationLaneBytes = canonicalSccpSoraToTonLaneBytesV1();
+    return {
+        expectedGlobalId: SCCP_TON_MAINNET_GLOBAL_ID,
+        routeRevision: 1,
+        tairaToTonMultiplier: 1,
+        maxWrappedSupply: 1000000,
+        sourceLaneBytes,
+        destinationLaneBytes,
+        routeHashes: (RouteHashes {
+            sourceLaneHash: sccpLaneHash(sourceLaneBytes),
+            destinationLaneHash: sccpLaneHash(destinationLaneBytes),
+            routeConfigurationHash: 1,
+            tail: (RouteHashesTail {
+                destinationBindingHash: 1,
+                semanticProofProfileHash: repeatedRouteByte(0x18),
+                deploymentCodeHashes: codes,
+            }).toCell(),
+        }).toCell(),
+        finalityHashes: (FinalityHashes {
+            soraFinalityAnchorHash: repeatedRouteByte(0x19),
+            verifierCircuitHash: repeatedRouteByte(0x15),
+            verifyingKeyHash: repeatedRouteByte(0x16),
+            tail: (FinalityHashesTail {
+                proofProfileCommitment: repeatedRouteByte(0x17),
+                mintBreakerGuardians: guardians,
+                embeddedVerifierCodeHash: repeatedRouteByte(0x14),
+                verifyingKeyCellHash: 1,
+                verifyingKey: beginCell().endCell(),
+                masterMetadata: beginCell().endCell(),
+            }).toCell(),
+        }).toCell(),
+    };
+}
 
 fun canonicalRecipientFromSlice(value: slice): cell {
     var input = value;
@@ -157,14 +218,25 @@ fun pairingVerifyingKey(): cell {
 }
 
 fun initialStateFixtureConfig(): Cell<BridgeConfig> {
-    val routeTail: RouteHashesTail = { destinationBindingHash: 4, semanticProofProfileHash: 5 };
-    val routeHashes: RouteHashes = {
-        sourceLaneHash: 1,
-        destinationLaneHash: 2,
-        routeConfigurationHash: 3,
+    val sourceLaneBytes = canonicalSccpTonToSoraLaneBytesV1();
+    val destinationLaneBytes = canonicalSccpSoraToTonLaneBytesV1();
+    val codeHashes = DeploymentCodeHashes {
+        jettonMasterCodeHash: build("TairaXorJettonMaster").hash(),
+        jettonWalletCodeHash: build("TairaXorJettonWallet").hash(),
+        routeCodeHash: build("TairaXorSccpBridge").hash(),
+    }.toCell();
+    val routeTail: RouteHashesTail = {
+        destinationBindingHash: 1,
+        semanticProofProfileHash: 5,
+        deploymentCodeHashes: codeHashes,
+    };
+    val draftRouteHashes: RouteHashes = {
+        sourceLaneHash: sccpLaneHash(sourceLaneBytes),
+        destinationLaneHash: sccpLaneHash(destinationLaneBytes),
+        routeConfigurationHash: 1,
         tail: routeTail.toCell(),
     };
-    val verifyingKey = beginCell().storeUint(12, 8).endCell();
+    val verifyingKey = pairingVerifyingKey();
     val guardianTail: MintBreakerGuardiansTail = { guardian3: 4, guardian4: 5 };
     val guardians: MintBreakerGuardians = {
         guardian0: 1,
@@ -178,23 +250,138 @@ fun initialStateFixtureConfig(): Cell<BridgeConfig> {
         verifyingKeyCellHash: verifyingKey.hash(),
         verifyingKey,
         mintBreakerGuardians: guardians.toCell(),
+        masterMetadata: beginCell().storeUint(0x53434350, 32).endCell(),
     };
     val finalityHashes: FinalityHashes = {
+        soraFinalityAnchorHash: 6,
+        verifierCircuitHash: 7,
+        verifyingKeyHash: canonicalBls12381VerifyingKeyHash(verifyingKey),
+        tail: finalityTail.toCell(),
+    };
+    val draft: BridgeConfig = {
+        expectedGlobalId: SCCP_TON_MAINNET_GLOBAL_ID,
+        routeRevision: 1,
+        tairaToTonMultiplier: SCCP_TAIRA_TO_TON_MULTIPLIER,
+        maxWrappedSupply: 1000000000000000,
+        sourceLaneBytes,
+        destinationLaneBytes,
+        routeHashes: draftRouteHashes.toCell(),
+        finalityHashes: finalityHashes.toCell(),
+    };
+    val destinationBindingHash = sccpTonDestinationBindingHashV1(draft);
+    val bindingRouteHashes: RouteHashes = {
+        sourceLaneHash: draftRouteHashes.sourceLaneHash,
+        destinationLaneHash: draftRouteHashes.destinationLaneHash,
+        routeConfigurationHash: 1,
+        tail: (RouteHashesTail {
+            destinationBindingHash,
+            semanticProofProfileHash: 5,
+            deploymentCodeHashes: codeHashes,
+        }).toCell(),
+    };
+    val bindingDraft: BridgeConfig = {
+        expectedGlobalId: draft.expectedGlobalId,
+        routeRevision: draft.routeRevision,
+        tairaToTonMultiplier: draft.tairaToTonMultiplier,
+        maxWrappedSupply: draft.maxWrappedSupply,
+        sourceLaneBytes: draft.sourceLaneBytes,
+        destinationLaneBytes: draft.destinationLaneBytes,
+        routeHashes: bindingRouteHashes.toCell(),
+        finalityHashes: draft.finalityHashes,
+    };
+    val routeConfigurationHash = sccpExactTonRouteConfigurationHashV1(bindingDraft);
+    return BridgeConfig {
+        expectedGlobalId: bindingDraft.expectedGlobalId,
+        routeRevision: bindingDraft.routeRevision,
+        tairaToTonMultiplier: bindingDraft.tairaToTonMultiplier,
+        maxWrappedSupply: bindingDraft.maxWrappedSupply,
+        sourceLaneBytes: bindingDraft.sourceLaneBytes,
+        destinationLaneBytes: bindingDraft.destinationLaneBytes,
+        routeHashes: (RouteHashes {
+            sourceLaneHash: bindingRouteHashes.sourceLaneHash,
+            destinationLaneHash: bindingRouteHashes.destinationLaneHash,
+            routeConfigurationHash,
+            tail: bindingRouteHashes.tail,
+        }).toCell(),
+        finalityHashes: bindingDraft.finalityHashes,
+    }.toCell();
+}
+
+fun sortedGuardianKeyPairs(): array<KeyPair> {
+    var keys = [
+        crypto.seedToKeyPair(1),
+        crypto.seedToKeyPair(2),
+        crypto.seedToKeyPair(3),
+        crypto.seedToKeyPair(4),
+        crypto.seedToKeyPair(5),
+    ];
+    var left = 0;
+    while (left < SCCP_MINT_BREAKER_GUARDIAN_COUNT) {
+        var right = left + 1;
+        while (right < SCCP_MINT_BREAKER_GUARDIAN_COUNT) {
+            if (keys.get(right).publicKey < keys.get(left).publicKey) {
+                val saved = keys.get(left);
+                keys.set(keys.get(right), left);
+                keys.set(saved, right);
+            }
+            right += 1;
+        }
+        left += 1;
+    }
+    return keys;
+}
+
+fun breakerFixtureConfig(keys: array<KeyPair>): BridgeConfig {
+    val guardianTail: MintBreakerGuardiansTail = {
+        guardian3: keys.get(3).publicKey,
+        guardian4: keys.get(4).publicKey,
+    };
+    val guardians: MintBreakerGuardians = {
+        guardian0: keys.get(0).publicKey,
+        guardian1: keys.get(1).publicKey,
+        guardian2: keys.get(2).publicKey,
+        tail: guardianTail.toCell(),
+    };
+    val verifyingKey = beginCell().storeUint(1, 8).endCell();
+    val finalityTail: FinalityHashesTail = {
+        proofProfileCommitment: 9,
+        embeddedVerifierCodeHash: 10,
+        verifyingKeyCellHash: verifyingKey.hash(),
+        verifyingKey,
+        mintBreakerGuardians: guardians.toCell(),
+        masterMetadata: beginCell().storeUint(0x53434350, 32).endCell(),
+    };
+    val finality: FinalityHashes = {
         soraFinalityAnchorHash: 6,
         verifierCircuitHash: 7,
         verifyingKeyHash: 8,
         tail: finalityTail.toCell(),
     };
-    return BridgeConfig {
+    val routeTail: RouteHashesTail = {
+        destinationBindingHash: 4,
+        semanticProofProfileHash: 5,
+        deploymentCodeHashes: (DeploymentCodeHashes {
+            jettonMasterCodeHash: 11,
+            jettonWalletCodeHash: 12,
+            routeCodeHash: 13,
+        }).toCell(),
+    };
+    val hashes: RouteHashes = {
+        sourceLaneHash: 1,
+        destinationLaneHash: 2,
+        routeConfigurationHash: 3,
+        tail: routeTail.toCell(),
+    };
+    return {
         expectedGlobalId: -239,
         routeRevision: 1,
         tairaToTonMultiplier: SCCP_TAIRA_TO_TON_MULTIPLIER,
-        maxWrappedSupply: 100,
-        sourceLaneBytes: beginCell().storeUint(14, 8).endCell(),
-        destinationLaneBytes: beginCell().storeUint(1, 8).endCell(),
-        routeHashes: routeHashes.toCell(),
-        finalityHashes: finalityHashes.toCell(),
-    }.toCell();
+        maxWrappedSupply: 1000000,
+        sourceLaneBytes: beginCell().storeUint(1, 8).endCell(),
+        destinationLaneBytes: beginCell().storeUint(2, 8).endCell(),
+        routeHashes: hashes.toCell(),
+        finalityHashes: finality.toCell(),
+    };
 }
 
 fun positiveDestinationSignals(): cell {
@@ -272,35 +459,23 @@ fun positiveProofForSignals(publicSignalsCell: cell, verifyingKeyCell: cell): ce
     return proof.toCell();
 }
 
-get fun `test sequential identical rejected deposits have unique refund identities`() {
-    val owner = address.fromWorkchainAndHash(
-        0,
-        0x0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20,
-    );
-    val first = sccpRefundIdentity(7, 99, owner, 123456789);
-    val second = sccpRefundIdentity(8, 99, owner, 123456789);
-    expect(first).toNotEqual(second);
-    expect(first).toEqual(sccpRefundIdentity(7, 99, owner, 123456789));
-    // Invalid bridge payloads must remain refundable even at the largest
-    // amount representable by TON's VarUInteger 16 `coins` type.
-    expect(sccpRefundIdentity(9, 99, owner, 0xffffffffffffffffffffffffffffff)).toNotEqual(0);
-}
-
 get fun `test completed mint replay acknowledges the current verified request`() {
     val record: MasterMintRecord = {
-        status: SCCP_COMPLETED,
         queryId: 11,
         bridgeAddress: address.fromWorkchainAndHash(0, 0x1111),
         recipient: address.fromWorkchainAndHash(0, 0x2222),
         jettonAmount: 77,
-        payloadHash: 0x3333,
+        tail: (MasterMintRecordTail {
+            payloadHash: 0x3333,
+            payloadSha256: 0x5555,
+        }).toCell(),
     };
     val ack = sccpMasterMintAckForRequest(record, 0x4444, 22);
     expect(ack.queryId).toEqual(22);
     expect(ack.messageId).toEqual(0x4444);
     expect(ack.recipient).toEqual(record.recipient);
     expect(ack.jettonAmount).toEqual(record.jettonAmount);
-    expect(ack.payloadHash).toEqual(record.payloadHash);
+    expect(ack.payloadHash).toEqual(record.tail.load().payloadHash);
 }
 
 get fun `test finalize version and retry funding policies fail closed`() {
@@ -310,12 +485,64 @@ get fun `test finalize version and retry funding policies fail closed`() {
     expect(sccpRetryValueIsSufficient(2 * SCCP_OPERATION_VALUE)).toEqual(true);
 }
 
-get fun `test master mint supply cap admits the boundary and rejects overruns`() {
+get fun `test pre-message reserves and bounded excesses preserve old balance`() {
+    expect(sccpPreMessageReserveAmount(1000, 400, 100)).toEqual(600);
+    expect(sccpPreMessageReserveAmount(450, 400, 100)).toEqual(100);
+    expect(
+        sccpBoundedInboundExcess(5 * SCCP_OPERATION_VALUE, 2 * SCCP_OPERATION_VALUE),
+    ).toEqual(2 * SCCP_OPERATION_VALUE);
+    expect(sccpBoundedInboundExcess(SCCP_OPERATION_VALUE, 0)).toEqual(0);
+    expect(sccpPendingCapacityAvailable(SCCP_PENDING_OPERATION_CAP - 1)).toEqual(true);
+    expect(sccpPendingCapacityAvailable(SCCP_PENDING_OPERATION_CAP)).toEqual(false);
     expect(sccpMintFitsSupplyCap(90, 10, 100)).toEqual(true);
     expect(sccpMintFitsSupplyCap(90, 11, 100)).toEqual(false);
     expect(sccpMintFitsSupplyCap(100, 1, 100)).toEqual(false);
     expect(sccpMintFitsSupplyCap(101, 1, 100)).toEqual(false);
-    expect(sccpMintFitsSupplyCap(0, 0, 0)).toEqual(false);
+    expect(sccpMintFitsSupplyCap(0, 0, 100)).toEqual(false);
+    expect(sccpMintFitsSupplyCap(0, 1, 0)).toEqual(false);
+}
+
+@test.fail_with(86)
+get fun `test pre-message reserve rejects impossible subtraction`() {
+    sccpPreMessageReserveAmount(99, 100, 1);
+}
+
+get fun `test mint breaker is target-bound fixed-slot three-of-five`() {
+    val keys = sortedGuardianKeyPairs();
+    val config = breakerFixtureConfig(keys);
+    val target = address.fromWorkchainAndHash(0, 0x1234);
+    val otherTarget = address.fromWorkchainAndHash(0, 0x5678);
+    val authorization = sccpMintBreakerAuthorization(config, target);
+    val signature0 = beginCell()
+        .storeSlice(crypto.sign(keys.get(0).privateKey, authorization))
+        .endCell();
+    val signature1 = beginCell()
+        .storeSlice(crypto.sign(keys.get(1).privateKey, authorization))
+        .endCell();
+    val signature2 = beginCell()
+        .storeSlice(crypto.sign(keys.get(2).privateKey, authorization))
+        .endCell();
+    val valid: SccpDisableMinting = {
+        signature0,
+        signature1,
+        tail: (SccpDisableMintingTail {
+            signature2,
+            signature3: null,
+            signature4: null,
+        }).toCell(),
+    };
+    expect(verifyMintBreakerAuthorization(config, target, valid)).toEqual(true);
+    expect(verifyMintBreakerAuthorization(config, otherTarget, valid)).toEqual(false);
+    val onlyTwo: SccpDisableMinting = {
+        signature0,
+        signature1,
+        tail: (SccpDisableMintingTail {
+            signature2: null,
+            signature3: null,
+            signature4: null,
+        }).toCell(),
+    };
+    expect(verifyMintBreakerAuthorization(config, target, onlyTwo)).toEqual(false);
 }
 
 get fun `test transfer funding and recoverable nonce policies fail closed`() {
@@ -350,7 +577,7 @@ get fun `test transfer funding and recoverable nonce policies fail closed`() {
     expect(sccpOutboundNonceCanAdvance(0xffffffffffffffff, 0xffffffffffffffff)).toEqual(false);
 }
 
-get fun `test wallet burn and refund retries bind the first debit tuple`() {
+get fun `test wallet burn retries bind the first debit tuple`() {
     val bridge = address.fromWorkchainAndHash(
         0,
         0x1111111111111111111111111111111111111111111111111111111111111111,
@@ -359,24 +586,27 @@ get fun `test wallet burn and refund retries bind the first debit tuple`() {
         0,
         0x2222222222222222222222222222222222222222222222222222222222222222,
     );
-    val otherRecipient = address.fromWorkchainAndHash(
-        0,
-        0x3333333333333333333333333333333333333333333333333333333333333333,
-    );
     val burn: WalletBurnRecord = {
-        status: SCCP_PENDING_BURN,
+        lockSequence: 5,
         queryId: 7,
+        outboundNonce: 6,
         bridgeAddress: bridge,
+        ownerAddress: recipient,
         jettonAmount: 10,
-        payloadHash: 11,
-        sourceEventDigest: 12,
+        tail: (WalletBurnRecordTail {
+            payloadHash: 11,
+            payloadSha256: 13,
+            sourceEventDigest: 12,
+        }).toCell(),
     };
     expect(
         sccpWalletBurnRecordMatches(
             burn,
-            SCCP_PENDING_BURN,
+            5,
             7,
+            6,
             bridge,
+            recipient,
             10,
             11,
             12,
@@ -385,55 +615,19 @@ get fun `test wallet burn and refund retries bind the first debit tuple`() {
     expect(
         sccpWalletBurnRecordMatches(
             burn,
-            SCCP_PENDING_BURN,
+            5,
             7,
+            6,
             bridge,
+            recipient,
             20,
             11,
             12,
         ),
     ).toEqual(false);
-
-    val refund: WalletRefundRecord = {
-        status: SCCP_PENDING_BURN,
-        queryId: 8,
-        bridgeAddress: bridge,
-        recipientOwner: recipient,
-        jettonAmount: 30,
-    };
-    expect(
-        sccpWalletRefundRecordMatches(
-            refund,
-            SCCP_PENDING_BURN,
-            8,
-            bridge,
-            recipient,
-            30,
-        ),
-    ).toEqual(true);
-    expect(
-        sccpWalletRefundRecordMatches(
-            refund,
-            SCCP_PENDING_BURN,
-            8,
-            bridge,
-            recipient,
-            31,
-        ),
-    ).toEqual(false);
-    expect(
-        sccpWalletRefundRecordMatches(
-            refund,
-            SCCP_PENDING_BURN,
-            8,
-            bridge,
-            otherRecipient,
-            30,
-        ),
-    ).toEqual(false);
 }
 
-get fun `test destination refund replay key is scoped to authenticated bridge`() {
+get fun `test master burn replay key is scoped to authenticated bridge`() {
     val canonicalBridge = address.fromWorkchainAndHash(
         0,
         0x4444444444444444444444444444444444444444444444444444444444444444,
@@ -442,45 +636,76 @@ get fun `test destination refund replay key is scoped to authenticated bridge`()
         0,
         0x5555555555555555555555555555555555555555555555555555555555555555,
     );
-    val canonical = sccpWalletRefundDestinationReplayId(canonicalBridge, 99);
-    expect(canonical).toEqual(sccpWalletRefundDestinationReplayId(canonicalBridge, 99));
-    expect(canonical).toNotEqual(sccpWalletRefundDestinationReplayId(attackerBridge, 99));
     expect(sccpMasterBurnReplayId(canonicalBridge, 99)).toNotEqual(
         sccpMasterBurnReplayId(attackerBridge, 99),
     );
-    val masterchainOwner = address.fromWorkchainAndHash(
-        -1,
-        0x4444444444444444444444444444444444444444444444444444444444444444,
+}
+
+get fun `test TON mainnet lanes and guardian ordered route hashes match final V1 goldens`() {
+    val config = routeHashGoldenConfig();
+    val hashes = config.routeHashes.load();
+    expect(hashes.sourceLaneHash).toEqual(
+        0x53c771f37951401d26513e2519cf46b93c582f75529d3949a6c548217ec87b55,
     );
-    expect(sccpRefundIdentity(0, 7, masterchainOwner, 1)).toNotEqual(
-        sccpRefundIdentity(0, 7, canonicalBridge, 1),
+    expect(hashes.destinationLaneHash).toEqual(
+        0x4876fd8bf67c75bbe3e96c884e82a8e794a2bd277f2f206cb19b96bedbf19bc0,
+    );
+    val binding = sccpTonDestinationBindingHashV1(config);
+    expect(binding).toEqual(
+        0x001c0af2bc2892344521e240b75cc136d7d497cb686722ffe932b4438266820c,
+    );
+    expect(sccpTonDeploymentConfigHashV1(config, binding)).toEqual(
+        0x59259105963c49d671793b36c35539ce0f9b5e819ec8a0e6043fa00750f9b708,
+    );
+    expect(sccpTonAssetRouteConfigHashV1(config)).toEqual(
+        0xed33173402e1a7de23b3052e2c2b22e876c359bae484127af8ee9773d4d78af6,
+    );
+    expect(sccpExactTonRouteConfigurationHashV1(config)).toEqual(
+        0x795191a9fef7b24355e19f9265bcd0b36c3ea18833f1e87a59395d493422a3a4,
     );
 }
 
 get fun `test canonical deployment data starts from one empty mutable state`() {
     val config = initialStateFixtureConfig();
-    val masterAddress = address.fromWorkchainAndHash(
+    val bridgeAddress = address.fromWorkchainAndHash(
         0,
         0x7777777777777777777777777777777777777777777777777777777777777777,
     );
-    val bridge = canonicalBridgeInitialStorage(config, masterAddress);
+    val bridge = canonicalBridgeInitialStorage(config);
+    val loadedConfig = config.load();
+    val routeHashes = loadedConfig.routeHashes.load();
     expect(bridge.storageVersion).toEqual(SCCP_STORAGE_VERSION);
-    expect(bridge.routeConfigurationHash).toEqual(3);
+    expect(bridge.routeConfigurationHash).toEqual(routeHashes.routeConfigurationHash);
+    expect(routeHashes.tail.load().destinationBindingHash).toEqual(
+        sccpTonDestinationBindingHashV1(loadedConfig),
+    );
+    expect(routeHashes.routeConfigurationHash).toEqual(
+        sccpExactTonRouteConfigurationHashV1(loadedConfig),
+    );
+    expect(loadedConfig.sourceLaneBytes.hash()).toEqual(canonicalSccpTonToSoraLaneBytesV1().hash());
+    expect(loadedConfig.destinationLaneBytes.hash()).toEqual(
+        canonicalSccpSoraToTonLaneBytesV1().hash(),
+    );
     expect(bridge.config.hash()).toEqual(config.hash());
-    expect(bridge.masterAddress).toEqual(masterAddress);
-    expect(bridge.refundSequence).toEqual(0);
-    expect(bridge.nonces.exists(masterAddress)).toEqual(false);
+    expect(bridge.bridgeConfigCellHash).toEqual(config.hash());
+    expect(bridge.mintingDisabled).toEqual(false);
     expect(bridge.replay.hash()).toEqual(emptyBridgeReplayState().hash());
     expect(bridge.pending.hash()).toEqual(emptyBridgePendingState().hash());
 
-    val metadata = beginCell().storeUint(0x53434350, 32).endCell();
-    val master = canonicalMasterInitialStorage(metadata, config);
+    val master = canonicalMasterInitialStorage(config, bridgeAddress);
     expect(master.storageVersion).toEqual(SCCP_STORAGE_VERSION);
-    expect(master.routeConfigurationHash).toEqual(3);
+    expect(master.routeConfigurationHash).toEqual(routeHashes.routeConfigurationHash);
+    expect(master.bridgeConfigCellHash).toEqual(config.hash());
     expect(master.totalSupply).toEqual(0);
-    expect(master.metadata.hash()).toEqual(metadata.hash());
+    expect(master.metadata.hash()).toEqual(
+        config.load().finalityHashes.load().tail.load().masterMetadata.hash(),
+    );
     expect(master.bridgeConfig.hash()).toEqual(config.hash());
+    expect(master.bridgeAddress).toEqual(bridgeAddress);
     expect(master.replay.hash()).toEqual(emptyMasterReplayState().hash());
+    expect(master.pendingMintCount).toEqual(0);
+    expect(master.mintingDisabled).toEqual(false);
+    expect(loadedConfig.maxWrappedSupply).toEqual(1000000000000000);
 }
 
 get fun `test canonical Taira I105 recipient passes complete source admission`() {
@@ -554,6 +779,12 @@ get fun `test canonical four-cell payload and hashes match Rust vectors`() {
     expect(ordinaryByteLength(payload.chunk3)).toEqual(0);
     expect(canonicalPayloadByteLength(payload)).toEqual(208);
     expect(sccpPayloadHash(payload)).toEqual(
+        0xa5b2070d585a783ee4450eb9694cb864fe8cb6a57622c6ec29f15ea168b8afff,
+    );
+    expect(sccpPayloadHashBlockCountV1(payload)).toEqual(2);
+    var incremental = sccpPayloadHashBlockV1(payload, sccpBlake2bInitialStateV1(), 0);
+    incremental = sccpPayloadHashBlockV1(payload, incremental, 1);
+    expect(sccpPayloadHashFromStateV1(incremental)).toEqual(
         0xa5b2070d585a783ee4450eb9694cb864fe8cb6a57622c6ec29f15ea168b8afff,
     );
     val lane = beginCell().storeSlice("lane".literalSlice()).endCell();

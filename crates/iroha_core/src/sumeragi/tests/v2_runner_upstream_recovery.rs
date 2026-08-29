@@ -171,8 +171,9 @@ fn pre_submit_lane_binding_rejection_arms_one_non_empty_retry() {
 #[test]
 fn quiet_retransmission_tick_services_one_retained_historical_session() {
     let mut lane_work = super::super::v2_lane_work::tests::quiet_historical_recovery_fixture();
+    let (services, _) = super::super::v2_worker::tests::fixture();
     assert!(lane_work.has_pending_historical_recovery());
-    let outcome = service_historical_recovery_tick(&mut lane_work)
+    let outcome = service_historical_recovery_tick(&mut lane_work, &services)
         .expect("quiet retransmission tick advances retained history");
     let HistoricalRecoveryServiceOutcome::Waiting(wait) = outcome else {
         panic!("missing canonical body must remain a typed quiet-network retry: {outcome:?}");

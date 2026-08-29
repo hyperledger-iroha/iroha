@@ -35,6 +35,7 @@ ABI_ENCODER_V2_SOURCES = frozenset(
     {
         "contracts/bsc/sccp/TairaXorBscSccpBridge.sol",
         "contracts/ethereum/sccp/TairaXorEthereumSccpBridge.sol",
+        "contracts/evm/sccp/SccpSha256ReplayForest.sol",
         "contracts/evm/sccp/TairaXorExactEvmSccpBridge.sol",
         "contracts/tron/sccp/TairaXorSccpBridge.sol",
     }

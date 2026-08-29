@@ -4305,7 +4305,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             }
             if rec.circuit_id.len() > iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_CIRCUIT_ID_BYTES
                 || !iroha_data_model::zk::open_verify_circuit_id_is_portable(&rec.circuit_id)
-                || iroha_data_model::zk::open_verify_circuit_id_uses_reserved_privacy_protocol_label_v1(
+                || iroha_data_model::zk::open_verify_circuit_id_uses_reserved_privacy_protocol_namespace_v1(
                     &rec.circuit_id,
                 )
             {
@@ -4398,7 +4398,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     fn normalize_halo2_circuit_id(raw: &str) -> Option<String> {
         if raw.len() > iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_CIRCUIT_ID_BYTES
             || !iroha_data_model::zk::open_verify_circuit_id_is_portable(raw)
-            || iroha_data_model::zk::open_verify_circuit_id_uses_reserved_privacy_protocol_label_v1(
+            || iroha_data_model::zk::open_verify_circuit_id_uses_reserved_privacy_protocol_namespace_v1(
                 raw,
             )
         {
@@ -4429,7 +4429,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         let is_admissible = |circuit_id: &str| {
             circuit_id.len() <= iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_CIRCUIT_ID_BYTES
                 && iroha_data_model::zk::open_verify_circuit_id_is_portable(circuit_id)
-                && !iroha_data_model::zk::open_verify_circuit_id_uses_reserved_privacy_protocol_label_v1(
+                && !iroha_data_model::zk::open_verify_circuit_id_uses_reserved_privacy_protocol_namespace_v1(
                     circuit_id,
                 )
         };
@@ -16967,7 +16967,7 @@ mod tests {
     };
     use iroha_data_model::{
         parameter::{CustomParameter, Parameter, SmartContractParameter},
-        privacy::{PRIVACY_RETIRED_PROTOCOL_LABELS_V1, PrivacyProtocolIdV1},
+        privacy::PrivacyProtocolIdV1,
         proof::{ProofAttachment, VerifyingKeyBox, VerifyingKeyId},
         query::{QueryRequest, QueryResponse, SingularQueryBox, prelude::FindParameters},
         zk::BackendTag,
@@ -16979,6 +16979,22 @@ mod tests {
     use ivm::{IVM, encoding, instruction, syscalls as ivm_sys};
     use nonzero_ext::nonzero;
     use std::{collections::BTreeMap, sync::Arc};
+
+    fn shared_argument_fixture_payload() -> Json {
+        let fixture: norito::json::Value = norito::json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/kotodama/entrypoint_argument_record_v1.json"
+        )))
+        .expect("parse shared contract argument fixture");
+        let payload = fixture
+            .as_object()
+            .and_then(|root| root.get("torii_boundary"))
+            .and_then(norito::json::Value::as_object)
+            .and_then(|boundary| boundary.get("payload"))
+            .expect("shared fixture Torii payload")
+            .clone();
+        Json::from(payload)
+    }
     #[cfg(feature = "zk-halo2-ipa")]
     fn sample_open_verify_envelope() -> iroha_data_model::zk::OpenVerifyEnvelope {
         let fixture =
@@ -23666,8 +23682,8 @@ seiyaku DurableOwner {
     #[cfg(feature = "zk-stark")]
     #[test]
     fn set_verifying_keys_rejects_weak_stark_parameters_during_rehydration() {
-        let backend = "stark/fri/sha256-goldilocks";
-        let circuit_id = "stark/fri/sha256-goldilocks:weak-rehydrated-key";
+        let backend = "stark/fri/poseidon-x7-goldilocks-6x64-v1";
+        let circuit_id = "stark/fri/poseidon-x7-goldilocks-6x64-v1:weak-rehydrated-key";
         let payload = crate::zk_stark::StarkFriVerifyingKeyV1 {
             version: 1,
             circuit_id: circuit_id.to_owned(),
@@ -23676,7 +23692,6 @@ seiyaku DurableOwner {
             fold_arity: 2,
             queries: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_QUERIES - 1,
             merkle_arity: 2,
-            hash_fn: crate::zk_stark::STARK_HASH_SHA256_V1,
         };
         let vk_bytes = norito::encode_canonical(&payload).expect("encode weak STARK key");
         let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
@@ -23846,10 +23861,8 @@ seiyaku DurableOwner {
         );
     }
     #[test]
-    fn set_verifying_keys_rejects_reserved_privacy_ids_during_state_rehydration() {
-        let active = PrivacyProtocolIdV1::ZkAcePqAuthorizationV0.canonical_label();
-        let retired = PRIVACY_RETIRED_PROTOCOL_LABELS_V1[0];
-        for (case, circuit_id) in [("active", active), ("retired", retired)] {
+    fn set_verifying_keys_rejects_exact12_privacy_ids_during_state_rehydration() {
+        for circuit_id in PrivacyProtocolIdV1::ALL.map(PrivacyProtocolIdV1::canonical_label) {
             let mut host = CoreHost::new(fixture_account("alice"));
             let backend = "halo2/ipa";
             let vk_bytes = vec![1, 2, 3, 4];
@@ -23860,15 +23873,16 @@ seiyaku DurableOwner {
             let map = BTreeMap::from([(VerifyingKeyId::new(backend, "vk"), record)]);
             assert!(
                 host.set_verifying_keys(map).is_err(),
-                "{case} privacy circuit id {circuit_id:?} must not rehydrate"
+                "Exact12 privacy circuit id {circuit_id:?} must not rehydrate"
             );
             assert!(host.verifying_keys.is_empty());
             assert!(host.prepared_verifying_keys.is_empty());
         }
+        let exact12 = PrivacyProtocolIdV1::ZkAcePqAuthorizationV1.canonical_label();
         for (case, circuit_id) in [
-            ("leading-whitespace", format!(" {active}")),
-            ("trailing-whitespace", format!("{retired} ")),
-            ("uppercase", active.to_ascii_uppercase()),
+            ("leading-whitespace", format!(" {exact12}")),
+            ("trailing-whitespace", format!("{exact12} ")),
+            ("uppercase", exact12.to_ascii_uppercase()),
         ] {
             let mut host = CoreHost::new(fixture_account("alice"));
             let backend = "halo2/ipa";
@@ -23894,7 +23908,7 @@ seiyaku DurableOwner {
         let backend = "halo2/ipa";
         let vk_bytes = vec![1, 2, 3, 4];
         let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
-        let near_miss = format!("generic-{active}");
+        let near_miss = format!("generic-{exact12}");
         let record = active_vk_record(
             commitment, [0x42; 32], backend, &near_miss, "core", vk_bytes,
         );
@@ -24002,8 +24016,8 @@ seiyaku DurableOwner {
             (
                 "halo2-registry-stark-record",
                 "halo2/ipa",
-                "stark/fri/sha256-goldilocks",
-                "stark/fri/sha256-goldilocks:zk-ace",
+                "stark/fri/poseidon-x7-goldilocks-6x64-v1",
+                "stark/fri/poseidon-x7-goldilocks-6x64-v1:zk-ace",
             ),
         ] {
             let mut host = CoreHost::new(fixture_account("alice"));
@@ -24379,6 +24393,8 @@ seiyaku DurableOwner {
             "sc/0123456789abcdef/counter",
             "da_ingest_quota_v1",
             "da_ingest_quota_v1/authority/deadbeef",
+            "faucet_claim_consumed_v1",
+            "faucet_claim_consumed_v1/deadbeef",
             "merge_execution_batch_applied_1_deadbeef",
             "merge_execution_lane_applied_1_2_3_deadbeef",
             "merge_lane_frontier_v1",
@@ -24421,6 +24437,7 @@ seiyaku DurableOwner {
         for key in [
             "scatter/counter",
             "da_ingest_quota_v1x",
+            "faucet_claim_consumed_v1x",
             "merge_lane_frontier_v1x",
             "queue_plan_admission_v2x",
             "queue_plan_pending_obligation_v1x",
@@ -25188,52 +25205,120 @@ seiyaku DurableOwner {
         assert_eq!(vm.register(10), 42);
     }
     #[test]
-    fn json_quantity_getter_accepts_only_canonical_strings() {
+    fn exact_json_getters_accept_only_canonical_strings_through_ledger_host() {
         let mut host = CoreHost::new(fixture_account("alice"));
-        let mut vm = IVM::new(10_000);
-        let key: Name = "amount".parse().expect("amount key");
-        let key_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&key));
-        let json = Json::from_str_norito(r#"{"amount":"1.25"}"#).expect("quantity JSON");
+        let mut vm = IVM::new(100_000);
+        let json = shared_argument_fixture_payload();
         let json_ptr = store_tlv(&mut vm, PointerType::Json, &norito_blob(&json));
-        vm.set_register(10, json_ptr);
-        vm.set_register(11, key_ptr);
-        host.syscall(ivm_sys::SYSCALL_JSON_GET_QUANTITY, &mut vm)
-            .expect("get quantity");
-        let (some, words) = ivm::sum::read_words(
-            &vm,
-            vm.register(10),
-            ivm::sum::SumLayoutV1::option(1).expect("quantity option layout"),
-        )
-        .expect("quantity option");
-        assert!(some);
-        let tlv = vm.memory.validate_tlv(words[0]).expect("quantity TLV");
-        assert_eq!(tlv.type_id, PointerType::Quantity);
-        let quantity = QuantityValueV1::decode_frame(tlv.payload)
-            .expect("decode quantity")
-            .into_quantity();
-        assert_eq!(
-            quantity,
-            "1.25".parse::<Quantity>().expect("canonical quantity")
-        );
-        for invalid in [
-            r#"{"amount":"1.2500"}"#,
-            r#"{"amount":"-1"}"#,
-            r#"{"amount":1.25}"#,
+        for (key, syscall, pointer_type, expected) in [
+            (
+                "exact_int",
+                ivm_sys::SYSCALL_JSON_GET_INT,
+                PointerType::Int,
+                "1606938044258990275541962092341162602522202993782792835301376",
+            ),
+            (
+                "exact_decimal",
+                ivm_sys::SYSCALL_JSON_GET_DECIMAL,
+                PointerType::Decimal,
+                "-12345678901234567890.125",
+            ),
+            (
+                "exact_quantity",
+                ivm_sys::SYSCALL_JSON_GET_QUANTITY,
+                PointerType::Quantity,
+                "12345678901234567890.0000000000000000000000000001",
+            ),
         ] {
-            let invalid = Json::from_str_norito(invalid).expect("invalid quantity JSON shape");
-            let invalid_ptr = store_tlv(&mut vm, PointerType::Json, &norito_blob(&invalid));
-            vm.set_register(10, invalid_ptr);
+            let key: Name = key.parse().expect("exact-number key");
+            let key_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&key));
+            vm.set_register(10, json_ptr);
             vm.set_register(11, key_ptr);
-            host.syscall(ivm_sys::SYSCALL_JSON_GET_QUANTITY, &mut vm)
-                .expect("invalid quantity is Option::none");
+            host.syscall(syscall, &mut vm).expect("exact JSON getter");
+            let (some, words) = ivm::sum::read_words(
+                &vm,
+                vm.register(10),
+                ivm::sum::SumLayoutV1::option(1).expect("exact-number option layout"),
+            )
+            .expect("exact-number option");
+            assert!(some, "{key} must produce Option::some");
+            let tlv = vm.memory.validate_tlv(words[0]).expect("exact-number TLV");
+            assert_eq!(tlv.type_id, pointer_type);
+            let actual = match pointer_type {
+                PointerType::Int => IntValueV1::decode_frame(tlv.payload)
+                    .expect("decode int frame")
+                    .into_int()
+                    .to_string(),
+                PointerType::Decimal => {
+                    iroha_primitives::numeric_abi::DecimalValueV1::decode_frame(tlv.payload)
+                        .expect("decode decimal frame")
+                        .into_numeric()
+                        .to_string()
+                }
+                PointerType::Quantity => QuantityValueV1::decode_frame(tlv.payload)
+                    .expect("decode quantity frame")
+                    .into_quantity()
+                    .to_string(),
+                _ => unreachable!("fixed exact-number pointer cases"),
+            };
+            assert_eq!(actual, expected);
+        }
+        let token_json =
+            Json::from_str_norito(r#"{"decimal_token":1.25,"int_token":7,"quantity_token":7}"#)
+                .expect("noncanonical numeric-token JSON");
+        let token_json_ptr = store_tlv(&mut vm, PointerType::Json, &norito_blob(&token_json));
+        for (key, syscall) in [
+            ("int_token", ivm_sys::SYSCALL_JSON_GET_INT),
+            ("decimal_token", ivm_sys::SYSCALL_JSON_GET_DECIMAL),
+            ("quantity_token", ivm_sys::SYSCALL_JSON_GET_QUANTITY),
+        ] {
+            let key: Name = key.parse().expect("numeric-token key");
+            let key_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&key));
+            vm.set_register(10, token_json_ptr);
+            vm.set_register(11, key_ptr);
+            host.syscall(syscall, &mut vm)
+                .expect("numeric token is Option::none");
             assert_eq!(
                 ivm::sum::read_words(
                     &vm,
                     vm.register(10),
-                    ivm::sum::SumLayoutV1::option(1).expect("quantity option layout"),
+                    ivm::sum::SumLayoutV1::option(1).expect("exact-number option layout"),
                 ),
-                Ok((false, vec![]))
+                Ok((false, vec![])),
+                "{key} must reject a JSON number token",
             );
+        }
+    }
+    #[test]
+    fn unassigned_exact_json_getters_fail_before_ledger_host_work() {
+        let mut host = CoreHost::new(fixture_account("alice"));
+        let mut vm = IVM::new(50_000);
+        vm.set_register(10, 0x1111);
+        vm.set_register(11, 0x2222);
+        for number in 0x01_0163..=0x01_0165 {
+            let registers_before = [vm.register(10), vm.register(11)];
+            let heap_cursor_before = vm.memory.alloc(0).expect("read heap cursor");
+            let gas_before = vm.remaining_gas();
+            let queued_before = host.queued.len();
+            let overlay_before = host.durable_state_overlay.len();
+            assert_eq!(
+                host.prepare_syscall(number, &vm),
+                Err(ivm::VMError::UnknownSyscall(number))
+            );
+            assert_eq!(
+                host.syscall(number, &mut vm),
+                Err(ivm::VMError::UnknownSyscall(number))
+            );
+            assert_eq!([vm.register(10), vm.register(11)], registers_before);
+            assert_eq!(
+                vm.memory
+                    .alloc(0)
+                    .expect("read heap cursor after rejection"),
+                heap_cursor_before
+            );
+            assert_eq!(vm.remaining_gas(), gas_before);
+            assert_eq!(host.queued.len(), queued_before);
+            assert_eq!(host.durable_state_overlay.len(), overlay_before);
         }
     }
     #[test]

@@ -431,7 +431,7 @@ impl DecidedLaneRecoveryDrainCommitter for ProductionDecidedLaneRecoveryDrainCom
         let _ = self
             .lane_work
             .accept_lane_message_with_ingress_ownership(inbound, self.active_view);
-        let _ = self.lane_work.service_next_historical_recovery()?;
+        let _ = service_historical_recovery_tick(self.lane_work, self.services)?;
         Ok(())
     }
 

@@ -17,8 +17,11 @@ use crate::{
 use core::convert::TryFrom;
 #[cfg(feature = "fastpq-gpu")]
 use fastpq_isi::poseidon::RATE;
-use fastpq_isi::{StarkParameterSet, poseidon::PoseidonSponge as CpuPoseidonSponge};
-use iroha_crypto::{Blake2b256, Hash, blake2::digest::Digest as _};
+use fastpq_isi::{
+    FASTPQ_CATALOG_V1, FASTPQ_FINAL_V1_ID, GoldilocksDigest384V1, GoldilocksDigestDomainV1,
+    StarkParameterSet, hash_bytes_384_v1, poseidon::PoseidonSponge as CpuPoseidonSponge,
+};
+use iroha_crypto::Hash;
 use iroha_data_model::fastpq::TRANSFER_TRANSCRIPTS_METADATA_KEY;
 use rayon::prelude::*;
 #[cfg(feature = "fastpq-gpu")]
@@ -33,10 +36,12 @@ use std::{
 const GOLDILOCKS_MODULUS: u64 = 0xffff_ffff_0000_0001;
 /// Sparse Merkle tree height used by the V1 trace layout.
 const SMT_HEIGHT: usize = transfer::TRANSFER_MERKLE_HEIGHT;
-/// Domain tag for the full-width metadata commitment.
-const METADATA_COMMITMENT_DOMAIN: &[u8] = b"fastpq:v1:metadata-commitment:blake2b-256";
-/// Number of exact 32-bit limbs carrying the 256-bit metadata commitment.
-pub(crate) const METADATA_COMMITMENT_LIMBS: usize = 8;
+/// Typed role for the native-STARK metadata preprocessing commitment.
+const METADATA_COMMITMENT_ROLE_V1: &[u8] = b"fastpq:v1:trace-metadata";
+/// Typed phase for the canonical metadata-map commitment.
+const METADATA_COMMITMENT_PHASE_V1: &[u8] = b"commitment";
+/// Number of canonical Goldilocks limbs carrying the six-lane metadata commitment.
+pub(crate) const METADATA_COMMITMENT_LIMBS: usize = 6;
 /// Default maximum canonical trace columns admitted before prover allocation.
 pub(crate) const DEFAULT_MAX_TRACE_COLUMNS: usize = 512;
 /// Domain tag for hashing DS identifiers.
@@ -627,7 +632,7 @@ pub fn build_trace(batch: &TransitionBatch) -> Result<Trace> {
     let mut transfer_rows = canonical
         .transitions
         .iter()
-        .any(|transition| matches!(transition.operation, crate::OperationKind::Transfer))
+        .any(|transition| matches!(&transition.operation, crate::OperationKind::Transfer))
         .then(|| Vec::with_capacity(canonical.transitions.len()));
     for transition in &canonical.transitions {
         let selectors = match &transition.operation {
@@ -891,33 +896,25 @@ fn metadata_commitment_limbs(
             norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
         norito::core::to_bytes(metadata)?
     };
-    Ok(metadata_commitment_limbs_from_digest(
-        metadata_commitment_digest(&encoded),
-    ))
+    Ok(metadata_commitment_digest(&encoded)?.words())
 }
-fn metadata_commitment_digest(encoded: &[u8]) -> [u8; 32] {
-    let domain_len = u64::try_from(METADATA_COMMITMENT_DOMAIN.len())
-        .expect("fixed metadata commitment domain length fits in u64")
-        .to_le_bytes();
-    let encoded_len = u64::try_from(encoded.len())
-        .expect("in-memory metadata encoding length fits in u64")
-        .to_le_bytes();
-    let mut hasher = Blake2b256::new();
-    hasher.update(domain_len);
-    hasher.update(METADATA_COMMITMENT_DOMAIN);
-    hasher.update(encoded_len);
-    hasher.update(encoded);
-    hasher.finalize().into()
-}
-fn metadata_commitment_limbs_from_digest(digest: [u8; 32]) -> [u64; METADATA_COMMITMENT_LIMBS] {
-    let mut limbs = [0_u64; METADATA_COMMITMENT_LIMBS];
-    for (limb, chunk) in limbs.iter_mut().zip(digest.chunks_exact(4)) {
-        let bytes: [u8; 4] = chunk
-            .try_into()
-            .expect("Blake2b-256 digest divides into exact u32 limbs");
-        *limb = u64::from(u32::from_le_bytes(bytes));
-    }
-    limbs
+fn metadata_commitment_digest(encoded: &[u8]) -> Result<GoldilocksDigest384V1> {
+    hash_bytes_384_v1(
+        GoldilocksDigestDomainV1 {
+            catalog: FASTPQ_CATALOG_V1.as_bytes(),
+            protocol: FASTPQ_FINAL_V1_ID.as_bytes(),
+            profile: FASTPQ_FINAL_V1_ID.as_bytes(),
+            role: METADATA_COMMITMENT_ROLE_V1,
+            phase: METADATA_COMMITMENT_PHASE_V1,
+            level: 0,
+            index: 0,
+            counter: 0,
+        },
+        &[encoded],
+    )
+    .ok_or(Error::PayloadLengthOverflow {
+        length: encoded.len(),
+    })
 }
 fn extract_transfer_witnesses(
     metadata: &BTreeMap<String, Vec<u8>>,
@@ -926,7 +923,7 @@ fn extract_transfer_witnesses(
 ) -> Result<Vec<transfer::TransferGadgetInput>> {
     let has_transfer = transitions
         .iter()
-        .any(|transition| matches!(transition.operation, crate::OperationKind::Transfer));
+        .any(|transition| matches!(&transition.operation, crate::OperationKind::Transfer));
     let Some(transcripts) = transfer::decode_transcripts(metadata)? else {
         if has_transfer {
             return Err(Error::MissingMetadata {
@@ -2072,7 +2069,7 @@ mod tests {
         let transcript = sample_transfer_transcript();
         let (old_root, new_root) = transcript_roots(&transcript);
         let mut batch = TransitionBatch::new(
-            "fastpq-lane-balanced",
+            "fastpq-state-transition-stark-v1",
             PublicInputs {
                 old_root,
                 new_root,
@@ -2240,7 +2237,7 @@ mod tests {
         );
     }
     #[test]
-    fn canonical_asset_key_parser_rejects_noncanonical_shapes() {
+    fn build_trace_rejects_noncanonical_asset_operation_keys() {
         for key in [
             b"xor/alice".as_slice(),
             b"asset//alice".as_slice(),
@@ -2248,19 +2245,41 @@ mod tests {
             b"asset/xor/".as_slice(),
             b"asset/xor/account/alice".as_slice(),
         ] {
-            assert!(matches!(
-                canonical_asset_id_bytes(key),
-                Err(Error::InvalidAssetKey)
+            let mut batch =
+                TransitionBatch::new("fastpq-state-transition-stark-v1", PublicInputs::default());
+            batch.push(StateTransition::new(
+                key.to_vec(),
+                4_u64.to_le_bytes().to_vec(),
+                5_u64.to_le_bytes().to_vec(),
+                OperationKind::Transfer,
             ));
+            assert!(matches!(build_trace(&batch), Err(Error::InvalidAssetKey)));
         }
     }
     #[test]
-    fn numeric_asset_decoder_rejects_noncanonical_lengths() {
+    fn build_trace_rejects_noncanonical_numeric_asset_value_lengths() {
         for length in [0_usize, 1, 7, 9] {
-            assert!(matches!(
-                decode_u64_le(&vec![0; length]),
-                Err(Error::InvalidAssetValueLength { length: actual }) if actual == length
-            ));
+            for mutate_pre_value in [true, false] {
+                let mut batch = TransitionBatch::new(
+                    "fastpq-state-transition-stark-v1",
+                    PublicInputs::default(),
+                );
+                let (pre_value, post_value) = if mutate_pre_value {
+                    (vec![0; length], 5_u64.to_le_bytes().to_vec())
+                } else {
+                    (4_u64.to_le_bytes().to_vec(), vec![0; length])
+                };
+                batch.push(StateTransition::new(
+                    b"asset/xor/alice".to_vec(),
+                    pre_value,
+                    post_value,
+                    OperationKind::Transfer,
+                ));
+                assert!(matches!(
+                    build_trace(&batch),
+                    Err(Error::InvalidAssetValueLength { length: actual }) if actual == length
+                ));
+            }
         }
     }
     #[test]
@@ -2279,8 +2298,8 @@ mod tests {
             first_limbs
                 .iter()
                 .chain(&second_limbs)
-                .all(|limb| u32::try_from(*limb).is_ok()),
-            "every digest limb must be injected exactly into Goldilocks"
+                .all(|limb| *limb < GOLDILOCKS_MODULUS),
+            "every digest lane must be a canonical Goldilocks element"
         );
         assert_ne!(first_limbs, second_limbs);
         assert_ne!(
@@ -2309,25 +2328,12 @@ mod tests {
         );
     }
     #[test]
-    fn metadata_commitment_has_pinned_raw_blake2b_vector_and_canonical_map_order() {
+    fn metadata_commitment_is_canonical_digest384_and_map_order_independent() {
+        let digest = metadata_commitment_digest(b"canonical-metadata-vector-v1")
+            .expect("bounded metadata commitment");
         assert_eq!(
-            hex::encode(metadata_commitment_digest(b"canonical-metadata-vector-v1")),
-            "d09dd80e40fe3292521739048dd1ea9d3076b6af314e1665a08e65f4ba9ab991"
-        );
-        assert_eq!(
-            metadata_commitment_limbs_from_digest(metadata_commitment_digest(
-                b"canonical-metadata-vector-v1"
-            )),
-            [
-                0x0ed8_9dd0,
-                0x9232_fe40,
-                0x0439_1752,
-                0x9dea_d18d,
-                0xafb6_7630,
-                0x6516_4e31,
-                0xf465_8ea0,
-                0x91b9_9aba,
-            ]
+            GoldilocksDigest384V1::from_le_bytes(digest.to_le_bytes()),
+            Some(digest)
         );
 
         let empty = BTreeMap::new();
@@ -2371,24 +2377,21 @@ mod tests {
                 .all(|column| column.name != "metadata_hash"),
             "the collision-prone single-field metadata projection must not remain in V1"
         );
-        let original_digests = column_hashes(&trace, &params).expect("original column hashes");
-        let original_commitment =
-            crate::digest::trace_commitment_from_digests(&params, &trace, &original_digests)
-                .expect("original trace commitment");
+        let original_commitment = crate::digest::trace_commitment_from_trace(&params, &trace)
+            .expect("original trace commitment");
 
         let mut mutated = trace.clone();
+        let high_limb_name = format!("metadata_hash_limb_{}", METADATA_COMMITMENT_LIMBS - 1);
         let high_limb = mutated
             .columns
             .iter_mut()
-            .find(|column| column.name == "metadata_hash_limb_7")
+            .find(|column| column.name == high_limb_name)
             .expect("highest metadata limb column");
         for value in &mut high_limb.values {
             *value ^= 1;
         }
-        let mutated_digests = column_hashes(&mutated, &params).expect("mutated column hashes");
-        let mutated_commitment =
-            crate::digest::trace_commitment_from_digests(&params, &mutated, &mutated_digests)
-                .expect("mutated trace commitment");
+        let mutated_commitment = crate::digest::trace_commitment_from_trace(&params, &mutated)
+            .expect("mutated trace commitment");
         assert_ne!(original_commitment, mutated_commitment);
     }
     #[test]
@@ -2396,7 +2399,7 @@ mod tests {
         let trace = build_trace(&sample_batch()).expect("build");
         let params = CANONICAL_PARAMETER_SETS
             .iter()
-            .find(|set| set.name == "fastpq-lane-balanced")
+            .find(|set| set.name == "fastpq-state-transition-stark-v1")
             .copied()
             .expect("canonical parameter set");
         let hashes = column_hashes(&trace, &params).expect("hashes");
@@ -2413,8 +2416,10 @@ mod tests {
     }
     #[test]
     fn public_trace_builder_rejects_oversized_schema_before_materialising_columns() {
-        let mut batch =
-            TransitionBatch::new("fastpq-lane-balanced", crate::PublicInputs::default());
+        let mut batch = TransitionBatch::new(
+            "fastpq-state-transition-stark-v1",
+            crate::PublicInputs::default(),
+        );
         batch.push(StateTransition::new(
             vec![0xA5; (DEFAULT_MAX_TRACE_COLUMNS + 1) * crate::LIMB_BYTES],
             Vec::new(),
@@ -3167,7 +3172,7 @@ mod tests {
         let mut canonical = batch.clone();
         canonical.sort();
         for (row, transition) in canonical.transitions.iter().enumerate() {
-            if !matches!(transition.operation, OperationKind::Transfer) {
+            if !matches!(&transition.operation, OperationKind::Transfer) {
                 continue;
             }
             let row_key = transfer::TransferRowKey::from_transition(transition);
@@ -3250,7 +3255,7 @@ mod tests {
         let transcript = sample_transfer_transcript();
         let (old_root, new_root) = transcript_roots(&transcript);
         let mut batch = TransitionBatch::new(
-            "fastpq-lane-balanced",
+            "fastpq-state-transition-stark-v1",
             PublicInputs {
                 old_root,
                 new_root,
@@ -3265,7 +3270,8 @@ mod tests {
     }
     #[test]
     fn meta_set_accepts_non_numeric_values() {
-        let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
+        let mut batch =
+            TransitionBatch::new("fastpq-state-transition-stark-v1", PublicInputs::default());
         batch.push(StateTransition::new(
             b"metadata/domain/wonderland".to_vec(),
             br#"{"key":"old","value":1}"#.to_vec(),
@@ -3321,16 +3327,13 @@ mod tests {
         assert_eq!(trace.row_usage.total_rows, trace.rows);
         assert_eq!(trace.row_usage.transfer_rows, 2);
         assert_eq!(trace.row_usage.meta_set_rows, 1);
-        assert_eq!(
-            trace.row_usage.non_transfer_rows(),
-            trace.row_usage.meta_set_rows
-        );
+        assert_eq!(trace.row_usage.non_transfer_rows(), 1);
     }
     fn batch_with_transfer_metadata() -> (TransitionBatch, TransferTranscript) {
         let transcript = sample_transfer_transcript();
         let (old_root, new_root) = transcript_roots(&transcript);
         let mut batch = TransitionBatch::new(
-            "fastpq-lane-balanced",
+            "fastpq-state-transition-stark-v1",
             PublicInputs {
                 old_root,
                 new_root,

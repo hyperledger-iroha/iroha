@@ -1,6 +1,18 @@
 // BFV full-bootstrap fixtures and STARK rejection profiles.
 //
 // Included lexically by `zk_stark::tests` through `zk_stark/tests.rs`.
+fn bfv_test_public_digest(
+    params: &StarkFriParamsV1,
+    statement_hash: iroha_crypto::Hash,
+) -> GoldilocksDigest384V1 {
+    let statement_bytes: [u8; iroha_crypto::Hash::LENGTH] = statement_hash.into();
+    stark_public_digest_v1(
+        params,
+        iroha_crypto::BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
+        &statement_bytes,
+    )
+    .expect("derive BFV six-lane public digest")
+}
 fn sample_bfv_full_bootstrap_linear_transform_artifact_payload(
     params: &iroha_crypto::BfvParameters,
     role: iroha_crypto::BfvFullBootstrapCircuitArtifactRoleV1,
@@ -470,7 +482,10 @@ fn bfv_full_bootstrap_air_prover_binds_statement_and_public_openings() {
         &env.params,
         &expected_params
     ));
-    let public_digest: [u8; 32] = material.proof_input_material.statement_hash.into();
+    let public_digest = bfv_test_public_digest(
+        &expected_params,
+        material.proof_input_material.statement_hash,
+    );
     let witness = &material.proof_input_material.witness_material;
     assert!(
         !verify_stark_fri_bfv_full_bootstrap_air_public_padding_envelope(
@@ -789,19 +804,8 @@ fn bfv_full_bootstrap_air_prover_binds_statement_and_public_openings() {
         ),
         "private BFV public-padding context must reject statement-bound domain-tag drift"
     );
-    let mut drifted_public_padding_params = env.params.clone();
-    drifted_public_padding_params.hash_fn = STARK_HASH_POSEIDON2_V1;
-    assert!(
-        !stark_air_context_matches_statement(
-            &drifted_public_padding_params,
-            air,
-            domain_size,
-            public_padding_context,
-        ),
-        "private BFV public-padding context must reject canonical parameter-profile drift"
-    );
     let zero_statement_hash = iroha_crypto::Hash::prehashed([0_u8; iroha_crypto::Hash::LENGTH]);
-    let zero_public_digest = [0_u8; iroha_crypto::Hash::LENGTH];
+    let zero_public_digest = bfv_test_public_digest(&env.params, zero_statement_hash);
     let zero_statement_context = StarkAirVerificationContext::BfvFullBootstrapPublicPadding {
         statement_hash: &zero_statement_hash,
         trace_material_digest: &material.arithmetic_trace_material_digest,
@@ -833,6 +837,7 @@ fn bfv_full_bootstrap_air_prover_binds_statement_and_public_openings() {
     let first_public_opening = air.openings.first().expect("BFV AIR public opening");
     assert!(
         stark_air_composition_value_for_context(
+            &env.params,
             zero_statement_context,
             usize::try_from(first_public_opening.index).expect("opening index fits usize"),
             domain_size,
@@ -843,8 +848,7 @@ fn bfv_full_bootstrap_air_prover_binds_statement_and_public_openings() {
         .is_none(),
         "private BFV public-padding context must not replay openings under a zero statement hash"
     );
-    let placeholder_public_digest: [u8; iroha_crypto::Hash::LENGTH] =
-        placeholder_statement_hash.into();
+    let placeholder_public_digest = bfv_test_public_digest(&env.params, placeholder_statement_hash);
     let placeholder_statement_context =
         StarkAirVerificationContext::BfvFullBootstrapPublicPadding {
             statement_hash: &placeholder_statement_hash,
@@ -865,6 +869,7 @@ fn bfv_full_bootstrap_air_prover_binds_statement_and_public_openings() {
     );
     assert!(
         stark_air_composition_value_for_context(
+            &env.params,
             placeholder_statement_context,
             usize::try_from(first_public_opening.index).expect("opening index fits usize"),
             domain_size,
@@ -892,6 +897,7 @@ fn bfv_full_bootstrap_air_prover_binds_statement_and_public_openings() {
     );
     assert!(
         stark_air_composition_value_for_context(
+            &env.params,
             placeholder_trace_context,
             usize::try_from(first_public_opening.index).expect("opening index fits usize"),
             domain_size,
@@ -902,8 +908,8 @@ fn bfv_full_bootstrap_air_prover_binds_statement_and_public_openings() {
         .is_none(),
         "private BFV public-padding context must not replay openings under a placeholder trace-material digest"
     );
-    let delayed_placeholder_public_digest: [u8; iroha_crypto::Hash::LENGTH] =
-        delayed_placeholder_statement_hash.into();
+    let delayed_placeholder_public_digest =
+        bfv_test_public_digest(&env.params, delayed_placeholder_statement_hash);
     let delayed_placeholder_statement_context =
         StarkAirVerificationContext::BfvFullBootstrapPublicPadding {
             statement_hash: &delayed_placeholder_statement_hash,
@@ -924,6 +930,7 @@ fn bfv_full_bootstrap_air_prover_binds_statement_and_public_openings() {
     );
     assert!(
         stark_air_composition_value_for_context(
+            &env.params,
             delayed_placeholder_statement_context,
             usize::try_from(first_public_opening.index).expect("opening index fits usize"),
             domain_size,
@@ -935,8 +942,8 @@ fn bfv_full_bootstrap_air_prover_binds_statement_and_public_openings() {
         "private BFV public-padding context must not replay openings under a leading-whitespace delayed placeholder statement hash"
     );
     for separator_spelled_statement_hash in separator_spelled_statement_hashes.iter().copied() {
-        let separator_spelled_public_digest: [u8; iroha_crypto::Hash::LENGTH] =
-            separator_spelled_statement_hash.into();
+        let separator_spelled_public_digest =
+            bfv_test_public_digest(&env.params, separator_spelled_statement_hash);
         let separator_spelled_statement_context =
             StarkAirVerificationContext::BfvFullBootstrapPublicPadding {
                 statement_hash: &separator_spelled_statement_hash,
@@ -957,6 +964,7 @@ fn bfv_full_bootstrap_air_prover_binds_statement_and_public_openings() {
         );
         assert!(
             stark_air_composition_value_for_context(
+                &env.params,
                 separator_spelled_statement_context,
                 usize::try_from(first_public_opening.index).expect("opening index fits usize"),
                 domain_size,
@@ -971,8 +979,8 @@ fn bfv_full_bootstrap_air_prover_binds_statement_and_public_openings() {
     for delayed_separator_spelled_statement_hash in
         delayed_separator_spelled_statement_hashes.iter().copied()
     {
-        let delayed_separator_spelled_public_digest: [u8; iroha_crypto::Hash::LENGTH] =
-            delayed_separator_spelled_statement_hash.into();
+        let delayed_separator_spelled_public_digest =
+            bfv_test_public_digest(&env.params, delayed_separator_spelled_statement_hash);
         let delayed_separator_spelled_statement_context =
             StarkAirVerificationContext::BfvFullBootstrapPublicPadding {
                 statement_hash: &delayed_separator_spelled_statement_hash,
@@ -994,6 +1002,7 @@ fn bfv_full_bootstrap_air_prover_binds_statement_and_public_openings() {
         );
         assert!(
             stark_air_composition_value_for_context(
+                &env.params,
                 delayed_separator_spelled_statement_context,
                 usize::try_from(first_public_opening.index).expect("opening index fits usize"),
                 domain_size,
@@ -1023,6 +1032,7 @@ fn bfv_full_bootstrap_air_prover_binds_statement_and_public_openings() {
     );
     assert!(
         stark_air_composition_value_for_context(
+            &env.params,
             delayed_placeholder_trace_context,
             usize::try_from(first_public_opening.index).expect("opening index fits usize"),
             domain_size,
@@ -1054,6 +1064,7 @@ fn bfv_full_bootstrap_air_prover_binds_statement_and_public_openings() {
         );
         assert!(
             stark_air_composition_value_for_context(
+                &env.params,
                 separator_spelled_trace_context,
                 usize::try_from(first_public_opening.index).expect("opening index fits usize"),
                 domain_size,
@@ -1088,6 +1099,7 @@ fn bfv_full_bootstrap_air_prover_binds_statement_and_public_openings() {
         );
         assert!(
             stark_air_composition_value_for_context(
+                &env.params,
                 delayed_separator_spelled_trace_context,
                 usize::try_from(first_public_opening.index).expect("opening index fits usize"),
                 domain_size,
@@ -1294,7 +1306,10 @@ fn bfv_full_bootstrap_air_rejects_auxiliary_generic_composition_sidecars() {
         .as_mut()
         .expect("composition values")
         .pop();
-    let public_digest: [u8; 32] = material.proof_input_material.statement_hash.into();
+    let public_digest = bfv_test_public_digest(
+        &sidecar_envelope.params,
+        material.proof_input_material.statement_hash,
+    );
     let witness = &material.proof_input_material.witness_material;
     for (case, envelope) in [
         ("paired auxiliary sidecars", sidecar_envelope),
@@ -1341,7 +1356,10 @@ fn bfv_full_bootstrap_air_rejects_malformed_proof_and_air_bindings() {
     ));
     let envelope: StarkVerifyEnvelopeV1 =
         norito::decode_from_bytes(bytes).expect("decode BFV STARK envelope");
-    let public_digest: [u8; 32] = material.proof_input_material.statement_hash.into();
+    let public_digest = bfv_test_public_digest(
+        &envelope.params,
+        material.proof_input_material.statement_hash,
+    );
     let witness = &material.proof_input_material.witness_material;
     let assert_rejected = |case: &str, envelope: &StarkVerifyEnvelopeV1| {
         let malformed_bytes =
@@ -1388,26 +1406,30 @@ fn bfv_full_bootstrap_air_rejects_malformed_proof_and_air_bindings() {
         .air
         .as_mut()
         .expect("AIR section")
-        .circuit_id = "stark/fri/sha256-goldilocks:foreign-bfv-air".to_owned();
+        .circuit_id = "stark/fri/poseidon-x7-goldilocks-6x64-v1:foreign-bfv-air".to_owned();
     assert_rejected("foreign AIR circuit id", &foreign_air);
     let mut drifted_composition_root = envelope.clone();
-    drifted_composition_root
-        .proof
-        .air
-        .as_mut()
-        .expect("AIR section")
-        .composition_root[0] ^= 0x01;
+    mutate_test_digest(
+        &mut drifted_composition_root
+            .proof
+            .air
+            .as_mut()
+            .expect("AIR section")
+            .composition_root,
+    );
     assert_rejected("AIR composition-root drift", &drifted_composition_root);
     let mut drifted_trace_root = envelope.clone();
-    drifted_trace_root
-        .proof
-        .air
-        .as_mut()
-        .expect("AIR section")
-        .trace_root[0] ^= 0x01;
+    mutate_test_digest(
+        &mut drifted_trace_root
+            .proof
+            .air
+            .as_mut()
+            .expect("AIR section")
+            .trace_root,
+    );
     assert_rejected("AIR trace-root drift", &drifted_trace_root);
     let mut drifted_fri_root = envelope.clone();
-    drifted_fri_root.proof.commits.roots[0][0] ^= 0x01;
+    mutate_test_digest(&mut drifted_fri_root.proof.commits.roots[0]);
     assert_rejected("FRI composition-root drift", &drifted_fri_root);
     let mut missing_query = envelope.clone();
     missing_query.proof.queries.pop();
@@ -1438,7 +1460,10 @@ fn bfv_full_bootstrap_air_rejects_opening_path_and_sample_drift() {
     ));
     let envelope: StarkVerifyEnvelopeV1 =
         norito::decode_from_bytes(bytes).expect("decode BFV STARK envelope");
-    let public_digest: [u8; 32] = material.proof_input_material.statement_hash.into();
+    let public_digest = bfv_test_public_digest(
+        &envelope.params,
+        material.proof_input_material.statement_hash,
+    );
     let witness = &material.proof_input_material.witness_material;
     let assert_rejected = |case: &str, envelope: &StarkVerifyEnvelopeV1| {
         let malformed_bytes =
@@ -1496,40 +1521,46 @@ fn bfv_full_bootstrap_air_rejects_opening_path_and_sample_drift() {
     core::mem::swap(&mut opening.row_path, &mut opening.next_row_path);
     assert_rejected("swapped row and next-row paths", &swapped_row_paths);
     let mut tampered_row_path = envelope.clone();
-    tampered_row_path
-        .proof
-        .air
-        .as_mut()
-        .expect("AIR section")
-        .openings[0]
-        .row_path
-        .siblings
-        .first_mut()
-        .expect("row path sibling")[0] ^= 0x01;
+    mutate_test_digest(
+        tampered_row_path
+            .proof
+            .air
+            .as_mut()
+            .expect("AIR section")
+            .openings[0]
+            .row_path
+            .siblings
+            .first_mut()
+            .expect("row path sibling"),
+    );
     assert_rejected("row Merkle path drift", &tampered_row_path);
     let mut tampered_next_row_path = envelope.clone();
-    tampered_next_row_path
-        .proof
-        .air
-        .as_mut()
-        .expect("AIR section")
-        .openings[0]
-        .next_row_path
-        .siblings
-        .first_mut()
-        .expect("next-row path sibling")[0] ^= 0x01;
+    mutate_test_digest(
+        tampered_next_row_path
+            .proof
+            .air
+            .as_mut()
+            .expect("AIR section")
+            .openings[0]
+            .next_row_path
+            .siblings
+            .first_mut()
+            .expect("next-row path sibling"),
+    );
     assert_rejected("next-row Merkle path drift", &tampered_next_row_path);
     let mut tampered_composition_path = envelope.clone();
-    tampered_composition_path
-        .proof
-        .air
-        .as_mut()
-        .expect("AIR section")
-        .openings[0]
-        .composition_path
-        .siblings
-        .first_mut()
-        .expect("composition path sibling")[0] ^= 0x01;
+    mutate_test_digest(
+        tampered_composition_path
+            .proof
+            .air
+            .as_mut()
+            .expect("AIR section")
+            .openings[0]
+            .composition_path
+            .siblings
+            .first_mut()
+            .expect("composition path sibling"),
+    );
     assert_rejected(
         "composition-value Merkle path drift",
         &tampered_composition_path,
@@ -1547,7 +1578,12 @@ fn bfv_full_bootstrap_air_rejects_opening_path_and_sample_drift() {
         &tampered_composition_value,
     );
     let mut tampered_fri_base_value = envelope.clone();
-    tampered_fri_base_value.proof.queries[0][0].y0 ^= 0x01;
+    let mut coefficients = tampered_fri_base_value.proof.queries[0][0]
+        .y0
+        .coefficients();
+    coefficients[0] ^= 0x01;
+    tampered_fri_base_value.proof.queries[0][0].y0 =
+        GoldilocksFp4V1::new(coefficients).expect("mutated FRI value remains canonical");
     assert_rejected("FRI base value drift", &tampered_fri_base_value);
     let mut duplicated_opening = envelope;
     let air = duplicated_opening.proof.air.as_mut().expect("AIR section");
@@ -1689,7 +1725,10 @@ fn bfv_full_bootstrap_air_rejects_parameter_profile_drift() {
     ));
     let envelope: StarkVerifyEnvelopeV1 =
         norito::decode_from_bytes(bytes).expect("decode BFV STARK envelope");
-    let public_digest: [u8; 32] = material.proof_input_material.statement_hash.into();
+    let public_digest = bfv_test_public_digest(
+        &envelope.params,
+        material.proof_input_material.statement_hash,
+    );
     let witness = &material.proof_input_material.witness_material;
     let assert_rejected = |case: &str, envelope: &StarkVerifyEnvelopeV1| {
         let malformed_bytes =
@@ -1736,9 +1775,6 @@ fn bfv_full_bootstrap_air_rejects_parameter_profile_drift() {
     let mut bad_merkle_arity = envelope.clone();
     bad_merkle_arity.params.merkle_arity = 4;
     assert_rejected("STARK Merkle-arity drift", &bad_merkle_arity);
-    let mut bad_hash_selector = envelope.clone();
-    bad_hash_selector.params.hash_fn = STARK_HASH_POSEIDON2_V1;
-    assert_rejected("STARK hash-selector drift", &bad_hash_selector);
     let mut bad_query_count = envelope.clone();
     bad_query_count.params.queries = bad_query_count.params.queries.saturating_sub(1);
     assert_rejected("STARK query-count header drift", &bad_query_count);
@@ -1889,7 +1925,6 @@ fn synthesized_envelope_rejects_unsupported_fold_arity() {
         fold_arity: 4,
         queries: 2,
         merkle_arity: 2,
-        hash_fn: STARK_HASH_SHA256_V1,
         domain_tag: "iroha:test:invalid".to_owned(),
     };
     let err = synthesize_stark_fri_envelope_bytes(params, "IROHA-TEST-STARK".to_owned())
@@ -1908,7 +1943,6 @@ fn synthesized_envelope_rejects_blowup_larger_than_domain() {
         fold_arity: 2,
         queries: 2,
         merkle_arity: 2,
-        hash_fn: STARK_HASH_SHA256_V1,
         domain_tag: "iroha:test:invalid-blowup-domain".to_owned(),
     };
     let err = synthesize_stark_fri_envelope_bytes(params, "IROHA-TEST-STARK".to_owned())
@@ -1927,14 +1961,13 @@ fn synthesized_envelope_rejects_tampered_domain_tag() {
         fold_arity: 2,
         queries: 2,
         merkle_arity: 2,
-        hash_fn: STARK_HASH_SHA256_V1,
         domain_tag: "iroha:test:tamper".to_owned(),
     };
     let bytes = prove_stark_fri_air_envelope_bytes(
         params,
         "IROHA-TEST-STARK".to_owned(),
-        "stark/fri/sha256-goldilocks:tamper".to_owned(),
-        [0x33; 32],
+        "stark/fri/poseidon-x7-goldilocks-6x64-v1:tamper".to_owned(),
+        test_digest(0x33),
     )
     .expect("ok");
     let mut envelope: StarkVerifyEnvelopeV1 =
@@ -1952,7 +1985,6 @@ fn synthesized_envelope_rejects_malformed_payload() {
         fold_arity: 2,
         queries: 2,
         merkle_arity: 2,
-        hash_fn: STARK_HASH_SHA256_V1,
         domain_tag: "iroha:test:malformed".to_owned(),
     };
     let mut bytes =

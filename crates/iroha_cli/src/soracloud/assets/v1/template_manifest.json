@@ -49,8 +49,8 @@
     },
     {
       "path": "http_service_readme.tmpl",
-      "byte_length": 6474,
-      "sha256": "7184cd969d39550b334bc940748946f402502b03d672f5632d7c9c3be46cbd2e",
+      "byte_length": 6465,
+      "sha256": "550cf4a99c3b334e3e369e47ccc874cfd67d022951f6b4a2c39e514e95e866c7",
       "layout": "UTF-8 Soracloud format template bytes with symbolic placeholders and LF endings",
       "source_preimages": [
         {

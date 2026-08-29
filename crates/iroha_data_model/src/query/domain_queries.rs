@@ -46,8 +46,8 @@ pub mod permission {
     //! Permission-related query definitions.
     //!
     //! Queries related to [`crate::permission`].
-    use std::{format, string::String, vec::Vec};
     use derive_more::Display;
+    use std::{format, string::String, vec::Vec};
     // Bring required IDs into scope for queries! items
     use crate::AccountId;
     queries! {
@@ -79,9 +79,9 @@ pub mod account {
     //! Account-related query definitions.
     //!
     //! Queries related to [`crate::account`].
-    use std::{format, string::String, vec::Vec};
     use derive_more::Display;
     use norito::codec::{Decode, Encode};
+    use std::{format, string::String, vec::Vec};
     // Bring required IDs into scope for queries! items
     use crate::prelude::AssetDefinitionId;
     /// API-facing record describing one alias bound to an account.
@@ -247,8 +247,8 @@ pub mod asset {
     //!
     //! Queries related to [`crate::asset`].
     #![allow(clippy::missing_inline_in_public_items)]
-    use std::{format, string::String, vec::Vec};
     use derive_more::Display;
+    use std::{format, string::String, vec::Vec};
     // Bring required IDs into scope for queries! items
     use crate::{AccountId, AssetId, asset::AssetDefinitionId};
     queries! {
@@ -335,11 +335,11 @@ pub mod repo {
 }
 pub mod escrow {
     //! Native asset escrow query definitions.
-    use derive_more::Display;
     use crate::{
         account::AccountId,
         escrow::{AssetEscrowStatus, EscrowId},
     };
+    use derive_more::Display;
     queries! {
         /// Find all native asset escrow records.
         #[derive(Copy, Display)]
@@ -389,7 +389,6 @@ pub mod escrow {
 }
 pub mod oracle {
     //! Oracle-specific query definitions.
-    use derive_more::Display;
     use crate::{
         nexus::UniversalAccountId,
         oracle::{
@@ -397,6 +396,7 @@ pub mod oracle {
             OracleProviderKey,
         },
     };
+    use derive_more::Display;
     queries! {
         /// Find all registered oracle feeds.
         #[derive(Copy, Display)]
@@ -653,9 +653,9 @@ pub mod nft {
     //! NFT-related query definitions.
     //!
     //! Queries related to [`crate::nft`].
-    use std::{format, string::String, vec::Vec};
     use crate::{AccountId, NftId};
     use derive_more::Display;
+    use std::{format, string::String, vec::Vec};
     queries! {
         /// [`FindNftById`] finds one `Nft` by its canonical identifier.
         #[derive(Display)]
@@ -702,8 +702,8 @@ pub mod rwa {
     //! RWA-related query definitions.
     //!
     //! Queries related to [`crate::rwa`].
-    use std::{format, string::String, vec::Vec};
     use derive_more::Display;
+    use std::{format, string::String, vec::Vec};
     queries! {
         /// [`FindRwas`] finds all registered RWA lots.
         #[derive(Copy, Display)]
@@ -721,9 +721,9 @@ pub mod domain {
     //!
     //! Queries related to [`crate::domain`].
     #![allow(clippy::missing_inline_in_public_items)]
-    use std::{format, string::String, vec::Vec};
     use crate::AccountId;
     use derive_more::Display;
+    use std::{format, string::String, vec::Vec};
     queries! {
         /// [`FindDomainById`] Iroha Query finds a `Domain` by its identifier.
         #[derive(Display)]
@@ -770,8 +770,8 @@ pub mod endorsement {
     //! Domain endorsement-related query definitions.
     //!
     //! Queries related to domain endorsement committees and policies.
-    use derive_more::Display;
     use crate::domain::DomainId;
+    use derive_more::Display;
     queries! {
         /// Fetch all recorded endorsements for a given domain.
         #[derive(Display)]
@@ -807,8 +807,8 @@ pub mod peer {
     //! Peer-related query definitions.
     //!
     //! Queries related to [`crate::peer`].
-    use std::{format, string::String, vec::Vec};
     use derive_more::Display;
+    use std::{format, string::String, vec::Vec};
     queries! {
         /// [`FindPeers`] Iroha Query finds all trusted peers presented.
         #[derive(Copy, Display)]
@@ -825,8 +825,8 @@ pub mod executor {
     //! Executor-related query definitions.
     //!
     //! Queries related to [`crate::executor`].
-    use std::{format, string::String, vec::Vec};
     use derive_more::Display;
+    use std::{format, string::String, vec::Vec};
     queries! {
         /// [`FindExecutorDataModel`] Iroha Query finds the data model of the current executor.
         #[derive(Copy, Display)]
@@ -886,8 +886,8 @@ pub mod proof {
     //! Proof-related query definitions.
     //!
     //! Queries related to zero-knowledge proofs and records.
-    use std::{format, string::String, vec::Vec};
     use derive_more::Display;
+    use std::{format, string::String, vec::Vec};
     queries! {
         /// Find a proof verification record by its identifier.
         #[derive(Display)]
@@ -930,8 +930,6 @@ pub mod sorafs {
     //! `SoraFS` query definitions.
     //!
     //! Queries related to `SoraFS` provider metadata.
-    use std::{fmt, string::String};
-    use hex;
     use crate::{
         account::AccountId,
         sorafs::{
@@ -956,6 +954,8 @@ pub mod sorafs {
             reserve::{ReserveFinalizedCursorV1, ReserveFinalizedEventCursorV1},
         },
     };
+    use hex;
+    use std::{fmt, string::String};
     queries! {
         /// Fetch the registered owner for a `SoraFS` provider.
         #[repr(transparent)]
@@ -1187,6 +1187,23 @@ pub mod sorafs {
         /// Fetch constant-time authoritative `PoP` registry anchors and counters.
         #[derive(Copy)]
         pub struct FindSorafsPopRegistryStatus;
+        /// Fetch one commitment-only citizen bond by its immutable serial commitment.
+        #[derive(Copy)]
+        #[repr(transparent)]
+        pub struct FindSorafsCitizenBondBySerialCommitment {
+            /// Immutable hidden bond serial commitment.
+            pub serial_commitment: [u8; 32],
+        }
+        /// Fetch the current frozen citizen-bond membership snapshot.
+        #[derive(Copy)]
+        pub struct FindSorafsCitizenBondSnapshot;
+        /// Fetch one identity-free anonymous service-note escrow.
+        #[derive(Copy)]
+        #[repr(transparent)]
+        pub struct FindSorafsAnonymousServiceEscrowById {
+            /// Deterministic escrow identity.
+            pub escrow_id: [u8; 32],
+        }
         /// Fetch one chain-authoritative repair task by canonical ticket identifier.
         pub struct FindSorafsRepairTask {
             /// Canonical repair ticket identifier.
@@ -1290,6 +1307,13 @@ pub mod sorafs {
             pub round_id: String,
             /// Canonical juror account.
             pub juror: AccountId,
+        }
+        /// Fetch one payload-free anonymous juror candidacy by action digest.
+        #[derive(Copy)]
+        #[repr(transparent)]
+        pub struct FindSorafsAnonymousJurorCandidacy {
+            /// Replay-proof candidacy action digest.
+            pub action_digest: [u8; 32],
         }
         /// Fetch one authoritative moderation case by case and round id.
         #[allow(
@@ -1601,6 +1625,29 @@ pub mod sorafs {
             f.write_str("Find SoraFS PoP registry status")
         }
     }
+    impl fmt::Display for FindSorafsCitizenBondBySerialCommitment {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(
+                f,
+                "Find SoraFS citizen bond `{}`",
+                hex::encode(self.serial_commitment)
+            )
+        }
+    }
+    impl fmt::Display for FindSorafsCitizenBondSnapshot {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("Find SoraFS citizen-bond snapshot")
+        }
+    }
+    impl fmt::Display for FindSorafsAnonymousServiceEscrowById {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(
+                f,
+                "Find SoraFS anonymous service escrow `{}`",
+                hex::encode(self.escrow_id)
+            )
+        }
+    }
     impl fmt::Display for FindSorafsRepairTask {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             write!(f, "Find SoraFS repair task `{}`", self.ticket_id)
@@ -1723,6 +1770,15 @@ pub mod sorafs {
             )
         }
     }
+    impl fmt::Display for FindSorafsAnonymousJurorCandidacy {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(
+                f,
+                "Find SoraFS anonymous juror candidacy `{}`",
+                hex::encode(self.action_digest)
+            )
+        }
+    }
     impl fmt::Display for FindSorafsModerationReveal {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             write!(
@@ -1792,6 +1848,8 @@ pub mod sorafs {
     /// Prelude re-exports for `SoraFS` queries.
     pub mod prelude {
         pub use super::{
+            FindSorafsAnonymousJurorCandidacy, FindSorafsAnonymousServiceEscrowById,
+            FindSorafsCitizenBondBySerialCommitment, FindSorafsCitizenBondSnapshot,
             FindSorafsModerationAppeal, FindSorafsModerationCase, FindSorafsModerationChallenge,
             FindSorafsModerationCommit, FindSorafsModerationEvents,
             FindSorafsModerationJurorEligibility, FindSorafsModerationNoShow,
@@ -1969,6 +2027,18 @@ impl_sorafs_orderbook_singular_query!(
         => crate::sorafs::pop_registry::PopRegistryStatusV1
 );
 impl_sorafs_orderbook_singular_query!(
+    sorafs::prelude::FindSorafsCitizenBondBySerialCommitment
+        => crate::sorafs::anonymity::SorafsCitizenBondV1
+);
+impl_sorafs_orderbook_singular_query!(
+    sorafs::prelude::FindSorafsCitizenBondSnapshot
+        => crate::sorafs::anonymity::SorafsCitizenBondSnapshotV1
+);
+impl_sorafs_orderbook_singular_query!(
+    sorafs::prelude::FindSorafsAnonymousServiceEscrowById
+        => crate::sorafs::anonymity::SorafsAnonymousServiceEscrowV1
+);
+impl_sorafs_orderbook_singular_query!(
     sorafs::prelude::FindSorafsRepairTask
         => crate::sorafs::moderation_ledger::RepairFinalizedTaskV1
 );
@@ -2015,6 +2085,10 @@ impl_sorafs_orderbook_singular_query!(
 impl_sorafs_orderbook_singular_query!(
     sorafs::prelude::FindSorafsModerationJurorEligibility
         => crate::sorafs::moderation_ledger::ModerationJurorEligibilityRecordV1
+);
+impl_sorafs_orderbook_singular_query!(
+    sorafs::prelude::FindSorafsAnonymousJurorCandidacy
+        => crate::sorafs::anonymity::SorafsAnonymousJurorCandidacyRecordV1
 );
 impl_sorafs_orderbook_singular_query!(
     sorafs::prelude::FindSorafsModerationCase

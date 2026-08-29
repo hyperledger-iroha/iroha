@@ -284,7 +284,7 @@ fn retransmission_classes_rotate_fairly_at_capacity_one() {
             .payload_block_hint
             .expect("planned proposal carries its global block hint"),
     );
-    let candidate = record_production_merge_candidate_for_persistence_retry(&adapter, &keys, 0);
+    let candidate = record_production_merge_candidate_for_persistence_retry(&mut adapter, &keys, 0);
     adapter
         .retain_merge_sidecars_for_global_view(candidate.view, None, None)
         .expect("install exact unlocked reducer directive");

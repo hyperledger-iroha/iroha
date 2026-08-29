@@ -209,7 +209,7 @@ fn privacy_transaction_construction_requires_the_matching_network_manifest_tuple
     };
     let missing = new_builder()
         .require_empty_privacy_action_builder_v1(
-            PrivacyProtocolIdV1::VegaExistingCredentialZkV0,
+            PrivacyProtocolIdV1::VegaExistingCredentialZkV1,
             "Vega",
         )
         .expect_err("local catalog must not invent network availability");
@@ -225,7 +225,7 @@ fn privacy_transaction_construction_requires_the_matching_network_manifest_tuple
     );
     let mismatch = wrong_protocol
         .require_empty_privacy_action_builder_v1(
-            PrivacyProtocolIdV1::VegaExistingCredentialZkV0,
+            PrivacyProtocolIdV1::VegaExistingCredentialZkV1,
             "Vega",
         )
         .expect_err("another active protocol row must not authorize Vega");
@@ -637,7 +637,7 @@ fn component_python_nonzero_digest_boundary_rejects_ambiguous_encodings() {
 fn exported_vega_python_device_digest_fails_closed_with_unavailable_profile() {
     use iroha_core::privacy_engines::verange::{VeRangeBitLengthV1, VeRangeParametersV1};
 
-    let protocol_id = PrivacyProtocolIdV1::VegaExistingCredentialZkV0;
+    let protocol_id = PrivacyProtocolIdV1::VegaExistingCredentialZkV1;
     assert!(matches!(
         compiled_privacy_profile_v1(protocol_id),
         Err(
@@ -677,7 +677,7 @@ fn exported_vega_python_device_digest_fails_closed_with_unavailable_profile() {
         );
         assert!(
             message.contains(
-                "native privacy engine for VegaExistingCredentialZkV0 is not governance-available"
+                "native privacy engine for VegaExistingCredentialZkV1 is not governance-available"
             ),
             "the EngineUnavailable cause must remain observable: {message}"
         );
@@ -688,7 +688,7 @@ fn vega_python_profile_is_unavailable_while_low_level_device_digest_binds_intent
     use iroha_core::privacy_engines::verange::{VeRangeBitLengthV1, VeRangeParametersV1};
     assert!(
         python_compiled_privacy_profile_v1(
-            PrivacyProtocolIdV1::VegaExistingCredentialZkV0,
+            PrivacyProtocolIdV1::VegaExistingCredentialZkV1,
             "Vega",
         )
         .is_err(),

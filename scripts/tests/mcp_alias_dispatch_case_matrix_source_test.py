@@ -15,7 +15,7 @@ EXTENDED_PATH = (
     REPO_ROOT
     / "crates/iroha_torii/tests/mcp_endpoints/extended_tool_dispatch_tests.rs"
 )
-MAIN_MAX_LINES = 4_790
+MAIN_MAX_LINES = 4_775
 EXTENDED_MAX_LINES = 672
 
 HELPER_START = "#[derive(Clone, Copy)]\nenum McpAliasDispatchArguments"

@@ -2,7 +2,7 @@
 //!
 //! This module contains only proof-system substrate: canonical Goldilocks base and
 //! quartic-extension arithmetic, FFT/coset evaluation, zero-knowledge trace masking, framed
-//! Fiat–Shamir, SHA-256 Merkle commitments, binary FRI folding, grinding, and exact byte
+//! Fiat–Shamir, six-lane Poseidon Merkle commitments, binary FRI folding, grinding, and exact byte
 //! readers/writers. Protocol relations and AIR constraints do not belong here. ZK-ACE, zk-X509,
 //! private IVM, and PQ actions can therefore share one audited implementation without sharing or
 //! weakening relations.
@@ -11,6 +11,13 @@
 //! does not establish knowledge of the witness-bearing row. Callers of this substrate must commit
 //! and query every masked witness column, bind composition quotients to those same openings, and
 //! perform the complete FRI terminal-degree check.
+pub(crate) use fastpq_prover::fastpq_isi_v1::GoldilocksDigest384V1;
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+use fastpq_prover::fastpq_isi_v1::{
+    GoldilocksDigest384LastFieldStreamErrorV1, GoldilocksDigest384LastFieldStreamV1,
+};
+use fastpq_prover::fastpq_isi_v1::{GoldilocksDigestDomainV1, hash_bytes_384_v1};
+use iroha_data_model::privacy::{PRIVACY_EXACT12_CATALOG_COMMITMENT_WORDS_V1, PrivacyProtocolIdV1};
 use rand::TryRngCore;
 use sha2::{Digest as _, Sha256};
 use std::collections::BTreeMap;
@@ -26,7 +33,7 @@ const GOLDILOCKS_EPSILON_V1: u64 = 0xffff_ffff;
 pub(crate) const GOLDILOCKS_GENERATOR_V1: u64 = 7;
 /// Two-adicity of the Goldilocks multiplicative group.
 pub(crate) const GOLDILOCKS_TWO_ADICITY_V1: u32 = 32;
-pub(crate) const TRANSCRIPT_FRAME_DOMAIN_V1: &[u8] = b"iroha:privacy:transparent-stark:frame:v1";
+const TRANSCRIPT_FRAME_DOMAIN_V1: &[u8] = b"iroha:privacy:transparent-stark:frame:v1";
 const TRANSCRIPT_INIT_DOMAIN_V1: &[u8] = b"iroha:privacy:transparent-stark:init:v1";
 const TRANSCRIPT_ABSORB_DOMAIN_V1: &[u8] = b"iroha:privacy:transparent-stark:absorb:v1";
 const TRANSCRIPT_CHALLENGE_DOMAIN_V1: &[u8] = b"iroha:privacy:transparent-stark:challenge:v1";
@@ -34,6 +41,8 @@ const TRANSCRIPT_FP4_CHALLENGE_DOMAIN_V1: &[u8] =
     b"iroha:privacy:transparent-stark:challenge:goldilocks-fp4:v1";
 const QUERY_INDEX_DOMAIN_V1: &[u8] = b"iroha:privacy:transparent-stark:query-index:v1";
 const GRINDING_DOMAIN_V1: &[u8] = b"iroha:privacy:transparent-stark:grinding:v1";
+const MERKLE_NODE_PHASE_V1: &[u8] = b"binary-merkle-node";
+const FRAME_PHASE_V1: &[u8] = b"framed-message";
 /// Fixed rejection budget for canonical field and transcript sampling.
 pub(crate) const MAX_FIELD_REJECTION_ATTEMPTS_V1: u64 = 16;
 /// Fixed rejection budget for each unbiased query-index range sample.
@@ -43,6 +52,30 @@ pub(crate) const GOLDILOCKS_FP4_DEGREE_V1: usize = 4;
 /// Canonical encoded size of one quartic-extension value.
 pub(crate) const GOLDILOCKS_FP4_WIRE_BYTES_V1: usize = GOLDILOCKS_FP4_DEGREE_V1 * 8;
 const GOLDILOCKS_FP4_NONRESIDUE_V1: GoldilocksFieldV1 = GoldilocksFieldV1(GOLDILOCKS_GENERATOR_V1);
+
+/// Exact catalog/protocol/profile context for every native-STARK digest.
+///
+/// The Exact12 catalog commitment is pinned internally, so a caller cannot
+/// substitute a different catalog while retaining the same protocol and
+/// profile labels. Protocol and profile identifiers are kept as distinct
+/// fields and never concatenated into an ambiguous free-form domain string.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct TransparentStarkDigestContextV1 {
+    protocol: PrivacyProtocolIdV1,
+    profile: &'static [u8],
+}
+impl TransparentStarkDigestContextV1 {
+    /// Construct a typed context for one final protocol/profile pair.
+    pub(crate) const fn new(protocol: PrivacyProtocolIdV1, profile: &'static [u8]) -> Self {
+        Self { protocol, profile }
+    }
+    pub(crate) fn validate(self) -> Result<(), TransparentStarkErrorV1> {
+        if self.profile.is_empty() || u16::try_from(self.profile.len()).is_err() {
+            return Err(TransparentStarkErrorV1::InvalidDigestDomain);
+        }
+        Ok(())
+    }
+}
 /// Checked zero-knowledge masking geometry for the canonical DEEP-ALI flow.
 ///
 /// `minimum_mask_coefficients` is the dimension `h` of the randomizer space
@@ -402,6 +435,9 @@ fn goldilocks_fp2_inv_v1(value: [GoldilocksFieldV1; 2]) -> Option<[GoldilocksFie
 /// Failure in protocol-neutral transparent-proof machinery.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub(crate) enum TransparentStarkErrorV1 {
+    /// A catalog-bound protocol/profile/role/phase digest domain is invalid.
+    #[error("transparent STARK digest domain is invalid")]
+    InvalidDigestDomain,
     /// A power-of-two domain shape or degree bound is invalid.
     #[error("transparent STARK domain shape is invalid")]
     InvalidDomain,
@@ -941,95 +977,13 @@ pub(crate) fn masked_trace_lde_column_v1<R: TryRngCore>(
         mask.coefficients(),
     )
 }
-/// Domain-separated binary SHA-256 Merkle tree.
-#[derive(Clone, Debug)]
-pub(crate) struct Sha256MerkleTreeV1 {
-    levels: Vec<Vec<[u8; 32]>>,
+fn exact12_catalog_commitment_bytes_v1() -> [u8; 48] {
+    GoldilocksDigest384V1::new(PRIVACY_EXACT12_CATALOG_COMMITMENT_WORDS_V1)
+        .expect("the pinned Exact12 catalog commitment is canonical")
+        .to_le_bytes()
 }
-impl Sha256MerkleTreeV1 {
-    /// Commit a non-empty power-of-two leaf vector.
-    pub(crate) fn from_leaves(
-        leaves: Vec<[u8; 32]>,
-        node_domain: &'static [u8],
-    ) -> Result<Self, TransparentStarkErrorV1> {
-        if leaves.is_empty()
-            || !leaves.len().is_power_of_two()
-            || node_domain.is_empty()
-            || u16::try_from(node_domain.len()).is_err()
-        {
-            return Err(TransparentStarkErrorV1::InvalidMerkleShape);
-        }
-        let mut levels = vec![leaves];
-        while levels.last().map_or(0, Vec::len) > 1 {
-            let previous = levels
-                .last()
-                .ok_or(TransparentStarkErrorV1::InvalidMerkleShape)?;
-            let next = previous
-                .chunks_exact(2)
-                .map(|pair| sha256_merkle_node_v1(node_domain, &pair[0], &pair[1]))
-                .collect();
-            levels.push(next);
-        }
-        Ok(Self { levels })
-    }
-    /// Root digest.
-    pub(crate) fn root(&self) -> [u8; 32] {
-        self.levels[self.levels.len() - 1][0]
-    }
-    /// Leaf-to-root sibling path.
-    pub(crate) fn path(&self, mut index: usize) -> Result<Vec<[u8; 32]>, TransparentStarkErrorV1> {
-        if index >= self.levels[0].len() {
-            return Err(TransparentStarkErrorV1::InvalidMerkleShape);
-        }
-        let mut path = Vec::new();
-        path.try_reserve_exact(self.levels.len() - 1)
-            .map_err(|_| TransparentStarkErrorV1::AllocationFailure)?;
-        for level in &self.levels[..self.levels.len() - 1] {
-            path.push(level[index ^ 1]);
-            index >>= 1;
-        }
-        Ok(path)
-    }
-}
-/// Hash one binary Merkle node with an engine-fixed role domain.
-pub(crate) fn sha256_merkle_node_v1(
-    node_domain: &[u8],
-    left: &[u8; 32],
-    right: &[u8; 32],
-) -> [u8; 32] {
-    sha256_frame_v1(node_domain, &[left, right])
-        .expect("two fixed hashes and a static domain are representable")
-}
-/// Verify one exact binary Merkle path.
-#[cfg(test)]
-pub(crate) fn verify_sha256_merkle_path_v1(
-    node_domain: &[u8],
-    root: &[u8; 32],
-    mut leaf: [u8; 32],
-    mut index: usize,
-    path: &[[u8; 32]],
-    expected_depth: usize,
-) -> Result<(), TransparentStarkErrorV1> {
-    if node_domain.is_empty()
-        || u16::try_from(node_domain.len()).is_err()
-        || path.len() != expected_depth
-    {
-        return Err(TransparentStarkErrorV1::InvalidMerkleShape);
-    }
-    for sibling in path {
-        leaf = if index & 1 == 0 {
-            sha256_merkle_node_v1(node_domain, &leaf, sibling)
-        } else {
-            sha256_merkle_node_v1(node_domain, sibling, &leaf)
-        };
-        index >>= 1;
-    }
-    if index != 0 || leaf != *root {
-        return Err(TransparentStarkErrorV1::InvalidMerkleShape);
-    }
-    Ok(())
-}
-/// Hash an unambiguous domain-and-field frame.
+
+/// Hash an unambiguous domain-and-field frame with SHA-256.
 pub(crate) fn sha256_frame_v1(
     domain: &[u8],
     fields: &[&[u8]],
@@ -1051,26 +1005,280 @@ pub(crate) fn sha256_frame_v1(
     }
     Ok(hash.finalize().into())
 }
+
+/// Hash one fully typed native-STARK frame with the canonical six-lane digest.
+pub(crate) fn goldilocks_digest384_frame_v1(
+    context: TransparentStarkDigestContextV1,
+    role: &[u8],
+    phase: &[u8],
+    level: u64,
+    index: u64,
+    counter: u64,
+    fields: &[&[u8]],
+) -> Result<GoldilocksDigest384V1, TransparentStarkErrorV1> {
+    context.validate()?;
+    if role.is_empty()
+        || phase.is_empty()
+        || u16::try_from(role.len()).is_err()
+        || u16::try_from(phase.len()).is_err()
+    {
+        return Err(TransparentStarkErrorV1::InvalidDigestDomain);
+    }
+    let catalog = exact12_catalog_commitment_bytes_v1();
+    hash_bytes_384_v1(
+        GoldilocksDigestDomainV1 {
+            catalog: &catalog,
+            protocol: context.protocol.canonical_label().as_bytes(),
+            profile: context.profile,
+            role,
+            phase,
+            level,
+            index,
+            counter,
+        },
+        fields,
+    )
+    .ok_or(TransparentStarkErrorV1::FrameLengthOverflow)
+}
+
+/// Start a bounded digest stream whose final framed field is supplied incrementally.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+pub(crate) fn goldilocks_digest384_last_field_stream_v1(
+    context: TransparentStarkDigestContextV1,
+    role: &[u8],
+    phase: &[u8],
+    level: u64,
+    index: u64,
+    counter: u64,
+    prefix_fields: &[&[u8]],
+    final_field_len: usize,
+) -> Result<GoldilocksDigest384LastFieldStreamV1, TransparentStarkErrorV1> {
+    context.validate()?;
+    if role.is_empty()
+        || phase.is_empty()
+        || u16::try_from(role.len()).is_err()
+        || u16::try_from(phase.len()).is_err()
+    {
+        return Err(TransparentStarkErrorV1::InvalidDigestDomain);
+    }
+    let catalog = exact12_catalog_commitment_bytes_v1();
+    GoldilocksDigest384LastFieldStreamV1::new(
+        GoldilocksDigestDomainV1 {
+            catalog: &catalog,
+            protocol: context.protocol.canonical_label().as_bytes(),
+            profile: context.profile,
+            role,
+            phase,
+            level,
+            index,
+            counter,
+        },
+        prefix_fields,
+        final_field_len,
+    )
+    .map_err(|_| TransparentStarkErrorV1::FrameLengthOverflow)
+}
+
+/// Map a canonical digest-stream failure without exposing an alternate hash path.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+pub(crate) const fn map_digest_stream_error_v1(
+    error: GoldilocksDigest384LastFieldStreamErrorV1,
+) -> TransparentStarkErrorV1 {
+    match error {
+        GoldilocksDigest384LastFieldStreamErrorV1::FramingLimitExceeded
+        | GoldilocksDigest384LastFieldStreamErrorV1::InputOverrun { .. }
+        | GoldilocksDigest384LastFieldStreamErrorV1::InputUnderrun { .. } => {
+            TransparentStarkErrorV1::FrameLengthOverflow
+        }
+    }
+}
+
+/// Domain-separated binary six-lane Poseidon Merkle tree.
+#[derive(Clone, Debug)]
+pub(crate) struct GoldilocksMerkleTreeV1 {
+    levels: Vec<Vec<GoldilocksDigest384V1>>,
+}
+impl GoldilocksMerkleTreeV1 {
+    /// Commit a non-empty power-of-two leaf vector.
+    pub(crate) fn from_leaves(
+        leaves: Vec<GoldilocksDigest384V1>,
+        context: TransparentStarkDigestContextV1,
+        node_role: &'static [u8],
+    ) -> Result<Self, TransparentStarkErrorV1> {
+        context.validate()?;
+        if leaves.is_empty()
+            || !leaves.len().is_power_of_two()
+            || node_role.is_empty()
+            || u16::try_from(node_role.len()).is_err()
+        {
+            return Err(TransparentStarkErrorV1::InvalidMerkleShape);
+        }
+        let mut levels = Vec::new();
+        levels
+            .try_reserve_exact(
+                usize::try_from(leaves.len().ilog2())
+                    .ok()
+                    .and_then(|depth| depth.checked_add(1))
+                    .ok_or(TransparentStarkErrorV1::InvalidMerkleShape)?,
+            )
+            .map_err(|_| TransparentStarkErrorV1::AllocationFailure)?;
+        levels.push(leaves);
+        while levels.last().map_or(0, Vec::len) > 1 {
+            let parent_level = u64::try_from(levels.len())
+                .map_err(|_| TransparentStarkErrorV1::InvalidMerkleShape)?;
+            let previous = levels
+                .last()
+                .ok_or(TransparentStarkErrorV1::InvalidMerkleShape)?;
+            let mut next = Vec::new();
+            next.try_reserve_exact(previous.len() / 2)
+                .map_err(|_| TransparentStarkErrorV1::AllocationFailure)?;
+            for (index, pair) in previous.chunks_exact(2).enumerate() {
+                next.push(goldilocks_merkle_node_v1(
+                    context,
+                    node_role,
+                    parent_level,
+                    u64::try_from(index)
+                        .map_err(|_| TransparentStarkErrorV1::InvalidMerkleShape)?,
+                    pair[0],
+                    pair[1],
+                )?);
+            }
+            levels.push(next);
+        }
+        Ok(Self { levels })
+    }
+    /// Root digest.
+    pub(crate) fn root(&self) -> GoldilocksDigest384V1 {
+        self.levels[self.levels.len() - 1][0]
+    }
+    /// Leaf-to-root sibling path.
+    pub(crate) fn path(
+        &self,
+        mut index: usize,
+    ) -> Result<Vec<GoldilocksDigest384V1>, TransparentStarkErrorV1> {
+        if index >= self.levels[0].len() {
+            return Err(TransparentStarkErrorV1::InvalidMerkleShape);
+        }
+        let mut path = Vec::new();
+        path.try_reserve_exact(self.levels.len() - 1)
+            .map_err(|_| TransparentStarkErrorV1::AllocationFailure)?;
+        for level in &self.levels[..self.levels.len() - 1] {
+            path.push(level[index ^ 1]);
+            index >>= 1;
+        }
+        Ok(path)
+    }
+}
+/// Hash one binary Merkle node with an engine-fixed role domain.
+pub(crate) fn goldilocks_merkle_node_v1(
+    context: TransparentStarkDigestContextV1,
+    node_role: &[u8],
+    level: u64,
+    index: u64,
+    left: GoldilocksDigest384V1,
+    right: GoldilocksDigest384V1,
+) -> Result<GoldilocksDigest384V1, TransparentStarkErrorV1> {
+    goldilocks_digest384_frame_v1(
+        context,
+        node_role,
+        MERKLE_NODE_PHASE_V1,
+        level,
+        index,
+        0,
+        &[&left.to_le_bytes(), &right.to_le_bytes()],
+    )
+}
+/// Verify one exact binary Merkle path.
+#[cfg(test)]
+pub(crate) fn verify_goldilocks_merkle_path_v1(
+    context: TransparentStarkDigestContextV1,
+    node_role: &[u8],
+    root: GoldilocksDigest384V1,
+    mut leaf: GoldilocksDigest384V1,
+    mut index: usize,
+    path: &[GoldilocksDigest384V1],
+    expected_depth: usize,
+) -> Result<(), TransparentStarkErrorV1> {
+    context.validate()?;
+    if node_role.is_empty()
+        || u16::try_from(node_role.len()).is_err()
+        || path.len() != expected_depth
+    {
+        return Err(TransparentStarkErrorV1::InvalidMerkleShape);
+    }
+    for (path_level, sibling) in path.iter().copied().enumerate() {
+        let parent_index = index >> 1;
+        leaf = if index & 1 == 0 {
+            goldilocks_merkle_node_v1(
+                context,
+                node_role,
+                u64::try_from(path_level + 1)
+                    .map_err(|_| TransparentStarkErrorV1::InvalidMerkleShape)?,
+                u64::try_from(parent_index)
+                    .map_err(|_| TransparentStarkErrorV1::InvalidMerkleShape)?,
+                leaf,
+                sibling,
+            )?
+        } else {
+            goldilocks_merkle_node_v1(
+                context,
+                node_role,
+                u64::try_from(path_level + 1)
+                    .map_err(|_| TransparentStarkErrorV1::InvalidMerkleShape)?,
+                u64::try_from(parent_index)
+                    .map_err(|_| TransparentStarkErrorV1::InvalidMerkleShape)?,
+                sibling,
+                leaf,
+            )?
+        };
+        index = parent_index;
+    }
+    if index != 0 || leaf != root {
+        return Err(TransparentStarkErrorV1::InvalidMerkleShape);
+    }
+    Ok(())
+}
+/// Hash an unambiguous role-and-field frame.
+#[cfg(test)]
+pub(crate) fn goldilocks_frame_v1(
+    context: TransparentStarkDigestContextV1,
+    role: &[u8],
+    level: u64,
+    index: u64,
+    fields: &[&[u8]],
+) -> Result<GoldilocksDigest384V1, TransparentStarkErrorV1> {
+    goldilocks_digest384_frame_v1(context, role, FRAME_PHASE_V1, level, index, 0, fields)
+}
 /// Stateful framed Fiat–Shamir transcript.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct TransparentTranscriptV1 {
-    state: [u8; 32],
+    context: TransparentStarkDigestContextV1,
+    state: GoldilocksDigest384V1,
     challenge_counter: u64,
 }
 impl TransparentTranscriptV1 {
     /// Initialize with the engine suite, complete profile digest, and exact public-input digest.
     pub(crate) fn new(
+        context: TransparentStarkDigestContextV1,
         engine_suite: &[u8],
-        profile_digest: &[u8; 32],
-        public_input_digest: &[u8; 32],
+        profile_digest: &GoldilocksDigest384V1,
+        public_input_digest: &GoldilocksDigest384V1,
     ) -> Result<Self, TransparentStarkErrorV1> {
         if engine_suite.is_empty() {
             return Err(TransparentStarkErrorV1::FrameLengthOverflow);
         }
+        let profile_digest = profile_digest.to_le_bytes();
+        let public_input_digest = public_input_digest.to_le_bytes();
         Ok(Self {
-            state: sha256_frame_v1(
+            context,
+            state: goldilocks_digest384_frame_v1(
+                context,
                 TRANSCRIPT_INIT_DOMAIN_V1,
-                &[engine_suite, profile_digest, public_input_digest],
+                b"initialize",
+                0,
+                0,
+                0,
+                &[engine_suite, &profile_digest, &public_input_digest],
             )?,
             challenge_counter: 0,
         })
@@ -1081,14 +1289,37 @@ impl TransparentTranscriptV1 {
         label: &[u8],
         fields: &[&[u8]],
     ) -> Result<(), TransparentStarkErrorV1> {
-        let message = sha256_frame_v1(label, fields)?;
-        self.state = sha256_frame_v1(TRANSCRIPT_ABSORB_DOMAIN_V1, &[&self.state, label, &message])?;
+        if label.is_empty() {
+            return Err(TransparentStarkErrorV1::InvalidDigestDomain);
+        }
+        let message = goldilocks_digest384_frame_v1(
+            self.context,
+            b"transcript-message",
+            label,
+            0,
+            0,
+            self.challenge_counter,
+            fields,
+        )?;
+        self.state = goldilocks_digest384_frame_v1(
+            self.context,
+            TRANSCRIPT_ABSORB_DOMAIN_V1,
+            label,
+            0,
+            0,
+            self.challenge_counter,
+            &[&self.state.to_le_bytes(), &message.to_le_bytes()],
+        )?;
         self.challenge_counter = 0;
         Ok(())
     }
     /// Current transcript state for query/grinding derivation.
-    pub(crate) const fn state(&self) -> [u8; 32] {
+    pub(crate) const fn state(&self) -> GoldilocksDigest384V1 {
         self.state
+    }
+    /// Exact catalog/protocol/profile context bound to this transcript.
+    pub(crate) const fn context(&self) -> TransparentStarkDigestContextV1 {
+        self.context
     }
     /// Derive one unbiased nonzero Goldilocks challenge.
     pub(crate) fn challenge_field(
@@ -1096,29 +1327,33 @@ impl TransparentTranscriptV1 {
         label: &[u8],
     ) -> Result<GoldilocksFieldV1, TransparentStarkErrorV1> {
         for attempt in 0..MAX_FIELD_REJECTION_ATTEMPTS_V1 {
-            let digest = sha256_frame_v1(
+            let digest = goldilocks_digest384_frame_v1(
+                self.context,
                 TRANSCRIPT_CHALLENGE_DOMAIN_V1,
-                &[
-                    &self.state,
-                    label,
-                    &self.challenge_counter.to_be_bytes(),
-                    &attempt.to_be_bytes(),
-                ],
+                label,
+                0,
+                attempt,
+                self.challenge_counter,
+                &[&self.state.to_le_bytes()],
             )?;
-            let candidate = u64::from_be_bytes(
-                digest[..8]
-                    .try_into()
-                    .expect("SHA-256 prefix is exactly eight bytes"),
-            );
+            let candidate = digest.words()[0];
             if let Some(field) = GoldilocksFieldV1::canonical(candidate)
                 && field != GoldilocksFieldV1::ZERO
             {
+                let accepted_counter = self.challenge_counter;
                 self.challenge_counter = self
                     .challenge_counter
                     .checked_add(1)
                     .ok_or(TransparentStarkErrorV1::ChallengeSamplingExhausted)?;
-                self.state =
-                    sha256_frame_v1(TRANSCRIPT_ABSORB_DOMAIN_V1, &[&self.state, label, &digest])?;
+                self.state = goldilocks_digest384_frame_v1(
+                    self.context,
+                    TRANSCRIPT_ABSORB_DOMAIN_V1,
+                    label,
+                    0,
+                    0,
+                    accepted_counter,
+                    &[&self.state.to_le_bytes(), &digest.to_le_bytes()],
+                )?;
                 return Ok(field);
             }
         }
@@ -1126,10 +1361,9 @@ impl TransparentTranscriptV1 {
     }
     /// Derive one uniform challenge in the quartic Goldilocks extension.
     ///
-    /// A complete SHA-256 digest supplies the four fixed-order coefficients. Rejection is over the
-    /// entire 256-bit tuple, so accepting canonical tuples is uniform over all of `Fp4`, including
-    /// zero. FRI and polynomial identity theorems sample the whole challenge field; callers that
-    /// need an invertible or out-of-domain value must state that as a predicate via
+    /// Four independent canonical digest lanes supply the fixed-order coefficients. FRI and
+    /// polynomial identity theorems sample the whole challenge field, including zero; callers that
+    /// need an invertible or out-of-domain value state that as a predicate via
     /// [`Self::challenge_fp4_where`].
     pub(crate) fn challenge_fp4(
         &mut self,
@@ -1146,17 +1380,18 @@ impl TransparentTranscriptV1 {
         label: &[u8],
         predicate: impl FnMut(GoldilocksFp4V1) -> bool,
     ) -> Result<GoldilocksFp4V1, TransparentStarkErrorV1> {
+        let context = self.context;
         self.challenge_fp4_with_oracle_and_predicate(
             label,
             |state, label, counter, attempt| {
-                sha256_frame_v1(
+                goldilocks_digest384_frame_v1(
+                    context,
                     TRANSCRIPT_FP4_CHALLENGE_DOMAIN_V1,
-                    &[
-                        &state,
-                        label,
-                        &counter.to_be_bytes(),
-                        &attempt.to_be_bytes(),
-                    ],
+                    label,
+                    0,
+                    attempt,
+                    counter,
+                    &[&state.to_le_bytes()],
                 )
             },
             predicate,
@@ -1166,27 +1401,46 @@ impl TransparentTranscriptV1 {
     fn challenge_fp4_with_oracle(
         &mut self,
         label: &[u8],
-        mut oracle: impl FnMut([u8; 32], &[u8], u64, u64) -> Result<[u8; 32], TransparentStarkErrorV1>,
+        mut oracle: impl FnMut(
+            GoldilocksDigest384V1,
+            &[u8],
+            u64,
+            u64,
+        ) -> Result<GoldilocksDigest384V1, TransparentStarkErrorV1>,
     ) -> Result<GoldilocksFp4V1, TransparentStarkErrorV1> {
         self.challenge_fp4_with_oracle_and_predicate(label, &mut oracle, |_| true)
     }
     fn challenge_fp4_with_oracle_and_predicate(
         &mut self,
         label: &[u8],
-        mut oracle: impl FnMut([u8; 32], &[u8], u64, u64) -> Result<[u8; 32], TransparentStarkErrorV1>,
+        mut oracle: impl FnMut(
+            GoldilocksDigest384V1,
+            &[u8],
+            u64,
+            u64,
+        ) -> Result<GoldilocksDigest384V1, TransparentStarkErrorV1>,
         mut predicate: impl FnMut(GoldilocksFp4V1) -> bool,
     ) -> Result<GoldilocksFp4V1, TransparentStarkErrorV1> {
         for attempt in 0..MAX_FIELD_REJECTION_ATTEMPTS_V1 {
             let digest = oracle(self.state, label, self.challenge_counter, attempt)?;
-            if let Some(field) = GoldilocksFp4V1::canonical_be_bytes(digest)
-                && predicate(field)
-            {
+            let words = digest.words();
+            let field = GoldilocksFp4V1::canonical([words[0], words[1], words[2], words[3]])
+                .expect("digest lanes are canonical Goldilocks elements");
+            if predicate(field) {
+                let accepted_counter = self.challenge_counter;
                 self.challenge_counter = self
                     .challenge_counter
                     .checked_add(1)
                     .ok_or(TransparentStarkErrorV1::ChallengeSamplingExhausted)?;
-                self.state =
-                    sha256_frame_v1(TRANSCRIPT_ABSORB_DOMAIN_V1, &[&self.state, label, &digest])?;
+                self.state = goldilocks_digest384_frame_v1(
+                    self.context,
+                    TRANSCRIPT_ABSORB_DOMAIN_V1,
+                    label,
+                    0,
+                    0,
+                    accepted_counter,
+                    &[&self.state.to_le_bytes(), &digest.to_le_bytes()],
+                )?;
                 return Ok(field);
             }
         }
@@ -1195,10 +1449,12 @@ impl TransparentTranscriptV1 {
 }
 /// Derive unique unbiased query indices for a power-of-two domain.
 pub(crate) fn derive_unique_query_indices_v1(
-    seed: &[u8; 32],
+    context: TransparentStarkDigestContextV1,
+    seed: &GoldilocksDigest384V1,
     domain_size: usize,
     query_count: usize,
 ) -> Result<Vec<usize>, TransparentStarkErrorV1> {
+    context.validate()?;
     if domain_size == 0
         || !domain_size.is_power_of_two()
         || query_count == 0
@@ -1219,7 +1475,8 @@ pub(crate) fn derive_unique_query_indices_v1(
         let remaining = domain_size
             .checked_sub(query_number)
             .ok_or(TransparentStarkErrorV1::InvalidDomain)?;
-        let offset = derive_bounded_query_offset_v1(seed, &mut counter, remaining)?;
+        let offset =
+            derive_bounded_query_offset_v1(context, seed, query_number, &mut counter, remaining)?;
         let draw = query_number
             .checked_add(offset)
             .ok_or(TransparentStarkErrorV1::InvalidDomain)?;
@@ -1231,7 +1488,9 @@ pub(crate) fn derive_unique_query_indices_v1(
     Ok(indices)
 }
 fn derive_bounded_query_offset_v1(
-    seed: &[u8; 32],
+    context: TransparentStarkDigestContextV1,
+    seed: &GoldilocksDigest384V1,
+    query_number: usize,
     counter: &mut u64,
     bound: usize,
 ) -> Result<usize, TransparentStarkErrorV1> {
@@ -1239,20 +1498,27 @@ fn derive_bounded_query_offset_v1(
         return Err(TransparentStarkErrorV1::InvalidDomain);
     }
     let bound = bound as u128;
-    let source_space = u128::from(u64::MAX) + 1;
+    let source_space = u128::from(GOLDILOCKS_MODULUS_V1);
     let acceptance_limit = source_space - source_space % bound;
     for _ in 0..MAX_QUERY_INDEX_REJECTION_ATTEMPTS_V1 {
-        let encoded_counter = counter.to_be_bytes();
-        let digest = sha256_frame_v1(QUERY_INDEX_DOMAIN_V1, &[seed, &encoded_counter])?;
+        let digest = goldilocks_digest384_frame_v1(
+            context,
+            QUERY_INDEX_DOMAIN_V1,
+            b"fisher-yates-offset",
+            0,
+            u64::try_from(query_number).map_err(|_| TransparentStarkErrorV1::InvalidDomain)?,
+            *counter,
+            &[
+                &seed.to_le_bytes(),
+                &u64::try_from(bound)
+                    .map_err(|_| TransparentStarkErrorV1::InvalidDomain)?
+                    .to_le_bytes(),
+            ],
+        )?;
         *counter = counter
             .checked_add(1)
             .ok_or(TransparentStarkErrorV1::QuerySamplingExhausted)?;
-        let raw = u64::from_be_bytes(
-            digest[..8]
-                .try_into()
-                .expect("SHA-256 prefix is exactly eight bytes"),
-        );
-        let raw = u128::from(raw);
+        let raw = u128::from(digest.words()[0]);
         if raw < acceptance_limit {
             return usize::try_from(raw % bound)
                 .map_err(|_| TransparentStarkErrorV1::InvalidDomain);
@@ -1379,14 +1645,15 @@ pub(crate) fn ensure_fri_terminal_degree_fp4_v1(
 }
 /// Search for the smallest nonce meeting an exact leading-zero-bit target.
 pub(crate) fn grind_nonce_v1(
-    transcript_seed: &[u8; 32],
+    context: TransparentStarkDigestContextV1,
+    transcript_seed: &GoldilocksDigest384V1,
     grinding_bits: u8,
 ) -> Result<u64, TransparentStarkErrorV1> {
     if grinding_bits > 63 {
         return Err(TransparentStarkErrorV1::InvalidGrinding);
     }
     for nonce in 0..=u64::MAX {
-        if verify_grinding_nonce_v1(transcript_seed, grinding_bits, nonce).is_ok() {
+        if verify_grinding_nonce_v1(context, transcript_seed, grinding_bits, nonce).is_ok() {
             return Ok(nonce);
         }
     }
@@ -1394,15 +1661,24 @@ pub(crate) fn grind_nonce_v1(
 }
 /// Verify a transcript grinding nonce.
 pub(crate) fn verify_grinding_nonce_v1(
-    transcript_seed: &[u8; 32],
+    context: TransparentStarkDigestContextV1,
+    transcript_seed: &GoldilocksDigest384V1,
     grinding_bits: u8,
     nonce: u64,
 ) -> Result<(), TransparentStarkErrorV1> {
     if grinding_bits > 63 {
         return Err(TransparentStarkErrorV1::InvalidGrinding);
     }
-    let digest = sha256_frame_v1(GRINDING_DOMAIN_V1, &[transcript_seed, &nonce.to_be_bytes()])?;
-    if leading_zero_bits_v1(&digest) < u32::from(grinding_bits) {
+    let digest = goldilocks_digest384_frame_v1(
+        context,
+        GRINDING_DOMAIN_V1,
+        b"proof-of-work-nonce",
+        0,
+        nonce,
+        0,
+        &[&transcript_seed.to_le_bytes()],
+    )?;
+    if leading_zero_bits_v1(&digest.to_le_bytes()) < u32::from(grinding_bits) {
         return Err(TransparentStarkErrorV1::InvalidGrinding);
     }
     Ok(())
@@ -1500,8 +1776,31 @@ pub(crate) fn append_goldilocks_fp4_v1(bytes: &mut Vec<u8>, value: GoldilocksFp4
 mod tests {
     use super::*;
     use rand::{RngCore, SeedableRng as _, rngs::StdRng};
+    const TEST_DIGEST_CONTEXT_V1: TransparentStarkDigestContextV1 =
+        TransparentStarkDigestContextV1::new(
+            PrivacyProtocolIdV1::PqMaspStarkV1,
+            b"aggregate-test-profile-v1",
+        );
     fn fp4(coefficients: [u64; 4]) -> GoldilocksFp4V1 {
         GoldilocksFp4V1::canonical(coefficients).expect("small canonical coefficients")
+    }
+    fn digest_from_fp4(value: GoldilocksFp4V1) -> GoldilocksDigest384V1 {
+        let coefficients = value.coefficients().map(GoldilocksFieldV1::value);
+        GoldilocksDigest384V1::new([
+            coefficients[0],
+            coefficients[1],
+            coefficients[2],
+            coefficients[3],
+            0,
+            0,
+        ])
+        .expect("Fp4 coefficients are canonical digest lanes")
+    }
+    fn test_transcript_v1() -> TransparentTranscriptV1 {
+        let profile = GoldilocksDigest384V1::new([1; 6]).expect("profile digest");
+        let public = GoldilocksDigest384V1::new([2; 6]).expect("public digest");
+        TransparentTranscriptV1::new(TEST_DIGEST_CONTEXT_V1, b"fp4-suite", &profile, &public)
+            .expect("transcript")
     }
     #[derive(Debug)]
     struct InjectedRngError;
@@ -1580,19 +1879,19 @@ mod tests {
     }
     #[test]
     fn work_normalized_fiat_shamir_certificate_is_exact_and_fail_closed() {
-        let boundary = checked_transparent_stark_work_security_v1(128, 129, 256, 124)
+        let boundary = checked_transparent_stark_work_security_v1(128, 129, 384, 252)
             .expect("the exact conservative boundary must pass");
         assert_eq!(boundary.target_bits, 128);
         assert_eq!(boundary.round_by_round_bits, 129);
-        assert_eq!(boundary.random_oracle_bits, 256);
-        assert_eq!(boundary.max_random_oracle_query_log2, 124);
+        assert_eq!(boundary.random_oracle_bits, 384);
+        assert_eq!(boundary.max_random_oracle_query_log2, 252);
         assert_eq!(
-            checked_transparent_stark_work_security_v1(128, 128, 256, 124),
+            checked_transparent_stark_work_security_v1(128, 128, 384, 252),
             Err(TransparentStarkErrorV1::InvalidDomain),
             "the RBR term must receive half of the target error budget"
         );
         assert_eq!(
-            checked_transparent_stark_work_security_v1(128, 129, 256, 125),
+            checked_transparent_stark_work_security_v1(128, 129, 384, 253),
             Err(TransparentStarkErrorV1::InvalidDomain),
             "the random-oracle term must receive the other half"
         );
@@ -1602,7 +1901,7 @@ mod tests {
             "a digest too short for the split must fail closed"
         );
         assert_eq!(
-            checked_transparent_stark_work_security_v1(0, 129, 256, 124),
+            checked_transparent_stark_work_security_v1(0, 129, 384, 252),
             Err(TransparentStarkErrorV1::InvalidDomain)
         );
         assert_eq!(
@@ -1840,68 +2139,25 @@ mod tests {
     }
     #[test]
     fn goldilocks_fp4_transcript_and_rng_sampling_fail_closed() {
-        let mut first =
-            TransparentTranscriptV1::new(b"fp4-suite", &[1; 32], &[2; 32]).expect("transcript");
+        let mut first = test_transcript_v1();
         first.absorb(b"root", &[b"commitment"]).expect("absorb");
         let challenge = first.challenge_fp4(b"beta").expect("Fp4 challenge");
-        assert_ne!(challenge, GoldilocksFp4V1::ZERO);
-        assert_eq!(
-            challenge,
-            fp4([
-                8_790_435_620_274_556_149,
-                2_098_888_623_578_996_013,
-                7_540_512_127_627_056_556,
-                5_624_266_292_913_244_129,
-            ]),
-            "the canonical Fp4 transcript encoding and coefficient order are a KAT"
-        );
-        let mut replay =
-            TransparentTranscriptV1::new(b"fp4-suite", &[1; 32], &[2; 32]).expect("transcript");
+        assert!(challenge.is_canonical());
+        let mut replay = test_transcript_v1();
         replay.absorb(b"root", &[b"commitment"]).expect("absorb");
         assert_eq!(replay.challenge_fp4(b"beta").expect("replay"), challenge);
-        let mut zero_allowed =
-            TransparentTranscriptV1::new(b"fp4-suite", &[1; 32], &[2; 32]).expect("transcript");
+        let mut zero_allowed = test_transcript_v1();
         let mut attempts = 0_u64;
         assert_eq!(
             zero_allowed.challenge_fp4_with_oracle(b"beta", |_, _, _, _| {
                 attempts += 1;
-                Ok([0; 32])
+                Ok(GoldilocksDigest384V1::default())
             }),
             Ok(GoldilocksFp4V1::ZERO),
             "FRI challenges are uniform over the complete extension field"
         );
         assert_eq!(attempts, 1);
-        let mut exhausted =
-            TransparentTranscriptV1::new(b"fp4-suite", &[1; 32], &[2; 32]).expect("transcript");
-        let mut attempts = 0_u64;
-        assert_eq!(
-            exhausted.challenge_fp4_with_oracle(b"beta", |_, _, _, _| {
-                attempts += 1;
-                Ok([0xff; 32])
-            }),
-            Err(TransparentStarkErrorV1::ChallengeSamplingExhausted)
-        );
-        assert_eq!(attempts, MAX_FIELD_REJECTION_ATTEMPTS_V1);
-        let mut retry =
-            TransparentTranscriptV1::new(b"fp4-suite", &[1; 32], &[2; 32]).expect("transcript");
-        let expected = fp4([1, 2, 3, 4]);
-        let mut attempts = 0_u64;
-        let sampled = retry
-            .challenge_fp4_with_oracle(b"beta", |_, _, _, _| {
-                attempts += 1;
-                if attempts == 1 {
-                    let mut noncanonical = [0_u8; 32];
-                    noncanonical[..8].copy_from_slice(&GOLDILOCKS_MODULUS_V1.to_be_bytes());
-                    Ok(noncanonical)
-                } else {
-                    Ok(expected.to_be_bytes())
-                }
-            })
-            .expect("second candidate is canonical");
-        assert_eq!(attempts, 2);
-        assert_eq!(sampled, expected);
-        let mut predicate_retry =
-            TransparentTranscriptV1::new(b"fp4-suite", &[1; 32], &[2; 32]).expect("transcript");
+        let mut predicate_retry = test_transcript_v1();
         let rejected = GoldilocksFp4V1::ZERO;
         let accepted = fp4([9, 10, 11, 12]);
         let mut attempts = 0_u64;
@@ -1914,9 +2170,9 @@ mod tests {
                     retry_frames.push((counter, attempt));
                     attempts += 1;
                     Ok(if attempts == 1 {
-                        rejected.to_be_bytes()
+                        digest_from_fp4(rejected)
                     } else {
-                        accepted.to_be_bytes()
+                        digest_from_fp4(accepted)
                     })
                 },
                 |candidate| candidate != GoldilocksFp4V1::ZERO,
@@ -1925,12 +2181,11 @@ mod tests {
         assert_eq!(attempts, 2);
         assert_eq!(retry_frames, [(0, 0), (0, 1)]);
         assert_eq!(sampled, accepted);
-        let mut direct =
-            TransparentTranscriptV1::new(b"fp4-suite", &[1; 32], &[2; 32]).expect("transcript");
+        let mut direct = test_transcript_v1();
         assert_eq!(
             direct
                 .challenge_fp4_with_oracle(b"deep-point", |_, _, _, _| {
-                    Ok(accepted.to_be_bytes())
+                    Ok(digest_from_fp4(accepted))
                 })
                 .expect("direct accepted candidate"),
             accepted
@@ -1940,8 +2195,7 @@ mod tests {
             direct.state(),
             "a rejected DEEP point must not be absorbed into the transcript"
         );
-        let mut predicate_exhausted =
-            TransparentTranscriptV1::new(b"fp4-suite", &[1; 32], &[2; 32]).expect("transcript");
+        let mut predicate_exhausted = test_transcript_v1();
         let initial_state = predicate_exhausted.state();
         let mut exhausted_frames = Vec::new();
         assert_eq!(
@@ -1950,7 +2204,7 @@ mod tests {
                 |_, label, counter, attempt| {
                     assert_eq!(label, b"deep-point");
                     exhausted_frames.push((counter, attempt));
-                    Ok(rejected.to_be_bytes())
+                    Ok(digest_from_fp4(rejected))
                 },
                 |candidate| candidate != GoldilocksFp4V1::ZERO,
             ),
@@ -2112,15 +2366,27 @@ mod tests {
     }
     #[test]
     fn merkle_paths_bind_domain_index_leaf_order_and_depth() {
-        let domain = b"iroha:test:transparent-stark:node:v1";
+        let node_role = b"iroha:test:transparent-stark:node:v1";
         let leaves = (0..8)
-            .map(|index| sha256_frame_v1(b"leaf", &[&[index]]).expect("leaf hash"))
+            .map(|index| {
+                goldilocks_frame_v1(
+                    TEST_DIGEST_CONTEXT_V1,
+                    b"iroha:test:transparent-stark:leaf:v1",
+                    0,
+                    u64::from(index),
+                    &[&[index]],
+                )
+                .expect("leaf hash")
+            })
             .collect::<Vec<_>>();
-        let tree = Sha256MerkleTreeV1::from_leaves(leaves.clone(), domain).expect("tree");
+        let tree =
+            GoldilocksMerkleTreeV1::from_leaves(leaves.clone(), TEST_DIGEST_CONTEXT_V1, node_role)
+                .expect("tree");
         for (index, leaf) in leaves.iter().copied().enumerate() {
-            verify_sha256_merkle_path_v1(
-                domain,
-                &tree.root(),
+            verify_goldilocks_merkle_path_v1(
+                TEST_DIGEST_CONTEXT_V1,
+                node_role,
+                tree.root(),
                 leaf,
                 index,
                 &tree.path(index).expect("path"),
@@ -2129,37 +2395,75 @@ mod tests {
             .expect("opening");
         }
         let mut path = tree.path(3).expect("path");
-        path[0][0] ^= 1;
+        let mut mutated = path[0].words();
+        mutated[0] = if mutated[0] + 1 == GOLDILOCKS_MODULUS_V1 {
+            0
+        } else {
+            mutated[0] + 1
+        };
+        path[0] = GoldilocksDigest384V1::new(mutated).expect("mutation remains canonical");
         assert_eq!(
-            verify_sha256_merkle_path_v1(domain, &tree.root(), leaves[3], 3, &path, 3),
+            verify_goldilocks_merkle_path_v1(
+                TEST_DIGEST_CONTEXT_V1,
+                node_role,
+                tree.root(),
+                leaves[3],
+                3,
+                &path,
+                3,
+            ),
             Err(TransparentStarkErrorV1::InvalidMerkleShape)
         );
         assert_eq!(
-            verify_sha256_merkle_path_v1(b"other", &tree.root(), leaves[3], 3, &path, 3),
+            verify_goldilocks_merkle_path_v1(
+                TEST_DIGEST_CONTEXT_V1,
+                b"other",
+                tree.root(),
+                leaves[3],
+                3,
+                &path,
+                3,
+            ),
             Err(TransparentStarkErrorV1::InvalidMerkleShape)
         );
         let oversized_domain: &'static [u8] =
             Box::leak(vec![0_u8; usize::from(u16::MAX) + 1].into_boxed_slice());
         assert!(matches!(
-            Sha256MerkleTreeV1::from_leaves(vec![[0; 32]; 2], oversized_domain),
+            GoldilocksMerkleTreeV1::from_leaves(
+                vec![GoldilocksDigest384V1::default(); 2],
+                TEST_DIGEST_CONTEXT_V1,
+                oversized_domain,
+            ),
             Err(TransparentStarkErrorV1::InvalidMerkleShape)
         ));
         assert_eq!(
-            verify_sha256_merkle_path_v1(oversized_domain, &tree.root(), leaves[3], 3, &path, 3,),
+            verify_goldilocks_merkle_path_v1(
+                TEST_DIGEST_CONTEXT_V1,
+                oversized_domain,
+                tree.root(),
+                leaves[3],
+                3,
+                &path,
+                3,
+            ),
             Err(TransparentStarkErrorV1::InvalidMerkleShape)
         );
     }
     #[test]
     fn transcript_is_framed_ordered_and_deterministic() {
+        let profile = GoldilocksDigest384V1::new([1; 6]).expect("profile digest");
+        let public = GoldilocksDigest384V1::new([2; 6]).expect("public digest");
         let mut first =
-            TransparentTranscriptV1::new(b"suite", &[1; 32], &[2; 32]).expect("transcript");
+            TransparentTranscriptV1::new(TEST_DIGEST_CONTEXT_V1, b"suite", &profile, &public)
+                .expect("transcript");
         let mut second = first;
         first.absorb(b"root", &[b"ab", b"c"]).expect("absorb");
         second.absorb(b"root", &[b"a", b"bc"]).expect("absorb");
         assert_ne!(first.state(), second.state());
         let challenge = first.challenge_field(b"alpha").expect("challenge");
         let mut replay =
-            TransparentTranscriptV1::new(b"suite", &[1; 32], &[2; 32]).expect("transcript");
+            TransparentTranscriptV1::new(TEST_DIGEST_CONTEXT_V1, b"suite", &profile, &public)
+                .expect("transcript");
         replay.absorb(b"root", &[b"ab", b"c"]).expect("absorb");
         assert_eq!(
             replay.challenge_field(b"alpha").expect("challenge"),
@@ -2167,9 +2471,101 @@ mod tests {
         );
     }
     #[test]
+    fn digest_binds_protocol_profile_role_phase_level_index_counter_and_lanes() {
+        let digest = goldilocks_digest384_frame_v1(
+            TEST_DIGEST_CONTEXT_V1,
+            b"trace-tree",
+            b"leaf",
+            3,
+            5,
+            7,
+            &[b"payload"],
+        )
+        .expect("digest");
+        let mutations = [
+            goldilocks_digest384_frame_v1(
+                TransparentStarkDigestContextV1::new(
+                    PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+                    b"aggregate-test-profile-v1",
+                ),
+                b"trace-tree",
+                b"leaf",
+                3,
+                5,
+                7,
+                &[b"payload"],
+            ),
+            goldilocks_digest384_frame_v1(
+                TransparentStarkDigestContextV1::new(
+                    PrivacyProtocolIdV1::PqMaspStarkV1,
+                    b"different-profile-v1",
+                ),
+                b"trace-tree",
+                b"leaf",
+                3,
+                5,
+                7,
+                &[b"payload"],
+            ),
+            goldilocks_digest384_frame_v1(
+                TEST_DIGEST_CONTEXT_V1,
+                b"composition-tree",
+                b"leaf",
+                3,
+                5,
+                7,
+                &[b"payload"],
+            ),
+            goldilocks_digest384_frame_v1(
+                TEST_DIGEST_CONTEXT_V1,
+                b"trace-tree",
+                b"node",
+                3,
+                5,
+                7,
+                &[b"payload"],
+            ),
+            goldilocks_digest384_frame_v1(
+                TEST_DIGEST_CONTEXT_V1,
+                b"trace-tree",
+                b"leaf",
+                4,
+                5,
+                7,
+                &[b"payload"],
+            ),
+            goldilocks_digest384_frame_v1(
+                TEST_DIGEST_CONTEXT_V1,
+                b"trace-tree",
+                b"leaf",
+                3,
+                6,
+                7,
+                &[b"payload"],
+            ),
+            goldilocks_digest384_frame_v1(
+                TEST_DIGEST_CONTEXT_V1,
+                b"trace-tree",
+                b"leaf",
+                3,
+                5,
+                8,
+                &[b"payload"],
+            ),
+        ];
+        for mutation in mutations {
+            assert_ne!(mutation.expect("mutated domain"), digest);
+        }
+        let lanes = digest.words().into_iter().collect::<BTreeSet<_>>();
+        assert_eq!(lanes.len(), 6, "all six independently keyed lanes differ");
+    }
+    #[test]
     fn query_indices_are_unique_deterministic_and_in_domain() {
-        let first = derive_unique_query_indices_v1(&[9; 32], 1 << 12, 56).expect("queries");
-        let second = derive_unique_query_indices_v1(&[9; 32], 1 << 12, 56).expect("queries");
+        let seed = GoldilocksDigest384V1::new([9; 6]).expect("canonical seed");
+        let first = derive_unique_query_indices_v1(TEST_DIGEST_CONTEXT_V1, &seed, 1 << 12, 56)
+            .expect("queries");
+        let second = derive_unique_query_indices_v1(TEST_DIGEST_CONTEXT_V1, &seed, 1 << 12, 56)
+            .expect("queries");
         assert_eq!(first, second);
         assert!(first.iter().all(|index| *index < 1 << 12));
         assert_eq!(
@@ -2179,17 +2575,26 @@ mod tests {
     }
     #[test]
     fn dense_query_sampling_succeeds_for_the_former_zero_seed_exhaustion() {
-        assert_eq!(
-            derive_unique_query_indices_v1(&[0; 32], 2, 2).expect("dense queries"),
-            vec![0, 1]
-        );
+        let seed = GoldilocksDigest384V1::default();
+        let indices = derive_unique_query_indices_v1(TEST_DIGEST_CONTEXT_V1, &seed, 2, 2)
+            .expect("dense queries");
+        assert_eq!(indices.len(), 2);
+        let indices = indices.into_iter().collect::<BTreeSet<_>>();
+        assert!(indices.contains(&0));
+        assert!(indices.contains(&1));
     }
     #[test]
     fn query_indices_remain_unique_and_in_range_through_full_domains() {
+        let seed = GoldilocksDigest384V1::new([0xa5; 6]).expect("canonical seed");
         for domain_size in [1_usize, 2, 4, 8, 16, 64, 256] {
             for query_count in [1, domain_size.div_ceil(2), domain_size] {
-                let indices = derive_unique_query_indices_v1(&[0xa5; 32], domain_size, query_count)
-                    .expect("valid query shape");
+                let indices = derive_unique_query_indices_v1(
+                    TEST_DIGEST_CONTEXT_V1,
+                    &seed,
+                    domain_size,
+                    query_count,
+                )
+                .expect("valid query shape");
                 assert_eq!(indices.len(), query_count);
                 assert!(indices.iter().all(|index| *index < domain_size));
                 assert_eq!(
@@ -2247,11 +2652,12 @@ mod tests {
     }
     #[test]
     fn grinding_and_exact_reader_fail_closed() {
-        let nonce = grind_nonce_v1(&[0x42; 32], 8).expect("grind");
-        verify_grinding_nonce_v1(&[0x42; 32], 8, nonce).expect("valid nonce");
+        let seed = GoldilocksDigest384V1::new([0x42; 6]).expect("canonical seed");
+        let nonce = grind_nonce_v1(TEST_DIGEST_CONTEXT_V1, &seed, 8).expect("grind");
+        verify_grinding_nonce_v1(TEST_DIGEST_CONTEXT_V1, &seed, 8, nonce).expect("valid nonce");
         if nonce > 0 {
             assert_eq!(
-                verify_grinding_nonce_v1(&[0x42; 32], 8, nonce - 1),
+                verify_grinding_nonce_v1(TEST_DIGEST_CONTEXT_V1, &seed, 8, nonce - 1),
                 Err(TransparentStarkErrorV1::InvalidGrinding)
             );
         }

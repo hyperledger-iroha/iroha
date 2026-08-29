@@ -2730,6 +2730,7 @@ mod tests {
                 relay_opener,
                 inbound_tx,
                 1,
+                Duration::from_millis(5),
                 receive_deadline,
             ),
         )
@@ -2744,6 +2745,57 @@ mod tests {
         assert_eq!(
             inbound.try_recv().expect("first cell reached the mux"),
             first
+        );
+
+        client.close(0u32.into(), b"test complete");
+        server.close(0u32.into(), b"test complete");
+        tokio::join!(server.wait_idle(), client.wait_idle());
+    }
+
+    #[tokio::test]
+    async fn strict_receiver_fails_closed_on_an_early_datagram_burst() {
+        let (server, client, server_connection, client_connection) = strict_test_quic_pair().await;
+        let session_key = vec![0x72; 32];
+        let relay_records =
+            RecordLayer::new(SessionKey::new(session_key.clone()), RecordEndpoint::Relay)
+                .expect("relay record layer");
+        let client_records = RecordLayer::new(SessionKey::new(session_key), RecordEndpoint::Client)
+            .expect("client record layer");
+        let (_, relay_opener) = constant_rate_codec(&relay_records).expect("relay strict codec");
+        let (mut client_sealer, _) =
+            constant_rate_codec(&client_records).expect("client strict codec");
+        for _ in 0..4 {
+            let encoded = client_sealer
+                .seal(&MuxFrame::cover())
+                .expect("seal cover cell")
+                .encode();
+            client_connection
+                .send_datagram(encoded.to_vec().into())
+                .expect("queue early cover cell");
+        }
+
+        let (inbound_tx, mut inbound) = mpsc::channel(1);
+        let error = timeout(
+            Duration::from_secs(2),
+            run_strict_constant_rate_receiver(
+                server_connection,
+                relay_opener,
+                inbound_tx,
+                1,
+                Duration::from_secs(1),
+                Duration::from_secs(8),
+            ),
+        )
+        .await
+        .expect("early-burst pacing test timed out")
+        .expect_err("a fourth immediate cell must exceed the two-tick pacing grace");
+        assert!(matches!(
+            error,
+            StrictConstantRateRuntimeError::ReceiveRateExceeded
+        ));
+        assert!(
+            inbound.try_recv().is_err(),
+            "cover cells must not reach a logical consumer"
         );
 
         client.close(0u32.into(), b"test complete");

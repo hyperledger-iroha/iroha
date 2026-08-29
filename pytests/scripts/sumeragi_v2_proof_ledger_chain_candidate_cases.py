@@ -1634,7 +1634,10 @@ def test_producer_continuation_frozen_projection_normalizations_are_pinned(
     """Frozen producer carriers retain their normalized reviewed filters."""
 
     module = load_checker()
-    tree = ast.parse(SCRIPT.read_text(encoding="utf-8"), filename=str(SCRIPT))
+    owner = SCRIPT.with_name(
+        "sumeragi_v2_proof_ledger_candidate_continuation_contracts.py"
+    )
+    tree = ast.parse(owner.read_text(encoding="utf-8"), filename=str(owner))
     checker = next(
         node
         for node in tree.body

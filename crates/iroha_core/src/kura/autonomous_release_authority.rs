@@ -267,6 +267,7 @@ impl Kura {
             retirement,
             source_disposition,
             &complete,
+            None,
         )?;
         // `_queue_fence` was declared before every Kura guard above. Rust's
         // reverse drop order therefore releases sidecar/geometry/canonical/
@@ -306,7 +307,7 @@ impl Kura {
         }
         let (certified_data_path, certified_index_path) =
             Self::certified_lane_block_paths_for_entry(entry, &self.store_root);
-        if self
+        if let Some(certified) = self
             .read_active_certified_lane_block_artifact_from_paths_durability_attested_locked(
                 entry,
                 retirement.lane_block_height,
@@ -314,7 +315,11 @@ impl Kura {
                 &certified_index_path,
                 true,
             )
-            .is_some()
+            && !self.active_certified_ordinary_is_canonical_hint_promotion_locked(
+                entry,
+                &record.artifact.executable_payload.origin_proposal,
+                &certified,
+            )
         {
             return Err(Self::invalid_lane_artifact_error(
                 certified_data_path,

@@ -442,8 +442,8 @@ test("verifying key read paths reject unsupported production backends before fet
     "stark/fri/replace-before-mainnet",
     "stark/fri/not-production-ready",
     "stark/fri/placeholder",
-    " stark/fri/sha256-goldilocks",
-    "stark/fri/sha256-goldilocks ",
+    " stark/fri/poseidon-x7-goldilocks-6x64-v1",
+    "stark/fri/poseidon-x7-goldilocks-6x64-v1 ",
     "halo2/ipa/orchard",
     "halo2/kzg",
     "halo2/ipa\0",
@@ -1144,10 +1144,7 @@ test("registerVerifyingKey accepts current production backend labels", async () 
     "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
     "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
     "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
-    "stark/fri",
-    "stark/fri/sha256-goldilocks",
-    "stark/fri/poseidon2-goldilocks",
-    "stark/fri/sha256_goldilocks.v1",
+    "stark/fri/poseidon-x7-goldilocks-6x64-v1",
   ];
   for (const [index, backend] of backends.entries()) {
     await client.registerVerifyingKey({
@@ -1179,7 +1176,7 @@ test("updateVerifyingKey accepts current production backend labels", async () =>
     "halo2/ipa",
     "halo2/pasta/ivm-execution-v1",
     "halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
-    "stark/fri/sha256-goldilocks",
+    "stark/fri/poseidon-x7-goldilocks-6x64-v1",
   ];
   for (const [index, backend] of backends.entries()) {
     await client.updateVerifyingKey({
@@ -1363,6 +1360,9 @@ test("verifying key registration rejects unsupported production backends before 
     ["register Cyrillic-a backend", () => client.registerVerifyingKey({ ...base, backend: "h\u0430lo2/ipa" })],
     ["register uppercase backend", () => client.registerVerifyingKey({ ...base, backend: "HALO2/IPA" })],
     ["register uppercase STARK backend", () => client.registerVerifyingKey({ ...base, backend: "stark/FRI" })],
+    ["register removed generic STARK backend", () => client.registerVerifyingKey({ ...base, backend: "stark/fri" })],
+    ["register removed Poseidon2 STARK backend", () => client.registerVerifyingKey({ ...base, backend: "stark/fri/poseidon2-goldilocks" })],
+    ["register removed SHA-256 STARK backend", () => client.registerVerifyingKey({ ...base, backend: "stark/fri/sha256_goldilocks.v1" })],
     ["register double-colon native backend", () => client.registerVerifyingKey({ ...base, backend: "halo2/ipa::ivm-execution-v1" })],
     ["register double-slash backend", () => client.registerVerifyingKey({ ...base, backend: "halo2//ipa" })],
     ["register trailing-colon backend", () => client.registerVerifyingKey({ ...base, backend: "halo2/ipa:" })],
@@ -1469,8 +1469,8 @@ test("verifying key registration rejects unsupported production backends before 
     ["update stub IPA", () => client.updateVerifyingKey({ ...base, backend: "halo2/ipa:stub" })],
     ["update spliced sample IPA", () => client.updateVerifyingKey({ ...base, backend: "halo2/ipa:s-a-m-p-l-e" })],
     ["update unknown STARK", () => client.updateVerifyingKey({ ...base, backend: "stark/unknown-native-v1" })],
-    ["update leading-space STARK", () => client.updateVerifyingKey({ ...base, backend: " stark/fri/sha256-goldilocks" })],
-    ["update trailing-space STARK", () => client.updateVerifyingKey({ ...base, backend: "stark/fri/sha256-goldilocks " })],
+    ["update leading-space STARK", () => client.updateVerifyingKey({ ...base, backend: " stark/fri/poseidon-x7-goldilocks-6x64-v1" })],
+    ["update trailing-space STARK", () => client.updateVerifyingKey({ ...base, backend: "stark/fri/poseidon-x7-goldilocks-6x64-v1 " })],
     ["update fullwidth-slash backend", () => client.updateVerifyingKey({ ...base, backend: "halo2\uFF0Fipa" })],
     ["update zero-width backend", () => client.updateVerifyingKey({ ...base, backend: "halo2/\u200Bipa" })],
     ["update Cyrillic-a backend", () => client.updateVerifyingKey({ ...base, backend: "h\u0430lo2/ipa" })],

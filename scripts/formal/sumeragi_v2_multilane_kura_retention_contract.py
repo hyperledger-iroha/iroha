@@ -209,12 +209,22 @@ KURA_RETENTION_REQUIRED_BINDINGS = (
     (
         "crates/iroha_core/src/kura.rs",
         "method",
+        "Kura::durable_mutation_authorized",
+        (
+            "self.emergency_fast_startup_enabled()",
+            "Error::EmergencyFastAuxiliaryUnavailable",
+            "self.ensure_snapshot_bootstrap_authenticated()?",
+            "self.ensure_canonical_storage_not_poisoned()",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/kura.rs",
+        "method",
         "Kura::start",
         (
+            "kura.durable_mutation_authorized()?",
             "kura.local_peer_id.get().is_none()",
             "Error::KuraReplicaLocalPeerUnbound",
-            "kura.ensure_snapshot_bootstrap_authenticated()?",
-            "kura.ensure_canonical_storage_not_poisoned()?",
         ),
     ),
     (
@@ -253,8 +263,9 @@ KURA_RETENTION_REQUIRED_BINDINGS = (
         "method",
         "Kura::new_inner",
         (
-            "let replica_registry_key_capacity = config",
-            ".replica_advert\n            .validate(config.blocks_in_memory)",
+            "let replica_registry_key_capacity = if config.init_mode == InitMode::Fast {",
+            "NonZeroUsize::MIN",
+            ".replica_advert\n                .validate(config.blocks_in_memory)",
             "Error::InvalidKuraReplicaAdvertConfiguration(error.to_string())",
             "eviction_required_replicas: config.replica_advert.eviction_required_replicas",
             "local_peer_id: OnceLock::new()",

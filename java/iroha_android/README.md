@@ -552,14 +552,14 @@ alternate Base64, truncation, trailing or unknown data, and reordered rows.
 Use `requireCanonicalArchive` with an independently trusted fixture when exact
 cross-row and cross-field identity matters.
 
-The registry has exactly twelve IDs: `zk-ace-pq-authorization-v0`,
+The registry has exactly twelve IDs: `zk-ace-pq-authorization-v1`,
 `anonymous-pgc-k-out-of-n-v1`, `verange-transparent-range-v1`,
-`iroha-zk-ams-v1`, `vega-existing-credential-zk-v0`,
-`iroha-zk-x509-stark-p256-v0`,
-`iroha-jindo-polynomial-commitment-v0`,
+`iroha-zk-ams-v1`, `vega-existing-credential-zk-v1`,
+`iroha-zk-x509-stark-p256-v1`,
+`iroha-jindo-polynomial-commitment-v1`,
 `iroha-bootle-lantern-anoncred-v1`, `orchard-halo2-actions-v1`,
 `monero-fcmp-plus-plus-v1`, `iroha-ivm-private-note-stark-v1`, and
-`pq-masp-stark-v0`. Parsing is exact: aliases, retired IDs, case changes, and
+`pq-masp-stark-v1`. Parsing is exact: aliases, retired IDs, case changes, and
 whitespace normalization fail closed.
 
 ## Multisig specs and TTL preview

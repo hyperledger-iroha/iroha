@@ -11,6 +11,7 @@ use iroha_core::privacy_profiles::{
 use iroha_crypto::{
     Algorithm, EcdsaSecp256k1Sha256, Error as CryptoError, Hash, KeyGenOption, KeyPair, PrivateKey,
     PublicKey, RamLfeBackend, RamLfeVerificationMode, Signature,
+    confidential_memo::{ConfidentialMemoKemSuiteV1, generate_confidential_memo_keypair_v1},
     kex::KeyExchangeScheme,
     sm::{Sm2PrivateKey, Sm2PublicKey, Sm2Signature},
 };
@@ -21,7 +22,10 @@ use iroha_data_model::{
         address::{AccountAddress, AccountAddressError, ChainDiscriminantGuard},
     },
     asset::id::{AssetBalanceScope, AssetDefinitionId, AssetId},
-    confidential::{CONFIDENTIAL_ENCRYPTED_PAYLOAD_V1, ConfidentialEncryptedPayload},
+    confidential::{
+        CONFIDENTIAL_MEMO_MAX_CIPHERTEXT_BYTES_V1, CONFIDENTIAL_MEMO_MAX_WIRE_BYTES_V1,
+        CONFIDENTIAL_MEMO_XCHACHA_TAG_BYTES_V1, ConfidentialMemoEnvelopeV1,
+    },
     da::manifest::DaManifestV1,
     domain::DomainId,
     governance::{
@@ -235,7 +239,6 @@ const ERR_HASH_OUT_LEN: c_int = -11;
 const ERR_BUFFER_TOO_SMALL: c_int = -12;
 const ERR_SM2_DERIVE: c_int = -13;
 const ERR_INVALID_NOTE_COMMITMENT: c_int = -14;
-const ERR_CONFIDENTIAL_PAYLOAD: c_int = -15;
 const ERR_SM2_VERIFY: c_int = -16;
 const ERR_SM2_PARSE: c_int = -17;
 const ERR_INVALID_NULLIFIERS: c_int = -19;
@@ -309,7 +312,6 @@ enum BridgeError {
     Alloc,
     HashOutBuffer,
     InvalidNoteCommitment,
-    ConfidentialPayload,
     InvalidNullifiers,
     InvalidRootHint,
     AssetId,
@@ -360,7 +362,6 @@ impl BridgeError {
             BridgeError::Alloc => ERR_ALLOC,
             BridgeError::HashOutBuffer => ERR_HASH_OUT_LEN,
             BridgeError::InvalidNoteCommitment => ERR_INVALID_NOTE_COMMITMENT,
-            BridgeError::ConfidentialPayload => ERR_CONFIDENTIAL_PAYLOAD,
             BridgeError::InvalidNullifiers => ERR_INVALID_NULLIFIERS,
             BridgeError::InvalidRootHint => ERR_INVALID_ROOT_HINT,
             BridgeError::AssetId => ERR_ASSET_ID_PARSE,
@@ -2689,61 +2690,229 @@ unsafe fn read_vec_bytes(ptr: *const c_uchar, len: c_ulong) -> BridgeResult<Vec<
     let slice = unsafe { slice::from_raw_parts(ptr, len as usize) };
     Ok(slice.to_vec())
 }
-fn build_confidential_encrypted_payload(
-    ephemeral: [u8; 32],
-    nonce: [u8; 24],
-    ciphertext: Vec<u8>,
-) -> BridgeResult<ConfidentialEncryptedPayload> {
-    let payload = ConfidentialEncryptedPayload::new(ephemeral, nonce, ciphertext);
-    payload
-        .validate()
-        .map_err(|_| BridgeError::ConfidentialPayload)?;
-    Ok(payload)
-}
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_encode_confidential_encrypted_payload(
-    ephemeral_ptr: *const c_uchar,
-    ephemeral_len: c_ulong,
-    nonce_ptr: *const c_uchar,
-    nonce_len: c_ulong,
-    ciphertext_ptr: *const c_uchar,
-    ciphertext_len: c_ulong,
+pub unsafe extern "C" fn connect_norito_validate_confidential_memo_envelope_v1(
+    envelope_ptr: *const c_uchar,
+    envelope_len: c_ulong,
     out_ptr: *mut *mut c_uchar,
     out_len: *mut c_ulong,
 ) -> c_int {
-    if ephemeral_ptr.is_null() || nonce_ptr.is_null() || out_ptr.is_null() || out_len.is_null() {
+    if envelope_ptr.is_null() || out_ptr.is_null() || out_len.is_null() {
         return -1;
     }
-    if ephemeral_len != 32 || nonce_len != 24 {
-        return -3;
+    unsafe {
+        *out_ptr = ptr::null_mut();
+        *out_len = 0;
     }
-    if ciphertext_len > (u32::MAX as c_ulong) {
+    if envelope_len as usize > CONFIDENTIAL_MEMO_MAX_WIRE_BYTES_V1 {
         return -2;
     }
-    // Safety: caller guarantees buffers are valid for the declared length.
-    let mut ephemeral = [0u8; 32];
-    ephemeral.copy_from_slice(unsafe { slice::from_raw_parts(ephemeral_ptr, 32) });
-    let mut nonce = [0u8; 24];
-    nonce.copy_from_slice(unsafe { slice::from_raw_parts(nonce_ptr, 24) });
-    let ciphertext = match unsafe { read_vec_bytes(ciphertext_ptr, ciphertext_len) } {
-        Ok(ciphertext) => ciphertext,
-        Err(BridgeError::NullPtr) => return -1,
+    // Safety: caller guarantees the input buffer is valid for the declared length.
+    let input = unsafe { slice::from_raw_parts(envelope_ptr, envelope_len as usize) };
+    let envelope = match ConfidentialMemoEnvelopeV1::decode_wire(input) {
+        Ok(envelope) => envelope,
         Err(_) => return -3,
     };
-    let payload = match build_confidential_encrypted_payload(ephemeral, nonce, ciphertext) {
-        Ok(payload) => payload,
+    let encoded = match envelope.encode_wire() {
+        Ok(encoded) => encoded,
         Err(_) => return -3,
     };
-    let ciphertext = payload.ciphertext();
-    let mut encoded = Vec::with_capacity(
-        1 + payload.ephemeral_pubkey().len() + payload.nonce().len() + ciphertext.len() + 10,
-    );
-    encoded.push(CONFIDENTIAL_ENCRYPTED_PAYLOAD_V1);
-    encoded.extend_from_slice(payload.ephemeral_pubkey());
-    encoded.extend_from_slice(payload.nonce());
-    encode_varint(ciphertext.len() as u64, &mut encoded);
-    encoded.extend_from_slice(ciphertext);
     unsafe { write_bytes(out_ptr, out_len, &encoded) }.map_or_else(|err| err, |_| 0)
+}
+
+fn confidential_memo_suite_v1(tag: c_uchar) -> Option<ConfidentialMemoKemSuiteV1> {
+    match tag {
+        0 => Some(ConfidentialMemoKemSuiteV1::MlKem768),
+        1 => Some(ConfidentialMemoKemSuiteV1::MlKem1024),
+        _ => None,
+    }
+}
+
+fn confidential_memo_data_suite_v1(
+    suite: ConfidentialMemoKemSuiteV1,
+) -> iroha_data_model::confidential::ConfidentialMemoSuiteV1 {
+    match suite {
+        ConfidentialMemoKemSuiteV1::MlKem768 => {
+            iroha_data_model::confidential::ConfidentialMemoSuiteV1::MlKem768XChaCha20Poly1305
+        }
+        ConfidentialMemoKemSuiteV1::MlKem1024 => {
+            iroha_data_model::confidential::ConfidentialMemoSuiteV1::MlKem1024XChaCha20Poly1305
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_generate_confidential_memo_keypair_v1(
+    suite_tag: c_uchar,
+    public_key_out: *mut *mut c_uchar,
+    public_key_len_out: *mut c_ulong,
+    secret_key_out: *mut *mut c_uchar,
+    secret_key_len_out: *mut c_ulong,
+) -> c_int {
+    if public_key_out.is_null()
+        || public_key_len_out.is_null()
+        || secret_key_out.is_null()
+        || secret_key_len_out.is_null()
+    {
+        return -1;
+    }
+    unsafe {
+        *public_key_out = ptr::null_mut();
+        *public_key_len_out = 0;
+        *secret_key_out = ptr::null_mut();
+        *secret_key_len_out = 0;
+    }
+    let Some(suite) = confidential_memo_suite_v1(suite_tag) else {
+        return -3;
+    };
+    let keypair = match generate_confidential_memo_keypair_v1(suite) {
+        Ok(keypair) => keypair,
+        Err(_) => return -3,
+    };
+    if let Err(error) =
+        unsafe { write_bytes(public_key_out, public_key_len_out, keypair.public_key()) }
+    {
+        return error;
+    }
+    if let Err(error) =
+        unsafe { write_bytes(secret_key_out, secret_key_len_out, keypair.secret_key()) }
+    {
+        unsafe {
+            free((*public_key_out).cast());
+            *public_key_out = ptr::null_mut();
+            *public_key_len_out = 0;
+        }
+        return error;
+    }
+    0
+}
+
+/// Zeroize and release one confidential-memo secret output.
+///
+/// # Safety
+///
+/// `secret_key` must be null or the exact live secret-key/plaintext pointer
+/// returned by a confidential-memo entrypoint, and `secret_key_len` must be the
+/// unchanged returned length.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_confidential_memo_secret_free_v1(
+    secret_key: *mut c_uchar,
+    secret_key_len: c_ulong,
+) {
+    if secret_key.is_null() {
+        return;
+    }
+    let secret = unsafe { slice::from_raw_parts_mut(secret_key, secret_key_len as usize) };
+    secret.zeroize();
+    unsafe { free(secret_key.cast()) };
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_seal_confidential_memo_v1(
+    suite_tag: c_uchar,
+    recipient_public_keys: *const c_uchar,
+    recipient_public_keys_len: c_ulong,
+    recipient_count: c_uchar,
+    plaintext: *const c_uchar,
+    plaintext_len: c_ulong,
+    out_ptr: *mut *mut c_uchar,
+    out_len: *mut c_ulong,
+) -> c_int {
+    if recipient_public_keys.is_null()
+        || (plaintext.is_null() && plaintext_len != 0)
+        || out_ptr.is_null()
+        || out_len.is_null()
+    {
+        return -1;
+    }
+    let Some(suite) = confidential_memo_suite_v1(suite_tag) else {
+        return -3;
+    };
+    if plaintext_len as usize
+        > CONFIDENTIAL_MEMO_MAX_CIPHERTEXT_BYTES_V1 - CONFIDENTIAL_MEMO_XCHACHA_TAG_BYTES_V1
+    {
+        return -2;
+    }
+    unsafe {
+        *out_ptr = ptr::null_mut();
+        *out_len = 0;
+    }
+    let count = usize::from(recipient_count);
+    if !(1..=8).contains(&count) {
+        return -3;
+    }
+    let key_bytes = suite.mlkem_suite().public_key_len();
+    if recipient_public_keys_len as usize != count.saturating_mul(key_bytes) {
+        return -3;
+    }
+    let packed =
+        unsafe { slice::from_raw_parts(recipient_public_keys, recipient_public_keys_len as usize) };
+    let recipients = packed
+        .chunks_exact(key_bytes)
+        .map(<[u8]>::to_vec)
+        .collect::<Vec<_>>();
+    let plaintext = if plaintext_len == 0 {
+        &[]
+    } else {
+        unsafe { slice::from_raw_parts(plaintext, plaintext_len as usize) }
+    };
+    let envelope = match ConfidentialMemoEnvelopeV1::seal(
+        confidential_memo_data_suite_v1(suite),
+        &recipients,
+        plaintext,
+    ) {
+        Ok(envelope) => envelope,
+        Err(_) => return -3,
+    };
+    let encoded = match envelope.encode_wire() {
+        Ok(encoded) => encoded,
+        Err(_) => return -3,
+    };
+    unsafe { write_bytes(out_ptr, out_len, &encoded) }.map_or_else(|error| error, |_| 0)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_open_confidential_memo_v1(
+    suite_tag: c_uchar,
+    recipient_secret_key: *const c_uchar,
+    recipient_secret_key_len: c_ulong,
+    envelope: *const c_uchar,
+    envelope_len: c_ulong,
+    out_ptr: *mut *mut c_uchar,
+    out_len: *mut c_ulong,
+) -> c_int {
+    if recipient_secret_key.is_null()
+        || envelope.is_null()
+        || out_ptr.is_null()
+        || out_len.is_null()
+    {
+        return -1;
+    }
+    if envelope_len as usize > CONFIDENTIAL_MEMO_MAX_WIRE_BYTES_V1 {
+        return -2;
+    }
+    unsafe {
+        *out_ptr = ptr::null_mut();
+        *out_len = 0;
+    }
+    let Some(suite) = confidential_memo_suite_v1(suite_tag) else {
+        return -3;
+    };
+    if recipient_secret_key_len as usize != suite.mlkem_suite().secret_key_len() {
+        return -3;
+    }
+    let secret_key =
+        unsafe { slice::from_raw_parts(recipient_secret_key, recipient_secret_key_len as usize) };
+    let wire = unsafe { slice::from_raw_parts(envelope, envelope_len as usize) };
+    let envelope = match ConfidentialMemoEnvelopeV1::decode_wire(wire) {
+        Ok(envelope) => envelope,
+        Err(_) => return -3,
+    };
+    let plaintext = match envelope.open(confidential_memo_data_suite_v1(suite), secret_key) {
+        Ok(plaintext) => Zeroizing::new(plaintext),
+        Err(_) => return -3,
+    };
+    unsafe { write_bytes(out_ptr, out_len, &plaintext) }.map_or_else(|error| error, |_| 0)
 }
 fn encode_varint(mut value: u64, out: &mut Vec<u8>) {
     loop {
@@ -24782,21 +24951,13 @@ mod accel_tests {
             }
         }
     }
-    fn call_confidential_payload_encoder(
-        ephemeral: &[u8; 32],
-        ciphertext: &[u8],
-    ) -> (c_int, *mut u8, c_ulong) {
-        let nonce = [0x44_u8; 24];
+    fn call_confidential_memo_validator(wire: &[u8]) -> (c_int, *mut u8, c_ulong) {
         let mut out_ptr: *mut u8 = ptr::null_mut();
         let mut out_len: c_ulong = 0;
         let result = unsafe {
-            connect_norito_encode_confidential_encrypted_payload(
-                ephemeral.as_ptr(),
-                ephemeral.len() as c_ulong,
-                nonce.as_ptr(),
-                nonce.len() as c_ulong,
-                ciphertext.as_ptr(),
-                ciphertext.len() as c_ulong,
+            connect_norito_validate_confidential_memo_envelope_v1(
+                wire.as_ptr(),
+                wire.len() as c_ulong,
                 &mut out_ptr,
                 &mut out_len,
             )
@@ -25626,35 +25787,145 @@ mod accel_tests {
         algorithm: Algorithm::Ed25519,
     );
     #[test]
-    fn confidential_payload_encoder_accepts_valid_payload() {
-        let (result, out_ptr, out_len) =
-            call_confidential_payload_encoder(&[0x07; 32], &[0x09, 0x0A]);
+    fn confidential_memo_validator_accepts_canonical_v1_wire() {
+        use iroha_data_model::confidential::{
+            CONFIDENTIAL_MEMO_WRAPPED_KEY_BYTES_V1, CONFIDENTIAL_MEMO_XCHACHA_NONCE_BYTES_V1,
+            CONFIDENTIAL_MEMO_XCHACHA_TAG_BYTES_V1, ConfidentialMemoRecipientSlotV1,
+            ConfidentialMemoSuiteV1,
+        };
+        let envelope = ConfidentialMemoEnvelopeV1::new(
+            core::array::from_fn(|index| {
+                let suite = ConfidentialMemoSuiteV1::MlKem768XChaCha20Poly1305;
+                let index = u8::try_from(index).expect("slot index fits u8");
+                ConfidentialMemoRecipientSlotV1::new(
+                    suite,
+                    vec![index + 1; suite.encapsulation_bytes()],
+                    [index + 17; CONFIDENTIAL_MEMO_XCHACHA_NONCE_BYTES_V1],
+                    [index + 33; CONFIDENTIAL_MEMO_WRAPPED_KEY_BYTES_V1],
+                )
+                .expect("canonical memo slot")
+            }),
+            [0xA5; CONFIDENTIAL_MEMO_XCHACHA_NONCE_BYTES_V1],
+            vec![0x5A; CONFIDENTIAL_MEMO_XCHACHA_TAG_BYTES_V1],
+        )
+        .expect("canonical memo envelope");
+        let wire = envelope.encode_wire().expect("encode canonical memo wire");
+        let (result, out_ptr, out_len) = call_confidential_memo_validator(&wire);
         assert_eq!(result, 0);
         assert!(!out_ptr.is_null());
         let encoded = unsafe { slice::from_raw_parts(out_ptr, out_len as usize) };
-        assert_eq!(encoded[0], CONFIDENTIAL_ENCRYPTED_PAYLOAD_V1);
-        assert_eq!(&encoded[1..33], &[0x07; 32]);
-        assert_eq!(&encoded[33..57], &[0x44; 24]);
-        assert_eq!(encoded[57], 2);
-        assert_eq!(&encoded[58..], &[0x09, 0x0A]);
+        assert_eq!(encoded, wire);
         unsafe {
             free(out_ptr as *mut _);
         }
     }
     #[test]
-    fn confidential_payload_encoder_rejects_low_order_ephemeral_key() {
-        let (result, out_ptr, out_len) =
-            call_confidential_payload_encoder(&[0x00; 32], &[0x09, 0x0A]);
+    fn confidential_memo_validator_rejects_legacy_wire() {
+        let mut old_wire = vec![1];
+        old_wire.extend_from_slice(&[7; 32]);
+        old_wire.extend_from_slice(&[2; 24]);
+        old_wire.extend_from_slice(&[16, 0x5A]);
+        let (result, out_ptr, out_len) = call_confidential_memo_validator(&old_wire);
         assert_eq!(result, -3);
         assert!(out_ptr.is_null());
         assert_eq!(out_len, 0);
     }
     #[test]
-    fn confidential_payload_encoder_rejects_empty_ciphertext() {
-        let (result, out_ptr, out_len) = call_confidential_payload_encoder(&[0x07; 32], &[]);
+    fn confidential_memo_validator_rejects_trailing_bytes() {
+        let wire = [
+            iroha_data_model::confidential::CONFIDENTIAL_MEMO_WIRE_MAGIC_V1.as_slice(),
+            &[0xFF],
+        ]
+        .concat();
+        let (result, out_ptr, out_len) = call_confidential_memo_validator(&wire);
         assert_eq!(result, -3);
         assert!(out_ptr.is_null());
         assert_eq!(out_len, 0);
+    }
+
+    #[test]
+    fn confidential_memo_keygen_seal_and_open_roundtrip() {
+        let mut public_key_ptr = ptr::null_mut();
+        let mut public_key_len = 0;
+        let mut secret_key_ptr = ptr::null_mut();
+        let mut secret_key_len = 0;
+        let keygen = unsafe {
+            connect_norito_generate_confidential_memo_keypair_v1(
+                0,
+                &mut public_key_ptr,
+                &mut public_key_len,
+                &mut secret_key_ptr,
+                &mut secret_key_len,
+            )
+        };
+        assert_eq!(keygen, 0);
+        assert!(!public_key_ptr.is_null());
+        assert!(!secret_key_ptr.is_null());
+
+        let plaintext = b"native exact-eight-slot memo";
+        let mut envelope_ptr = ptr::null_mut();
+        let mut envelope_len = 0;
+        let seal = unsafe {
+            connect_norito_seal_confidential_memo_v1(
+                0,
+                public_key_ptr,
+                public_key_len,
+                1,
+                plaintext.as_ptr(),
+                plaintext.len() as c_ulong,
+                &mut envelope_ptr,
+                &mut envelope_len,
+            )
+        };
+        assert_eq!(seal, 0);
+        assert!(!envelope_ptr.is_null());
+
+        let mut opened_ptr = ptr::null_mut();
+        let mut opened_len = 0;
+        let open = unsafe {
+            connect_norito_open_confidential_memo_v1(
+                0,
+                secret_key_ptr,
+                secret_key_len,
+                envelope_ptr,
+                envelope_len,
+                &mut opened_ptr,
+                &mut opened_len,
+            )
+        };
+        assert_eq!(open, 0);
+        assert_eq!(opened_len as usize, plaintext.len());
+        assert_eq!(
+            unsafe { slice::from_raw_parts(opened_ptr, opened_len as usize) },
+            plaintext
+        );
+
+        connect_norito_free(public_key_ptr);
+        unsafe { connect_norito_confidential_memo_secret_free_v1(secret_key_ptr, secret_key_len) };
+        connect_norito_free(envelope_ptr);
+        unsafe { connect_norito_confidential_memo_secret_free_v1(opened_ptr, opened_len) };
+    }
+
+    #[test]
+    fn confidential_memo_native_boundary_rejects_unknown_suite() {
+        let mut public_key_ptr = ptr::null_mut();
+        let mut public_key_len = 0;
+        let mut secret_key_ptr = ptr::null_mut();
+        let mut secret_key_len = 0;
+        assert_eq!(
+            unsafe {
+                connect_norito_generate_confidential_memo_keypair_v1(
+                    0xFF,
+                    &mut public_key_ptr,
+                    &mut public_key_len,
+                    &mut secret_key_ptr,
+                    &mut secret_key_len,
+                )
+            },
+            -3
+        );
+        assert!(public_key_ptr.is_null());
+        assert!(secret_key_ptr.is_null());
     }
     #[test]
     fn connect_generate_keypair_private_output_derives_public_key() {

@@ -5,12 +5,13 @@ boundary. V1 deliberately exposes only witnessed transfers and opaque metadata
 carriers; unsupported supply, permission, and non-membership variants are not
 retained in the wire or trace schema.
 
-Cryptographic qualification note (2026-08-23): the implemented boundary is
-useful for deterministic correctness and integration testing, but is not a
-128-bit ledger-grade proof system. The sole canonical parameter record declares
-geometry and FRI query counts, not a security target; the one-field commitment
-has a roughly 32-bit generic collision ceiling. Appendix A lists the remaining
-release blockers.
+Cryptographic qualification note (2026-08-29): the sole canonical parameter
+record targets 128-bit aggregate qROM security with six independently generated
+Goldilocks digest lanes, degree-four FRI challenges, binary folds, and 136
+queries. The exact arithmetic calculator meets that target, but arithmetic is
+not a production qualification claim: the protocol-specific qROM reduction and
+the final-artifact multi-target digest review remain mandatory. Appendix A
+records the calculation and blockers.
 
 ## Implemented release boundary
 
@@ -44,17 +45,17 @@ release blockers.
   opaque profile accepts MetaSet carrier rows only; its public roots are
   externally authenticated statement context, not proven state updates.
 - Production CoreHost rejects non-null standalone `AXT_VERIFY_DS_PROOF` before
-  proof recording or cache mutation. The caller-carried witness and roughly
-  32-bit FASTPQ commitment cannot serve as remote authorization without an
-  authoritative finalized source-state anchor.
+  proof recording or cache mutation. A caller-carried witness cannot serve as
+  remote authorization without an authoritative finalized source-state anchor,
+  irrespective of the proof commitment width.
 - Handle-bound transfer proofs carry canonical remote-spend claim preimages.
   Verification reconstructs their commitments and requires an exact one-to-one
   match with real transfer transcripts across handle identity, dataspace,
   asset, accounts, amount, and cardinality. The issuer signature authenticates
   the capability/asset fields, not the intent, proof, or amount, so this
   specialized path remains outside release qualification while those exact
-  facts depend on the current 32-bit binding. Finalized lane-relay and
-  authoritative fee-vault paths retain their separate state anchors.
+  facts are not authenticated. Finalized lane-relay and authoritative fee-vault
+  paths retain their separate state anchors.
 - Test/dev-tools raw-statement helpers check cryptographic transcript and byte
   determinism only. They make no state-validity claim and are absent from normal
   production builds.
@@ -70,9 +71,10 @@ release blockers.
 > `PackedBytes`) and a full-width, domain-separated BLAKE2b-256 ordering
 > commitment. The dense-MDS Poseidon constants used by the STARK are pinned by
 > the repository asset and manifest; this construction is not Poseidon2. The
-> ordering and trace-commitment fixtures (`tests/fixtures/ordering_hash.json`
-> and `tests/fixtures/trace_commitment.json`) anchor the regression suite. They
-> are regenerated only when `FASTPQ_UPDATE_FIXTURES=1` is set explicitly.
+> ordering fixture (`tests/fixtures/ordering_hash.json`) anchors the sorted-row
+> regression, while `tests/trace_commitment.rs` covers canonical commitment
+> encoding, determinism, and fixture separation. The JSON fixture is regenerated
+> only when `FASTPQ_UPDATE_FIXTURES=1` is set explicitly.
 
 ### Implemented trace schema
 - Each row encodes only the V1 statement surface:
@@ -93,8 +95,8 @@ release blockers.
 - Provide fixtures and property tests:
   - Packing limb coverage in `fastpq_prover/src/packing.rs` unit tests.
   - Ordering stability hash (`tests/fixtures/ordering_hash.json`).
-  - Trace commitment (`tests/fixtures/trace_commitment.json`).
-  - Canonical V1 proof fixtures (`v1_balanced_{64,1k,5k}.bin`).
+  - Trace-commitment canonical/determinism coverage (`tests/trace_commitment.rs`).
+  - Canonical V1 raw-transcript fixture (`v1_raw_transcript_64.bin`).
 
 ### AIR Column Schema
 | Column Group      | Names                                                                                  | Description                                                                                                           |
@@ -132,13 +134,19 @@ proofs and binary/golden proof artifacts produced with the single
   `D = { o · g^i | i = 0 .. N_eval-1 }`, where `N_eval = 2^{k+b}` divides the
   2-adic capacity of Goldilocks, `g` is the pinned root of exact order
   `N_eval`, and `o = omega_coset` is the pinned nonzero offset outside that
-  subgroup. Record the domain parameters in the transcript (tag
-  `fastpq:v1:lde`).
+  subgroup. The sole compiled parameter record fixes this geometry; the
+  parameter identifier is bound into transcript initialization.
 - Composition commitment: combine the 16 implemented residues with 16
   independently sampled coefficients. Proving and verifier-side derivation
   first require every residue to vanish on the canonical base trace; the raw
   LDE composition is then committed for low-degree testing.
-- FRI with the sole V1 arity `r = 8`: for each layer, absorb the root with tag `fastpq:v1:fri_layer_ℓ`, sample `β_ℓ` (tag `fastpq:v1:beta_ℓ`), and fold an opened coset using the domain elements for that coset. Verifiers must bind every opened value to its Merkle path and evaluation point; an x-free linear combination of sibling values is not a valid low-degree check.
+- FRI with the sole V1 binary arity `r = 2`: for each layer, absorb the
+  six-lane 384-bit root with tag `fastpq:v1:fri_layer:<round>`, sample a
+  `GoldilocksFp4V1` challenge `β_ℓ` (tag `fastpq:v1:beta:<round>`), and fold
+  an opened multiplicative coset using the domain elements for that coset.
+  Verifiers must bind every opened value to its Merkle path and evaluation
+  point; an x-free linear combination of sibling values is not a valid
+  low-degree check.
   The implemented prover/verifier now uses strided multiplicative cosets,
   inverse-subgroup decomposition, the round domain point, and adaptive final
   arity without repeat-last padding. It stops while the complete terminal domain
@@ -156,16 +164,16 @@ proofs and binary/golden proof artifacts produced with the single
   Proof {
       protocol_version: u16,
       parameter: String,
-      trace_commitment: Hash,
+      trace_commitment: GoldilocksDigest384V1,
       public_io: PublicIO,
-      trace_root: [u8; 32],
-      air_trace_root: [u8; 32],
-      air_composition_root: [u8; 32],
-      lde_root: [u8; 32],
+      trace_root: GoldilocksDigest384V1,
+      air_trace_root: GoldilocksDigest384V1,
+      air_composition_root: GoldilocksDigest384V1,
+      lde_root: GoldilocksDigest384V1,
       lde_domain_size: u32,
-      fri_layers: Vec<[u8; 32]>,
-      alphas: Vec<Field>,
-      betas: Vec<Field>,
+      alphas: Vec<u64>,
+      betas: Vec<GoldilocksFp4V1>,
+      fri_layers: Vec<GoldilocksDigest384V1>,
       queries: Vec<QueryOpening>,
       air_openings: Vec<AirConstraintOpening>,
       fri_queries: Vec<FriQueryOpening>,
@@ -173,35 +181,43 @@ proofs and binary/golden proof artifacts produced with the single
 
   QueryOpening {
       index: u32,
-      value: Field,
-      chunk_values: Vec<Field>,
-      merkle_path: Vec<Field>,
+      value: u64,
+      chunk_values: Vec<u64>,
+      merkle_path: Vec<GoldilocksDigest384V1>,
+  }
+
+  FriRoundOpening {
+      round: u32,
+      index: u32,
+      values: Vec<GoldilocksFp4V1>,
+      folded_value: GoldilocksFp4V1,
+      merkle_path: Vec<GoldilocksDigest384V1>,
   }
 
   FriQueryOpening {
       initial_index: u32,
       rounds: Vec<FriRoundOpening>,
       final_index: u32,
-      final_values: Vec<Field>,
-      final_merkle_path: Vec<Field>,
+      final_values: Vec<GoldilocksFp4V1>,
+      final_merkle_path: Vec<GoldilocksDigest384V1>,
   }
 
   AirConstraintOpening {
       index: u32,
-      current_row: Vec<Field>,
-      next_row: Vec<Field>,
-      current_row_path: Vec<Field>,
-      next_row_path: Vec<Field>,
-      composition_value: Field,
-      composition_path: Vec<Field>,
+      current_row: Vec<u64>,
+      next_row: Vec<u64>,
+      current_row_path: Vec<GoldilocksDigest384V1>,
+      next_row_path: Vec<GoldilocksDigest384V1>,
+      composition_value: u64,
+      composition_path: Vec<GoldilocksDigest384V1>,
   }
   ```
 - Node-facing V1 verification deterministically rebuilds the canonical trace and
   its LDE, AIR-trace, and AIR-composition commitments from the supplied batch
   before accepting proof-carried roots or openings. `VerifyLimits`
   caps proof material, query counts, path depth, transition count, and payload
-  size before that work begins; large 1k/5k/20k-row traces remain in prover and
-  benchmark regression suites.
+  size before that work begins; the 1k-row CPU/GPU parity case and 20k-row
+  benchmark workloads remain outside the serialized fixture set.
 - The release batch, proof, and public-I/O carriers have explicit
   `TransitionBatchV1`, `ProofV1`, and `PublicIOV1` Norito schema identities.
   Pre-release schema headers are rejected, so removed ordinals and
@@ -233,31 +249,44 @@ low-degree commitment and is not required to vanish at every LDE point.
 - **Byte packing:** base-256 (7-byte limbs, little-endian). Unit tests live beside
   `fastpq_prover/src/packing.rs`.
 - **Field encoding:** canonical Goldilocks (little-endian 64-bit limb, reject ≥ p).
-  Proof-carried Poseidon field commitments use the repository's canonical
-  32-byte field container; transfer touched-balance roots are canonical
-  `iroha_crypto::Hash` bytes, not Poseidon fields. After proof-size limits and
-  before transcript verification, the verifier walks every proof-carried field
-  scalar/container and rejects alternate representatives; opaque public hashes
-  are intentionally excluded from this field preflight.
+  `GoldilocksFp4V1` values encode four canonical limbs in 32 bytes; native-STARK
+  commitments and Merkle siblings use `GoldilocksDigest384V1`, which encodes six
+  canonical lanes in 48 bytes and rejects alternate representatives during
+  construction and decoding.
+  Transfer touched-balance roots remain 32-byte `iroha_crypto::Hash` values, not
+  Poseidon field elements. After proof-size limits and before transcript
+  verification, the verifier walks every remaining proof-carried scalar and
+  extension value and rejects alternate representatives; digest carriers have
+  already enforced canonicality, and opaque public hashes are intentionally
+  excluded from this field preflight.
 - **Transcript (Fiat–Shamir):**
-  1. BLAKE2b absorb `protocol_version`, `parameter`, `public_io`, and the Poseidon commitment tag (`fastpq:v1:init`).
-  2. Absorb `lde_root`, `trace_root` (`fastpq:v1:roots`).
-  3. Derive exactly 16 V1 composition challenges `α_j`
-     (`fastpq:v1:alpha_j`), one for each current constraint residue. Coefficients
+  1. Initialize the six-lane Poseidon transcript from the canonical Norito
+     encoding of `protocol_version`, `parameter`, and `public_io` under
+     `fastpq:v1:init`.
+  2. Absorb `trace_root` under `fastpq:v1:trace_root`, then derive one
+     `fastpq:v1:column_mix:<i>` base-field challenge per trace column.
+  3. Absorb `lde_root`, `trace_root` (`fastpq:v1:roots`).
+  4. Derive exactly 16 V1 composition challenges `α_j`
+     (`fastpq:v1:alpha:<j>`), one for each current constraint residue. Coefficients
      are never reused across residues.
-  4. Absorb `air_trace_root`, `air_composition_root` (`fastpq:v1:air_roots`).
-  5. For each FRI layer root, absorb with `fastpq:v1:fri_layer_ℓ`, derive `β_ℓ` (`fastpq:v1:beta_ℓ`).
-  6. Derive query indices (`fastpq:v1:query_index`).
+  5. Absorb `air_trace_root`, `air_composition_root` (`fastpq:v1:air_roots`).
+  6. For each nonterminal FRI layer root, absorb
+     `fastpq:v1:fri_layer:<round>` and derive the corresponding Fp4 challenge
+     `fastpq:v1:beta:<round>`; absorb the terminal root under
+     `fastpq:v1:fri:final`.
+  7. Derive deduplicated query indices with rejection sampling under
+     `fastpq:v1:query_index:<counter>`.
 
   Tags are lowercase ASCII; verifiers reject mismatches before sampling challenges. The
-  `v1_balanced_{64,1k,5k}.bin` proof fixtures pin the resulting
-  transcript bytes.
+  `v1_raw_transcript_64.bin` fixture pins the resulting transcript bytes within
+  the public verifier's admitted geometry. Larger-scale performance evidence is
+  captured separately by the release benchmarks.
 - **Versioning:** `protocol_version = 1` is the only release protocol. The
   `parameter` name selects one exact record from the compiled canonical
   catalogue, which the prover and verifier use directly. There is no secondary
   catalogue-version compatibility layer. Changes to the proof schema,
   transcript, or canonical parameters are first-release hard cuts and require
-  regenerating proof fixtures.
+  regenerating the proof fixture.
 
 ## Permission commitment status
 
@@ -289,14 +318,15 @@ These estimates describe the cryptographic low-degree/query layer only. They do
 not compensate for an absent semantic constraint; the explicit profile gate
 above is what prevents unsupported operations from reaching production proof
 acceptance.
-| N_trace | blowup | FRI arity | layers | queries | est bits | Proof size (≤) | RAM (≤) | P95 latency (≤) |
-| ------- | ------ | --------- | ------ | ------- | -------- | --------------- | ------- | ---------------- |
-| 2^16    | 8      | 8         | ≤8     | 46      | bounded by ~32-bit field commitments | measured by release fixture | measured by release run | measured by release run |
+| N_trace | blowup | FRI arity | layers | queries | aggregate arithmetic target | Proof size (≤) | RAM (≤) | P95 latency (≤) |
+| ------- | ------ | --------- | ------ | ------- | --------------------------- | --------------- | ------- | ---------------- |
+| 2^16    | 8      | 2         | ≤18    | 136     | 128 bits met; qualification blocked pending review | measured by release fixture | measured by release run | measured by release run |
 
-Derivations follow Appendix A. Deterministic verifier-negative tests cover malformed proofs, and
-the sole V1 parameter record fixes the domain geometry and query count. It does not enforce or
-advertise a security target: the current one-field commitments retain the roughly 32-bit generic
-collision ceiling described in Appendix A. Independent soundness qualification remains required.
+Derivations follow Appendix A. Deterministic verifier-negative tests cover
+malformed proofs, and the sole V1 parameter record fixes the domain geometry,
+six-lane commitment construction, degree-four challenge field, 128-bit target,
+and query count. Independent protocol-specific soundness qualification remains
+required before the arithmetic result can be treated as release evidence.
 
 ## Public IO Schema
 | Field            | Bytes | Encoding                              | Notes                               |
@@ -307,7 +337,7 @@ collision ceiling described in Appendix A. Independent soundness qualification r
 | `new_root`       | 32    | canonical hash bytes                  | Transfer touched-balance post-root; external context for opaque AXT. |
 | `perm_root`      | 32    | opaque commitment bytes               | Authenticated context only; permission membership is not proven in V1. |
 | `tx_set_hash`    | 32    | BLAKE2b                               | Sorted instruction identifiers.     |
-| `parameter`      | var   | UTF-8 (e.g., `fastpq-lane-balanced`)  | Parameter set name.                 |
+| `parameter`      | var   | UTF-8 (`fastpq-state-transition-stark-v1`) | Sole V1 parameter set name.         |
 | `protocol_version` | 2   | little-endian u16                     | The sole V1 protocol discriminator. |
 | `ordering_hash`  | 32    | domain-separated BLAKE2b-256          | Stable hash of sorted rows.         |
 
@@ -320,9 +350,10 @@ binding mirrors, transfer transcripts, remote-spend claim preimages,
 amount/expiry/manifest/DA mirrors, and the batch seal. Metadata never selects a
 proof semantics profile.
 
-## Encoding Hashes
+## Commitment encodings
 - Ordering hash: full-width BLAKE2b-256 (tag `fastpq:v1:ordering`).
-- Batch artifact hash: BLAKE2b over `PublicIO || proof.commitments` (tag `fastpq:v1:artifact`).
+- Preprocessing trace commitment: six-lane Poseidon-x7 Goldilocks digest over
+  typed column leaves, binary nodes, parameter identity, and exact trace shape.
 
 ## Stage Definitions of Done (DoD)
 - **Stage 1 DoD**
@@ -332,10 +363,12 @@ proof semantics profile.
   - Transfer touched-balance witness generation and key-derived path binding implemented.
   - Non-membership, permission mutation, and supply operations are outside V1.
 - **V1 Prover DoD**
-  - Transcript spec implemented; tag/order unit tests and the binary V1 proof fixtures pin the transcript.
+  - Transcript spec implemented; tag/order unit tests and the binary V1 proof fixture pin the transcript.
   - Dense-MDS Poseidon constants and the Goldilocks `x^7` S-box are pinned in prover and verifier with endianness and former-collision tests across architectures.
-  - Canonical parameter geometry checks are active; the sole record declares no security target,
-    and proof size/RAM/latency must be measured from release runs.
+  - Canonical parameter geometry checks are active; the sole record declares
+    the 128-bit aggregate arithmetic target, while production qualification
+    remains unavailable until independent review is registered. Proof
+    size/RAM/latency must be measured from release runs.
     **TODO:** land the empirical 16-residue Monte Carlo characterization described in Appendix A.
 - **Stage 3 DoD**
   - Scheduler API (`SubmitProofRequest`, `ProofResult`) documented with idempotency keys.
@@ -390,7 +423,7 @@ proof semantics profile.
     2. Run parity tests with GPU lanes enabled: `FASTPQ_GPU=gpu cargo test -p fastpq_prover --features fastpq-gpu --release`. This exercises the Metal kernels and falls back automatically if detection fails.【crates/fastpq_prover/src/backend.rs:114】【crates/fastpq_prover/src/metal.rs:418】
     3. Capture a benchmark sample for dashboards using the release build's embedded library path (or runtime-source fallback):
       `cargo run -p fastpq_prover --features fastpq-gpu,dev-tools --bin fastpq_metal_bench --release -- --rows 20000 --iterations 5 --output fastpq_metal_bench.json --trace-dir traces`.
-       The canonical `fastpq-lane-balanced` set now pads every capture to 32,768 rows, so the
+       The canonical `fastpq-state-transition-stark-v1` set now pads every capture to 32,768 rows, so the
        JSON reflects both the requested 20 k rows and the padded domain that drives the GPU
        kernels. Upload the JSON/log to the release evidence store; this repository does not ship a
        nightly FastPQ Metal workflow or a reference capture. The report records
@@ -405,7 +438,7 @@ proof semantics profile.
    adoption. Fetch a witness from Torii
   (`iroha_cli audit witness --binary --out exec.witness`) and decode it with
   `iroha_cli audit witness --decode exec.witness` (optionally add
-  `--fastpq-parameter fastpq-lane-balanced` to assert the expected parameter set; FASTPQ batches
+  `--fastpq-parameter fastpq-state-transition-stark-v1` to assert the expected parameter set; FASTPQ batches
   emit by default; pass `--no-fastpq-batches` only if you need to trim the output).
    Every batch entry now emits a `row_usage` object (`total_rows`, `transfer_rows`,
    `non_transfer_rows`, `meta_set_rows`, and `transfer_ratio`). Archive that JSON snippet to avoid
@@ -1066,57 +1099,56 @@ Use this document as the canonical reference; update it alongside source code, f
 
 ## Appendix A — Soundness Derivation
 
-This appendix records the design calculation behind the “Soundness & SLOs”
-table. It is not a security claim for the current implementation.
+This appendix records the exact aggregate arithmetic implemented by
+`fastpq_isi`. It is a deterministic parameter-selection calculation, not by
+itself a security or production-qualification claim.
 
-Implementation qualification gap (2026-08-23): proof values, FRI challenges,
-Merkle nodes, and roots occupy one Goldilocks base-field element. There is no
-grinding step or inert security-label knob; the one-field commitment has a
-roughly 32-bit generic collision ceiling. A
-Fiat--Shamir challenge offers at most 64 bits before query/union losses. The FRI
-fold and terminal degree check are now domain-aware, but the current
-one-field commitments remain the lower security ceiling. The sole V1 parameter
-record does not declare a security target, and these calculations are not
-release evidence.
+Implementation qualification gap (2026-08-29): native-STARK commitments and
+Fiat--Shamir state use six independently domain-separated Goldilocks lanes, for
+a canonical 384-bit encoding. FRI challenges, opened values, and folds use
+`GoldilocksFp4V1 = Goldilocks[X]/(X^4 - 7)`. The frozen arithmetic inputs meet
+the declared 128-bit target, but the result remains
+`Unavailable(MissingProtocolSpecificQromReduction)`. An independently reviewed
+reduction connecting this accounting to the complete FASTPQ adversary and a
+multi-target review tied to final artifact digests are still required.
 
 ### Notation
 - `N_trace = 2^k` — trace length after sorting and padding to a power of two.
-- `b` — blowup factor (`N_eval = N_trace × b`).
-- `r = 8` — V1 FRI arity.
-- `ℓ` — number of FRI reductions (`layers` column).
-- `q = 46` — V1 verifier queries per proof.
-- `ρ` — effective code rate reported by the column planner: `ρ = max_i(degree_i / domain_i)` over the constraints that survive the first FRI round.
+- `b = 8` — blowup factor (`N_eval = N_trace × b`).
+- `r = 2` — sole V1 FRI folding arity.
+- `ℓ ≤ 18` — maximum number of binary FRI reductions.
+- `q = 136` — deduplicated verifier queries selected by the calculator.
+- `T = 54` — portable release proof targets included in the union bound.
+- `Q ≤ 2^32` — declared quantum random-oracle query bound.
+- `n = 384` — combined width of the six independent digest lanes.
 
-The Goldilocks base field has `|F| = 2^64 - 2^32 + 1`, so a base-field
-Fiat--Shamir term is on the order of `q / |F|`. Security failure terms combine
-additively; this term is a cap, not extra margin above a larger FRI estimate.
-The current protocol performs no grinding.
+The current protocol declares zero grinding bits. That fact is explicit in the
+sole parameter record and contributes no hidden margin to the calculation.
 
 ### Analytic bound
 
-With constant-rate DEEP-FRI the statistical failure probability satisfies
+For a candidate query count, the implemented exact dyadic upper bound is
 
 ```
-p_fri ≤ Σ_{j=0}^{ℓ-1} ρ^{q} = ℓ · ρ^{q}
+p_sampling  = T × Q^2 / 2^(q × log2(b) / 2)
+p_collision = T^2 × Q^3 / 2^n
+p_total     = p_sampling + p_collision
 ```
 
-because each layer is intended to reduce polynomial degree and domain width by
-the same factor `r`, keeping `rho` constant. The table's `est bits` column
-reports only `floor(-log2(p_fri))`. A complete bound must add Fiat--Shamir,
-commitment-collision, grinding, and other failure terms and then take the
-resulting minimum security level.
-
-For V1, `b = r = 8` and `q = 46`. Regardless of an optimistic isolated FRI
-term, the current one-field commitment lowers generic collision security to
-about 32 bits. An independent quantitative analysis remains required before
-ledger qualification.
+The calculator requires `p_total < 2^-128` using integer arithmetic only. For
+the frozen inputs and `q = 136`, the sampling denominator exponent is `204`,
+its numerator is `54 × 2^64`, and the collision term is
+`54^2 × 2^96 / 2^384`. Query count 136 is the least admitted multiple of eight
+that passes; 128 queries fail the same exact comparison. This calculation is
+necessary parameter evidence, but it does not discharge the independent
+protocol-specific reduction or digest review.
 
 ### Rejection-sampling follow-up
 
 **TODO:** add the planned Monte Carlo harness for the implemented 16-residue
-composition and report its measured bound as diagnostic evidence. Do not turn
-it into a 128-bit release gate until independent qualification establishes such
-a target. Semantic adversarial coverage is deterministic instead: unsupported
+composition and report its measured behavior as diagnostic evidence. It does
+not replace the exact aggregate calculator or independent qualification.
+Semantic adversarial coverage is deterministic instead: unsupported
 operations/profile confusion, foreign batch-derived roots, challenge
 cancellation, noncanonical numeric/key encodings, and alternate transfer paths
 must each be rejected by dedicated regression tests.
@@ -1134,46 +1166,50 @@ Stage 0 pins the trace and evaluation generators to Poseidon-derived constants
    accepted offset with the sole V1 parameter set.
 ### Reproduction and validation
 - Tooling: `cargo run --manifest-path scripts/fastpq/Cargo.toml --bin poseidon_gen -- domain-roots` emits either Rust snippets or a Markdown table (see `--format table`, `--seed`, `--filter`).【scripts/fastpq/src/bin/poseidon_gen.rs:1】
-- Tests: `canonical_set_declares_v1_shape` and
-  `regenerated_domain_roots_are_coherent_and_cosets_are_outside_lde_subgroups` keep
+- Tests: `sole_profile_has_final_binary_fp4_shape` and
+  `domain_roots_are_coherent_and_coset_is_outside_lde_subgroup` keep
   the canonical parameter set aligned with the published constants, exact
-  subgroup orders, the trace/LDE blowup relation, outside-subgroup cosets,
-  and the V1 blowup/arity pairing, so `cargo test -p fastpq_isi`
+  subgroup orders, the trace/LDE blowup relation, outside-subgroup coset,
+  binary FRI arity, and degree-four challenge field, so `cargo test -p fastpq_isi`
   catches drift immediately.
-  【crates/fastpq_isi/src/params.rs:138】
+  【crates/fastpq_isi/src/params.rs:337】
 - Source of truth: update this table, `fastpq_isi/src/params.rs`, and the V1
   fixtures together if the first-release constants change.
 
 ## Appendix C — Commitment pipeline details
 
-### Streaming Poseidon commitment flow
-V1 uses one deterministic trace-commitment pipeline in both prover and verifier:
+### Native-STARK commitment flow
+V1 uses the same deterministic preparation pipeline in prover and verifier:
 1. **Normalise transitions.** `trace::build_trace` consumes the already
    canonicalized batch, pads it to `N_trace = 2^{⌈log₂ rows⌉}`, and emits the
-   fixed-order column vectors.【crates/fastpq_prover/src/trace.rs:1】
-2. **Prepare polynomial data once.** `trace::derive_polynomial_data`
+   fixed-order column vectors.【crates/fastpq_prover/src/trace.rs:612】
+2. **Commit the preprocessing trace.**
+   `digest::trace_commitment_from_trace` hashes each named base-trace column
+   into a six-lane digest, folds a typed binary Merkle tree, then binds the
+   parameter identity and exact row/padding/column shape into the final typed
+   `GoldilocksDigest384V1` stored in `Proof::trace_commitment`.
+   【crates/fastpq_prover/src/digest.rs:81】
+3. **Prepare polynomial data once.** `trace::derive_polynomial_data`
    interpolates every column and materializes its deterministic CPU LDE. The
    backend reuses these coefficients and evaluations instead of performing a
-   second transform for commitment hashing.【crates/fastpq_prover/src/trace.rs:1987】
-3. **Hash prepared coefficients.** `trace::hash_columns_from_coefficients`
-   hashes each prepared coefficient vector with the domain
-   `fastpq:v1:trace:column:<name>`. Optional GPU dispatch must match the scalar
-   Poseidon result and falls back to that result after a runtime dispatch
-   failure.【crates/fastpq_prover/src/trace.rs:1886】
-4. **Lift into a Merkle tree.** `trace::merkle_root` folds the column digests
-   with Poseidon nodes, duplicating the final leaf at odd-width levels.【crates/fastpq_prover/src/trace.rs:2043】
-5. **Finalize the digest.** `digest::trace_commitment_from_digests` length-prefixes the
-   domain tag (`fastpq:v1:trace_commitment`), parameter name, exact Poseidon
-   profile digest, padded dimensions, column digests, and Merkle root, then
-   hashes the payload with Iroha's `Hash::new` (Blake2b-256) before embedding it
-   in `Proof::trace_commitment`.【crates/fastpq_prover/src/digest.rs:67】
+   second transform for commitment hashing.【crates/fastpq_prover/src/trace.rs:1701】
+4. **Commit coefficient columns.** The backend hashes each named coefficient
+   vector into a six-lane leaf and folds those leaves under the typed `Trace`
+   Merkle role to produce `trace_root`. Optional GPU Merkle dispatch must match
+   the scalar result and uses the deterministic CPU fallback after an allowed
+   runtime dispatch failure.【crates/fastpq_prover/src/backend.rs:2534】
+5. **Bind and commit LDE/AIR material.** After absorbing `trace_root`, the
+   transcript derives one base-field column-mix coefficient per LDE column. The
+   backend combines those columns row-wise, commits `lde_root`, commits the
+   row-major AIR trace and composition vectors, and binds all four 384-bit roots
+   before FRI challenges are sampled.【crates/fastpq_prover/src/backend.rs:2595】
 
-The verifier recomputes the same digest before sampling Fiat–Shamir challenges,
-so mismatches abort proofs before any openings. The paired
-`tests/fixtures/ordering_hash.json` and
-`tests/fixtures/trace_commitment.json` regressions pin the sorted-row input and
-resulting commitment; either fixture changes only under an explicit
-`FASTPQ_UPDATE_FIXTURES=1` regeneration.
+The verifier recomputes the same commitments before accepting openings, so
+mismatches abort the proof. The
+`tests/fixtures/ordering_hash.json` regression pins the sorted-row input, while
+`tests/trace_commitment.rs` independently checks canonical encoding,
+determinism, and separation of the resulting commitments. The JSON fixture
+changes only under an explicit `FASTPQ_UPDATE_FIXTURES=1` regeneration.
 
 ### Poseidon fallback controls
 
@@ -1214,17 +1250,20 @@ The hashing pipeline consumes columns in this deterministic order:
 
 `trace::column_hashes` walks the columns in exactly this order. Any schema or
 order change is a proof/fixture hard cut and must regenerate the binary proof
-fixtures.【crates/fastpq_prover/src/trace.rs:474】
+fixture.【crates/fastpq_prover/src/trace.rs:474】
 
 ### Transcript domain tags
-Stage 2 fixes the Fiat–Shamir catalog below to keep challenge generation deterministic:
+V1 fixes the Fiat–Shamir catalog below to keep challenge generation deterministic:
 
 | Tag | Purpose |
 | --- | ------- |
-| `fastpq:v1:init` | Absorb protocol version, parameter set, and `PublicIO`. |
+| `fastpq:v1:init` | Initialize from protocol version, parameter set, and `PublicIO`. |
+| `fastpq:v1:trace_root` | Commit the trace Merkle root before column-mix challenges. |
+| `fastpq:v1:column_mix:<i>` | Sample one base-field LDE column-mix coefficient per trace column. |
 | `fastpq:v1:roots` | Commit the LDE and trace Merkle roots, in that order. |
 | `fastpq:v1:alpha:<i>` | Sample one composition-polynomial challenge for each of the 16 residues (`i = 0..15`). |
+| `fastpq:v1:air_roots` | Commit the AIR-trace and AIR-composition roots, in that order. |
 | `fastpq:v1:beta:<round>` | Sample the folding challenge for each FRI round. |
 | `fastpq:v1:fri_layer:<round>` | Commit the Merkle root for each FRI layer. |
 | `fastpq:v1:fri:final` | Record the final FRI layer before opening queries. |
-| `fastpq:v1:query_index:0` | Deterministically derive verifier query indices. |
+| `fastpq:v1:query_index:<counter>` | Derive deduplicated verifier query indices with rejection sampling. |

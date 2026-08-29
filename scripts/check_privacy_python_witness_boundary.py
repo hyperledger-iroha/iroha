@@ -12,19 +12,19 @@ from pathlib import Path
 from typing import Final
 
 GENERIC11_PROTOCOLS: Final[tuple[str, ...]] = (
-    "zk-ace-pq-authorization-v0",
+    "zk-ace-pq-authorization-v1",
     "anonymous-pgc-k-out-of-n-v1",
     "verange-transparent-range-v1",
     "iroha-zk-ams-v1",
-    "vega-existing-credential-zk-v0",
-    "iroha-jindo-polynomial-commitment-v0",
+    "vega-existing-credential-zk-v1",
+    "iroha-jindo-polynomial-commitment-v1",
     "iroha-bootle-lantern-anoncred-v1",
     "orchard-halo2-actions-v1",
     "monero-fcmp-plus-plus-v1",
     "iroha-ivm-private-note-stark-v1",
-    "pq-masp-stark-v0",
+    "pq-masp-stark-v1",
 )
-ZK_X509_PROTOCOL: Final = "iroha-zk-x509-stark-p256-v0"
+ZK_X509_PROTOCOL: Final = "iroha-zk-x509-stark-p256-v1"
 DIRECT_BUNDLE_METHODS: Final[tuple[str, ...]] = (
     "sign_privacy_anonymous_pgc_payment_action_v1",
     "sign_privacy_orchard_note_action_v1",
@@ -87,13 +87,18 @@ RETIRED_RAW_RESULT_TYPES: Final[tuple[str, ...]] = (
     "PrivacyZkAmsProvisionAccountActionBuildResultV1",
 )
 WORKER_TOP_LEVEL_EXPORTS: Final[tuple[str, ...]] = (
+    "ATOMIC_PRIVATE_SETTLEMENT_PROTOCOL_LABEL_V1",
     "PRIVACY_GENERIC11_WORKER_OPERATION_SCHEMAS_V1",
     "PRIVACY_WALLET_WORKER_MAX_EXECUTION_PLAN_BYTES_V1",
     "PRIVACY_WALLET_WORKER_MAX_FRAME_BYTES_V1",
     "PRIVACY_WALLET_WORKER_MAX_PUBLIC_INTENT_BYTES_V1",
+    "PRIVACY_WALLET_WORKER_MAX_SETTLEMENT_PROOF_BYTES_V1",
+    "PRIVACY_WALLET_WORKER_MAX_SETTLEMENT_PUBLIC_OBJECT_BYTES_V1",
     "PRIVACY_WALLET_WORKER_MAX_TTL_MILLIS_V1",
     "PRIVACY_WALLET_WORKER_MIN_TTL_MILLIS_V1",
     "PRIVACY_WALLET_WORKER_PROTOCOL_VERSION_V1",
+    "PrivateSettlementPreparedProofV1",
+    "PrivateSettlementWalletLeaseV1",
     "PrivacyWalletSignedActionV1",
     "PrivacyWalletWitnessBindingV1",
     "PrivacyWalletWitnessHandleV1",
@@ -385,7 +390,7 @@ def inspect_repository(root: Path) -> BoundaryReport:
         else ""
     )
     if (
-        "PrivacyProtocolIdV1::IrohaZkX509StarkP256V0" not in retained_source
+        "PrivacyProtocolIdV1::IrohaZkX509StarkP256V1" not in retained_source
         or "return Err(WorkerError::UnsupportedProtocol)" not in retained_source
     ):
         errors.append("Rust generic worker does not explicitly reject ZK-X509")

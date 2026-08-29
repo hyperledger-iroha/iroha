@@ -6794,28 +6794,6 @@ fn parse_world(
 ) -> Result<World, json::Error> {
     if let Some(actual) = map.source_order.as_ref() {
         let expected = canonical_world_field_order();
-        const EMPTY_PRIVATE_SETTLEMENT_MIGRATION_FIELDS: [&str; 7] = [
-            "private_settlement_governance",
-            "private_settlement_pools",
-            "private_settlement_roots",
-            "private_settlement_nullifiers",
-            "private_settlement_outputs",
-            "private_settlement_receipts",
-            "private_settlement_aborts",
-        ];
-        let private_settlement_fields_present = EMPTY_PRIVATE_SETTLEMENT_MIGRATION_FIELDS
-            .iter()
-            .filter(|field| map.contains_key(field))
-            .count();
-        if private_settlement_fields_present != 0
-            && private_settlement_fields_present != EMPTY_PRIVATE_SETTLEMENT_MIGRATION_FIELDS.len()
-        {
-            return Err(json::Error::InvalidField {
-                field: "world.private_settlement_state".to_owned(),
-                message: "private-settlement snapshot maps must be either all present or all absent for empty-state migration"
-                    .to_owned(),
-            });
-        }
         if let Some(unknown) = actual.iter().find(|key| !expected.contains(key)) {
             return Err(json::Error::InvalidField {
                 field: format!("world.{unknown}"),
@@ -6823,12 +6801,7 @@ fn parse_world(
                     .to_owned(),
             });
         }
-        let migrated_expected = expected
-            .iter()
-            .filter(|field| !EMPTY_PRIVATE_SETTLEMENT_MIGRATION_FIELDS.contains(&field.as_str()))
-            .cloned()
-            .collect::<Vec<_>>();
-        if actual != expected && actual != &migrated_expected {
+        if actual != expected {
             return Err(json::Error::InvalidField {
                 field: "world".to_owned(),
                 message: "snapshot world fields are not in canonical schema order".to_owned(),
@@ -7082,37 +7055,34 @@ fn parse_world(
         take_required(&mut map, "sccp_registry")?;
     let sccp_route_liabilities: Storage<SccpRouteKeyV1, SccpRouteLiabilityV1> =
         take_required(&mut map, "sccp_route_liabilities")?;
+    let sccp_ton_breaker_observations: Storage<SccpRouteKeyV1, SccpTonBreakerObservationRecordV1> =
+        take_required(&mut map, "sccp_ton_breaker_observations")?;
+    let sccp_replay_forests: Storage<SccpReplayAccumulatorIdV1, SccpReplayForestV1> =
+        take_required(&mut map, "sccp_replay_forests")?;
     let sccp_outbound_pending_usage = take_required(&mut map, "sccp_outbound_pending_usage")?;
     let sccp_outbound_pending_messages = take_required(&mut map, "sccp_outbound_pending_messages")?;
     let sccp_outbound_message_locator = take_required(&mut map, "sccp_outbound_message_locator")?;
     let sccp_outbound_message_index = take_required(&mut map, "sccp_outbound_message_index")?;
-    let sccp_outbound_proofs = take_required(&mut map, "sccp_outbound_proofs")?;
-    let sccp_inbound_messages = take_required(&mut map, "sccp_inbound_messages")?;
     let sccp_inbound_anchor_high_water: Storage<SccpInboundAnchorHighWaterKeyV1, u64> =
         take_required(&mut map, "sccp_inbound_anchor_high_water")?;
     validate_sccp_outbound_pending_messages(&sccp_outbound_pending_messages)?;
+    validate_sccp_replay_forests(&sccp_replay_forests)?;
     validate_sccp_outbound_pending_usage(
         &sccp_outbound_pending_messages,
         &sccp_outbound_pending_usage,
     )?;
     validate_sccp_outbound_indexes(
         &sccp_outbound_pending_messages,
-        &sccp_outbound_proofs,
         &sccp_outbound_message_locator,
         &sccp_outbound_message_index,
     )?;
-    validate_sccp_outbound_proofs(&sccp_outbound_proofs, &sccp_outbound_message_locator)?;
-    validate_sccp_inbound_messages(&sccp_inbound_messages)?;
-    let sccp_inbound_messages_view = sccp_inbound_messages.view();
     let sccp_inbound_anchor_high_water_view = sccp_inbound_anchor_high_water.view();
-    validate_sccp_inbound_anchor_high_water_index(
-        &sccp_inbound_messages_view,
-        &sccp_inbound_anchor_high_water_view,
-    )
-    .map_err(|message| json::Error::InvalidField {
-        field: "world.sccp_inbound_anchor_high_water".to_owned(),
-        message,
-    })?;
+    validate_sccp_inbound_anchor_high_water_index(&sccp_inbound_anchor_high_water_view).map_err(
+        |message| json::Error::InvalidField {
+            field: "world.sccp_inbound_anchor_high_water".to_owned(),
+            message,
+        },
+    )?;
     let tx_sequences: Storage<AccountId, u64> = take_required(&mut map, "tx_sequences")?;
     let triggers_value = map
         .remove("triggers")
@@ -7133,6 +7103,9 @@ fn parse_world(
     let runtime_upgrades = take_required(&mut map, "runtime_upgrades")?;
     let privacy_consensus_policy: Cell<iroha_data_model::privacy::PrivacyConsensusPolicyV1> =
         take_required(&mut map, "privacy_consensus_policy")?;
+    let privacy_exact12_qualification: Cell<
+        Option<iroha_data_model::privacy::PrivacyExact12QualificationRecordV1>,
+    > = take_required(&mut map, "privacy_exact12_qualification")?;
     let privacy_activations: Storage<
         crate::privacy_state::PrivacyActivationKeyV1,
         iroha_data_model::privacy::PrivacyProtocolActivationRecordV1,
@@ -7140,31 +7113,31 @@ fn parse_world(
     let private_settlement_governance: Storage<
         PrivateSettlementPoolKeyV1,
         PrivateSettlementPoolGovernanceProjectionV1,
-    > = take_optional(&mut map, "private_settlement_governance")?.unwrap_or_default();
+    > = take_required(&mut map, "private_settlement_governance")?;
     let private_settlement_pools: Storage<
         PrivateSettlementPoolKeyV1,
         PrivateSettlementPoolStateV1,
-    > = take_optional(&mut map, "private_settlement_pools")?.unwrap_or_default();
+    > = take_required(&mut map, "private_settlement_pools")?;
     let private_settlement_roots: Storage<
         PrivateSettlementRootKeyV1,
         PrivateSettlementRootProvenanceV1,
-    > = take_optional(&mut map, "private_settlement_roots")?.unwrap_or_default();
+    > = take_required(&mut map, "private_settlement_roots")?;
     let private_settlement_nullifiers: Storage<
         PrivateSettlementNullifierKeyV1,
         PrivateSettlementFinalizationReferenceV1,
-    > = take_optional(&mut map, "private_settlement_nullifiers")?.unwrap_or_default();
+    > = take_required(&mut map, "private_settlement_nullifiers")?;
     let private_settlement_outputs: Storage<
         PrivateSettlementOutputKeyV1,
         PrivateSettlementOutputRecordV1,
-    > = take_optional(&mut map, "private_settlement_outputs")?.unwrap_or_default();
+    > = take_required(&mut map, "private_settlement_outputs")?;
     let private_settlement_receipts: Storage<
         Hash,
         iroha_data_model::nexus::PrivateSettlementReceiptV1,
-    > = take_optional(&mut map, "private_settlement_receipts")?.unwrap_or_default();
+    > = take_required(&mut map, "private_settlement_receipts")?;
     let private_settlement_aborts: Storage<
         Hash,
         iroha_data_model::nexus::PrivateSettlementAbortReceiptV1,
-    > = take_optional(&mut map, "private_settlement_aborts")?.unwrap_or_default();
+    > = take_required(&mut map, "private_settlement_aborts")?;
     crate::private_settlement::global_state::validate_private_settlement_persisted_state_v1(
         &private_settlement_governance.view(),
         &private_settlement_pools.view(),
@@ -7216,6 +7189,14 @@ fn parse_world(
         field: "world.privacy_state".to_owned(),
         message,
     })?;
+    if let Some(qualification) = privacy_exact12_qualification.view().get() {
+        qualification
+            .validate()
+            .map_err(|error| json::Error::InvalidField {
+                field: "world.privacy_exact12_qualification".to_owned(),
+                message: error.to_string(),
+            })?;
+    }
     crate::privacy_state::validate_privacy_orchard_public_dependencies_v1(
         &privacy_commitments.view(),
         &accounts.view(),
@@ -7488,12 +7469,12 @@ fn parse_world(
         axt_handle_budget_ledger,
         sccp_registry,
         sccp_route_liabilities,
+        sccp_ton_breaker_observations,
+        sccp_replay_forests,
         sccp_outbound_pending_usage,
         sccp_outbound_pending_messages,
         sccp_outbound_message_locator,
         sccp_outbound_message_index,
-        sccp_outbound_proofs,
-        sccp_inbound_messages,
         sccp_inbound_anchor_high_water,
         tx_sequences,
         triggers,
@@ -7507,6 +7488,7 @@ fn parse_world(
         poseidon_params,
         runtime_upgrades,
         privacy_consensus_policy,
+        privacy_exact12_qualification,
         privacy_activations,
         private_settlement_governance,
         private_settlement_pools,
@@ -9379,90 +9361,6 @@ mod decode_tests {
         assert!(
             SnapshotJsonMap::parse(r#"{"first":0,"first":1}"#, "fixture").is_err(),
             "duplicate signed snapshot fields must fail closed"
-        );
-    }
-    fn omit_world_snapshot_fields(encoded: &str, omitted: &[&str]) -> String {
-        let parsed = SnapshotJsonMap::parse(encoded, "world").expect("parse canonical World");
-        let order = parsed
-            .source_order
-            .as_ref()
-            .expect("borrowed snapshot retains source order");
-        let mut migrated = String::from("{");
-        let mut first = true;
-        for field in order {
-            if omitted.contains(&field.as_str()) {
-                continue;
-            }
-            let SnapshotJsonField::Borrowed { raw } =
-                parsed.fields.get(field).expect("source-order field exists")
-            else {
-                unreachable!("parsed snapshot fields are borrowed")
-            };
-            if !first {
-                migrated.push(',');
-            }
-            first = false;
-            migrated.push_str(&json::to_json(field).expect("encode field name"));
-            migrated.push(':');
-            migrated.push_str(raw);
-        }
-        migrated.push('}');
-        migrated
-    }
-    #[test]
-    fn private_settlement_snapshot_migration_is_all_or_nothing() {
-        const FIELDS: [&str; 7] = [
-            "private_settlement_governance",
-            "private_settlement_pools",
-            "private_settlement_roots",
-            "private_settlement_nullifiers",
-            "private_settlement_outputs",
-            "private_settlement_receipts",
-            "private_settlement_aborts",
-        ];
-        let encoded = json::to_json(&World::default()).expect("serialize default World");
-        let ivm = IVM::new(0);
-        let seed = IvmSeed {
-            ivm: &ivm,
-            _marker: PhantomData,
-        };
-
-        let migrated = omit_world_snapshot_fields(&encoded, &FIELDS);
-        let restored = parse_world(
-            SnapshotJsonMap::parse(&migrated, "world").expect("parse legacy World"),
-            &seed,
-        )
-        .expect("legacy World defaults the complete empty private-settlement projection");
-        assert!(
-            restored
-                .private_settlement_governance
-                .view()
-                .iter()
-                .next()
-                .is_none()
-        );
-        assert!(
-            restored
-                .private_settlement_pools
-                .view()
-                .iter()
-                .next()
-                .is_none()
-        );
-
-        let partial = omit_world_snapshot_fields(&encoded, &FIELDS[..1]);
-        let error = match parse_world(
-            SnapshotJsonMap::parse(&partial, "world").expect("parse partial World"),
-            &seed,
-        ) {
-            Ok(_) => panic!("partially missing private-settlement maps must fail closed"),
-            Err(error) => error,
-        };
-        assert!(
-            error.to_string().contains(
-                "private-settlement snapshot maps must be either all present or all absent"
-            ),
-            "unexpected partial-migration error: {error}"
         );
     }
     #[test]

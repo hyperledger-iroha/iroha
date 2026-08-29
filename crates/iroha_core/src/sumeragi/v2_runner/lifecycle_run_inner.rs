@@ -519,7 +519,10 @@ fn recover_canonical_bodies_before_activation(
                     }
                     let now = Instant::now();
                     if body_recovery.has_pending() && now >= next_retry {
-                        let request_queued = body_recovery.service_next()?;
+                        let request_queued = service_canonical_executed_block_recovery(
+                            &mut body_recovery,
+                            services,
+                        )?;
                         let serviced_at = Instant::now();
                         refresh_canonical_recovery_retry_deadline(
                             &mut next_retry,
@@ -538,7 +541,10 @@ fn recover_canonical_bodies_before_activation(
                         CanonicalRecoveryIngressDrain::default()
                     };
                     if ingress.exact_response_progress && body_recovery.has_pending() {
-                        let request_queued = body_recovery.service_next()?;
+                        let request_queued = service_canonical_executed_block_recovery(
+                            &mut body_recovery,
+                            services,
+                        )?;
                         let serviced_at = Instant::now();
                         refresh_canonical_recovery_retry_deadline_after_progress(
                             &mut next_retry,
@@ -947,12 +953,13 @@ fn run_lifecycle_active_height(
                     drain_lane_relay_ingress(
                         lane_relay_rx,
                         &mut lane_work,
+                        services,
                         executor.current_tag().view(),
                     )?;
                     drive_merge_sidecar_recovery(executor, services, &mut lane_work)?;
                     let now = Instant::now();
                     if now >= next_lane_retransmit {
-                        let _ = service_historical_recovery_tick(&mut lane_work)?;
+                        let _ = service_historical_recovery_tick(&mut lane_work, services)?;
                         lane_work.schedule_autonomous_new_view_timeouts(
                             now,
                             executor.current_tag().view(),
@@ -1061,12 +1068,13 @@ fn run_lifecycle_active_height(
                         drain_lane_relay_ingress(
                             lane_relay_rx,
                             &mut lane_work,
+                            services,
                             executor.current_tag().view(),
                         )?;
                         drive_merge_sidecar_recovery(executor, services, &mut lane_work)?;
                         let now = Instant::now();
                         if now >= next_lane_retransmit {
-                            let _ = service_historical_recovery_tick(&mut lane_work)?;
+                            let _ = service_historical_recovery_tick(&mut lane_work, services)?;
                             lane_work.schedule_autonomous_new_view_timeouts(
                                 now,
                                 executor.current_tag().view(),
@@ -1179,12 +1187,13 @@ fn run_lifecycle_active_height(
                     drain_lane_relay_ingress(
                         lane_relay_rx,
                         &mut lane_work,
+                        services,
                         executor.current_tag().view(),
                     )?;
                     drive_merge_sidecar_recovery(executor, services, &mut lane_work)?;
                     let now = Instant::now();
                     if now >= next_lane_retransmit {
-                        let _ = service_historical_recovery_tick(&mut lane_work)?;
+                        let _ = service_historical_recovery_tick(&mut lane_work, services)?;
                         lane_work.schedule_autonomous_new_view_timeouts(
                             now,
                             executor.current_tag().view(),
@@ -1451,6 +1460,7 @@ fn run_lifecycle_active_height(
                     }
                     super::preflight_finalized_lane_rollover(
                         executor,
+                        services,
                         &mut lane_work,
                         &mut canonical_lane_body_recovered,
                     )

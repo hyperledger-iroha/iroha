@@ -2222,7 +2222,7 @@ async fn resolve_torii_proof_record_for_routes_prefers_not_found_over_route_unav
     let (local_route, foreign_route) =
             crate::tests_runtime_handlers::configure_private_ingress_with_offline_foreign_route_for_test(&mut app);
     let missing_id = ProofId {
-        backend: "stark/fri/sha256-goldilocks-v1".to_owned(),
+        backend: "stark/fri/poseidon-x7-goldilocks-6x64-v1-v1".to_owned(),
         proof_hash: [0x44; 32],
     }
     .to_string();
@@ -2252,7 +2252,7 @@ async fn resolve_torii_proof_record_for_routes_returns_route_unavailable_when_on
     let (_local_route, foreign_route) =
             crate::tests_runtime_handlers::configure_private_ingress_with_offline_foreign_route_for_test(&mut app);
     let missing_id = ProofId {
-        backend: "stark/fri/sha256-goldilocks-v1".to_owned(),
+        backend: "stark/fri/poseidon-x7-goldilocks-6x64-v1-v1".to_owned(),
         proof_hash: [0x55; 32],
     }
     .to_string();
@@ -2388,7 +2388,7 @@ async fn proof_record_get_returns_not_found_when_all_routes_miss() {
     let mut app = mk_app_state_for_tests();
     crate::tests_runtime_handlers::configure_private_ingress_routes_for_test(&mut app);
     let missing_id = ProofId {
-        backend: "stark/fri/sha256-goldilocks-v1".to_owned(),
+        backend: "stark/fri/poseidon-x7-goldilocks-6x64-v1-v1".to_owned(),
         proof_hash: [0x73; 32],
     }
     .to_string();

@@ -13,9 +13,9 @@ library SccpExactTransferCodec {
     bytes internal constant MESSAGE_ID_PREFIX = "sccp:lane-message-id:v1";
     bytes internal constant SOURCE_EVENT_PREFIX = "sccp:source:event:v1";
 
-    uint8 internal constant CODEC_CANONICAL_TEXT = 1;
-    uint8 internal constant CODEC_EVM_ADDRESS20 = 2;
-    uint8 internal constant CODEC_TRON_ADDRESS21 = 5;
+    uint8 internal constant CODEC_CANONICAL_TEXT = 0;
+    uint8 internal constant CODEC_EVM_ADDRESS20 = 1;
+    uint8 internal constant CODEC_TRON_ADDRESS21 = 2;
 
     uint256 internal constant MAX_TEXT_BYTES = 256;
     uint256 internal constant MAX_U128 = (uint256(1) << 128) - 1;
@@ -71,28 +71,22 @@ library SccpExactTransferCodec {
     }
 
     function ethereumNetwork(uint8 profile) internal pure returns (bytes memory) {
-        require(profile == 2 || profile == 3, "Unsupported Ethereum profile");
-        uint64 chainId = profile == 2 ? uint64(1) : uint64(11155111);
-        return abi.encodePacked(bytes1(0x01), bytes1(profile), u32le(1), u64le(chainId));
+        require(profile == 0x41, "Unsupported Ethereum profile");
+        return abi.encodePacked(bytes1(0x01), bytes1(profile), u32le(1), u64le(1));
     }
 
     function bscNetwork(uint8 profile) internal pure returns (bytes memory) {
-        require(profile == 4 || profile == 5, "Unsupported BSC profile");
-        uint64 chainId = profile == 4 ? uint64(56) : uint64(97);
-        return abi.encodePacked(bytes1(0x01), bytes1(profile), u32le(2), u64le(chainId));
+        require(profile == 0x42, "Unsupported BSC profile");
+        return abi.encodePacked(bytes1(0x01), bytes1(profile), u32le(2), u64le(56));
     }
 
     function tronNetwork(uint8 profile) internal pure returns (bytes memory) {
-        uint32 networkId;
-        if (profile == 10) networkId = 0x2b6653dc;
-        else if (profile == 11) networkId = 0xcd8690dc;
-        else if (profile == 12) networkId = 0x94a9059e;
-        else revert("Unsupported TRON profile");
-        return abi.encodePacked(bytes1(0x01), bytes1(profile), u32le(5), u32le(networkId));
+        require(profile == 0x43, "Unsupported TRON profile");
+        return abi.encodePacked(bytes1(0x01), bytes1(profile), u32le(3), u32le(0x2b6653dc));
     }
 
     function tairaNetwork() internal pure returns (bytes memory) {
-        return hex"010100000000fc56984b2be7431d840e21514d1883f0";
+        return hex"014000000000fc56984b2be7431d840e21514d1883f0";
     }
 
     function lane(bytes memory source, bytes memory target) internal pure returns (bytes memory) {
@@ -147,7 +141,7 @@ library SccpExactTransferCodec {
         require(_isPrintableAsciiText(fields.assetId) && _isPrintableAsciiText(fields.routeId),
             "Noncanonical route text");
         bytes memory header = abi.encodePacked(
-            bytes1(0x02), // SccpPayloadV1::Transfer
+            bytes1(0x00), // SccpPayloadV1::Transfer
             bytes1(0x01),
             u32le(fields.sourceDomain),
             u32le(fields.destinationDomain),

@@ -4,8 +4,9 @@ use super::{
     PrivacyCapabilityRowValidationErrorV1, PrivacyCapabilitySnapshotV1,
     PrivacyCapabilitySnapshotValidationErrorV1, PrivacyCompiledProfileResultV1,
     PrivacyCompiledProfileUnavailableReasonV1, PrivacyConsensusPolicyV1,
-    PrivacyExact12CapabilityManifestDigestV1, PrivacyPolicyValidationErrorV1,
-    PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1,
+    PrivacyExact12CapabilityManifestDigestV1, PrivacyExact12QualificationRecordV1,
+    PrivacyPolicyValidationErrorV1, PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1,
+    PrivacyProtocolLifecycleV1,
 };
 #[cfg(feature = "json")]
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
@@ -168,69 +169,58 @@ impl PrivacyFeatureMaskV1 {
     norito(tag = "readiness", content = "detail", deny_unknown_fields)
 )]
 pub enum PrivacyCapabilityReadinessV1 {
-    /// The retained native profile passed its compiled readiness gates.
-    #[cfg_attr(feature = "json", norito(rename = "available"))]
-    Available,
-    /// The revised Jindo profile is executable but retains an explicit limitation.
-    #[cfg_attr(feature = "json", norito(rename = "available-experimental"))]
-    AvailableExperimental,
-    /// The native profile remains fail-closed for the exact typed reason.
+    /// All compiled, security, audit, release, and deployment evidence matches
+    /// the active committed record.
+    #[cfg_attr(feature = "json", norito(rename = "production-qualified"))]
+    ProductionQualified,
+    /// The protocol remains fail-closed for the exact evidence-derived reason.
     #[cfg_attr(feature = "json", norito(rename = "unavailable"))]
-    Unavailable(PrivacyCompiledProfileUnavailableReasonV1),
+    Unavailable(PrivacyCapabilityUnavailableReasonV1),
 }
-/// Projection of committed governance lifecycle for one capability row.
+/// Evidence-derived reason why a protocol is not production-qualified.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
     feature = "json",
-    norito(tag = "activation_state", content = "detail", deny_unknown_fields)
+    norito(tag = "reason", content = "detail", deny_unknown_fields)
 )]
-pub enum PrivacyCapabilityActivationStateV1 {
-    /// No committed activation record exists.
+pub enum PrivacyCapabilityUnavailableReasonV1 {
+    /// The current binary has no complete executable profile.
+    #[cfg_attr(feature = "json", norito(rename = "compiled-profile"))]
+    CompiledProfile(PrivacyCompiledProfileUnavailableReasonV1),
+    /// No committed activation record exists for the protocol.
     #[cfg_attr(feature = "json", norito(rename = "not-registered"))]
     NotRegistered,
-    /// Governance committed a future activation.
+    /// Governance committed a future activation that is not yet active.
     #[cfg_attr(feature = "json", norito(rename = "proposed"))]
     Proposed,
-    /// Governance currently admits the protocol.
-    #[cfg_attr(feature = "json", norito(rename = "active"))]
-    Active,
     /// Governance temporarily rejects the protocol.
     #[cfg_attr(feature = "json", norito(rename = "suspended"))]
     Suspended,
     /// Governance permanently retired the protocol.
     #[cfg_attr(feature = "json", norito(rename = "retired"))]
     Retired,
-}
-/// Explicit limitation retained by a public capability row.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "limitation", content = "detail", deny_unknown_fields)
-)]
-pub enum PrivacyCapabilityLimitationV1 {
-    /// Revised Jindo has no distribution-wide knowledge-soundness certificate.
-    #[cfg_attr(
-        feature = "json",
-        norito(rename = "missing-distribution-wide-knowledge-soundness-evidence")
-    )]
-    MissingDistributionWideKnowledgeSoundnessEvidence,
+    /// Lifecycle is active, but no validated release/deployment evidence is registered.
+    #[cfg_attr(feature = "json", norito(rename = "missing-production-qualification"))]
+    MissingProductionQualification,
+    /// Registered evidence is malformed, stale, or bound to another activation.
+    #[cfg_attr(feature = "json", norito(rename = "invalid-production-qualification"))]
+    InvalidProductionQualification,
 }
 impl PrivacyProtocolIdV1 {
     /// Canonical public operation schema for this retained protocol.
     #[must_use]
     pub const fn expected_operation_schema(self) -> PrivacyOperationSchemaV1 {
         match self {
-            Self::ZkAcePqAuthorizationV0 => PrivacyOperationSchemaV1::ZkAceAuthorizationActionV1,
+            Self::ZkAcePqAuthorizationV1 => PrivacyOperationSchemaV1::ZkAceAuthorizationActionV1,
             Self::AnonymousPgcKOutOfNV1 => PrivacyOperationSchemaV1::AnonymousPgcPaymentActionV1,
             Self::VeRangeTransparentRangeV1 => PrivacyOperationSchemaV1::VeRangeRangeProofV1,
             Self::IrohaZkAmsV1 => PrivacyOperationSchemaV1::ZkAmsAdmissionAndProvisioningV1,
-            Self::VegaExistingCredentialZkV0 => {
+            Self::VegaExistingCredentialZkV1 => {
                 PrivacyOperationSchemaV1::VegaCredentialPresentationV1
             }
-            Self::IrohaZkX509StarkP256V0 => PrivacyOperationSchemaV1::ZkX509IdentityPresentationV1,
-            Self::IrohaJindoPolynomialCommitmentV0 => {
+            Self::IrohaZkX509StarkP256V1 => PrivacyOperationSchemaV1::ZkX509IdentityPresentationV1,
+            Self::IrohaJindoPolynomialCommitmentV1 => {
                 PrivacyOperationSchemaV1::JindoPolynomialEvaluationV1
             }
             Self::IrohaBootleLanternAnoncredV1 => {
@@ -239,41 +229,41 @@ impl PrivacyProtocolIdV1 {
             Self::OrchardHalo2ActionsV1 => PrivacyOperationSchemaV1::OrchardNoteActionV1,
             Self::MoneroFcmpPlusPlusV1 => PrivacyOperationSchemaV1::FcmpMembershipPaymentV1,
             Self::IrohaIvmPrivateNoteStarkV1 => PrivacyOperationSchemaV1::IvmPrivateNoteActionV1,
-            Self::PqMaspStarkV0 => PrivacyOperationSchemaV1::PqMaspNoteActionV1,
+            Self::PqMaspStarkV1 => PrivacyOperationSchemaV1::PqMaspNoteActionV1,
         }
     }
     /// Canonical execution classification for this retained protocol.
     #[must_use]
     pub const fn expected_execution_mode(self) -> PrivacyExecutionModeV1 {
         match self {
-            Self::ZkAcePqAuthorizationV0 => PrivacyExecutionModeV1::AuthorizationAction,
+            Self::ZkAcePqAuthorizationV1 => PrivacyExecutionModeV1::AuthorizationAction,
             Self::AnonymousPgcKOutOfNV1 | Self::MoneroFcmpPlusPlusV1 => {
                 PrivacyExecutionModeV1::PaymentAction
             }
-            Self::VeRangeTransparentRangeV1 | Self::IrohaJindoPolynomialCommitmentV0 => {
+            Self::VeRangeTransparentRangeV1 | Self::IrohaJindoPolynomialCommitmentV1 => {
                 PrivacyExecutionModeV1::Component
             }
             Self::IrohaZkAmsV1 => PrivacyExecutionModeV1::AdmissionAction,
-            Self::VegaExistingCredentialZkV0
-            | Self::IrohaZkX509StarkP256V0
+            Self::VegaExistingCredentialZkV1
+            | Self::IrohaZkX509StarkP256V1
             | Self::IrohaBootleLanternAnoncredV1 => PrivacyExecutionModeV1::PresentationAction,
             Self::OrchardHalo2ActionsV1
             | Self::IrohaIvmPrivateNoteStarkV1
-            | Self::PqMaspStarkV0 => PrivacyExecutionModeV1::NoteAction,
+            | Self::PqMaspStarkV1 => PrivacyExecutionModeV1::NoteAction,
         }
     }
     /// Exact feature mask for this retained protocol.
     #[must_use]
     pub const fn expected_feature_mask(self) -> PrivacyFeatureMaskV1 {
         let bits = match self {
-            Self::ZkAcePqAuthorizationV0 | Self::IrohaJindoPolynomialCommitmentV0 => 0,
+            Self::ZkAcePqAuthorizationV1 | Self::IrohaJindoPolynomialCommitmentV1 => 0,
             Self::AnonymousPgcKOutOfNV1 => {
                 PrivacyFeatureMaskV1::HIDE_SENDER | PrivacyFeatureMaskV1::HIDE_RECEIVER
             }
             Self::VeRangeTransparentRangeV1 => PrivacyFeatureMaskV1::HIDE_AMOUNT,
             Self::IrohaZkAmsV1
-            | Self::VegaExistingCredentialZkV0
-            | Self::IrohaZkX509StarkP256V0
+            | Self::VegaExistingCredentialZkV1
+            | Self::IrohaZkX509StarkP256V1
             | Self::IrohaBootleLanternAnoncredV1
             | Self::MoneroFcmpPlusPlusV1 => PrivacyFeatureMaskV1::HIDE_SENDER,
             Self::OrchardHalo2ActionsV1 | Self::IrohaIvmPrivateNoteStarkV1 => {
@@ -281,7 +271,7 @@ impl PrivacyProtocolIdV1 {
                     | PrivacyFeatureMaskV1::HIDE_SENDER
                     | PrivacyFeatureMaskV1::HIDE_RECEIVER
             }
-            Self::PqMaspStarkV0 => {
+            Self::PqMaspStarkV1 => {
                 PrivacyFeatureMaskV1::HIDE_AMOUNT
                     | PrivacyFeatureMaskV1::HIDE_SENDER
                     | PrivacyFeatureMaskV1::HIDE_RECEIVER
@@ -290,16 +280,6 @@ impl PrivacyProtocolIdV1 {
             }
         };
         PrivacyFeatureMaskV1::new(bits)
-    }
-    /// Explicit limitation required for this retained protocol, if any.
-    #[must_use]
-    pub const fn expected_capability_limitation(self) -> Option<PrivacyCapabilityLimitationV1> {
-        match self {
-            Self::IrohaJindoPolynomialCommitmentV0 => Some(
-                PrivacyCapabilityLimitationV1::MissingDistributionWideKnowledgeSoundnessEvidence,
-            ),
-            _ => None,
-        }
     }
 }
 /// One row of the canonical public Exact12 capability manifest.
@@ -317,42 +297,76 @@ pub struct PrivacyExact12CapabilityRowV1 {
     pub privacy_feature_mask: PrivacyFeatureMaskV1,
     /// Exact compiled profile and all profile/schema bindings, or its typed failure.
     pub compiled_profile: PrivacyCompiledProfileResultV1,
-    /// Evidence-derived compiled readiness.
+    /// Evidence-derived production readiness.
     pub readiness: PrivacyCapabilityReadinessV1,
-    /// Projection of the committed governance lifecycle.
-    pub activation_state: PrivacyCapabilityActivationStateV1,
     /// Full committed governance record, if registered.
     pub activation: Option<PrivacyProtocolActivationRecordV1>,
-    /// Explicit retained limitation; revised Jindo always carries its missing evidence.
-    pub limitation: Option<PrivacyCapabilityLimitationV1>,
 }
 impl PrivacyExact12CapabilityRowV1 {
-    fn from_committed_snapshot_row(row: &PrivacyCapabilityRowV1) -> Self {
-        let readiness = match row.compiled_profile {
-            PrivacyCompiledProfileResultV1::Available(_)
-                if row.protocol_id == PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0 =>
-            {
-                PrivacyCapabilityReadinessV1::AvailableExperimental
+    fn from_committed_snapshot_row(
+        row: &PrivacyCapabilityRowV1,
+        committed_height: u64,
+        qualification: Option<&PrivacyExact12QualificationRecordV1>,
+    ) -> Self {
+        let readiness = match (row.compiled_profile, row.activation) {
+            (PrivacyCompiledProfileResultV1::Unavailable(reason), _) => {
+                PrivacyCapabilityReadinessV1::Unavailable(
+                    PrivacyCapabilityUnavailableReasonV1::CompiledProfile(reason),
+                )
             }
-            PrivacyCompiledProfileResultV1::Available(_) => PrivacyCapabilityReadinessV1::Available,
-            PrivacyCompiledProfileResultV1::Unavailable(reason) => {
-                PrivacyCapabilityReadinessV1::Unavailable(reason)
+            (PrivacyCompiledProfileResultV1::Available(_), None) => {
+                PrivacyCapabilityReadinessV1::Unavailable(
+                    PrivacyCapabilityUnavailableReasonV1::NotRegistered,
+                )
             }
-        };
-        let activation_state = match row.activation.map(|activation| activation.lifecycle) {
-            None => PrivacyCapabilityActivationStateV1::NotRegistered,
-            Some(PrivacyProtocolLifecycleV1::Proposed(_)) => {
-                PrivacyCapabilityActivationStateV1::Proposed
-            }
-            Some(PrivacyProtocolLifecycleV1::Active(_)) => {
-                PrivacyCapabilityActivationStateV1::Active
-            }
-            Some(PrivacyProtocolLifecycleV1::Suspended(_)) => {
-                PrivacyCapabilityActivationStateV1::Suspended
-            }
-            Some(PrivacyProtocolLifecycleV1::Retired(_)) => {
-                PrivacyCapabilityActivationStateV1::Retired
-            }
+            (
+                PrivacyCompiledProfileResultV1::Available(_),
+                Some(PrivacyProtocolActivationRecordV1 {
+                    lifecycle: PrivacyProtocolLifecycleV1::Proposed(_),
+                    ..
+                }),
+            ) => PrivacyCapabilityReadinessV1::Unavailable(
+                PrivacyCapabilityUnavailableReasonV1::Proposed,
+            ),
+            (
+                PrivacyCompiledProfileResultV1::Available(_),
+                Some(PrivacyProtocolActivationRecordV1 {
+                    lifecycle: PrivacyProtocolLifecycleV1::Suspended(_),
+                    ..
+                }),
+            ) => PrivacyCapabilityReadinessV1::Unavailable(
+                PrivacyCapabilityUnavailableReasonV1::Suspended,
+            ),
+            (
+                PrivacyCompiledProfileResultV1::Available(_),
+                Some(PrivacyProtocolActivationRecordV1 {
+                    lifecycle: PrivacyProtocolLifecycleV1::Retired(_),
+                    ..
+                }),
+            ) => PrivacyCapabilityReadinessV1::Unavailable(
+                PrivacyCapabilityUnavailableReasonV1::Retired,
+            ),
+            (
+                PrivacyCompiledProfileResultV1::Available(_),
+                Some(PrivacyProtocolActivationRecordV1 {
+                    lifecycle: PrivacyProtocolLifecycleV1::Active(_),
+                    ..
+                }),
+            ) => match qualification {
+                None => PrivacyCapabilityReadinessV1::Unavailable(
+                    PrivacyCapabilityUnavailableReasonV1::MissingProductionQualification,
+                ),
+                Some(qualification)
+                    if qualification
+                        .validate_protocol_at_snapshot(committed_height, row)
+                        .is_ok() =>
+                {
+                    PrivacyCapabilityReadinessV1::ProductionQualified
+                }
+                Some(_) => PrivacyCapabilityReadinessV1::Unavailable(
+                    PrivacyCapabilityUnavailableReasonV1::InvalidProductionQualification,
+                ),
+            },
         };
         Self {
             protocol_id: row.protocol_id,
@@ -361,9 +375,7 @@ impl PrivacyExact12CapabilityRowV1 {
             privacy_feature_mask: row.protocol_id.expected_feature_mask(),
             compiled_profile: row.compiled_profile,
             readiness,
-            activation_state,
             activation: row.activation,
-            limitation: row.protocol_id.expected_capability_limitation(),
         }
     }
     /// Return whether this committed row is executable and actively admitted.
@@ -377,16 +389,13 @@ impl PrivacyExact12CapabilityRowV1 {
     pub const fn is_network_available(&self) -> bool {
         matches!(
             self.readiness,
-            PrivacyCapabilityReadinessV1::Available
-                | PrivacyCapabilityReadinessV1::AvailableExperimental
-        ) && matches!(
-            self.activation_state,
-            PrivacyCapabilityActivationStateV1::Active
+            PrivacyCapabilityReadinessV1::ProductionQualified
         )
     }
     fn validate_at_committed_height(
         &self,
         committed_height: u64,
+        qualification: Option<&PrivacyExact12QualificationRecordV1>,
     ) -> Result<(), PrivacyExact12CapabilityRowValidationErrorV1> {
         PrivacyCapabilityRowV1 {
             protocol_id: self.protocol_id,
@@ -422,32 +431,20 @@ impl PrivacyExact12CapabilityRowV1 {
                 },
             );
         }
-        let projected = Self::from_committed_snapshot_row(&PrivacyCapabilityRowV1 {
-            protocol_id: self.protocol_id,
-            compiled_profile: self.compiled_profile,
-            activation: self.activation,
-        });
+        let projected = Self::from_committed_snapshot_row(
+            &PrivacyCapabilityRowV1 {
+                protocol_id: self.protocol_id,
+                compiled_profile: self.compiled_profile,
+                activation: self.activation,
+            },
+            committed_height,
+            qualification,
+        );
         if self.readiness != projected.readiness {
             return Err(
                 PrivacyExact12CapabilityRowValidationErrorV1::ReadinessMismatch {
                     expected: projected.readiness,
                     actual: self.readiness,
-                },
-            );
-        }
-        if self.activation_state != projected.activation_state {
-            return Err(
-                PrivacyExact12CapabilityRowValidationErrorV1::ActivationStateMismatch {
-                    expected: projected.activation_state,
-                    actual: self.activation_state,
-                },
-            );
-        }
-        if self.limitation != projected.limitation {
-            return Err(
-                PrivacyExact12CapabilityRowValidationErrorV1::LimitationMismatch {
-                    expected: projected.limitation,
-                    actual: self.limitation,
                 },
             );
         }
@@ -492,22 +489,6 @@ pub enum PrivacyExact12CapabilityRowValidationErrorV1 {
         /// Rejected readiness.
         actual: PrivacyCapabilityReadinessV1,
     },
-    /// Activation-state projection differs from the committed lifecycle.
-    #[error("privacy activation state {actual:?} differs from committed {expected:?}")]
-    ActivationStateMismatch {
-        /// Committed lifecycle projection.
-        expected: PrivacyCapabilityActivationStateV1,
-        /// Rejected projection.
-        actual: PrivacyCapabilityActivationStateV1,
-    },
-    /// Limitation differs from the closed retained-protocol mapping.
-    #[error("privacy limitation {actual:?} differs from required {expected:?}")]
-    LimitationMismatch {
-        /// Required limitation.
-        expected: Option<PrivacyCapabilityLimitationV1>,
-        /// Rejected limitation.
-        actual: Option<PrivacyCapabilityLimitationV1>,
-    },
 }
 /// Canonical self-digesting v1 Exact12 public capability manifest.
 ///
@@ -527,6 +508,10 @@ pub struct PrivacyExact12CapabilityManifestV1 {
     pub committed_height: u64,
     /// Authoritative singleton chain-wide privacy policy.
     pub consensus_policy: PrivacyConsensusPolicyV1,
+    /// Full immutable release and target-network deployment evidence.
+    ///
+    /// `None` is represented explicitly and keeps active rows unavailable.
+    pub qualification: Option<PrivacyExact12QualificationRecordV1>,
     /// Exactly twelve capability rows in canonical discriminant order.
     pub protocols: Vec<PrivacyExact12CapabilityRowV1>,
     /// SHA-256 self-digest with this field normalized to zero.
@@ -549,10 +534,17 @@ impl PrivacyCapabilitySnapshotV1 {
             version: PRIVACY_EXACT12_CAPABILITY_MANIFEST_VERSION_V1,
             committed_height: self.committed_height,
             consensus_policy: self.consensus_policy,
+            qualification: self.qualification.clone(),
             protocols: self
                 .protocols
                 .iter()
-                .map(PrivacyExact12CapabilityRowV1::from_committed_snapshot_row)
+                .map(|row| {
+                    PrivacyExact12CapabilityRowV1::from_committed_snapshot_row(
+                        row,
+                        self.committed_height,
+                        self.qualification.as_ref(),
+                    )
+                })
                 .collect(),
             manifest_digest: PrivacyExact12CapabilityManifestDigestV1::new([0; 32]),
         };
@@ -604,8 +596,8 @@ impl PrivacyExact12CapabilityManifestV1 {
     ///
     /// # Errors
     ///
-    /// Rejects version, policy, ordering, row-projection, readiness,
-    /// activation, limitation, or digest drift.
+    /// Rejects version, policy, ordering, row projection, evidence-derived
+    /// readiness, activation, or digest drift.
     pub fn validate(&self) -> Result<(), PrivacyExact12CapabilityManifestValidationErrorV1> {
         if self.version != PRIVACY_EXACT12_CAPABILITY_MANIFEST_VERSION_V1 {
             return Err(PrivacyExact12CapabilityManifestValidationErrorV1::Version {
@@ -616,6 +608,11 @@ impl PrivacyExact12CapabilityManifestV1 {
         self.consensus_policy
             .validate_at_committed_height(self.committed_height)
             .map_err(PrivacyExact12CapabilityManifestValidationErrorV1::ConsensusPolicy)?;
+        if let Some(qualification) = &self.qualification {
+            qualification
+                .validate()
+                .map_err(PrivacyExact12CapabilityManifestValidationErrorV1::Qualification)?;
+        }
         if self.protocols.len() != PrivacyProtocolIdV1::COUNT {
             return Err(
                 PrivacyExact12CapabilityManifestValidationErrorV1::ProtocolCount {
@@ -639,7 +636,7 @@ impl PrivacyExact12CapabilityManifestV1 {
                     },
                 );
             }
-            row.validate_at_committed_height(self.committed_height)
+            row.validate_at_committed_height(self.committed_height, self.qualification.as_ref())
                 .map_err(|source| {
                     PrivacyExact12CapabilityManifestValidationErrorV1::ProtocolRow {
                         protocol_id: expected,
@@ -691,6 +688,9 @@ pub enum PrivacyExact12CapabilityManifestValidationErrorV1 {
     /// Singleton consensus policy is invalid at the committed height.
     #[error("privacy Exact12 capability consensus policy is invalid: {0}")]
     ConsensusPolicy(PrivacyPolicyValidationErrorV1),
+    /// Top-level release/deployment evidence is malformed.
+    #[error("privacy Exact12 capability qualification is invalid: {0}")]
+    Qualification(super::PrivacyExact12QualificationRecordValidationErrorV1),
     /// Manifest row count differs from Exact12.
     #[error("privacy Exact12 capability manifest has {actual} rows; expected {expected}")]
     ProtocolCount {

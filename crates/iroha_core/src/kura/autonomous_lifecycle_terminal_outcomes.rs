@@ -621,6 +621,7 @@ impl Kura {
                                 retirement,
                                 queue_disposition,
                                 &outcome,
+                                None,
                             )?;
                         }
                     }
@@ -2887,6 +2888,7 @@ impl Kura {
                                 retirement,
                                 queue_disposition,
                                 &outcome,
+                                None,
                             )?;
                         }
                     }
@@ -3404,6 +3406,8 @@ impl Kura {
         pending_canonical_bytes: u64,
         entries: &[LaneConfigEntry],
     ) -> Result<()> {
+        let mut capacity_cache = AutonomousReplicaClaimStartupCapacityCache::default();
+        let mut directory_entries_seen = 0_usize;
         let mut outcomes_seen = 0_usize;
         for entry in entries {
             let directory = Self::lane_artifact_dir(&entry.blocks_dir(&self.store_root));
@@ -3415,6 +3419,19 @@ impl Kura {
             for directory_entry in directory_entries {
                 let directory_entry =
                     directory_entry.map_err(|error| Error::IO(error, directory.clone()))?;
+                directory_entries_seen =
+                    directory_entries_seen.checked_add(1).ok_or_else(|| {
+                        Self::invalid_lane_artifact_error(
+                            directory.clone(),
+                            "replica Complete startup seal directory-entry count overflows",
+                        )
+                    })?;
+                if directory_entries_seen > AUTONOMOUS_LIFECYCLE_GENERATION_AUDIT_MAX_ENTRIES {
+                    return Err(Self::invalid_lane_artifact_error(
+                        directory,
+                        "replica Complete startup seal exceeds its global directory-entry bound",
+                    ));
+                }
                 let path = directory_entry.path();
                 let name = directory_entry.file_name().into_string().map_err(|_| {
                     Self::invalid_lane_artifact_error(
@@ -3535,6 +3552,7 @@ impl Kura {
                     retirement,
                     queue_disposition,
                     &outcome,
+                    Some(&mut capacity_cache),
                 )?;
             }
         }
@@ -3621,6 +3639,7 @@ impl Kura {
                             retirement,
                             queue_disposition,
                             outcome,
+                            None,
                         )?;
                     }
                 }

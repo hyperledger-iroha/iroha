@@ -316,6 +316,27 @@ def test_progress_witness_source_fidelity_seals_post_decision_timeout_boundary(
             "FiniteGenerationCanIncrement must equal only",
         ),
         (
+            "ByzantineProposalJustificationDomain",
+            "  [timeoutCertificate: TimeoutCertificateOptionSet,\n"
+            "   highestPrepareQc: PrepareQcOptionSet]\n",
+            "  FiniteByzantineProposalJustificationDomain\n",
+            "ByzantineProposalJustificationDomain must equal only",
+        ),
+        (
+            "FiniteByzantineProposalJustificationDomain",
+            "    \\cup {[timeoutCertificate |-> installed.tc,\n"
+            "            highestPrepareQc |-> installed.tc.highestPrepareQc]:\n"
+            "           installed \\in installedTCs}\n",
+            "",
+            "FiniteByzantineProposalJustificationDomain must equal only",
+        ),
+        (
+            "FiniteByzantineProposalJustificationDomain",
+            "           installed \\in installedTCs}\n",
+            "           installed \\in formedTCs}\n",
+            "FiniteByzantineProposalJustificationDomain must equal only",
+        ),
+        (
             "FiniteModelConfiguration",
             "  /\\ ViewDomain \\subseteq 0..MaxGeneration\n",
             "  /\\ TRUE\n",
@@ -1893,45 +1914,32 @@ def test_async_source_fidelity_requires_timeout_signer_deduplication(
     tmp_path: Path,
 ) -> None:
     module = load_checker()
-    formal_dir = tmp_path / "docs" / "formal" / "sumeragi_v2"
-    formal_dir.mkdir(parents=True)
-    for relative in (
-        Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
-        Path("crates/iroha_core/src/sumeragi/v2.rs"),
-        Path("crates/iroha_core/src/sumeragi/v2_effects.rs"),
-        Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"),
-        Path("crates/iroha_core/src/sumeragi/v2_core.rs"),
-        Path("crates/iroha_core/src/sumeragi/v2_core/refinement.rs"),
-        Path("crates/iroha_sumeragi_core/src/verus_proofs.rs"),
-        Path("crates/iroha_sumeragi_core/VERIFICATION.md"),
-        Path("scripts/verify_sumeragi_v2.sh"),
-    ):
-        destination = tmp_path / relative
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(ROOT_DIR / relative, destination)
-    for name in (
+    formal_dir = copy_async_source_fidelity_fixture(
+        tmp_path,
+        module,
         "SumeragiV2AsyncNetwork.tla",
         "SumeragiV2Core.tla",
+        "SumeragiV2LivenessProofs.tla",
+        "proof_coverage.json",
         "liveness.cfg",
-    ):
-        source = (module.FORMAL_DIR / name).read_text(encoding="utf-8")
-        (formal_dir / name).write_text(source, encoding="utf-8")
+        *module._BYZANTINE_PROPOSAL_DOMAIN_PROOF_BINDINGS,
+    )
 
     assert module._async_source_fidelity_errors(formal_dir) == []
 
     core_path = formal_dir / "SumeragiV2Core.tla"
     core_source = core_path.read_text(encoding="utf-8")
+    timeout_slot_guard = "  /\\ ~TimeoutVoteSlotOccupied(node, vote)\n"
+    assert core_source.count(timeout_slot_guard) == 1
     core_path.write_text(
-        core_source.replace(
-            "             \\/ TimeoutVoteSlotOccupied(envelope.recipient, envelope.vote)\n",
-            "",
-            1,
-        ),
+        core_source.replace(timeout_slot_guard, "", 1),
         encoding="utf-8",
     )
 
-    errors = module._async_source_fidelity_errors(formal_dir)
-    assert any("DeliverTimeout omits first-vote-per-signer" in error for error in errors)
+    errors = module._progress_witness_source_fidelity_errors(formal_dir)
+    assert any(
+        "TimeoutReceiptAdmitted must equal only" in error for error in errors
+    )
 
     core_path.write_text(core_source, encoding="utf-8")
     cfg_path = formal_dir / "liveness.cfg"
@@ -1965,6 +1973,142 @@ def test_async_source_fidelity_requires_timeout_signer_deduplication(
         )
         errors = module._async_source_fidelity_errors(formal_dir)
         assert any(expected_error in error for error in errors)
+
+    cfg_path.write_text(cfg_source, encoding="utf-8")
+    network_path = formal_dir / "SumeragiV2AsyncNetwork.tla"
+    network_source = network_path.read_text(encoding="utf-8")
+    network_mutations = (
+        (
+            "       justification \\in ByzantineProposalJustificationDomain:\n"
+            "       AsyncByzantineProposal(\n"
+            "         signer, roundView, subject,\n"
+            "         justification.timeoutCertificate,\n"
+            "         justification.highestPrepareQc)\n",
+            "       tc \\in TimeoutCertificateOptionSet,\n"
+            "       highestPrepare \\in PrepareQcOptionSet:\n"
+            "       AsyncByzantineProposal (\n"
+            "         signer, roundView, subject,\n"
+            "         tc, highestPrepare)\n",
+            "AsyncFaultStep must range Byzantine proposal justifications",
+        ),
+        (
+            "       justification \\in ByzantineProposalJustificationDomain:\n"
+            "       AsyncByzantineProposal(\n"
+            "         signer, roundView, subject,\n"
+            "         justification.timeoutCertificate,\n"
+            "         justification.highestPrepareQc)\n",
+            "       justification \\in ByzantineProposalJustificationDomain:\n"
+            "       AsyncByzantineProposal(\n"
+            "         signer, roundView, subject,\n"
+            "         justification.timeoutCertificate,\n"
+            "         justification.highestPrepareQc)\n"
+            "  \\/ \\E signer \\in ValidatorIds, roundView \\in Views,\n"
+            "       subject \\in Subjects,\n"
+            "       tc \\in TimeoutCertificateOptionSet,\n"
+            "       highestPrepare \\in PrepareQcOptionSet:\n"
+            "       AsyncByzantineProposal (\n"
+            "         signer, roundView, subject,\n"
+            "         tc, highestPrepare)\n",
+            "AsyncFaultStep must contain exactly one Byzantine proposal action",
+        ),
+        (
+            "AsyncIngressPhysicalOrdinalMaximum ==\n  (2 ^ 64) - 1\n",
+            "AsyncIngressPhysicalOrdinalMaximum ==\n  9223372036854775807\n",
+            "AsyncIngressPhysicalOrdinalMaximum must equal only",
+        ),
+        (
+            "FiniteAsyncIngressPhysicalOrdinalMaximum == 4096\n",
+            "FiniteAsyncIngressPhysicalOrdinalMaximum == 100\n",
+            "FiniteAsyncIngressPhysicalOrdinalMaximum must equal only",
+        ),
+    )
+    for needle, replacement, expected_error in network_mutations:
+        assert needle in network_source, needle
+        network_path.write_text(
+            network_source.replace(needle, replacement, 1), encoding="utf-8"
+        )
+        errors = module._async_source_fidelity_errors(formal_dir)
+        assert any(expected_error in error for error in errors), errors
+        if "TimeoutCertificateOptionSet" in replacement:
+            assert any(
+                "AsyncFaultStep must not eagerly enumerate" in error
+                for error in errors
+            ), errors
+        network_path.write_text(network_source, encoding="utf-8")
+
+    core_mutation = (
+        "       justification \\in ByzantineProposalJustificationDomain:\n"
+        "       ByzantineBroadcastProposal(\n"
+        "         signer, roundView, subject,\n"
+        "         justification.timeoutCertificate,\n"
+        "         justification.highestPrepareQc)\n"
+    )
+    assert core_source.count(core_mutation) == 1
+    core_path.write_text(
+        core_source.replace(
+            core_mutation,
+            core_mutation
+            + "  \\/ \\E signer \\in ValidatorIds, roundView \\in Views,\n"
+            "       subject \\in Subjects,\n"
+            "       tc \\in TimeoutCertificateOptionSet,\n"
+            "       highestPrepare \\in PrepareQcOptionSet:\n"
+            "       ByzantineBroadcastProposal (\n"
+            "         signer, roundView, subject,\n"
+            "         tc, highestPrepare)\n",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    errors = module._async_source_fidelity_errors(formal_dir)
+    assert any(
+        "Core Next must contain exactly one Byzantine proposal action" in error
+        for error in errors
+    ), errors
+    assert any(
+        "Core Next must not eagerly enumerate" in error for error in errors
+    ), errors
+    core_path.write_text(core_source, encoding="utf-8")
+
+    for relative in module._BYZANTINE_PROPOSAL_DOMAIN_PROOF_BINDINGS:
+        shutil.copyfile(module.FORMAL_DIR / relative, formal_dir / relative)
+    assert module._byzantine_proposal_domain_proof_binding_errors(formal_dir) == []
+    for relative, bindings in (
+        module._BYZANTINE_PROPOSAL_DOMAIN_PROOF_BINDINGS.items()
+    ):
+        proof_path = formal_dir / relative
+        canonical_proof_source = proof_path.read_text(encoding="utf-8")
+        for symbol, transition in bindings:
+            theorem_start = canonical_proof_source.index(f"THEOREM {symbol} ==")
+            next_theorem = canonical_proof_source.find("\nTHEOREM ", theorem_start + 1)
+            theorem_end = (
+                len(canonical_proof_source) if next_theorem < 0 else next_theorem
+            )
+            theorem_source = canonical_proof_source[theorem_start:theorem_end]
+            proof_needle = (
+                f"DEF {transition}, ByzantineProposalJustificationDomain"
+            )
+            assert theorem_source.count(proof_needle) == 1, (relative, symbol)
+            mutated_theorem = theorem_source.replace(
+                proof_needle,
+                "BY ByzantineProposalJustificationDomain\n"
+                f"         DEF {transition}",
+                1,
+            )
+            proof_path.write_text(
+                canonical_proof_source[:theorem_start]
+                + mutated_theorem
+                + canonical_proof_source[theorem_end:],
+                encoding="utf-8",
+            )
+            errors = module._byzantine_proposal_domain_proof_binding_errors(
+                formal_dir
+            )
+            assert any(
+                f"{symbol} must unfold ByzantineProposalJustificationDomain"
+                in error
+                for error in errors
+            ), errors
+            proof_path.write_text(canonical_proof_source, encoding="utf-8")
 
 
 def test_async_source_fidelity_pins_candidate_consumer_and_restart_state(

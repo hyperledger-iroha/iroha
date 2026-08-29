@@ -32,6 +32,7 @@ use std::{
     string::String,
     vec::Vec,
 };
+
 /// Voting mode for a referendum.
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, iroha_schema::IntoSchema,

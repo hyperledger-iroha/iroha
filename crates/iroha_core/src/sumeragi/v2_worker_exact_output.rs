@@ -186,8 +186,10 @@ struct PendingExactOutput {
     /// Kura-verified authority observed only after State committed this height.
     ///
     /// This never relaxes ordinary exact-output ownership. It only proves that
-    /// a ticketless GlobalV2 topology target is superseded by the exact durable
-    /// finality artifact when a committed roster transition removes that target.
+    /// a ticketless topology target is superseded when the existing applied-height
+    /// handoff contract can authenticate its typed claim from the exact durable
+    /// finality artifact, with read-only Kura evidence where the claim requires it.
+    /// This does not infer a topology delta.
     applied_height_finality: Option<wire::finality::V2FinalityArtifact>,
     /// Writer-flushed sidecar cursor receipts not yet applied by lane work.
     admitted_sidecar_chunks: VecDeque<CertifiedMergeSidecarChunkAdmission>,
@@ -2860,9 +2862,11 @@ impl PendingExactOutput {
         Ok(())
     }
     /// Drive exact output fairly until drained, blocked, or the deterministic budget is spent.
-    fn drive_with_budget_ack<Attempt>(
+    fn drive_with_budget_ack_and_durable_history<Attempt>(
         &mut self,
         attempt_budget: usize,
+        durable_history: Option<&Kura>,
+        released_kura_replica_advert_heights: &mut BTreeSet<u64>,
         mut attempt: Attempt,
     ) -> Result<ExactOutputDriveOutcome, String>
     where
@@ -3170,16 +3174,22 @@ impl PendingExactOutput {
                             .as_ref()
                             .is_some_and(|artifact| {
                                 self.fanouts.get(fanout_index).is_some_and(|fanout| {
-                                    matches!(
+                                    let claim_durable_history = if matches!(
                                         &fanout.rollover_claim,
-                                        ExactOutputRolloverClaim::GlobalV2(_)
-                                    ) && applied_height_reconstruction_covers(
+                                        ExactOutputRolloverClaim::DurableKuraReplicaAdvert { .. }
+                                            | ExactOutputRolloverClaim::QueuePlanAdmission { .. }
+                                    ) {
+                                        durable_history
+                                    } else {
+                                        None
+                                    };
+                                    applied_height_reconstruction_covers(
                                         &fanout.messages,
                                         &fanout.semantic_peers(),
                                         &fanout.rollover_claim,
                                         artifact,
                                         None,
-                                        None,
+                                        claim_durable_history,
                                     )
                                     .is_ok()
                                 })
@@ -3195,10 +3205,24 @@ impl PendingExactOutput {
                         // cumulative Close.
                         // Retaining this ticketless worker copy could consume
                         // the only shared non-roster slot forever. Exact durable
-                        // finality also supersedes a same-height GlobalV2
-                        // occurrence after a committed roster transition; its
-                        // typed creation scope prevents unrelated ticketless
-                        // topology traffic from taking that release path.
+                        // finality also supersedes a same-height occurrence once
+                        // State commits that height, whether actor rank was lost
+                        // to a topology change or waiter exhaustion. Reusing the
+                        // applied-height handoff verifier admits only claims it can
+                        // authenticate from finality alone or from the exact
+                        // read-only Kura source supplied by production services;
+                        // typed scope prevents unrelated ticketless topology
+                        // traffic from taking that release path.
+                        if let Some(ExactOutputRolloverClaim::DurableKuraReplicaAdvert {
+                            source_height,
+                            ..
+                        }) = self
+                            .fanouts
+                            .get(fanout_index)
+                            .map(|fanout| &fanout.rollover_claim)
+                        {
+                            released_kura_replica_advert_heights.insert(*source_height);
+                        }
                         drop(message);
                         self.fanouts
                             .get_mut(fanout_index)
@@ -3250,6 +3274,33 @@ impl PendingExactOutput {
         Ok(ExactOutputDriveOutcome::Drained)
     }
     #[cfg(test)]
+    fn drive_with_budget_ack<Attempt>(
+        &mut self,
+        attempt_budget: usize,
+        attempt: Attempt,
+    ) -> Result<ExactOutputDriveOutcome, String>
+    where
+        Attempt: FnMut(
+            Post<NetworkMessage>,
+            Option<NetworkActorAdmissionTicket>,
+            &ExactTargetRoute,
+            u8,
+        ) -> Result<
+            ExactOutputAttemptOutcome,
+            NetworkActorAdmissionError<Post<NetworkMessage>>,
+        >,
+    {
+        let mut released_kura_replica_advert_heights = BTreeSet::new();
+        let outcome = self.drive_with_budget_ack_and_durable_history(
+            attempt_budget,
+            None,
+            &mut released_kura_replica_advert_heights,
+            attempt,
+        )?;
+        debug_assert!(released_kura_replica_advert_heights.is_empty());
+        Ok(outcome)
+    }
+    #[cfg(test)]
     fn drive_with_budget<Attempt>(
         &mut self,
         attempt_budget: usize,
@@ -3271,6 +3322,8 @@ impl PendingExactOutput {
     }
     fn drive_bounded_with_ack<Attempt>(
         &mut self,
+        durable_history: &Kura,
+        released_kura_replica_advert_heights: &mut BTreeSet<u64>,
         attempt: Attempt,
     ) -> Result<ExactOutputDriveOutcome, String>
     where
@@ -3284,7 +3337,12 @@ impl PendingExactOutput {
             NetworkActorAdmissionError<Post<NetworkMessage>>,
         >,
     {
-        self.drive_with_budget_ack(self.drive_attempt_budget, attempt)
+        self.drive_with_budget_ack_and_durable_history(
+            self.drive_attempt_budget,
+            Some(durable_history),
+            released_kura_replica_advert_heights,
+            attempt,
+        )
     }
     #[cfg(test)]
     fn drive_with<Attempt>(&mut self, attempt: Attempt) -> Result<Option<usize>, String>

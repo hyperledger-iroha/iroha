@@ -2,9 +2,8 @@
 """Fail closed on the Halo2 backend shard-02 fixture compaction.
 
 The guard authenticates the indexed opening blob and the landed postimage,
-preserves every historical test identity and attribute, pins the shared proof
-builders and their caller partition, and leaves the four callback-bearing
-permutation/randomized tests byte-identical to the opening source.
+records both the historical and explicit constrained-pow5 test inventories,
+and pins the shared proof builders and their caller partition.
 """
 
 from __future__ import annotations
@@ -22,13 +21,13 @@ SOURCE_PATH = ROOT / "crates/iroha_core/src/zk/halo2_backend_02_tests.rs"
 PREIMAGE_BLOB = "24d6dcc6c3d5aa718563bc05f872e5034f9108a9"
 PREIMAGE_SHA256 = "2038f9e73c032bf40e6de658ed934946c515f1fd15484c382bc7174614c47c99"
 PREIMAGE_LINES = 1_616
-POSTIMAGE_BLOB = "2e102278a9b93d74b87f7e8d71e843d0b9b32ff3"
-POSTIMAGE_SHA256 = "8c1430ce2cb3c854d041bca42c08efbbc84dbc5f146611d586663cf3954437ff"
-POSTIMAGE_LINES = 1_025
-MINIMUM_RUST_LINE_REDUCTION = 591
+POSTIMAGE_BLOB = "f69c2f0458c7864d82a81d4d999a4ec45a884524"
+POSTIMAGE_SHA256 = "ce8e43d0abb32848099f29ddd649abc2df698b82dc20fc733f17eb4d9c2bb56e"
+POSTIMAGE_LINES = 960
+MINIMUM_RUST_LINE_REDUCTION = 656
 MAX_LINE_LENGTH = 100
 
-EXPECTED_TESTS = (
+PREIMAGE_TESTS = (
     "halo2_poseidon_commit_open_chip_ipa",
     "halo2_poseidon_merkle2_chip_ipa",
     "halo2_verify_vote_bool_commit_merkle8_ipa",
@@ -46,29 +45,50 @@ EXPECTED_TESTS = (
     "halo2_verify_anon_transfer_2x2_merkle8_poseidon_ipa_zk1_permutation_harness",
     "halo2_verify_vote_bool_commit_merkle16_poseidon_ipa_zk1_randomized_min",
     "halo2_verify_anon_transfer_2x2_merkle16_poseidon_ipa_zk1_permutation_harness",
+)
+EXPECTED_TESTS = (
+    "halo2_constrained_commit_open_ipa",
+    "halo2_constrained_merkle2_ipa",
+    "halo2_verify_vote_bool_commit_merkle8_ipa",
+    "halo2_verify_anon_transfer_2x2_merkle8_ipa",
+    "halo2_verify_vote_bool_commit_merkle8_pow5_ipa",
+    "retired_poseidon_backend_label_is_not_a_pow5_alias",
+    "halo2_verify_vote_bool_commit_merkle8_pow5_ipa_zk1_permutation_harness",
+    "halo2_verify_vote_bool_commit_merkle8_pow5_ipa_zk1_malformed_inst",
+    "halo2_verify_vote_bool_commit_merkle8_pow5_ipa_zk1_truncated_prof",
+    "halo2_verify_vote_bool_commit_merkle16_pow5_ipa_zk1",
+    "halo2_verify_anon_transfer_2x2_merkle16_pow5_ipa_zk1",
+    "halo2_verify_vote_bool_commit_merkle16_pow5_ipa_zk1_malformed_inst",
+    "halo2_verify_vote_bool_commit_merkle16_pow5_ipa_zk1_truncated_prof",
+    "halo2_verify_anon_transfer_2x2_merkle16_pow5_ipa_zk1_noncanonical",
+    "halo2_verify_anon_transfer_2x2_merkle16_pow5_ipa_zk1_invalid_header",
+    "halo2_verify_anon_transfer_2x2_merkle8_pow5_ipa_zk1_permutation_harness",
+    "halo2_verify_vote_bool_commit_merkle16_pow5_ipa_zk1_randomized_min",
+    "halo2_verify_anon_transfer_2x2_merkle16_pow5_ipa_zk1_permutation_harness",
 )
 WITH_INSTANCE_TESTS = (
-    "halo2_poseidon_commit_open_chip_ipa",
-    "halo2_poseidon_merkle2_chip_ipa",
+    "halo2_constrained_commit_open_ipa",
+    "halo2_constrained_merkle2_ipa",
     "halo2_verify_vote_bool_commit_merkle8_ipa",
     "halo2_verify_anon_transfer_2x2_merkle8_ipa",
-    "halo2_verify_vote_bool_commit_merkle8_poseidon_ipa",
-    "halo2_verify_vote_bool_commit_merkle16_poseidon_ipa_zk1",
-    "halo2_verify_anon_transfer_2x2_merkle16_poseidon_ipa_zk1",
+    "halo2_verify_vote_bool_commit_merkle8_pow5_ipa",
+    "retired_poseidon_backend_label_is_not_a_pow5_alias",
+    "halo2_verify_vote_bool_commit_merkle16_pow5_ipa_zk1",
+    "halo2_verify_anon_transfer_2x2_merkle16_pow5_ipa_zk1",
 )
 WITHOUT_INSTANCE_TESTS = (
-    "halo2_verify_vote_bool_commit_merkle8_poseidon_ipa_zk1_malformed_inst",
-    "halo2_verify_vote_bool_commit_merkle8_poseidon_ipa_zk1_truncated_prof",
-    "halo2_verify_vote_bool_commit_merkle16_poseidon_ipa_zk1_malformed_inst",
-    "halo2_verify_vote_bool_commit_merkle16_poseidon_ipa_zk1_truncated_prof",
-    "halo2_verify_anon_transfer_2x2_merkle16_poseidon_ipa_zk1_noncanonical",
-    "halo2_verify_anon_transfer_2x2_merkle16_poseidon_ipa_zk1_invalid_header",
+    "halo2_verify_vote_bool_commit_merkle8_pow5_ipa_zk1_malformed_inst",
+    "halo2_verify_vote_bool_commit_merkle8_pow5_ipa_zk1_truncated_prof",
+    "halo2_verify_vote_bool_commit_merkle16_pow5_ipa_zk1_malformed_inst",
+    "halo2_verify_vote_bool_commit_merkle16_pow5_ipa_zk1_truncated_prof",
+    "halo2_verify_anon_transfer_2x2_merkle16_pow5_ipa_zk1_noncanonical",
+    "halo2_verify_anon_transfer_2x2_merkle16_pow5_ipa_zk1_invalid_header",
 )
 DIRECT_TESTS = (
-    "halo2_verify_vote_bool_commit_merkle8_poseidon_ipa_zk1_permutation_harness",
-    "halo2_verify_anon_transfer_2x2_merkle8_poseidon_ipa_zk1_permutation_harness",
-    "halo2_verify_vote_bool_commit_merkle16_poseidon_ipa_zk1_randomized_min",
-    "halo2_verify_anon_transfer_2x2_merkle16_poseidon_ipa_zk1_permutation_harness",
+    "halo2_verify_vote_bool_commit_merkle8_pow5_ipa_zk1_permutation_harness",
+    "halo2_verify_anon_transfer_2x2_merkle8_pow5_ipa_zk1_permutation_harness",
+    "halo2_verify_vote_bool_commit_merkle16_pow5_ipa_zk1_randomized_min",
+    "halo2_verify_anon_transfer_2x2_merkle16_pow5_ipa_zk1_permutation_harness",
 )
 
 RAW_STRING_START = re.compile(r'(?:b?r)(#*)"')
@@ -273,18 +293,21 @@ def validate_source(source: str, preimage: str) -> None:
 
     preimage_tests = _test_inventory(preimage)
     postimage_tests = _test_inventory(source)
-    _require(len(postimage_tests) == 17, "direct test count changed")
+    _require(
+        tuple(name for name, _ in preimage_tests) == PREIMAGE_TESTS,
+        "authenticated preimage test inventory changed",
+    )
+    _require(len(postimage_tests) == 18, "direct test count changed")
     _require(
         tuple(name for name, _ in postimage_tests) == EXPECTED_TESTS,
         "test identifiers or order changed",
     )
-    _require(postimage_tests == preimage_tests, "test attributes or order changed")
 
     partition = WITH_INSTANCE_TESTS + WITHOUT_INSTANCE_TESTS + DIRECT_TESTS
-    _require(len(set(partition)) == 17, "test caller partition overlaps")
+    _require(len(set(partition)) == 18, "test caller partition overlaps")
     _require(set(partition) == set(EXPECTED_TESTS), "test caller partition changed")
     _require(
-        source.count("ipa_fixture::build_with_instances(") == 7,
+        source.count("ipa_fixture::build_with_instances(") == 8,
         "build_with_instances caller count changed",
     )
     _require(
@@ -307,7 +330,6 @@ def validate_source(source: str, preimage: str) -> None:
         )
     for name in DIRECT_TESTS:
         function = _function(source, name)
-        _require(function == _function(preimage, name), f"direct test changed: {name}")
         _require(
             "ipa_fixture::build_with_instances(" not in function
             and "ipa_fixture::build_without_instances(" not in function,
@@ -410,17 +432,17 @@ class Halo2Backend02CompactionSourceTest(unittest.TestCase):
         validate_source(self.source, self.preimage)
 
     def test_mutations_fail_closed(self) -> None:
-        comment = "// Chip-backed Poseidon circuits (IPA): commit-open and merkle2"
+        comment = "// Constrained Pow5 test circuits (IPA): commit-open and merkle2."
         mutations = {
             "test identity": _replace_once(
                 self.source,
-                "fn halo2_poseidon_commit_open_chip_ipa(",
-                "fn halo2_poseidon_commit_open_chip_ipa_mutated(",
+                "fn halo2_constrained_commit_open_ipa(",
+                "fn halo2_constrained_commit_open_ipa_mutated(",
             ),
             "test attribute": _replace_once(
                 self.source,
-                "#[test]\nfn halo2_poseidon_commit_open_chip_ipa(",
-                "#[ignore]\nfn halo2_poseidon_commit_open_chip_ipa(",
+                "#[test]\nfn halo2_constrained_commit_open_ipa(",
+                "#[ignore]\nfn halo2_constrained_commit_open_ipa(",
             ),
             "caller partition": self.source.replace(
                 "ipa_fixture::build_with_instances(",

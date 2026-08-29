@@ -41,9 +41,6 @@ fn assert_merge_queue_plan_synced_intent_error(error: MergeLedgerCommitError) {
 fn autonomous_merge_admission_intent_producer_rejects_ordinary_external_before_effects() {
     let (state, validator_keypairs, _, parent) = configured_single_lane_queue_plan_state();
     let authority_height = parent.header().height().get();
-    let application_height = authority_height
-        .checked_add(1)
-        .expect("fixture application height");
     let tag = 0x79;
     let entrypoint = ordinary_external_entrypoint_for_merge_intent_test(&state, tag);
     assert_eq!(
@@ -71,29 +68,20 @@ fn autonomous_merge_admission_intent_producer_rejects_ordinary_external_before_e
         world.commit();
     }
     seed_exact_queue_plan_admission_state_for_test(&state, &certificate);
-    let source = autonomous_merge_source_for_queue_plan_admission_test(
+    let error = match autonomous_merge_source_for_queue_plan_admission_test(
         &state,
         &binding,
         entrypoint,
         routing_plan,
         &validator_keypairs,
+    ) {
+        Ok(_) => panic!("payload construction must reject Ordinary External autonomous content"),
+        Err(error) => error,
+    };
+    assert_eq!(
+        error,
+        crate::lane_consensus::LaneAutonomousArtifactError::InvalidAdmissionIntent
     );
-    let application_header = BlockHeader::new(
-        NonZeroU64::new(application_height).expect("fixture application height is non-zero"),
-        Some(parent.hash()),
-        None,
-        None,
-        u64::try_from(parent.header().creation_time().as_millis())
-            .expect("fixture parent time fits u64")
-            .saturating_add(1),
-        0,
-    );
-    let mut state_block = state.merge_preexecution_block(application_header);
-    let error = State::preexecute_merge_execution_sources_into(&mut state_block, vec![source])
-        .expect_err("producer must reject Ordinary External autonomous content");
-    assert_merge_queue_plan_synced_intent_error(error);
-    assert!(state_block.merge_carrier_entrypoints.is_empty());
-    assert!(state_block.world.external_event_buf.is_empty());
 }
 
 #[test]

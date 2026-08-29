@@ -2,6 +2,8 @@
 #![allow(unexpected_cfgs)]
 mod algorithm;
 mod confidential;
+#[cfg(feature = "pqc")]
+pub mod confidential_memo;
 /// Authenticated, process-local spooling for bounded confidential chunks.
 pub mod confidential_spool;
 #[cfg(feature = "bls")]

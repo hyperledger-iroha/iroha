@@ -909,6 +909,7 @@ pub struct PrivateSettlementAuditPayerInputV1 {
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub note_spending_authority: [u8; 32],
     /// Non-zero bundle-bound dummy domain exactly when `active` is false.
+    #[norito(required)]
     pub dummy_domain: Option<Hash>,
 }
 
@@ -1244,6 +1245,7 @@ pub struct PrivateSettlementAuditNoteOpeningV1 {
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub memo_digest: [u8; 32],
     /// Non-zero, bundle-bound dummy domain exactly when `active` is false.
+    #[norito(required)]
     pub dummy_domain: Option<Hash>,
 }
 
@@ -3942,6 +3944,52 @@ mod tests {
 
     fn hash(seed: u8) -> Hash {
         Hash::new([seed])
+    }
+
+    #[test]
+    fn audit_payer_input_json_requires_explicit_dummy_domain() {
+        let input = PrivateSettlementAuditPayerInputV1 {
+            input_ordinal: 0,
+            active: true,
+            commitment: PrivacyCommitmentV1::new([1; 32]),
+            nullifier: PrivacyNullifierV1::new([2; 32]),
+            note_spending_authority: [3; 32],
+            dummy_domain: None,
+        };
+        let value = norito::json::to_value(&input).expect("encode payer input JSON");
+        assert_eq!(value.get("dummy_domain"), Some(&norito::json::Value::Null));
+        let decoded = norito::json::from_value::<PrivateSettlementAuditPayerInputV1>(value.clone())
+            .expect("explicit null dummy domain decodes");
+        assert_eq!(decoded, input);
+
+        let mut omitted = value;
+        omitted
+            .as_object_mut()
+            .expect("payer input is a JSON object")
+            .remove("dummy_domain");
+        let error = norito::json::from_value::<PrivateSettlementAuditPayerInputV1>(omitted)
+            .expect_err("omitted dummy domain must reject");
+        assert!(error.to_string().contains("missing field `dummy_domain`"));
+    }
+
+    #[test]
+    fn audit_note_opening_json_requires_explicit_dummy_domain() {
+        let opening = active_opening(4, 9);
+        let value = norito::json::to_value(&opening).expect("encode audit note opening JSON");
+        assert_eq!(value.get("dummy_domain"), Some(&norito::json::Value::Null));
+        let decoded =
+            norito::json::from_value::<PrivateSettlementAuditNoteOpeningV1>(value.clone())
+                .expect("explicit null dummy domain decodes");
+        assert_eq!(decoded, opening);
+
+        let mut omitted = value;
+        omitted
+            .as_object_mut()
+            .expect("audit note opening is a JSON object")
+            .remove("dummy_domain");
+        let error = norito::json::from_value::<PrivateSettlementAuditNoteOpeningV1>(omitted)
+            .expect_err("omitted dummy domain must reject");
+        assert!(error.to_string().contains("missing field `dummy_domain`"));
     }
 
     fn route(dataspace: u64) -> PrivateSettlementRouteV1 {

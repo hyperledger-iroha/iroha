@@ -7458,7 +7458,6 @@ mod tests {
         Level, NetworkId, Registrable,
         account::{Account, AccountId},
         asset::{AssetDefinitionId, AssetId},
-        block::consensus_v2::{NPOS_TAG, PERMISSIONED_TAG},
         events::{
             data::space_directory::{SpaceDirectoryEvent, SpaceDirectoryManifestRevoked},
             time::{ExecutionTime, TimeEventFilter},

@@ -4,6 +4,7 @@ use crate::tests_runtime_handlers::{
     app_auth_test_guard, checked_torii_test_ed25519_keypair, mk_app_state_for_tests,
     mk_app_state_for_tests_with_world, signed_app_headers, world_with_account,
 };
+use base64::Engine as _;
 use iroha_config::parameters::actual::ToriiMcpProfile;
 const TEST_ACCOUNT_I105: &str = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
 
@@ -39,6 +40,29 @@ fn canonical_test_witness_header() -> String {
     .expect("bounded canonical witness header")
 }
 const TEST_ASSET_ID: &str = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
+
+fn test_faucet_runtime_config() -> iroha_config::parameters::actual::ToriiFaucet {
+    iroha_config::parameters::actual::ToriiFaucet {
+        authority: AccountAddress::parse_encoded(TEST_ACCOUNT_I105, None)
+            .expect("canonical faucet authority")
+            .to_account_id()
+            .expect("faucet authority account id"),
+        private_key_file: "/runtime-only/mcp-test-faucet.key".into(),
+        signer: checked_torii_test_ed25519_keypair(0x7a, "derive MCP faucet test signer"),
+        asset_definition_id: TEST_ASSET_ID.to_owned(),
+        amount: 1_u32.into(),
+        pow_difficulty_bits: std::num::NonZeroU8::new(1).expect("nonzero"),
+        pow_scrypt_log_n: 1,
+        pow_scrypt_r: 1,
+        pow_scrypt_p: 1,
+        pow_max_anchor_age_blocks: std::num::NonZeroU64::new(1).expect("nonzero"),
+        pow_adaptive_lookback_blocks: 1,
+        pow_adaptive_claims_per_extra_bit: 1,
+        pow_adaptive_max_extra_bits: 1,
+        pow_beacon_seed_enabled: false,
+    }
+}
+
 #[test]
 fn catalog_dispatch_matching_handles_exact_parameters_and_wildcards() {
     assert!(route_template_matches(
@@ -773,20 +797,25 @@ async fn long_poll_quota_preserves_capacity_for_bounded_tools() {
 async fn real_long_poll_cannot_starve_bounded_dispatch_and_releases_both_permits() {
     let started = std::sync::Arc::new(tokio::sync::Notify::new());
     let release = std::sync::Arc::new(tokio::sync::Notify::new());
+    let block_first_status_poll = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
     let router_started = std::sync::Arc::clone(&started);
     let router_release = std::sync::Arc::clone(&release);
+    let router_block_first_status_poll = std::sync::Arc::clone(&block_first_status_poll);
     let router =
         axum::Router::new().fallback_service(tower::service_fn(move |request: Request<Body>| {
             let started = std::sync::Arc::clone(&router_started);
             let release = std::sync::Arc::clone(&router_release);
+            let block_first_status_poll = std::sync::Arc::clone(&router_block_first_status_poll);
             async move {
                 if request
                     .uri()
                     .path()
                     .contains("/pipeline/transactions/status")
                 {
-                    started.notify_one();
-                    release.notified().await;
+                    if block_first_status_poll.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                        started.notify_one();
+                        release.notified().await;
+                    }
                     Ok::<_, std::convert::Infallible>(
                         Response::builder()
                             .status(StatusCode::NOT_FOUND)
@@ -884,6 +913,126 @@ async fn real_long_poll_cannot_starve_bounded_dispatch_and_releases_both_permits
         .expect("long-poll task joins");
     assert_eq!(global.available_permits(), 2);
     assert_eq!(long_poll.available_permits(), 1);
+}
+
+#[tokio::test]
+async fn cancelling_real_long_poll_releases_both_quotas_and_allows_reentry() {
+    let (started_tx, mut started_rx) = tokio::sync::mpsc::unbounded_channel();
+    let release = std::sync::Arc::new(tokio::sync::Notify::new());
+    let route_release = std::sync::Arc::clone(&release);
+    let router =
+        axum::Router::new().fallback_service(tower::service_fn(move |_request: Request<Body>| {
+            let started_tx = started_tx.clone();
+            let release = std::sync::Arc::clone(&route_release);
+            async move {
+                let _ = started_tx.send(());
+                release.notified().await;
+                Ok::<_, std::convert::Infallible>(
+                    Response::builder()
+                        .status(StatusCode::NOT_FOUND)
+                        .body(Body::empty())
+                        .expect("pending status response"),
+                )
+            }
+        }));
+    let mut app = mk_app_state_for_tests();
+    let (global, long_poll) = {
+        let state = std::sync::Arc::get_mut(&mut app).expect("unique app state");
+        state.require_api_token = true;
+        state.api_tokens_set = std::sync::Arc::new(["client".to_owned()].into_iter().collect());
+        state.mcp.max_inflight_dispatches = std::num::NonZeroUsize::new(2).expect("nonzero");
+        state.mcp_tools = std::sync::Arc::new(vec![iroha_transactions_wait_tool()]);
+        state.mcp_dispatch_inflight = std::sync::Arc::new(tokio::sync::Semaphore::new(2));
+        state.mcp_long_poll_inflight = std::sync::Arc::new(tokio::sync::Semaphore::new(1));
+        *state
+            .mcp_dispatch_router
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(router);
+        (
+            std::sync::Arc::clone(&state.mcp_dispatch_inflight),
+            std::sync::Arc::clone(&state.mcp_long_poll_inflight),
+        )
+    };
+    let wait_arguments = norito::json!({
+        "query": { "hash": ("ab".repeat(32)) },
+        "timeout_ms": 1,
+        "poll_interval_ms": 100
+    });
+    let cancellation_nonce = cancellation_test_nonce(0x41);
+    let wait_request = norito::json!({
+        "jsonrpc": (JSONRPC_VERSION),
+        "id": "cancel-long-poll",
+        "method": "tools/call",
+        "params": {
+            "name": "iroha.transactions.wait",
+            "arguments": (wait_arguments.clone()),
+            "_meta": { "iroha/cancellationNonce": (cancellation_nonce.as_str()) }
+        }
+    });
+    let wait_app = std::sync::Arc::clone(&app);
+    let wait_headers = cancellation_test_headers("client");
+    let first_wait =
+        tokio::spawn(
+            async move { handle_jsonrpc_request(wait_app, &wait_headers, wait_request).await },
+        );
+    tokio::time::timeout(Duration::from_secs(2), started_rx.recv())
+        .await
+        .expect("first long poll reaches nested status route")
+        .expect("nested status router remains live");
+    assert_eq!(global.available_permits(), 1);
+    assert_eq!(long_poll.available_permits(), 0);
+
+    handle_cancelled_notification(
+        &app,
+        &cancellation_test_headers("client"),
+        &cancel_notification(Value::String("cancel-long-poll".to_owned())),
+    );
+    assert!(matches!(
+        tokio::time::timeout(Duration::from_secs(2), first_wait)
+            .await
+            .expect("cancelled long poll completes")
+            .expect("long-poll task joins"),
+        JsonRpcRequestOutcome::Cancelled
+    ));
+    assert_eq!(global.available_permits(), 2);
+    assert_eq!(long_poll.available_permits(), 1);
+
+    let replacement_request = norito::json!({
+        "jsonrpc": (JSONRPC_VERSION),
+        "id": "replacement-long-poll",
+        "method": "tools/call",
+        "params": {
+            "name": "iroha.transactions.wait",
+            "arguments": (wait_arguments),
+            "_meta": { "iroha/cancellationNonce": (cancellation_nonce.as_str()) }
+        }
+    });
+    let second_app = std::sync::Arc::clone(&app);
+    let second_headers = cancellation_test_headers("client");
+    let second_wait = tokio::spawn(async move {
+        handle_jsonrpc_request(second_app, &second_headers, replacement_request).await
+    });
+    tokio::time::timeout(Duration::from_secs(2), started_rx.recv())
+        .await
+        .expect("replacement long poll reaches nested status route")
+        .expect("nested status router remains live");
+    assert_eq!(global.available_permits(), 1);
+    assert_eq!(long_poll.available_permits(), 0);
+    handle_cancelled_notification(
+        &app,
+        &cancellation_test_headers("client"),
+        &cancel_notification(Value::String("replacement-long-poll".to_owned())),
+    );
+    assert!(matches!(
+        tokio::time::timeout(Duration::from_secs(2), second_wait)
+            .await
+            .expect("replacement long poll cancellation completes")
+            .expect("replacement long-poll task joins"),
+        JsonRpcRequestOutcome::Cancelled
+    ));
+    assert_eq!(global.available_permits(), 2);
+    assert_eq!(long_poll.available_permits(), 1);
+    drop(release);
 }
 
 #[tokio::test]
@@ -995,6 +1144,7 @@ async fn faucet_tools_reject_noncanonical_argument_shapes_before_dispatch() {
     {
         let state = std::sync::Arc::get_mut(&mut app).expect("unique app state");
         state.mcp.profile = ToriiMcpProfile::Writer;
+        state.account_faucet = Some(test_faucet_runtime_config());
         state.mcp_tools = std::sync::Arc::new(build_tool_specs(&state.mcp));
         *state
             .mcp_dispatch_router
@@ -1066,20 +1216,40 @@ fn cancellation_test_headers(token: &'static str) -> HeaderMap {
     headers
 }
 
+fn cancellation_test_nonce(fill: u8) -> String {
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([fill; 32])
+}
+
 fn cancellable_health_request(id: Value) -> Value {
+    cancellable_health_request_with_nonce(id, cancellation_test_nonce(0x41).as_str())
+}
+
+fn cancellable_health_request_with_nonce(id: Value, cancellation_nonce: &str) -> Value {
     norito::json!({
         "jsonrpc": (JSONRPC_VERSION),
         "id": (id),
         "method": "tools/call",
-        "params": { "name": "iroha.health", "arguments": {} }
+        "params": {
+            "name": "iroha.health",
+            "arguments": {},
+            "_meta": { "iroha/cancellationNonce": (cancellation_nonce) }
+        }
     })
 }
 
 fn cancel_notification(id: Value) -> Value {
+    cancel_notification_with_nonce(id, cancellation_test_nonce(0x41).as_str())
+}
+
+fn cancel_notification_with_nonce(id: Value, cancellation_nonce: &str) -> Value {
     norito::json!({
         "jsonrpc": (JSONRPC_VERSION),
         "method": "notifications/cancelled",
-        "params": { "requestId": (id), "reason": "test cancellation" }
+        "params": {
+            "requestId": (id),
+            "reason": "test cancellation",
+            "_meta": { "iroha/cancellationNonce": (cancellation_nonce) }
+        }
     })
 }
 
@@ -1104,6 +1274,76 @@ fn cancellation_keys_preserve_lossless_json_id_representation() {
     );
     assert!(ExactJsonRpcId::from_value(&oversized_a).is_none());
     assert!(ExactJsonRpcId::from_value(&oversized_b).is_none());
+
+    let valid_nonce = cancellation_test_nonce(0x5a);
+    let params = norito::json!({
+        "_meta": { "iroha/cancellationNonce": (valid_nonce.clone()) }
+    });
+    assert_eq!(
+        cancellation_nonce_from_params(params.as_object().expect("params")),
+        Ok(Some([0x5a; 32]))
+    );
+    for invalid in [
+        norito::json!({ "_meta": "not-an-object" }),
+        norito::json!({ "_meta": { "iroha/cancellationNonce": 7 } }),
+        norito::json!({ "_meta": { "iroha/cancellationNonce": "short" } }),
+        norito::json!({
+            "_meta": { "iroha/cancellationNonce": (format!("{valid_nonce}=")) }
+        }),
+    ] {
+        assert_eq!(
+            cancellation_nonce_from_params(invalid.as_object().expect("params")),
+            Err(())
+        );
+    }
+}
+
+#[tokio::test]
+async fn malformed_authenticated_cancellation_nonce_is_rejected() {
+    let mut app = mk_app_state_for_tests();
+    {
+        let state = std::sync::Arc::get_mut(&mut app).expect("unique app state");
+        state.require_api_token = true;
+        state.api_tokens_set = std::sync::Arc::new(["client".to_owned()].into_iter().collect());
+    }
+    let request = cancellable_health_request_with_nonce(
+        Value::String("invalid-nonce".to_owned()),
+        "not-canonical",
+    );
+    let outcome = handle_jsonrpc_request(app, &cancellation_test_headers("client"), request).await;
+    let JsonRpcRequestOutcome::Response(response) = outcome else {
+        panic!("malformed cancellation nonce must return a JSON-RPC error");
+    };
+    assert_eq!(
+        response.pointer("/error/code").and_then(Value::as_i64),
+        Some(JSONRPC_INVALID_PARAMS)
+    );
+    assert_eq!(
+        response
+            .pointer("/error/data/error_code")
+            .and_then(Value::as_str),
+        Some("invalid_cancellation_nonce")
+    );
+}
+
+#[test]
+fn authenticated_call_without_nonce_remains_non_cancellable() {
+    let mut app = mk_app_state_for_tests();
+    {
+        let state = std::sync::Arc::get_mut(&mut app).expect("unique app state");
+        state.require_api_token = true;
+        state.api_tokens_set = std::sync::Arc::new(["client".to_owned()].into_iter().collect());
+    }
+    let params = norito::json!({ "name": "iroha.health", "arguments": {} });
+    assert!(matches!(
+        register_authenticated_inflight_request(
+            &app,
+            &cancellation_test_headers("client"),
+            Some(&Value::String("ordinary".to_owned())),
+            params.as_object().expect("params"),
+        ),
+        Ok(None)
+    ));
 }
 
 #[tokio::test]
@@ -1142,10 +1382,10 @@ async fn oversized_numeric_ids_cannot_enter_or_target_cancellation_registry() {
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(router);
     }
-    let request: Value = json::from_str(
-        r#"{"jsonrpc":"2.0","id":18446744073709551616,"method":"tools/call","params":{"name":"iroha.health","arguments":{}}}"#,
-    )
-    .expect("oversized-id request");
+    let cancellation_nonce = cancellation_test_nonce(0x41);
+    let request_json = r#"{"jsonrpc":"2.0","id":18446744073709551616,"method":"tools/call","params":{"name":"iroha.health","arguments":{},"_meta":{"iroha/cancellationNonce":"__NONCE__"}}}"#
+        .replace("__NONCE__", &cancellation_nonce);
+    let request: Value = json::from_str(&request_json).expect("oversized-id request");
     let headers = cancellation_test_headers("client");
     let JsonRpcRequestOutcome::Response(response) =
         handle_jsonrpc_request(std::sync::Arc::clone(&app), &headers, request).await
@@ -1176,10 +1416,10 @@ async fn oversized_numeric_ids_cannot_enter_or_target_cancellation_registry() {
         .await
         .expect("largest supported numeric id reaches dispatch");
 
-    let notification: Value = json::from_str(
-        r#"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":18446744073709551617}}"#,
-    )
-    .expect("oversized cancellation notification");
+    let notification_json = r#"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":18446744073709551617,"_meta":{"iroha/cancellationNonce":"__NONCE__"}}}"#
+        .replace("__NONCE__", &cancellation_nonce);
+    let notification: Value =
+        json::from_str(&notification_json).expect("oversized cancellation notification");
     handle_cancelled_notification(&app, &cancellation_test_headers("client"), &notification);
     tokio::task::yield_now().await;
     assert!(
@@ -1202,7 +1442,7 @@ async fn oversized_numeric_ids_cannot_enter_or_target_cancellation_registry() {
 }
 
 #[tokio::test]
-async fn cancellation_is_bound_to_authenticated_client_exact_id_and_generation() {
+async fn cancellation_is_bound_to_authenticated_client_exact_id_and_nonce() {
     let started_a = std::sync::Arc::new(tokio::sync::Notify::new());
     let started_b = std::sync::Arc::new(tokio::sync::Notify::new());
     let release_a = std::sync::Arc::new(tokio::sync::Notify::new());
@@ -1282,7 +1522,10 @@ async fn cancellation_is_bound_to_authenticated_client_exact_id_and_generation()
     let duplicate = handle_jsonrpc_request(
         std::sync::Arc::clone(&app),
         &cancellation_test_headers("client-a"),
-        cancellable_health_request(shared_id.clone()),
+        cancellable_health_request_with_nonce(
+            shared_id.clone(),
+            cancellation_test_nonce(0x42).as_str(),
+        ),
     )
     .await;
     let JsonRpcRequestOutcome::Response(duplicate) = duplicate else {
@@ -1327,29 +1570,208 @@ async fn cancellation_is_bound_to_authenticated_client_exact_id_and_generation()
     ));
     assert_eq!(global.available_permits(), 4);
 
+    let replacement_nonce = cancellation_test_nonce(0x43);
     let reused_app = std::sync::Arc::clone(&app);
     let reused_headers = cancellation_test_headers("client-a");
-    let reused_request = cancellable_health_request(shared_id.clone());
+    let reused_request =
+        cancellable_health_request_with_nonce(shared_id.clone(), replacement_nonce.as_str());
     let reused = tokio::spawn(async move {
         handle_jsonrpc_request(reused_app, &reused_headers, reused_request).await
     });
     tokio::time::timeout(Duration::from_secs(2), started_a.notified())
         .await
-        .expect("reused id starts after generation cleanup");
+        .expect("reused id with a new nonce starts after cleanup");
     handle_cancelled_notification(
         &app,
         &cancellation_test_headers("client-a"),
-        &cancel_notification(shared_id),
+        &cancel_notification(shared_id.clone()),
+    );
+    {
+        let key = McpInflightKey {
+            client_fingerprint: authenticated_cancellation_client_fingerprint(
+                &app,
+                &cancellation_test_headers("client-a"),
+            )
+            .expect("authenticated client fingerprint"),
+            request_id: ExactJsonRpcId::from_value(&shared_id).expect("exact shared id"),
+        };
+        let entries = app
+            .mcp_inflight_requests
+            .entries
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let entry = entries.get(&key).expect("replacement remains registered");
+        assert_eq!(entry.cancellation_nonce, [0x43; 32]);
+        assert!(
+            !*entry.cancellation.borrow(),
+            "a delayed cancellation for the retired nonce must not affect ID reuse"
+        );
+    }
+    handle_cancelled_notification(
+        &app,
+        &cancellation_test_headers("client-a"),
+        &cancel_notification_with_nonce(shared_id, replacement_nonce.as_str()),
     );
     assert!(matches!(
         tokio::time::timeout(Duration::from_secs(2), reused)
             .await
-            .expect("reused id cancellation completes")
-            .expect("reused id task joins"),
+            .expect("replacement nonce cancellation completes")
+            .expect("replacement request task joins"),
         JsonRpcRequestOutcome::Cancelled
     ));
     assert_eq!(global.available_permits(), 4);
     drop((release_a, release_b));
+}
+
+#[tokio::test]
+async fn cancellation_registry_capacity_rejects_overflow_and_recovers_after_drop() {
+    let (started_tx, mut started_rx) = tokio::sync::mpsc::unbounded_channel();
+    let release = std::sync::Arc::new(tokio::sync::Notify::new());
+    let route_release = std::sync::Arc::clone(&release);
+    let router =
+        axum::Router::new().fallback_service(tower::service_fn(move |_request: Request<Body>| {
+            let started_tx = started_tx.clone();
+            let release = std::sync::Arc::clone(&route_release);
+            async move {
+                let _ = started_tx.send(());
+                release.notified().await;
+                Ok::<_, std::convert::Infallible>(
+                    Response::builder()
+                        .status(StatusCode::NO_CONTENT)
+                        .body(Body::empty())
+                        .expect("response"),
+                )
+            }
+        }));
+    let mut app = mk_app_state_for_tests();
+    let global = {
+        let state = std::sync::Arc::get_mut(&mut app).expect("unique app state");
+        state.require_api_token = true;
+        state.api_tokens_set = std::sync::Arc::new(["client".to_owned()].into_iter().collect());
+        state.mcp.max_inflight_dispatches = std::num::NonZeroUsize::new(2).expect("nonzero");
+        state.mcp_tools = std::sync::Arc::new(vec![iroha_health_tool()]);
+        state.mcp_dispatch_inflight = std::sync::Arc::new(tokio::sync::Semaphore::new(2));
+        *state
+            .mcp_dispatch_router
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(router);
+        std::sync::Arc::clone(&state.mcp_dispatch_inflight)
+    };
+    let first_app = std::sync::Arc::clone(&app);
+    let first_headers = cancellation_test_headers("client");
+    let first = tokio::spawn(async move {
+        handle_jsonrpc_request(
+            first_app,
+            &first_headers,
+            cancellable_health_request(Value::String("one".to_owned())),
+        )
+        .await
+    });
+    let second_app = std::sync::Arc::clone(&app);
+    let second_headers = cancellation_test_headers("client");
+    let second = tokio::spawn(async move {
+        handle_jsonrpc_request(
+            second_app,
+            &second_headers,
+            cancellable_health_request(Value::String("two".to_owned())),
+        )
+        .await
+    });
+    for label in ["first", "second"] {
+        tokio::time::timeout(Duration::from_secs(2), started_rx.recv())
+            .await
+            .unwrap_or_else(|_| panic!("{label} request reaches nested route"))
+            .expect("nested router remains live");
+    }
+    assert_eq!(global.available_permits(), 0);
+
+    let overflow_id = Value::String("overflow".to_owned());
+    let overflow = handle_jsonrpc_request(
+        std::sync::Arc::clone(&app),
+        &cancellation_test_headers("client"),
+        cancellable_health_request(overflow_id.clone()),
+    )
+    .await;
+    let JsonRpcRequestOutcome::Response(overflow) = overflow else {
+        panic!("capacity overflow must return a JSON-RPC error");
+    };
+    assert_eq!(overflow.get("id"), Some(&overflow_id));
+    assert_eq!(
+        overflow.pointer("/error/code").and_then(Value::as_i64),
+        Some(MCP_DISPATCH_CAPACITY_EXHAUSTED)
+    );
+    assert_eq!(
+        overflow
+            .pointer("/error/data/error_code")
+            .and_then(Value::as_str),
+        Some("cancellation_registry_capacity_exhausted")
+    );
+    assert_eq!(
+        overflow
+            .pointer("/error/data/max_inflight_dispatches")
+            .and_then(Value::as_u64),
+        Some(2)
+    );
+    assert_eq!(
+        overflow
+            .pointer("/error/data/retryable")
+            .and_then(Value::as_bool),
+        Some(true)
+    );
+
+    handle_cancelled_notification(
+        &app,
+        &cancellation_test_headers("client"),
+        &cancel_notification(Value::String("one".to_owned())),
+    );
+    assert!(matches!(
+        tokio::time::timeout(Duration::from_secs(2), first)
+            .await
+            .expect("first cancellation completes")
+            .expect("first request task joins"),
+        JsonRpcRequestOutcome::Cancelled
+    ));
+    assert_eq!(global.available_permits(), 1);
+
+    let replacement_app = std::sync::Arc::clone(&app);
+    let replacement_headers = cancellation_test_headers("client");
+    let replacement = tokio::spawn(async move {
+        handle_jsonrpc_request(
+            replacement_app,
+            &replacement_headers,
+            cancellable_health_request(Value::String("replacement".to_owned())),
+        )
+        .await
+    });
+    tokio::time::timeout(Duration::from_secs(2), started_rx.recv())
+        .await
+        .expect("replacement request reaches nested route")
+        .expect("nested router remains live");
+    assert_eq!(global.available_permits(), 0);
+
+    for request_id in ["two", "replacement"] {
+        handle_cancelled_notification(
+            &app,
+            &cancellation_test_headers("client"),
+            &cancel_notification(Value::String(request_id.to_owned())),
+        );
+    }
+    assert!(matches!(
+        tokio::time::timeout(Duration::from_secs(2), second)
+            .await
+            .expect("second cancellation completes")
+            .expect("second request task joins"),
+        JsonRpcRequestOutcome::Cancelled
+    ));
+    assert!(matches!(
+        tokio::time::timeout(Duration::from_secs(2), replacement)
+            .await
+            .expect("replacement cancellation completes")
+            .expect("replacement request task joins"),
+        JsonRpcRequestOutcome::Cancelled
+    ));
+    assert_eq!(global.available_permits(), 2);
+    drop(release);
 }
 
 #[test]
@@ -1380,6 +1802,20 @@ fn capabilities_payload_includes_toolset_version() {
     assert!(
         !toolset_version.is_empty(),
         "toolsetVersion must not be empty"
+    );
+    let cancellation = payload
+        .pointer("/capabilities/experimental/iroha/tools/cancellation")
+        .and_then(Value::as_object)
+        .expect("cancellation extension metadata");
+    assert_eq!(
+        cancellation.get("nonceMetaKey").and_then(Value::as_str),
+        Some(MCP_CANCELLATION_NONCE_META_KEY)
+    );
+    assert_eq!(
+        cancellation
+            .get("requiresApiToken")
+            .and_then(Value::as_bool),
+        Some(true)
     );
 }
 #[test]
@@ -1855,6 +2291,64 @@ fn whole_catalog_publishes_self_contained_input_schemas() {
         .unwrap_or_else(|error| panic!("{error}"));
     }
 }
+
+#[tokio::test]
+async fn disabled_faucet_tools_are_omitted_and_rejected_at_runtime() {
+    let mut app = mk_app_state_for_tests();
+    let state = std::sync::Arc::get_mut(&mut app).expect("unique app state");
+    assert!(state.account_faucet.is_none());
+    state.mcp.profile = ToriiMcpProfile::Writer;
+    state.mcp_tools = std::sync::Arc::new(vec![
+        iroha_health_tool(),
+        iroha_accounts_faucet_prepare_tool(),
+        iroha_accounts_faucet_submit_tool(),
+    ]);
+    let visible = visible_tools_for_app(&app);
+    assert_eq!(
+        visible
+            .iter()
+            .map(|tool| tool.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["iroha.health"]
+    );
+    for name in [
+        "iroha.accounts.faucet.prepare",
+        "iroha.accounts.faucet.submit",
+    ] {
+        let response = handle_named_tool_call(
+            Some(Value::String(format!("disabled-{name}"))),
+            std::sync::Arc::clone(&app),
+            &HeaderMap::new(),
+            name,
+            &Map::new(),
+        )
+        .await;
+        assert_eq!(
+            response
+                .pointer("/error/data/error_code")
+                .and_then(Value::as_str),
+            Some(MCP_TOOL_UNAVAILABLE)
+        );
+    }
+}
+
+#[test]
+fn unreviewed_manual_tool_names_fail_closed_to_write() {
+    for name in [
+        "iroha.future.get",
+        "iroha.future.list",
+        "iroha.future.query",
+        "iroha.future.telemetry",
+        "iroha.future.wait",
+    ] {
+        assert_eq!(
+            manual_tool_effect_from_name(name),
+            ToolEffect::Write,
+            "unreviewed name `{name}` must not gain read-only policy access from its suffix"
+        );
+    }
+}
+
 #[test]
 fn raw_body_tool_accepts_advertised_flat_shortcuts() {
     let tool = simple_manual_raw_body_post_tool(
@@ -2869,6 +3363,10 @@ fn connect_management_extra_headers_allow_authorization_only() {
         out.get("authorization")
             .and_then(|value| value.to_str().ok()),
         Some("Bearer management")
+    );
+    assert!(
+        out.get("authorization")
+            .is_some_and(HeaderValue::is_sensitive)
     );
     assert!(!out.contains_key("x-iroha-account"));
     assert!(!out.contains_key("x-iroha-remote-addr"));

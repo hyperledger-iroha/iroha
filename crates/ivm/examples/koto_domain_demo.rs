@@ -3,7 +3,6 @@ use ivm::{
     AccountId, IVM, MockWorldStateView, PermissionToken, ProgramMetadata,
     kotodama::compiler::Compiler as KotodamaCompiler, mock_wsv::WsvHost,
 };
-use std::collections::HashMap;
 fn fixture_account(hex_public_key: &str) -> AccountId {
     AccountId::new(hex_public_key.parse().expect("public key"))
 }

@@ -84,6 +84,10 @@ VALIDATOR_OPTION_ORDER = (
     "--expected-signer-fingerprint",
     "--corridor-completion",
     "--formal-completion",
+    "--formal-replay-source-receipt",
+    "--formal-replay-release-root",
+    "--expected-formal-replay-signature-sha256",
+    "--formal-replay-principal",
     "--seed-completion",
     "--chaos-completion",
     "--g4p-completion",
@@ -127,6 +131,8 @@ VALIDATOR_PATH_OPTIONS = frozenset(
         "--signature-ssh-keygen",
         "--corridor-completion",
         "--formal-completion",
+        "--formal-replay-source-receipt",
+        "--formal-replay-release-root",
         "--seed-completion",
         "--chaos-completion",
         "--g4p-completion",
@@ -158,7 +164,7 @@ VALIDATION_ACK_COMPONENT_FILES = (
     "copy_sumeragi_v2_release_cargo_cache_validation_ack.py",
 )
 VALIDATION_ACK_COMPONENT_SHA256 = (
-    "ea01518547b6a99a907cd1a6564e1219fc90918f2b7a8525b8b93bccfb9bfbd6"
+    "b4a6c0182c84f22b33c0db4953c9b87edd6e7f9e19e2cabbb2ed58944d2fa6d5"
 )
 VALIDATION_ACK_COMPONENT_MAXIMUM_BYTES = 512 * 1024
 CLI_COMPONENT_FILES = (

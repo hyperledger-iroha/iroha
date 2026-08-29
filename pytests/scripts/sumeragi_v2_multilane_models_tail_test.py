@@ -184,6 +184,52 @@ def test_inflight_layout_contract_rejects_kura_release_prefix_preflight_weakenin
         for error in errors
     ), errors
 
+    release_path = (
+        tmp_path
+        / "crates/iroha_core/src/kura/autonomous_merge_bundle_support.rs"
+    )
+    replace_once(
+        release_path,
+        "match (release_mode, released_disposition) {",
+        "match release_mode {",
+    )
+    errors = validate_fixture(tmp_path, module, contract)
+    assert any(
+        "AutonomousLaneReleaseProjectionContext::claim_transition_authorization"
+        in error
+        and "match (release_mode, released_disposition)" in error
+        for error in errors
+    ), errors
+
+    replace_once(
+        release_path,
+        "match release_mode {",
+        "match (release_mode, released_disposition) {",
+    )
+    replace_once_after(
+        release_path,
+        "AutonomousLaneClaimReleaseAuthorizationMode::ReplicaFifo,",
+        "if self.actor == self.producer {",
+        "if false {",
+    )
+    replace_once_after(
+        release_path,
+        "AutonomousLaneClaimReleaseAuthorizationMode::ReplicaDisposition,",
+        "if self.actor == self.producer {",
+        "if false {",
+    )
+    errors = validate_fixture(tmp_path, module, contract)
+    for required_message in (
+        "producer cannot use non-Queue replica FIFO release authority",
+        "producer cannot use replica Queue disposition authority",
+    ):
+        assert any(
+            "AutonomousLaneReleaseProjectionContext::claim_transition_authorization"
+            in error
+            and required_message in error
+            for error in errors
+        ), errors
+
 
 def test_inflight_layout_contract_rejects_kura_atomic_replace_order_drift(
     tmp_path: Path,

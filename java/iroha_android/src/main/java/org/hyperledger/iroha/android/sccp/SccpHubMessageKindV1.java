@@ -2,7 +2,7 @@ package org.hyperledger.iroha.android.sccp;
 
 /** Stable first-release SCCP hub commitment kind tags. */
 public enum SccpHubMessageKindV1 {
-  TRANSFER(5);
+  TRANSFER(0);
 
   private final int tag;
 

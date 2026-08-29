@@ -16,32 +16,32 @@ class PrivacyNativeBridgeTest {
     private val retired = matrix.filter { it.first() == "retired" }.map { it[1] }
     private val expected = protocolRows.map { it[2] }
     private val expectedProofSystems = listOf(
-        PrivacyProofSystemIdV1.STARK_FRI_SHA256_GOLDILOCKS,
+        PrivacyProofSystemIdV1.STARK_FRI_POSEIDON_X7_GOLDILOCKS_6X64_V1,
         PrivacyProofSystemIdV1.ANONYMOUS_PGC_P256,
         PrivacyProofSystemIdV1.IROHA_VERANGE_P256,
         PrivacyProofSystemIdV1.ZK_AMS_MASKED_RELAXED_SPARTAN_T256_RISTRETTO255_SHA3_512,
         PrivacyProofSystemIdV1.VEGA_NEUTRON_NOVA_SPARTAN_HYRAX_T256,
-        PrivacyProofSystemIdV1.STARK_FRI_SHA256_GOLDILOCKS,
+        PrivacyProofSystemIdV1.STARK_FRI_POSEIDON_X7_GOLDILOCKS_6X64_V1,
         PrivacyProofSystemIdV1.JINDO_POLYNOMIAL_COMMITMENT,
         PrivacyProofSystemIdV1.LANTERN_LNP22_MODULE_LINEAR_NORM,
         PrivacyProofSystemIdV1.HALO2_IPA_PASTA,
         PrivacyProofSystemIdV1.FCMP_PLUS_PLUS_CURVE_TREE_BULLETPROOFS,
-        PrivacyProofSystemIdV1.STARK_FRI_SHA256_GOLDILOCKS,
-        PrivacyProofSystemIdV1.STARK_FRI_SHA256_GOLDILOCKS,
+        PrivacyProofSystemIdV1.STARK_FRI_POSEIDON_X7_GOLDILOCKS_6X64_V1,
+        PrivacyProofSystemIdV1.STARK_FRI_POSEIDON_X7_GOLDILOCKS_6X64_V1,
     )
     private val expectedEngines = listOf(
-        PrivacyEngineIdV1.NATIVE_GOLDILOCKS_STARK_FRI,
+        PrivacyEngineIdV1.NATIVE_GOLDILOCKS_POSEIDON_X7_STARK_FRI_6X64_V1,
         PrivacyEngineIdV1.NATIVE_ANONYMOUS_PGC_P256,
         PrivacyEngineIdV1.NATIVE_VERANGE_P256,
         PrivacyEngineIdV1.NATIVE_ZK_AMS_MASKED_RELAXED_SPARTAN_T256_RISTRETTO255,
         PrivacyEngineIdV1.NATIVE_VEGA,
-        PrivacyEngineIdV1.NATIVE_GOLDILOCKS_STARK_FRI,
+        PrivacyEngineIdV1.NATIVE_GOLDILOCKS_POSEIDON_X7_STARK_FRI_6X64_V1,
         PrivacyEngineIdV1.NATIVE_JINDO,
         PrivacyEngineIdV1.NATIVE_LANTERN_LNP22,
         PrivacyEngineIdV1.NATIVE_HALO2_ORCHARD,
         PrivacyEngineIdV1.NATIVE_FCMP_PLUS_PLUS,
-        PrivacyEngineIdV1.NATIVE_GOLDILOCKS_STARK_FRI,
-        PrivacyEngineIdV1.NATIVE_GOLDILOCKS_STARK_FRI,
+        PrivacyEngineIdV1.NATIVE_GOLDILOCKS_POSEIDON_X7_STARK_FRI_6X64_V1,
+        PrivacyEngineIdV1.NATIVE_GOLDILOCKS_POSEIDON_X7_STARK_FRI_6X64_V1,
     )
 
     @Test
@@ -49,6 +49,24 @@ class PrivacyNativeBridgeTest {
         assertEquals(23, PrivacyNativeBridge.REQUIRED_BRIDGE_ABI_VERSION)
         assertEquals(expected, PrivacyNativeBridge.protocolsV1().map { it.canonicalLabel })
         assertEquals(12, PrivacyNativeBridge.protocolsV1().size)
+        assertEquals(0, PrivacyProtocolIdV1.ZK_ACE_PQ_AUTHORIZATION_V1.ordinal)
+        assertEquals(4, PrivacyProtocolIdV1.VEGA_EXISTING_CREDENTIAL_ZK_V1.ordinal)
+        assertEquals(5, PrivacyProtocolIdV1.IROHA_ZK_X509_STARK_P256_V1.ordinal)
+        assertEquals(6, PrivacyProtocolIdV1.IROHA_JINDO_POLYNOMIAL_COMMITMENT_V1.ordinal)
+        assertEquals(11, PrivacyProtocolIdV1.PQ_MASP_STARK_V1.ordinal)
+        assertEquals(0, PrivacyProofSystemIdV1.STARK_FRI_POSEIDON_X7_GOLDILOCKS_6X64_V1.ordinal)
+        assertEquals(
+            "stark-fri-poseidon-x7-goldilocks-6x64-v1",
+            PrivacyProofSystemIdV1.STARK_FRI_POSEIDON_X7_GOLDILOCKS_6X64_V1.canonicalLabel,
+        )
+        assertEquals(
+            0,
+            PrivacyEngineIdV1.NATIVE_GOLDILOCKS_POSEIDON_X7_STARK_FRI_6X64_V1.ordinal,
+        )
+        assertEquals(
+            "native-goldilocks-poseidon-x7-stark-fri-6x64-v1",
+            PrivacyEngineIdV1.NATIVE_GOLDILOCKS_POSEIDON_X7_STARK_FRI_6X64_V1.canonicalLabel,
+        )
         expected.forEachIndexed { index, label ->
             val protocol = PrivacyNativeBridge.protocolsV1()[index]
             assertEquals(

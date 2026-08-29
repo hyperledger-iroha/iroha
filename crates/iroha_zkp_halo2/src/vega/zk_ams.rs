@@ -174,10 +174,9 @@ pub use mkhe::{
     zk_ams_mkhe_release_kat_evidence_v1, zk_ams_mkhe_release_manifest_v1,
     zk_ams_mkhe_resource_certificate_digest_v1, zk_ams_mkhe_resource_certificate_v1,
     zk_ams_mkhe_resource_evidence_v1, zk_ams_mkhe_rns_native_profile_manifest_v1,
-    zk_ams_mkhe_rns_native_profile_v1, zk_ams_mkhe_rns_native_release_candidate_digest_v1,
-    zk_ams_mkhe_rns_native_topology_v1, zk_ams_mkhe_security_candidate_input_digest_v1,
-    zk_ams_mkhe_security_candidate_v1, zk_ams_mkhe_security_certificate_v1,
-    zk_ams_mkhe_seekable_evaluated_key_accounting_v1,
+    zk_ams_mkhe_rns_native_profile_v1, zk_ams_mkhe_rns_native_topology_v1,
+    zk_ams_mkhe_security_candidate_input_digest_v1, zk_ams_mkhe_security_candidate_v1,
+    zk_ams_mkhe_security_certificate_v1, zk_ams_mkhe_seekable_evaluated_key_accounting_v1,
     zk_ams_mkhe_streaming_collective_automorphism_accounting_v1, zk_ams_mkhe_wire_evidence_v1,
     zk_ams_phase3_nifs_verifier_digest_v1, zk_ams_phase3_ordered_public_inputs_digest_v1,
     zk_ams_phase3_terminal_implementation_v1, zk_ams_phase23_cross_term_v1,
@@ -642,17 +641,6 @@ pub fn zk_ams_compiled_profile_digest_v1() -> Result<[u8; 32], ZkAmsAdmissionRel
     let readiness = zk_ams_mkhe_readiness_v1()
         .map_err(|_| ZkAmsAdmissionRelationErrorV1::InvalidCompiledProfile)?;
     compiled_profile_digest_for_readiness_v1(readiness)
-}
-/// Return the digest of the frozen, but not release-ready, candidate profile.
-///
-/// This function exists only for deterministic release-evidence builders and native negative-test
-/// fixtures that must bind the exact candidate while the readiness gates remain open. It must never
-/// be used to authorize production activation, admission proving, or verification; those paths must
-/// call [`zk_ams_compiled_profile_digest_v1`] and remain readiness-gated.
-pub fn zk_ams_release_candidate_profile_digest_v1()
--> Result<[u8; 32], ZkAmsAdmissionRelationErrorV1> {
-    canonical_shape()?;
-    Ok(compiled_profile_digest_unchecked_v1())
 }
 fn compiled_profile_digest_for_readiness_v1(
     readiness: ZkAmsMkheReadinessV1,
@@ -1549,14 +1537,6 @@ mod tests {
     }
     #[test]
     fn unavailable_mkhe_release_has_no_public_prove_or_verify_bypass() {
-        assert_eq!(
-            zk_ams_release_candidate_profile_digest_v1().expect("candidate digest"),
-            [
-                0xa7, 0x12, 0xb8, 0x12, 0xc9, 0x34, 0xba, 0x84, 0x78, 0x37, 0xef, 0x0e, 0xf1, 0xa6,
-                0x1f, 0x48, 0x2e, 0xcd, 0x79, 0x88, 0x81, 0xce, 0x6a, 0x08, 0xed, 0x39, 0xd3, 0x3a,
-                0x03, 0xd7, 0x30, 0xc2
-            ]
-        );
         assert_eq!(
             zk_ams_compiled_profile_digest_v1(),
             Err(ZkAmsAdmissionRelationErrorV1::InvalidCompiledProfile)

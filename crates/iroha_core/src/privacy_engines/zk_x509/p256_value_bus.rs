@@ -30,7 +30,7 @@ use super::{
     p256_trace::{P256EcdsaTraceMaterialV1, compile_p256_ecdsa_topology_v1},
 };
 use crate::privacy_engines::transparent_stark::{
-    GoldilocksFieldV1 as F, TransparentStarkErrorV1, TransparentTranscriptV1,
+    GoldilocksDigest384V1, GoldilocksFieldV1 as F, TransparentStarkErrorV1, TransparentTranscriptV1,
 };
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use std::sync::Arc;
@@ -3141,6 +3141,7 @@ mod tests {
         ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1, ZkX509CredentialMainPreAuxV1,
         derive_zk_x509_credential_pre_aux_binding_v1,
     };
+    use crate::privacy_engines::zk_x509::stark::zk_x509_test_digest384_v1;
     #[derive(Clone)]
     struct ProgramV1 {
         initial: Vec<P256InitialValueBindingV1>,
@@ -3372,14 +3373,14 @@ mod tests {
             [seed; 32],
             [seed.wrapping_add(1); 32],
             core::array::from_fn::<_, ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1, _>(|index| {
-                [seed.wrapping_add(index as u8).wrapping_add(2); 32]
+                zk_x509_test_digest384_v1(seed.wrapping_add(index as u8).wrapping_add(2))
             }),
         );
         derive_zk_x509_credential_pre_aux_binding_v1(
             main,
-            [seed.wrapping_add(0x20); 32],
-            [seed.wrapping_add(0x40); 32],
-            [seed.wrapping_add(0x60); 32],
+            zk_x509_test_digest384_v1(seed.wrapping_add(0x20)),
+            zk_x509_test_digest384_v1(seed.wrapping_add(0x40)),
+            zk_x509_test_digest384_v1(seed.wrapping_add(0x60)),
         )
         .expect("opaque X5B1 binding")
         .main_post_base()
@@ -4967,9 +4968,13 @@ mod tests {
             ),
             Err(P256ValueBusErrorV1::Challenge)
         );
-        let mut transcript =
-            TransparentTranscriptV1::new(b"p256-value-bus-test", &[0x51; 32], &[0xa7; 32])
-                .expect("test transcript");
+        let mut transcript = TransparentTranscriptV1::new(
+            super::super::stark::ZK_X509_DIGEST_CONTEXT_V1,
+            b"p256-value-bus-test",
+            &GoldilocksDigest384V1::new([0x51; 6]).expect("profile digest"),
+            &GoldilocksDigest384V1::new([0xa7; 6]).expect("public digest"),
+        )
+        .expect("test transcript");
         let derived = derive_zk_x509_p256_value_bus_challenges_v1(&mut transcript)
             .expect("derived challenges");
         derived.validate().expect("separated challenge lanes");

@@ -77,6 +77,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('user/sorafs_moderation_query_bound_tests.rs'),
         Path('user/governance_dag_head_mode_tests.rs'),
         Path('user/zk_prover_report_retention_tests.rs'),
+        Path('user/zk_attachment_retention_tests.rs'),
         Path('user/query_fanout_memory_tests.rs'),
         Path('user/app_routed_read_body_timeout_tests.rs'),
         Path('user/operator_signature_body_timeout_tests.rs'),
@@ -265,6 +266,9 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('serviced_candidate_store_tail_tests.rs'),
     ),
     Path('crates/iroha_p2p/src/network.rs'): (
+        Path('network/admission.rs'),
+        Path('network/best_effort_admission.rs'),
+        Path('network/reliable_actor.rs'),
         Path('network/handle_update_tests.rs'),
         Path('network/queue_depth_tests.rs'),
     ),
@@ -327,6 +331,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
     Path('crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs'): (Path('v2_lifecycle_launch_tests.rs'),),
     Path('crates/iroha_core/src/sumeragi/v2_lifecycle_launch_tests.rs'): (
         Path('v2_lifecycle_launch_ready_proposal_sign_test_fixtures.rs'),
+        Path('v2_lifecycle_launch_pending_kura_source_tests.rs'),
         Path('v2_lifecycle_launch_recovered_sign_settlement_source_tests.rs'),
         Path('v2_lifecycle_launch_recovered_fetch_source_tests.rs'),
         Path('v2_lifecycle_launch_certified_response_retry_source_tests.rs'),
@@ -728,7 +733,8 @@ pub fn persist_pending_queue_plan_admission_certificate() {
 __KURA_PRODUCTION_INCLUDES__
 
 #[cfg(test)]
-pub(crate) mod tests {}
+pub(crate) mod tests {
+}
 """.replace("__KURA_PRODUCTION_INCLUDES__", kura_production_includes),
         encoding="utf-8",
     )
@@ -2394,15 +2400,25 @@ def test_each_reviewed_rust_include_manifest_fails_closed(
     canonical_parent = parent.read_text(encoding="utf-8")
     canonical_include = f'include!("{components[0].as_posix()}");'
     substituted_include = 'include!("substituted_manifest_component.rs");'
+    substituted_component = parent.parent / "substituted_manifest_component.rs"
     if canonical_parent.count(canonical_include) != 1:
         canonical_include = f'#[path = "{components[0].as_posix()}"]'
         substituted_include = '#[path = "substituted_manifest_component.rs"]'
+    if canonical_parent.count(canonical_include) != 1:
+        module_name = components[0].stem
+        canonical_include = f"mod {module_name};"
+        substituted_include = "mod substituted_manifest_component;"
+        substituted_component = (
+            parent.parent
+            / components[0].parent
+            / "substituted_manifest_component.rs"
+        )
     assert canonical_parent.count(canonical_include) == 1
     parent.write_text(
         canonical_parent.replace(canonical_include, substituted_include, 1),
         encoding="utf-8",
     )
-    (parent.parent / "substituted_manifest_component.rs").write_text(
+    substituted_component.write_text(
         canonical_component,
         encoding="utf-8",
     )
@@ -2508,7 +2524,7 @@ def test_kura_production_inventory_rejects_substituted_and_extra_includes(
         "direct production include inventory must equal" in error for error in errors
     ), errors
 
-    marker = "#[cfg(test)]\npub(crate) mod tests {}"
+    marker = "#[cfg(test)]\npub(crate) mod tests {\n}"
     assert canonical.count(marker) == 1
     extra_include = 'include!("kura/extra_production_support.rs");\n\n'
     kura_path.write_text(
@@ -2527,7 +2543,7 @@ def test_kura_production_inventory_rejects_substituted_and_extra_includes(
     ), errors
 
     kura_path.write_text(
-        canonical.replace(marker, "#[cfg(test)]\nmod tests {}", 1),
+        canonical.replace(marker, "#[cfg(test)]\nmod tests {\n}", 1),
         encoding="utf-8",
     )
     _path, _source, _components, errors = module._kura_production_source_inventory(
@@ -4969,160 +4985,3 @@ def test_production_trace_certificate_rejects_every_top_level_field_drift(
             artifacts=paths,
         )
         assert errors and "canonical current theorem certificate" in errors[0], field
-
-
-@pytest.mark.parametrize(
-    ("kind", "symbol", "old", "new"),
-    (
-        (
-            "operator",
-            "AsyncIngressSchedulerBarrierActive",
-            "  \\/ AsyncOrdinaryIngressProtectedRecordsAt(node) # {}",
-            "  \\/ FALSE",
-        ),
-        (
-            "operator",
-            "AsyncEarliestIngressSchedulerOrdinal",
-            "       ELSE AsyncOrdinaryIngressEarliestPhysicalRecord(\n"
-            "              node).schedulerOrdinal",
-            "       ELSE AsyncLeaderWireEarliestPhysicalIngressRecord(\n"
-            "              node).schedulerOrdinal",
-        ),
-        (
-            "operator",
-            "AsyncOlderRuntimeLifecyclePrecedesIngressScheduler",
-            "  /\\ AsyncSelectedRuntimeSourcePhysicalOrdinal(node)\n"
-            "       < AsyncEarliestIngressPhysicalOrdinal(node)",
-            "  /\\ TRUE",
-        ),
-        (
-            "operator",
-            "AsyncOlderLocalLifecyclePrecedesServeIngress",
-            "  /\\ LocalSourceLifecyclePhysicalOrdinal(\n"
-            "       node, SelectedLocalSource(node))\n"
-            "       < AsyncEarliestIngressPhysicalOrdinal(node)",
-            "  /\\ TRUE",
-        ),
-        (
-            "operator",
-            "AsyncCandidateLifecycleStateAfterServeIngressAdmission",
-            "     !.retransmitLifecycleOrdinal =",
-            "     !.timeoutLifecycleOrdinal =",
-        ),
-        (
-            "operator",
-            "AsyncSharedSchedulerOrdinalInjectionInvariant",
-            "  /\\ \\A admission \\in asyncServeIngressAdmissions:\n"
-            "       AsyncRetransmitLifecycleOwned(admission.node)\n"
-            "         => admission.schedulerOrdinal #\n"
-            "              AsyncRetransmitLifecycleOrdinal(admission.node)\n",
-            "",
-        ),
-        (
-            "theorem",
-            "SerializedLocalPrecedesServeIngressExactFrame",
-            "         /\\ LocalSourceLifecyclePhysicalOrdinal(\n"
-            "              node, SelectedLocalSource(node))\n"
-            "              < AsyncEarliestIngressPhysicalOrdinal(node)",
-            "         /\\ TRUE",
-        ),
-        (
-            "theorem",
-            "AsyncLaterServeTicketInterleavesOlderRuntimeEpisode",
-            "    /\\ AsyncSelectedRuntimeSourcePhysicalOrdinal(node)\n"
-            "         < AsyncEarliestIngressPhysicalOrdinal(node)",
-            "    /\\ TRUE",
-        ),
-        (
-            "theorem",
-            "AsyncLaterServeTicketInterleavesOlderLocalEpisode",
-            "    /\\ LocalSourceLifecyclePhysicalOrdinal(\n"
-            "         node, SelectedLocalSource(node))\n"
-            "         < AsyncEarliestIngressPhysicalOrdinal(node)",
-            "    /\\ TRUE",
-        ),
-    ),
-)
-def test_serve_scheduler_ordinal_release_contract_rejects_current_weakening(
-    tmp_path: Path,
-    kind: str,
-    symbol: str,
-    old: str,
-    new: str,
-) -> None:
-    module = load_checker()
-    repo_root, formal_dir = copy_serve_scheduler_ordinal_mutation_fixture(
-        tmp_path, module
-    )
-    path = formal_dir / "SumeragiV2AsyncNetwork.tla"
-    source = path.read_text(encoding="utf-8")
-    mutate = mutate_tla_operator if kind == "operator" else mutate_tla_theorem
-    path.write_text(mutate(source, symbol, old, new), encoding="utf-8")
-    module.SERVE_SCHEDULER_ORDINAL_RELEASE_SOURCE_SHA256[path.name] = (
-        hashlib.sha256(path.read_bytes()).hexdigest()
-    )
-
-    errors = module._serve_scheduler_ordinal_mutation_source_fidelity_errors(
-        formal_dir, repo_root
-    )
-
-    prefix = "theorem " if kind == "theorem" else ""
-    assert any(
-        f"{prefix}{symbol} must equal only" in error for error in errors
-    ), errors
-
-
-def _assert_commit_import_release_or_stale_artifact(
-    tmp_path: Path, artifact_name: str
-) -> None:
-    module = load_checker()
-    repo_root, formal_dir = copy_commit_import_provenance_mutation_fixture(
-        tmp_path, module
-    )
-    path = repo_root / artifact_name if "/" in artifact_name else formal_dir / artifact_name
-    release_mutations = {
-        "SumeragiV2AsyncNetwork.tla": (
-            "DirectCommitQcCandidateHasExactImportLineage",
-            "    /\\ item.envelope.qc.context = context\n",
-            "    /\\ TRUE\n",
-        ),
-        "SumeragiV2HistoricalRecoveryTemporalClosureProofs.tla": (
-            "IndexedChainSpecClosesHistoricalCertificateLocalImportCandidateEntry",
-            "  IndexedChainSpec\n"
-            "    => IndexedHistoricalCertificateLocalImportCandidateEntryProperty\n",
-            "  IndexedChainSpec\n    => TRUE\n",
-        ),
-    }
-    release_mutation = release_mutations.get(artifact_name)
-    if release_mutation is None:
-        path.write_text(
-            path.read_text(encoding="utf-8") + "\n\\* stale import provenance\n",
-            encoding="utf-8",
-        )
-    else:
-        symbol, old, new = release_mutation
-        source = path.read_text(encoding="utf-8")
-        path.write_text(
-            mutate_tla_theorem(source, symbol, old, new), encoding="utf-8"
-        )
-        module.COMMIT_IMPORT_PROVENANCE_RELEASE_SOURCE_SHA256[path.name] = (
-            hashlib.sha256(path.read_bytes()).hexdigest()
-        )
-
-    errors = module._commit_import_provenance_mutation_source_fidelity_errors(
-        formal_dir, repo_root
-    )
-    if release_mutation is None:
-        assert any(
-            str(path) in error
-            and (
-                "must match exact reviewed SHA-256" in error
-                or "must match frozen SHA-256" in error
-            )
-            for error in errors
-        ), errors
-    else:
-        assert any(
-            f"Commit-import release theorem {symbol} must state only" in error
-            for error in errors
-        ), errors

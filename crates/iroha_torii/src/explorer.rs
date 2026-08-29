@@ -3062,10 +3062,10 @@ mod tests {
         let action = iroha_data_model::isi::bridge::SccpRouteGovernanceActionV1::Remove(
             iroha_data_model::bridge::SccpRouteKeyV1 {
                 lane_id: iroha_data_model::bridge::SccpLaneIdV1 {
-                    source: iroha_data_model::bridge::SccpNetworkV1::SolanaTestnet,
+                    source: iroha_data_model::bridge::SccpNetworkV1::TonMainnet,
                     target: iroha_data_model::bridge::SccpNetworkV1::SoraTaira,
                 },
-                route_id: "taira_sol_xor".to_owned(),
+                route_id: "taira_ton_xor".to_owned(),
                 asset_key: "xor".to_owned(),
                 revision: 1,
             },

@@ -1692,7 +1692,7 @@ pub(super) fn build_private_note_base_trace_v1(
     build_private_note_trace_v1(
         statement,
         Some(witness),
-        PrivateNoteRelationProfileV1::LEGACY,
+        PrivateNoteRelationProfileV1::IVM_PRIVATE_NOTE,
     )
 }
 /// Compile a prover trace under one crate-private relation profile.
@@ -1708,7 +1708,10 @@ pub(super) fn build_private_note_base_trace_with_profile_v1(
 pub(super) fn build_private_note_fixed_trace_v1(
     statement: &IrohaIvmPrivateNoteStarkStatementV1,
 ) -> Result<PrivateNoteFixedTraceV1, IvmPrivateNoteAirErrorV1> {
-    build_private_note_fixed_trace_with_profile_v1(statement, PrivateNoteRelationProfileV1::LEGACY)
+    build_private_note_fixed_trace_with_profile_v1(
+        statement,
+        PrivateNoteRelationProfileV1::IVM_PRIVATE_NOTE,
+    )
 }
 /// Compile verifier-fixed topology under one crate-private relation profile.
 pub(super) fn build_private_note_fixed_trace_with_profile_v1(
@@ -1727,7 +1730,7 @@ pub(super) fn build_private_note_copy_schedule_v1(
 > {
     build_private_note_copy_schedule_with_profile_v1(
         statement,
-        PrivateNoteRelationProfileV1::LEGACY,
+        PrivateNoteRelationProfileV1::IVM_PRIVATE_NOTE,
     )
 }
 /// Compile the copy schedule under one crate-private relation profile.
@@ -3012,7 +3015,7 @@ pub(super) fn validate_private_note_base_trace_v1(
     validate_private_note_base_trace_with_profile_v1(
         statement,
         trace,
-        PrivateNoteRelationProfileV1::LEGACY,
+        PrivateNoteRelationProfileV1::IVM_PRIVATE_NOTE,
     )
 }
 pub(super) fn validate_private_note_base_trace_with_profile_v1(
@@ -3198,32 +3201,32 @@ mod tests {
         }));
     }
     #[test]
-    fn legacy_trace_helpers_are_byte_for_byte_profile_invariant() {
+    fn canonical_trace_helpers_select_the_ivm_private_note_profile() {
         let value = fixture();
-        let legacy = build_private_note_base_trace_v1(&value.statement, &value.witness)
-            .expect("legacy base trace");
+        let canonical = build_private_note_base_trace_v1(&value.statement, &value.witness)
+            .expect("canonical base trace");
         let profiled = build_private_note_base_trace_with_profile_v1(
             &value.statement,
             &value.witness,
-            PrivateNoteRelationProfileV1::LEGACY,
+            PrivateNoteRelationProfileV1::IVM_PRIVATE_NOTE,
         )
-        .expect("explicit legacy base trace");
-        assert_eq!(legacy, profiled);
+        .expect("explicit IVM private-note base trace");
+        assert_eq!(canonical, profiled);
         assert_eq!(
-            build_private_note_fixed_trace_v1(&value.statement).expect("legacy fixed trace"),
+            build_private_note_fixed_trace_v1(&value.statement).expect("canonical fixed trace"),
             build_private_note_fixed_trace_with_profile_v1(
                 &value.statement,
-                PrivateNoteRelationProfileV1::LEGACY,
+                PrivateNoteRelationProfileV1::IVM_PRIVATE_NOTE,
             )
-            .expect("explicit legacy fixed trace")
+            .expect("explicit IVM private-note fixed trace")
         );
         assert_eq!(
-            build_private_note_copy_schedule_v1(&value.statement).expect("legacy copy schedule"),
+            build_private_note_copy_schedule_v1(&value.statement).expect("canonical copy schedule"),
             build_private_note_copy_schedule_with_profile_v1(
                 &value.statement,
-                PrivateNoteRelationProfileV1::LEGACY,
+                PrivateNoteRelationProfileV1::IVM_PRIVATE_NOTE,
             )
-            .expect("explicit legacy copy schedule")
+            .expect("explicit IVM private-note copy schedule")
         );
     }
     #[test]

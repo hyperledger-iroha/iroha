@@ -1145,8 +1145,7 @@ impl ParliamentTlePartialReleaseSignerBrokerBackendV1
                 iroha_core::tle_release::TlePartialReleaseCapabilityErrorV1::Unavailable => {
                     ParliamentTlePartialReleaseSignerBrokerBackendErrorV1::Unavailable
                 }
-                iroha_core::tle_release::TlePartialReleaseCapabilityErrorV1::Unsupported
-                | iroha_core::tle_release::TlePartialReleaseCapabilityErrorV1::NotOwned
+                iroha_core::tle_release::TlePartialReleaseCapabilityErrorV1::NotOwned
                 | iroha_core::tle_release::TlePartialReleaseCapabilityErrorV1::InvalidRequest => {
                     ParliamentTlePartialReleaseSignerBrokerBackendErrorV1::Rejected
                 }

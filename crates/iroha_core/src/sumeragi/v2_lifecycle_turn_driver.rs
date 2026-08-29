@@ -2039,7 +2039,7 @@ impl LaunchedProductionLifecycleV1 {
                     Ok(selected_priority) => selected_priority,
                     Err(LifecycleIngressSelectorError::QueueCutChanged) => {
                         iroha_logger::debug!(
-                            "certified-response fair-ingress census changed during classification; retrying"
+                            "certified-response fair-ingress census changed during priority classification; retrying"
                         );
                         drop(cut);
                         drop(runner);

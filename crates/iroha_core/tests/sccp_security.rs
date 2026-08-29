@@ -65,6 +65,10 @@ fn staged_tron_route() -> SccpGovernedRouteV1 {
         outbound_proof_policy: evm.outbound_proof_policy,
         route_address: evm.route_address,
         route_code_hash: evm.route_code_hash,
+        replay_verifier_address: evm.replay_verifier_address,
+        replay_verifier_code_hash: evm.replay_verifier_code_hash,
+        mint_breaker_address: evm.mint_breaker_address,
+        mint_breaker_code_hash: evm.mint_breaker_code_hash,
         taira_to_token_multiplier: evm.taira_to_token_multiplier,
         max_wrapped_supply: evm.max_wrapped_supply,
     };

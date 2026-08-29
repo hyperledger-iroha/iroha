@@ -633,12 +633,15 @@ fn pipeline_fastpq_recovery_builder_paginates_and_bounds_encoding() {
                 block_hash,
                 entry_hash: Hash::prehashed([batch_index as u8 + 1; Hash::LENGTH]),
                 batch_index,
-                parameter: "fastpq-test".to_owned(),
+                parameter: "fastpq-state-transition-stark-v1".to_owned(),
                 transition_count: 0,
-                trace_commitment: Hash::new([batch_index as u8]),
+                trace_commitment: iroha_data_model::privacy::GoldilocksDigest384V1::new(
+                    [u64::from(batch_index) + 1; 6],
+                )
+                .expect("canonical test FASTPQ trace commitment"),
                 proof_digest: Hash::new(&proof),
                 batch: fastpq_prover::TransitionBatch::new(
-                    "fastpq-test",
+                    "fastpq-state-transition-stark-v1",
                     fastpq_prover::PublicInputs::default(),
                 ),
                 proof,
@@ -663,8 +666,10 @@ fn pipeline_fastpq_recovery_builder_paginates_and_bounds_encoding() {
         value.get("proofs").and_then(|v| v.as_array()).map(Vec::len),
         Some(1)
     );
-    let batch =
-        fastpq_prover::TransitionBatch::new("fastpq-test", fastpq_prover::PublicInputs::default());
+    let batch = fastpq_prover::TransitionBatch::new(
+        "fastpq-state-transition-stark-v1",
+        fastpq_prover::PublicInputs::default(),
+    );
     let mut artifact_bytes = 0;
     let (encoded, reconstructed) = encode_fastpq_recovery_batch(&batch, false, &mut artifact_bytes)
         .expect("bounded FASTPQ batch encoding");

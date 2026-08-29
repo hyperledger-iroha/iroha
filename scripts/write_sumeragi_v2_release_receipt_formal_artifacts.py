@@ -568,6 +568,7 @@ def _formal_replay_release(
         "allowed_signers",
         "revocation.krl",
         "release-attestation.json",
+        "tlapm-projection",
     }
     if (
         not stat.S_ISDIR(root_metadata.st_mode)
@@ -579,6 +580,29 @@ def _formal_replay_release(
     release_root_contract = _capture_directory_contract(
         release_root_path,
         "formal replay release root",
+    )
+    projection_root = release_root_path / "tlapm-projection"
+    try:
+        projection_metadata = projection_root.lstat()
+        projection_names = {
+            entry.name for entry in os.scandir(projection_root)
+        }
+    except OSError as error:
+        raise ReceiptError(
+            "formal replay TLAPM projection is unavailable"
+        ) from error
+    if (
+        not stat.S_ISDIR(projection_metadata.st_mode)
+        or stat.S_IMODE(projection_metadata.st_mode) != 0o555
+        or projection_metadata.st_uid != os.geteuid()
+        or projection_names != {"Folds.tla", "Functions.tla"}
+    ):
+        raise ReceiptError(
+            "formal replay TLAPM projection inventory is not exact"
+        )
+    projection_root_contract = _capture_directory_contract(
+        projection_root,
+        "formal replay TLAPM projection",
     )
 
     specs = (
@@ -623,6 +647,18 @@ def _formal_replay_release(
             release_root_path / "release-attestation.json",
             0o400,
             _MAX_RELEASE_JSON_BYTES,
+        ),
+        (
+            "tlapm_folds",
+            projection_root / "Folds.tla",
+            0o444,
+            _MAX_RELEASE_TEXT_BYTES,
+        ),
+        (
+            "tlapm_functions",
+            projection_root / "Functions.tla",
+            0o444,
+            _MAX_RELEASE_TEXT_BYTES,
         ),
     )
     snapshots: dict[str, EvidenceSnapshot] = {}
@@ -771,6 +807,11 @@ def _formal_replay_release(
             "formal replay source root after verification",
         )
         != source_root_contract
+        or _capture_directory_contract(
+            projection_root,
+            "formal replay TLAPM projection after verification",
+        )
+        != projection_root_contract
     ):
         raise ReceiptError(
             "formal replay release directories changed during verification"

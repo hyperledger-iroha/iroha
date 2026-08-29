@@ -232,6 +232,12 @@ mod model {
         SorafsPopAuditDigest(u64),
         /// Failed to find authoritative `SoraFS` `PoP` registry status
         SorafsPopRegistryStatus,
+        /// Failed to find a `SoraFS` citizen bond by immutable serial commitment.
+        SorafsCitizenBond([u8; 32]),
+        /// Failed to find the current frozen citizen-bond snapshot.
+        SorafsCitizenBondSnapshot,
+        /// Failed to find an anonymous service-note escrow.
+        SorafsAnonymousServiceEscrow([u8; 32]),
         /// Failed to find chain-authoritative `SoraFS` repair task `{0}`
         SorafsRepairTask(String),
         /// Failed to find chain-authoritative `SoraFS` repair status
@@ -248,6 +254,8 @@ mod model {
         SorafsModerationAppeal(String),
         /// Failed to find authoritative `SoraFS` moderation juror eligibility `{0}`
         SorafsModerationJurorEligibility(String),
+        /// Failed to find anonymous `SoraFS` juror candidacy `{0:?}`.
+        SorafsAnonymousJurorCandidacy([u8; 32]),
         /// Failed to find authoritative `SoraFS` moderation case `{0}`
         SorafsModerationCase(String),
         /// Failed to find authoritative `SoraFS` moderation commit `{0}`

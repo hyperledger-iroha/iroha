@@ -205,7 +205,7 @@ _PRODUCTION_P2P_RELIABLE_NETWORK_ITEM_SHA256 = {
         "8ceba6ccc2066090b9b2e14985be6cb6f4dff3cfd3e5d375450f770272eb5057"
     ),
     "peer_terminated": (
-        "32c662f6a4e5be0b27d9fc7510076bc203b9a5dd7782b22796e89eeeb89fcd9c"
+        "0ea8ec01b50e9fb4d14f497ab447035d912be826503ea04844fc8a4e1a8cd63f"
     ),
     "cancel_all_reply_route_tenures": (
         "85556605246c148cb390b143406a6a5320fc14c57ec964c52b1eb5f0f9395ca1"
@@ -214,7 +214,7 @@ _PRODUCTION_P2P_RELIABLE_NETWORK_ITEM_SHA256 = {
         "ecd2987b63057f26e35d5753bf94c5c68fc4d720c9529630c4b1ff52e18b69ce"
     ),
     "run": (
-        "64f3dd2c69c7e7aaec84464e775a1449d6d6f8692dc3fb18684e9cf2c9803541"
+        "29f23eac0bcb039cb1b52460ba7040214cec7aa7990869988ef1456982cb053c"
     ),
 }
 
@@ -265,5 +265,347 @@ _PRODUCTION_P2P_CAP_ITEM_SHA256 = {
 _PRODUCTION_SM_DISTID_GEOMETRY_ITEM_SHA256 = {
     "validate_distid": (
         "205a20a45faa4455d25b8e9d2501f6ab66a2b069a83b8e358a9645d71c94181d"
+    ),
+}
+
+def _transport_geometry_refresh_resistant_errors(
+    paths: dict[str, Path], sources: dict[str, str]
+) -> list[str]:
+    """Check reviewed P2P and production-Taira semantics without token seals."""
+
+    errors: list[str] = []
+    for role, item_name, required, description in (
+        (
+            "p2p_network",
+            "relay_message_wire_payload_len",
+            """
+let origin_len = peer_id_wire_len_from_raw_key_bytes(RELAY_NODE_PUBLIC_KEY_BYTES, flags)?;
+let target_len = relay_target_wire_len(direct.then_some(RELAY_NODE_PUBLIC_KEY_BYTES), flags)?;
+let ttl_len = core::mem::size_of::<u8>();
+let origin_signature_len = byte_sequence_wire_len(RELAY_ORIGIN_SIGNATURE_BYTES)?;
+let field_lens = [
+    origin_len,
+    target_len,
+    ttl_len,
+    origin_signature_len,
+    payload_len,
+];
+""",
+            "relay geometry must charge the origin signature and every exact five-field wire component",
+        ),
+        (
+            "p2p_peer",
+            "parse_next_encrypted_frame",
+            """
+let _decode_scratch_lease = self
+    .source_byte_budget
+    .reserve_decode_scratch(size)
+    .await
+    .ok_or(Error::FrameTooLarge)?;
+let frame_retention = self
+    .current_frame_retention
+    .take()
+    .expect("complete encrypted frame must hold its source byte lease");
+""",
+            "receiver decode scratch must be reserved before taking the source-owned ciphertext lease",
+        ),
+        (
+            "p2p_peer",
+            "parse_next_encrypted_frame",
+            """
+ParsedFrame::Malformed(context) => {
+    self.last_malformed_payload = Some(context);
+    return Err(Error::MalformedPayloadFrame);
+}
+""",
+            "an authenticated malformed frame must fail atomically before any decoded prefix is delivered",
+        ),
+        (
+            "p2p_peer",
+            "connected_from",
+            """
+let peer = state::ConnectedFrom {
+    our_public_address,
+    key_pair,
+    soranet_transport_key_pair,
+    soranet_transport_certificate,
+    connection,
+    network_id,
+""",
+            "inbound peer construction must retain separate validated node and transport identities, their cached certificate, and the canonical network identity",
+        ),
+        (
+            "p2p_network",
+            "start_tls_listener",
+            """
+let peer_task = connected_from::<T, E>(
+    public_address,
+    key_pair,
+    soranet_transport_key_pair,
+    soranet_transport_certificate,
+    Connection::from_split_with_binding(
+""",
+            "mandatory TLS inbound handoff must carry separate validated node and transport identities plus their cached certificate",
+        ),
+        (
+            "p2p_network",
+            "run",
+            """
+Some(update_validator_dial_control) = receive_control_update(
+    &mut self.update_validator_dial_roster_receiver,
+) => {
+    match update_validator_dial_control {
+        ValidatorDialControlUpdate::Roster(roster) => {
+            self.set_validator_dial_roster(roster);
+        }
+        ValidatorDialControlUpdate::Topology(topology) => {
+            self.set_validator_topology(topology);
+        }
+    }
+}
+""",
+            "network actor must consume coupled validator dial-roster and topology ownership updates",
+        ),
+        (
+            "p2p_network",
+            "peer_connected",
+            """
+self.validator_dial_scheduler.note_session_established(
+    &self.self_id,
+    peer.id(),
+    tokio::time::Instant::now(),
+    self.connect_startup_delay_until,
+);
+""",
+            "accepted peer must publish validator dial session ownership",
+        ),
+    ):
+        items = rust_items(sources[role], item_name)
+        if len(items) == 1:
+            _require_rust_token_sequence(
+                paths[role], items[0], required, description, errors
+            )
+
+    config_contracts = (
+        (
+            "taira_config",
+            ("sumeragi", "block"),
+            (("max_transactions", 96), ("max_payload_bytes", 16_777_216),
+             ("proposal_queue_scan_multiplier", 4)),
+            "production Taira profile pins the revision-4 payload ceiling with privacy framing headroom",
+        ),
+        (
+            "taira_config",
+            ("sumeragi", "queues"),
+            (("authenticated_non_validator_sources", 2), ("body_bytes", 207_618_048),
+             ("body_source_bytes", 34_603_008)),
+            "production Taira profile pins H=2 and six source partitions",
+        ),
+        (
+            "taira_config",
+            ("network",),
+            (("max_frame_bytes", 23_068_700), ("max_frame_bytes_block_sync", 23_068_672),
+             ("max_frame_bytes_tx_gossip", 13_631_488)),
+            "production Taira profile carries maximum privacy transaction and block-sync frames",
+        ),
+    )
+    parsed_configs: dict[str, dict[tuple[str, ...], list[int]]] = {}
+    for role in ("taira_config",):
+        table: tuple[str, ...] = ()
+        values: dict[tuple[str, ...], list[int]] = {}
+        for line in sources[role].splitlines():
+            section = re.fullmatch(r"\s*\[([A-Za-z0-9_.-]+)\]\s*", line)
+            if section:
+                table = tuple(section.group(1).split("."))
+                continue
+            integer = re.fullmatch(
+                r"\s*([A-Za-z_][A-Za-z0-9_-]*)\s*=\s*([0-9][0-9_]*)\s*(?:#.*)?",
+                line,
+            )
+            if integer:
+                values.setdefault(table + (integer.group(1),), []).append(
+                    int(integer.group(2).replace("_", ""))
+                )
+        parsed_configs[role] = values
+    for role, table, expected_values, description in config_contracts:
+        observed = {
+            field: parsed_configs[role].get(table + (field,), [])
+            for field, _value in expected_values
+        }
+        if any(observed[field] != [value] for field, value in expected_values):
+            errors.append(
+                f"{paths[role]}: {description} must match exact numeric values "
+                f"{dict(expected_values)!r}; found {observed!r}"
+            )
+
+    for role, description in (
+        ("taira_genesis", "production Taira genesis DA pins the revision-4 protocol ceiling"),
+    ):
+        try:
+            genesis = json.loads(sources[role])
+            observed = genesis["sumeragi_v2"]["da_layout"]["max_payload_size_bytes"]
+        except (json.JSONDecodeError, KeyError, TypeError) as exc:
+            errors.append(f"{paths[role]}: {description} in valid JSON: {exc}")
+            continue
+        if type(observed) is not int or observed != 16_777_216:
+            errors.append(f"{paths[role]}: {description}; found {observed!r}")
+    return errors
+
+# Exact comment/literal-free token digests for the allocation-free P2P frame
+# geometry used by Sumeragi height activation.  These helpers are part of the
+# production refinement boundary: replacing checked arithmetic with a shorter
+# estimate can make a locally valid progress envelope impossible to transmit.
+_PRODUCTION_P2P_FRAME_GEOMETRY_ITEM_SHA256 = {
+    "checked_len_prefixed": (
+        "b6411bf29b1e2517fb2c4151c52634334f712f05127c4efd6440166ee6b65207"
+    ),
+    "peer_id_wire_len_from_raw_key_bytes": (
+        "b13f1926dab04641ff700941aaf854a29a0205e4828831da3f207a0930829844"
+    ),
+    "relay_target_wire_len": (
+        "84837f33c9793445071c17cdc11de01ddc1b7b57e061896afd381252743d3c05"
+    ),
+    "relay_message_wire_payload_len": (
+        "e354e0de75bfcb827e1cca70b082392c61316d40bb87ca689ea67918ecdfb009"
+    ),
+    "direct_data_frame_wire_len_from_payload_len": (
+        "fa559993ed02666615d9443ef67b6f801f4c52e74d33e39681bed9a283fe2d38"
+    ),
+    "broadcast_data_frame_wire_len_from_payload_len": (
+        "074e4bf40cbdca31a2bd6b5c33bfd0d0a81acec64b33d55954bb42db16fbcf24"
+    ),
+    "data_frame_wire_len_from_payload_len": (
+        "28e6cf55cea091e8229a2aa4b7a1a47e7f5052679dcad8ab029f15dd2beebd78"
+    ),
+    "validate_transport_queue_geometry": (
+        "2b43cba3a15fb667169280663e960cb6fabf5ccde7272d4276b6480041c66632"
+    ),
+}
+_PRODUCTION_P2P_PEER_FRAME_ITEM_SHA256 = {
+    "data_message_wire_len_from_payload_len": (
+        "d157ece83c8e700725549e91fcb572b61ebe3d8c3e267e9d3bfe31765ff3310c"
+    ),
+}
+_PRODUCTION_P2P_RUN_FRAME_ITEM_SHA256 = {
+    "frame_plaintext_cap_for": (
+        "4d66d6b2dc3c139c4df54c7c9d7b7640691ce3aa0765a44298b689e63d360e21"
+    ),
+    "checked_encoded_frame_len": (
+        "1355646a778b09fa26e4b9f3de58d3fbce4353845790e12afdd8cf7db7cdd888"
+    ),
+}
+_PRODUCTION_P2P_QUIC_FRAME_ITEM_SHA256 = {
+    "try_send": (
+        "bd32ba60bc0de89dc1ac9a7062a69c41df4ff6c72dd5c053550385780510891e"
+    ),
+}
+_PRODUCTION_P2P_RECEIVER_FRAME_ITEM_SHA256 = {
+    "reserve_for_frame": (
+        "cb0e506080c0985c5f81c5c567250e143d072f2f23e06b4072cb3d2b739a8212"
+    ),
+    "parse_next_encrypted_frame": (
+        "88a4e66c149185fa41ac6415c4c24ce864b5cc62f476d1296f0d3a7b3288d055"
+    ),
+}
+_PRODUCTION_P2P_SOURCE_OWNERSHIP_ITEM_SHA256 = {
+    "same_owner": (
+        "e6bba8d24c683f3b322752c93d977415e41e8dffcd9221f410d462a4006835db"
+    ),
+    "merge": (
+        "36f4915a83458c73f12ff364ebf4ccdd45e6b826fe305e52429098967d26bb55"
+    ),
+    "source_credits": (
+        "f3c9f0c68484f0685560f896d3f782c5c75eb2edf336184ba3ca230bddced095"
+    ),
+    "extend": (
+        "c0d7b44202b40992e33ae23c530fa6c135ff003e23765dde461a044a3a6d8d46"
+    ),
+}
+_PRODUCTION_P2P_SENDER_FRAME_ITEM_SHA256 = {
+    "encrypted_frame_geometry": (
+        "fa320e44681f1928dd862e8f07b1ea3c72b2c409ba58bf88556c2edd6d57b929"
+    ),
+    "prepare_message_with_ownership": (
+        "2d6ef5bd05a9b9ac31e254546f0e10509df5211daae262d8daa38de8049aa441"
+    ),
+    "prepare_encoded_buffer": (
+        "eb243e718f0b02455dcb31f009ea22aca2f33b4c27aaa00cd309846d87a159fb"
+    ),
+    "check_queue_limit": (
+        "097b47794fe8e9d4ded5357204dfe755f99d476323e11d4c50b604efad0dfb48"
+    ),
+    "account_enqueued": (
+        "dc14a3102e45e8487ed71d3cf7c43af270be5bad47b00fe69fac9f85e51dba13"
+    ),
+    "enqueue_encrypted": (
+        "1efc3f5c8f677f117d82e7e1dcec9c489fbddbcf970b3bba74fd184c5f138421"
+    ),
+}
+_PRODUCTION_P2P_START_FRAME_ITEM_SHA256 = {
+    "validate_encrypted_frame_cap": (
+        "5305bae9d0febfc2a1348f8f3b9737fb5155a62084a80f731d75bc372ea3bbcd"
+    ),
+    "start_with_crypto": (
+        "5afecc8ebea95afccf327303e006b5e8bbbacb5f42fbe60e3d7b0db1fd42ed8c"
+    ),
+    "start_with_crypto_and_initial_authorities": (
+        "f51d249c4ff9b04e5c2655e0ff729436cd9ee503f420a73314f69f765496b4f4"
+    ),
+}
+_PRODUCTION_P2P_RELIABLE_PEER_ITEM_SHA256 = {
+    "post_recover_with_flush_ack": (
+        "efe28549106501cb539ea51d42e5c318f5c54bfeb8bef94e1cd1a78a85ea499a"
+    ),
+    "post_recover_inner": (
+        "004f480809bdd5e6f456a5da08b2acd192fb817c44606eec5066141aed2f5b7f"
+    ),
+    "acknowledge_flush": (
+        "b2f9e0921009c50799677284aef793d9a76d184db88b24b1b242eb093e8f71cb"
+    ),
+    "prepare_owned_or_defer": (
+        "0fab3dc65badad08481063c4517f590710ea0592f6e3094d8df05df6a8872f50"
+    ),
+    "prepare_message_with_ownership": (
+        "2d6ef5bd05a9b9ac31e254546f0e10509df5211daae262d8daa38de8049aa441"
+    ),
+    "prepare_or_defer_with_ownership": (
+        "271a4549dc2075166aa9c647a6477f1748f32b536d790dcef967ca9c32087a4d"
+    ),
+    "retry_deferred": (
+        "37298defcaba75e4f3b1e32b55cc6025629e350e2c1a3efe3b358aaad719b3d9"
+    ),
+    "flush_plain_high": (
+        "38da1a9853b5a4c780a3c4dc898ec9ba328b39c1128b7fce7cd2922d2ed5c32b"
+    ),
+    "flush_plain_low": (
+        "bf7e0c4580f6a886ed26d61258f5d8017821b9ab8246ceed1e1f63e510676dd6"
+    ),
+    "enqueue_current_buffer": (
+        "e105440c89db28ab02b220b287af24f04939d31ef0e26bde32cc0346f0450a69"
+    ),
+    "acknowledge_flushed_batch": (
+        "30d441537005fc905493103db122d17670def105f67d36993341038b674a4c63"
+    ),
+    "fill_batch": (
+        "30bba0f4890fd277ee9b22cd433178d840418dbd22a1a615f2a1153857b09ae7"
+    ),
+    "pop_high_frame": (
+        "e7bd48c39d938732bd44cff707989aca7e8d1f55e75c20d559a35ad788302a74"
+    ),
+    "pop_low_frame": (
+        "3d472752bbb83b40712993959290bacdbebe26d604c38500f701642ea62b33a9"
+    ),
+    "send": (
+        "a10e589b0e785b9d113d693e7946a35bc1b6dabb7f8f72c59ff713efe3c393e5"
+    ),
+    "send_one_ready_stream": (
+        "aa54b3d9df965c06ab3b66175859fa31ef5fd377c1bbeacc049a9d8d69a1c7c3"
+    ),
+    "next_peer_stream_io": (
+        "178e60084380d1ac3b9abf5cdcc866748d8de270d215846f85dcc63a7c3b9539"
+    ),
+    "run": "0b53d79641d9b497ae34691faa4cf2dfeaeed02d28fa58fea00daa6f827cc299",
+    "reattach_reply_route": (
+        "120803740de09553bb9112a556cceed7e2db414f4f5da3a9691a7886b5264be0"
     ),
 }

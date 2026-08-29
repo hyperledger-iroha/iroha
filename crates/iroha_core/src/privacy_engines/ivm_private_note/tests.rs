@@ -397,12 +397,12 @@ fn exact_three_output_profile_accepts_balanced_cover_geometry_only() {
     assert_eq!(
         cover_input.commitment_v1(),
         Err(IvmPrivateNoteRelationErrorV1::ZeroWitnessComponent),
-        "the public legacy commitment helper must continue rejecting zero-valued notes"
+        "the canonical IVM private-note commitment helper must reject zero-valued notes"
     );
     assert_eq!(
         cover_input.nullifier_v1(&value.statement),
         Err(IvmPrivateNoteRelationErrorV1::ZeroWitnessComponent),
-        "the public legacy nullifier helper must retain legacy note validation"
+        "the canonical IVM private-note nullifier helper must reject zero-valued notes"
     );
     let relation = validate_private_note_relation_with_profile_v1(
         &value.statement,
@@ -422,12 +422,12 @@ fn exact_three_output_profile_accepts_balanced_cover_geometry_only() {
     assert_eq!(
         validate_private_note_relation_v1(&value.statement, &value.witness),
         Err(IvmPrivateNoteRelationErrorV1::InvalidStatement),
-        "the public legacy relation must retain its one-or-two-output geometry"
+        "the canonical IVM private-note relation must enforce one-or-two-output geometry"
     );
     assert_eq!(
         PrivateNotePlaintextV1::new(0, bytes(0xC1), bytes(0xC2), bytes(0xC3), bytes(0xC4),),
         Err(IvmPrivateNoteRelationErrorV1::ZeroWitnessComponent),
-        "the public legacy note constructor must continue rejecting zero value"
+        "the canonical IVM private-note constructor must reject zero value"
     );
 }
 #[test]

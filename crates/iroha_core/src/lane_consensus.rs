@@ -26,7 +26,7 @@ use iroha_data_model::{
     },
     nexus::{DataSpaceId, LaneId},
     peer::PeerId,
-    transaction::signed::TransactionEntrypoint,
+    transaction::{TransactionAdmissionIntent, signed::TransactionEntrypoint},
 };
 use iroha_logger::prelude::*;
 use norito::codec::{Decode, Encode};
@@ -598,6 +598,9 @@ pub(crate) enum LaneAutonomousArtifactError {
     /// Entrypoints do not match the descriptor hashes.
     #[error("autonomous lane payload entrypoints do not match descriptor")]
     EntrypointMismatch,
+    /// An autonomous payload entrypoint lacks its signature-bound QueuePlan role.
+    #[error("autonomous lane payload entrypoint is not QueuePlan-synchronized")]
+    InvalidAdmissionIntent,
     /// Durable queue reservations do not exactly bind the executable payload.
     #[error("autonomous lane payload reservation bindings do not match payload")]
     ReservationMismatch,
@@ -1501,6 +1504,11 @@ fn validate_lane_executable_payload_body(
         || entrypoint_hashes.len() > MAX_LANE_EXECUTABLE_ENTRYPOINTS
     {
         return Err(LaneAutonomousArtifactError::EntrypointLimitExceeded);
+    }
+    if entrypoints.iter().any(|entrypoint| {
+        entrypoint.admission_intent() != TransactionAdmissionIntent::QueuePlanSynced
+    }) {
+        return Err(LaneAutonomousArtifactError::InvalidAdmissionIntent);
     }
     let encoded_payload_body_len = Encode::encode(&(
         entrypoints.to_vec(),
@@ -5379,12 +5387,12 @@ mod tests {
             },
         },
         consensus::VALIDATOR_SET_HASH_VERSION_V1,
-        isi::InstructionBox,
         nexus::{DataSpaceId, LaneId},
-        transaction::signed::{ExecutionStep, TransactionEntrypoint},
-        trigger::time::TimeTriggerEntrypoint,
+        transaction::{
+            FeePaymentIntent, TransactionAdmissionIntent, TransactionBuilder,
+            signed::TransactionEntrypoint,
+        },
     };
-    use iroha_primitives::const_vec::ConstVec;
     use std::{
         collections::{BTreeMap, BTreeSet},
         time::{Duration, Instant},
@@ -5995,13 +6003,19 @@ mod tests {
     ) -> (NetworkId, u64, LaneExecutablePayloadV1) {
         let mut validator_set = keypairs.iter().map(peer).collect::<Vec<_>>();
         validator_set.sort();
-        let entrypoint = TransactionEntrypoint::Time(TimeTriggerEntrypoint {
-            id: "lane-autonomous-checkpoint"
-                .parse()
-                .expect("fixture trigger id"),
-            instructions: ExecutionStep(ConstVec::from(Vec::<InstructionBox>::new())),
-            authority: AccountId::new(keypairs[0].public_key().clone()),
-        });
+        let network_id = NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
+            b"lane-autonomous-genesis",
+        )));
+        let transaction_key = checked_ed25519_keypair(70);
+        let entrypoint = TransactionEntrypoint::External(
+            TransactionBuilder::new(
+                network_id,
+                AccountId::new(transaction_key.public_key().clone()),
+                FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
+            .sign(transaction_key.private_key()),
+        );
         let entrypoint_hash = Hash::from(entrypoint.hash());
         let mut descriptor = LaneBlockDescriptorV1 {
             lane_id: LaneId::new(7),
@@ -6041,9 +6055,6 @@ mod tests {
             }),
         };
         proposal.proposal_hash = proposal.computed_proposal_hash();
-        let network_id = NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
-            b"lane-autonomous-genesis",
-        )));
         let epoch = 4;
         let producer =
             deterministic_lane_author(&validator_set, proposal.descriptor.lane_block_height)
@@ -6087,6 +6098,29 @@ mod tests {
         )
         .expect("signed autonomous payload");
         (network_id, epoch, payload)
+    }
+    #[test]
+    fn autonomous_payload_validator_rejects_ordinary_entrypoint() {
+        let keypairs = [
+            checked_bls_keypair(71),
+            checked_bls_keypair(72),
+            checked_bls_keypair(73),
+        ];
+        let (network_id, epoch, mut payload) = autonomous_payload_fixture(&keypairs);
+        let transaction_key = checked_ed25519_keypair(74);
+        payload.entrypoints[0] = TransactionEntrypoint::External(
+            TransactionBuilder::new(
+                network_id,
+                AccountId::new(transaction_key.public_key().clone()),
+                FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .sign(transaction_key.private_key()),
+        );
+
+        assert_eq!(
+            payload.validate(network_id, epoch),
+            Err(LaneAutonomousArtifactError::InvalidAdmissionIntent)
+        );
     }
     #[test]
     fn autonomous_payload_v2_is_hint_neutral_and_rejects_other_versions() {

@@ -645,7 +645,7 @@ impl TimedOvnSurvivorsFrozenStateV1 {
         let survivors = TimedOvnCommittedSurvivorRosterCacheV1::from_committed_roster(
             &roster,
             &self.survivor_participant_hashes,
-            release_identity,
+            &release_identity,
         )?;
         let prepared = PreparedTimedOvnCommittedAttemptV1 {
             session,
@@ -698,10 +698,10 @@ impl TimedOvnSurvivorsFrozenStateV1 {
             tle_key_session,
         )?;
         Ok(TimedOvnBallotVerificationCommonV1::new(
-            session,
+            &session,
             self.registration_roster_root,
             self.release_identity.survivor_corpus_root,
-            identity,
+            &identity,
         )?)
     }
 
@@ -755,7 +755,7 @@ impl TimedOvnSurvivorsFrozenStateV1 {
                 u16::try_from(survivor_index)
                     .map_err(|_| TimedOvnEvidenceError::InvalidEvidenceSize)?,
                 &registration,
-                self.survivor_masking_keys[survivor_index],
+                &self.survivor_masking_keys[survivor_index],
             )?;
             ballots.push(TimedOvnMaskedBallotV1::from_bytes_with_context(
                 &context, record,
@@ -1062,8 +1062,8 @@ impl TimedOvnCorpusAccumulatorV1 {
             TimedOvnCommittedAggregateCacheV1::from_committed_accumulator(
                 common,
                 self.accepted_ballots,
-                self.aggregate_ephemerals,
-                self.aggregate_commitments,
+                &self.aggregate_ephemerals,
+                &self.aggregate_commitments,
             )?,
         )
     }
@@ -1098,10 +1098,10 @@ impl TimedOvnCorpusOpenStateV1 {
             return Err(TimedOvnEvidenceError::InvalidEvidenceSize);
         }
         let common = TimedOvnBallotVerificationCommonV1::new(
-            prepared.session,
+            &prepared.session,
             *prepared.roster.roster_root(),
             *prepared.survivors.survivor_root(),
-            prepared.release_identity,
+            &prepared.release_identity,
         )?;
         let ballots = self
             .ballot_records
@@ -1261,10 +1261,10 @@ impl TimedOvnEvidenceStateV1 {
             tle_key_session,
         )?;
         let common = TimedOvnBallotVerificationCommonV1::new(
-            session,
+            &session,
             *roster.roster_root(),
             survivor_root,
-            release_identity,
+            &release_identity,
         )?;
         if usize::from(self.aggregate.accepted_ballots) != self.survivor_participant_hashes.len() {
             return Err(TimedOvnEvidenceError::ReplayMismatch);
@@ -1272,8 +1272,8 @@ impl TimedOvnEvidenceStateV1 {
         let aggregate = TimedOvnCommittedAggregateCacheV1::from_committed_accumulator(
             &common,
             self.aggregate.accepted_ballots,
-            self.aggregate.aggregate_ephemerals,
-            self.aggregate.aggregate_commitments,
+            &self.aggregate.aggregate_ephemerals,
+            &self.aggregate.aggregate_commitments,
         )?;
         let dropout_root =
             dropout_decisions_root(&session, &roster, &self.survivor_participant_hashes);
@@ -1720,7 +1720,7 @@ impl TimedOvnLifecycleStateV1 {
         let survivors = TimedOvnCommittedSurvivorRosterCacheV1::from_committed_roster(
             &roster,
             &survivor_participant_hashes,
-            typed_release_identity,
+            &typed_release_identity,
         )?;
         let survivor_registration_indices =
             survivor_registration_indices_v1(roster.registrations(), &survivor_participant_hashes)?;
@@ -2328,7 +2328,7 @@ impl PreparedTimedOvnAttemptV1 {
             &no_recovery_root,
             tle_key_session,
         )?;
-        let survivors = TimedOvnSurvivorRosterV1::new(&roster, survivor_ids, release_identity)?;
+        let survivors = TimedOvnSurvivorRosterV1::new(&roster, survivor_ids, &release_identity)?;
         Ok(Self {
             session_record,
             release_record,
@@ -2692,7 +2692,7 @@ fn rebuild_roster(
             Ok(registration)
         })
         .collect::<Result<Vec<_>, TimedOvnError>>()?;
-    let roster = TimedOvnRosterV1::new(session, registrations)?;
+    let roster = TimedOvnRosterV1::new(&session, registrations)?;
     Ok((session, roster))
 }
 
@@ -2714,7 +2714,7 @@ fn rebuild_roster_committed_cache(
             Ok(registration)
         })
         .collect::<Result<Vec<_>, TimedOvnError>>()?;
-    let roster = TimedOvnCommittedRosterCacheV1::from_committed_records(session, registrations)?;
+    let roster = TimedOvnCommittedRosterCacheV1::from_committed_records(&session, registrations)?;
     Ok((session, roster))
 }
 

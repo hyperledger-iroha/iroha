@@ -15,19 +15,26 @@ use iroha_data_model::{
         BRIDGE_FINALITY_ATTESTATION_VERSION_V1, BRIDGE_FINALITY_PROOF_VERSION_V2, BridgeCommitment,
         BridgeFinalityAttestationBodyV1, BridgeFinalityAttestationV1,
         BridgeFinalityAttestationValidationError, BridgeFinalityBundle, BridgeFinalityProof,
-        SccpGovernedRouteV1, SccpOutboundMessageKeyV1,
+        SccpGovernedRouteV1, SccpLaneIdV1, SccpOutboundMessageKeyV1, SccpReplayAccumulatorIdV1,
+        SccpReplayActorV1, SccpReplayBoundaryV1, SccpReplayDomainV1, SccpReplayForestV1,
+        SccpReplayPrincipalV1, SccpReplayRecordV1, SccpRouteKeyV1,
     },
     isi::InstructionBox,
     name::Name,
     peer::PeerId,
-    transaction::{Executable, ExecutableBatchItem, TransactionEntrypoint},
+    transaction::{Executable, ExecutableBatchItem, TransactionEntrypoint, TransactionResult},
 };
 use iroha_sccp::{
-    SccpGroth16Bn254ProofRequestV1, SccpHubCommitmentV1, SccpPayloadV1, TairaBridgeFinalityProofV1,
-    TairaSccpMessageProofV1,
+    SccpGroth16Bn254ProofRequestV1, SccpHubCommitmentV1, SccpPayloadV1, SccpReplayArchiveV1,
+    TairaBridgeFinalityProofV1, TairaSccpMessageProofV1,
 };
 use mv::storage::StorageReadOnly;
-use std::{collections::BTreeSet, fmt};
+use sha2::Digest as _;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt,
+    num::NonZeroUsize,
+};
 use thiserror::Error;
 /// A Sumeragi-v2 finality artifact whose structure, roster PoPs, and CommitQC
 /// cryptography have already been verified.
@@ -235,6 +242,24 @@ pub struct ValidatedSccpOutboundMessageProjectionV1 {
     pub commitment: SccpHubCommitmentV1,
 }
 impl ValidatedRecordedSccpMessage {
+    /// Return the exact governed external-to-SORA route key for this outbound record.
+    ///
+    /// Although the message lane points from SORA to the destination, registry
+    /// keys use the reciprocal external-to-SORA lane. Keeping this derivation
+    /// beside canonical payload validation prevents scheduler and execution
+    /// admission from disagreeing about the route-scoped state they read.
+    pub(crate) fn governed_route_key(&self) -> Option<SccpRouteKeyV1> {
+        let SccpPayloadV1::Transfer(transfer) = &self.payload;
+        replay_route_key(
+            SccpLaneIdV1 {
+                source: self.context.lane.target,
+                target: self.context.lane.source,
+            },
+            transfer,
+        )
+        .ok()
+    }
+
     /// Build the payload-bearing pending outbox record from this canonical validation result.
     pub(crate) fn outbound_record(
         &self,
@@ -306,7 +331,6 @@ fn test_sccp_target_network_for_domain(
     match target_domain {
         iroha_sccp::SCCP_DOMAIN_ETH => SccpNetworkV1::EthereumMainnet,
         iroha_sccp::SCCP_DOMAIN_BSC => SccpNetworkV1::BscMainnet,
-        iroha_sccp::SCCP_DOMAIN_SOLANA => SccpNetworkV1::SolanaTestnet,
         iroha_sccp::SCCP_DOMAIN_TON => SccpNetworkV1::TonMainnet,
         iroha_sccp::SCCP_DOMAIN_TRON => SccpNetworkV1::TronMainnet,
         domain => panic!("test SCCP payload names unsupported target domain {domain}"),
@@ -356,7 +380,11 @@ pub(crate) fn test_record_sccp_message(
     payload_bytes: Vec<u8>,
 ) -> iroha_data_model::isi::bridge::RecordSccpMessage {
     let context = test_sccp_outbound_context_for_payload_bytes(&payload_bytes);
-    iroha_data_model::isi::bridge::RecordSccpMessage::new(context, payload_bytes)
+    iroha_data_model::isi::bridge::RecordSccpMessage::new(
+        context,
+        payload_bytes,
+        iroha_data_model::bridge::SccpSparseMerkleWitnessV1::empty_shard(),
+    )
 }
 #[cfg(test)]
 pub(crate) fn test_sccp_outbound_message_key(payload: &SccpPayloadV1) -> SccpOutboundMessageKeyV1 {
@@ -1495,7 +1523,7 @@ pub fn build_sccp_groth16_bn254_proof_request_from_verified_finality_v1(
 /// Build the governed curve-specific SCCP destination proving request from an
 /// already verified local finality artifact.
 ///
-/// TON routes select BLS12-381; EVM, TRON, and Solana routes select BN254.
+/// TON routes select BLS12-381; EVM and TRON routes select BN254.
 /// The marker and exact embedded finality equality remain the trust boundary,
 /// so this function performs no second Taira BLS verification.
 #[must_use]
@@ -1810,6 +1838,451 @@ fn verify_structural_sccp_finality_proof_against_local_state(
         );
     }
     Ok(finality.clone())
+}
+
+/// One replay admission reconstructed only from commit-authenticated execution
+/// input and its successful result.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SccpCommittedReplayAdmissionV1 {
+    /// Exact route/boundary forest selected by the committed instruction.
+    pub accumulator_id: SccpReplayAccumulatorIdV1,
+    /// Complete replay domain independently derived from committed fields.
+    pub domain: SccpReplayDomainV1,
+    /// Semantic occupied-leaf record independently derived from committed fields.
+    pub record: SccpReplayRecordV1,
+    /// Exact caller witness that made the committed transition possible.
+    pub witness: iroha_data_model::bridge::SccpSparseMerkleWitnessV1,
+}
+
+/// Failure while reconstructing replay state from finalized Kura execution.
+///
+/// Variants intentionally retain no proof bytes, identities, paths, or parser
+/// diagnostics so an archive service cannot reflect attacker-controlled data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SccpReplayRebuildErrorV1 {
+    /// A finalized block is absent or its entrypoint/result commitment is malformed.
+    MalformedBlock,
+    /// A referenced merge execution is absent, misaligned, or malformed.
+    MalformedMerge,
+    /// A successful SCCP instruction cannot produce the unique canonical record.
+    MalformedAdmission,
+    /// One signed transaction or trigger call claims more than one replay mutation.
+    MultipleMutations,
+    /// A committed mutation names a forest absent from the supplied final registry projection.
+    UnknownAccumulator,
+    /// An archive transition or final rebuilt forest differs from Core consensus state.
+    ForestMismatch,
+    /// The selected finalized Kura tip changed during the scan.
+    FinalityChanged,
+}
+
+impl core::fmt::Display for SccpReplayRebuildErrorV1 {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str(match self {
+            Self::MalformedBlock => "malformed finalized SCCP replay block projection",
+            Self::MalformedMerge => "malformed finalized SCCP merge projection",
+            Self::MalformedAdmission => "malformed committed SCCP replay admission",
+            Self::MultipleMutations => "multiple SCCP replay mutations in one execution call",
+            Self::UnknownAccumulator => "committed SCCP replay accumulator is not registered",
+            Self::ForestMismatch => "rebuilt SCCP replay forest differs from consensus state",
+            Self::FinalityChanged => "finalized Kura tip changed during SCCP replay rebuild",
+        })
+    }
+}
+
+impl std::error::Error for SccpReplayRebuildErrorV1 {}
+
+fn canonical_replay_route_parts(
+    transfer: &iroha_sccp::TransferPayloadV1,
+) -> Result<(&str, &str), SccpReplayRebuildErrorV1> {
+    if transfer.route_id_codec != iroha_sccp::SCCP_CODEC_CANONICAL_TEXT
+        || transfer.asset_id_codec != iroha_sccp::SCCP_CODEC_CANONICAL_TEXT
+    {
+        return Err(SccpReplayRebuildErrorV1::MalformedAdmission);
+    }
+    let route_id = core::str::from_utf8(&transfer.route_id)
+        .map_err(|_| SccpReplayRebuildErrorV1::MalformedAdmission)?;
+    let asset_key = core::str::from_utf8(&transfer.asset_id)
+        .map_err(|_| SccpReplayRebuildErrorV1::MalformedAdmission)?;
+    if route_id.is_empty()
+        || asset_key.is_empty()
+        || asset_key.contains('#')
+        || asset_key.parse::<Name>().is_err()
+    {
+        return Err(SccpReplayRebuildErrorV1::MalformedAdmission);
+    }
+    Ok((route_id, asset_key))
+}
+
+fn replay_route_key(
+    lane: SccpLaneIdV1,
+    transfer: &iroha_sccp::TransferPayloadV1,
+) -> Result<SccpRouteKeyV1, SccpReplayRebuildErrorV1> {
+    let (route_id, asset_key) = canonical_replay_route_parts(transfer)?;
+    SccpRouteKeyV1::new(
+        lane,
+        route_id.to_owned(),
+        asset_key.to_owned(),
+        transfer.route_revision,
+    )
+    .map_err(|_| SccpReplayRebuildErrorV1::MalformedAdmission)
+}
+
+fn committed_outbound_replay_admission(
+    authority: &iroha_data_model::account::AccountId,
+    record: &iroha_data_model::isi::bridge::RecordSccpMessage,
+) -> Result<SccpCommittedReplayAdmissionV1, SccpReplayRebuildErrorV1> {
+    let validated =
+        validate_recorded_sccp_message_payload_bytes(record.context, &record.payload_bytes)
+            .map_err(|_| SccpReplayRebuildErrorV1::MalformedAdmission)?;
+    let SccpPayloadV1::Transfer(transfer) = &validated.payload;
+    let route_key = replay_route_key(
+        SccpLaneIdV1 {
+            source: validated.context.lane.target,
+            target: validated.context.lane.source,
+        },
+        transfer,
+    )?;
+    let boundary = SccpReplayBoundaryV1::SoraOutboundLock;
+    Ok(SccpCommittedReplayAdmissionV1 {
+        accumulator_id: SccpReplayAccumulatorIdV1 {
+            route_key,
+            boundary,
+        },
+        domain: SccpReplayDomainV1 {
+            source_network: validated.context.lane.source,
+            target_network: validated.context.lane.target,
+            boundary,
+            route_revision: transfer.route_revision,
+            route_configuration_hash: validated.context.route_configuration_hash,
+            actor: SccpReplayActorV1::Route,
+        },
+        record: SccpReplayRecordV1 {
+            operation: boundary,
+            replay_id: validated.key.message_id,
+            payload_sha256: sha2::Sha256::digest(&record.payload_bytes).into(),
+            amount: transfer.amount,
+            principal: SccpReplayPrincipalV1::SoraAccount(authority.clone()),
+            auxiliary_identity_sha256: sha2::Sha256::digest(
+                validated.context.destination_binding_hash,
+            )
+            .into(),
+        },
+        witness: record.replay_witness.clone(),
+    })
+}
+
+fn canonical_taira_recipient_for_rebuild(
+    transfer: &iroha_sccp::TransferPayloadV1,
+) -> Result<iroha_data_model::account::AccountId, SccpReplayRebuildErrorV1> {
+    if transfer.recipient_codec != iroha_sccp::SCCP_CODEC_CANONICAL_TEXT {
+        return Err(SccpReplayRebuildErrorV1::MalformedAdmission);
+    }
+    let literal = core::str::from_utf8(&transfer.recipient)
+        .map_err(|_| SccpReplayRebuildErrorV1::MalformedAdmission)?;
+    let address = iroha_data_model::account::AccountAddress::parse_encoded(
+        literal,
+        Some(iroha_sccp::SCCP_TAIRA_I105_DISCRIMINANT_V1),
+    )
+    .map_err(|_| SccpReplayRebuildErrorV1::MalformedAdmission)?;
+    if address
+        .to_i105_for_discriminant(iroha_sccp::SCCP_TAIRA_I105_DISCRIMINANT_V1)
+        .map_err(|_| SccpReplayRebuildErrorV1::MalformedAdmission)?
+        != literal
+    {
+        return Err(SccpReplayRebuildErrorV1::MalformedAdmission);
+    }
+    let account = address
+        .to_account_id()
+        .map_err(|_| SccpReplayRebuildErrorV1::MalformedAdmission)?;
+    if account
+        .try_signatory()
+        .is_none_or(|key| key.algorithm() != Algorithm::Ed25519)
+    {
+        return Err(SccpReplayRebuildErrorV1::MalformedAdmission);
+    }
+    Ok(account)
+}
+
+fn committed_native_replay_admission(
+    submit: &iroha_data_model::isi::bridge::SubmitBridgeProof,
+) -> Result<Option<SccpCommittedReplayAdmissionV1>, SccpReplayRebuildErrorV1> {
+    let iroha_data_model::bridge::BridgeProofPayload::NativeProtocol(native) =
+        &submit.proof.payload
+    else {
+        return Ok(None);
+    };
+    let witness = submit
+        .replay_witness
+        .clone()
+        .ok_or(SccpReplayRebuildErrorV1::MalformedAdmission)?;
+    let decoded = iroha_sccp::decode_bridge_native_protocol_proof_v1(native)
+        .map_err(|_| SccpReplayRebuildErrorV1::MalformedAdmission)?;
+    let SccpPayloadV1::Transfer(transfer) = &decoded.payload;
+    if decoded.source.lane.source.domain_id() != transfer.source_domain
+        || decoded.source.lane.target.domain_id() != transfer.dest_domain
+        || transfer.dest_domain != iroha_sccp::SCCP_DOMAIN_SORA
+        || transfer.asset_home_domain != iroha_sccp::SCCP_DOMAIN_SORA
+    {
+        return Err(SccpReplayRebuildErrorV1::MalformedAdmission);
+    }
+    let route_key = replay_route_key(decoded.source.lane, transfer)?;
+    let payload_bytes = iroha_sccp::canonical_sccp_payload_bytes(&decoded.payload)
+        .map_err(|_| SccpReplayRebuildErrorV1::MalformedAdmission)?;
+    let boundary = SccpReplayBoundaryV1::SoraInboundRelease;
+    Ok(Some(SccpCommittedReplayAdmissionV1 {
+        accumulator_id: SccpReplayAccumulatorIdV1 {
+            route_key,
+            boundary,
+        },
+        domain: SccpReplayDomainV1 {
+            source_network: decoded.source.lane.source,
+            target_network: decoded.source.lane.target,
+            boundary,
+            route_revision: transfer.route_revision,
+            route_configuration_hash: native.route_configuration_hash,
+            actor: SccpReplayActorV1::Route,
+        },
+        record: SccpReplayRecordV1 {
+            operation: boundary,
+            replay_id: decoded.source.message_id,
+            payload_sha256: sha2::Sha256::digest(payload_bytes).into(),
+            amount: transfer.amount,
+            principal: SccpReplayPrincipalV1::SoraAccount(canonical_taira_recipient_for_rebuild(
+                transfer,
+            )?),
+            auxiliary_identity_sha256: sha2::Sha256::digest(decoded.source.source_event_digest)
+                .into(),
+        },
+        witness,
+    }))
+}
+
+fn collect_replay_admissions_from_instruction_step<I>(
+    authority: Option<&iroha_data_model::account::AccountId>,
+    instructions: I,
+    proved_overlay: bool,
+) -> Result<Vec<SccpCommittedReplayAdmissionV1>, SccpReplayRebuildErrorV1>
+where
+    I: IntoIterator,
+    I::Item: std::borrow::Borrow<InstructionBox>,
+{
+    let mut admissions = Vec::new();
+    for instruction in instructions {
+        let instruction = std::borrow::Borrow::borrow(&instruction);
+        let any = instruction.as_any();
+        if let Some(record) = any.downcast_ref::<iroha_data_model::isi::bridge::RecordSccpMessage>()
+        {
+            if !proved_overlay {
+                return Err(SccpReplayRebuildErrorV1::MalformedAdmission);
+            }
+            admissions.push(committed_outbound_replay_admission(
+                authority.ok_or(SccpReplayRebuildErrorV1::MalformedAdmission)?,
+                record,
+            )?);
+        }
+        if let Some(submit) = any.downcast_ref::<iroha_data_model::isi::bridge::SubmitBridgeProof>()
+            && let Some(admission) = committed_native_replay_admission(submit)?
+        {
+            admissions.push(admission);
+        }
+    }
+    if admissions.len() > 1 {
+        return Err(SccpReplayRebuildErrorV1::MultipleMutations);
+    }
+    Ok(admissions)
+}
+
+fn collect_initial_replay_admissions(
+    entrypoint: &TransactionEntrypoint,
+) -> Result<Vec<SccpCommittedReplayAdmissionV1>, SccpReplayRebuildErrorV1> {
+    match entrypoint {
+        TransactionEntrypoint::External(transaction) => collect_replay_admissions_from_executable(
+            transaction.authority(),
+            transaction.instructions(),
+        ),
+        TransactionEntrypoint::SealedReveal(reveal) => {
+            let transaction = reveal.signed_transaction();
+            collect_replay_admissions_from_executable(
+                transaction.authority(),
+                transaction.instructions(),
+            )
+        }
+        TransactionEntrypoint::Time(time) => {
+            collect_replay_admissions_from_instruction_step(None, time.instructions.iter(), false)
+        }
+        TransactionEntrypoint::SealedCommitment(_) => Ok(Vec::new()),
+    }
+}
+
+fn collect_replay_admissions_from_executable(
+    authority: &iroha_data_model::account::AccountId,
+    executable: &Executable,
+) -> Result<Vec<SccpCommittedReplayAdmissionV1>, SccpReplayRebuildErrorV1> {
+    match executable {
+        Executable::Instructions(instructions) => collect_replay_admissions_from_instruction_step(
+            Some(authority),
+            instructions.iter(),
+            false,
+        ),
+        Executable::Batch(items) => collect_replay_admissions_from_instruction_step(
+            Some(authority),
+            items.iter().filter_map(|item| match item {
+                ExecutableBatchItem::Instruction(instruction) => Some(instruction),
+                ExecutableBatchItem::ContractCall(_) => None,
+            }),
+            false,
+        ),
+        Executable::IvmProved(proved) => collect_replay_admissions_from_instruction_step(
+            Some(authority),
+            proved.overlay.iter(),
+            true,
+        ),
+        Executable::ContractCall(_) | Executable::Ivm(_) => Ok(Vec::new()),
+    }
+}
+
+fn collect_replay_admissions_from_entrypoint_result(
+    entrypoint: &TransactionEntrypoint,
+    result: &TransactionResult,
+) -> Result<Vec<SccpCommittedReplayAdmissionV1>, SccpReplayRebuildErrorV1> {
+    let Ok(data_triggers) = result.as_ref() else {
+        return Ok(Vec::new());
+    };
+    let mut admissions = collect_initial_replay_admissions(entrypoint)?;
+    for step in data_triggers {
+        admissions.extend(collect_replay_admissions_from_instruction_step(
+            None,
+            step.instructions.iter(),
+            false,
+        )?);
+    }
+    if admissions.len() > 1 {
+        return Err(SccpReplayRebuildErrorV1::MultipleMutations);
+    }
+    Ok(admissions)
+}
+
+/// Extract replay admissions in exact consensus execution order.
+///
+/// An authenticated merge batch is consumed before ordinary carrier
+/// entrypoints. Within either phase every entrypoint is paired one-for-one with
+/// its committed result; rejected executions contribute no mutation. Successful
+/// result payloads also expose exact time-trigger and chained data-trigger
+/// instruction steps, so no event sidecar is consulted.
+pub fn collect_sccp_replay_admissions_from_finalized_execution(
+    block: &SignedBlock,
+    merge_entry: Option<&iroha_data_model::merge::MergeLedgerEntry>,
+) -> Result<Vec<SccpCommittedReplayAdmissionV1>, SccpReplayRebuildErrorV1> {
+    block
+        .validate_entrypoint_merkle_cache()
+        .map_err(|_| SccpReplayRebuildErrorV1::MalformedBlock)?;
+    block
+        .validate_result_merkle_cache()
+        .map_err(|_| SccpReplayRebuildErrorV1::MalformedBlock)?;
+    let mut admissions = Vec::new();
+    if let Some(batch) = merge_entry.and_then(|entry| entry.execution_batch.as_ref()) {
+        if batch.version != 1 || !crate::merge::merge_execution_batch_commitments_match(batch) {
+            return Err(SccpReplayRebuildErrorV1::MalformedMerge);
+        }
+        let observed = batch
+            .lanes
+            .iter()
+            .try_fold(0_usize, |count, lane| {
+                if lane.entrypoints.len() != lane.results.len() {
+                    return None;
+                }
+                count.checked_add(lane.entrypoints.len())
+            })
+            .ok_or(SccpReplayRebuildErrorV1::MalformedMerge)?;
+        if u64::try_from(observed).ok() != Some(batch.entrypoint_count) {
+            return Err(SccpReplayRebuildErrorV1::MalformedMerge);
+        }
+        for lane in &batch.lanes {
+            for (entrypoint, result) in lane.entrypoints.iter().zip(&lane.results) {
+                admissions.extend(collect_replay_admissions_from_entrypoint_result(
+                    entrypoint, result,
+                )?);
+            }
+        }
+    }
+    for (_, entrypoint, result) in block.entrypoint_results() {
+        admissions.extend(collect_replay_admissions_from_entrypoint_result(
+            &entrypoint,
+            result,
+        )?);
+    }
+    Ok(admissions)
+}
+
+/// Rebuild all supplied replay forests by scanning finalized Kura blocks and
+/// authenticated merge execution, then require byte-exact agreement with Core.
+///
+/// `expected` must be projected from the final Core registry/state snapshot at
+/// `finalized_height`. It preinitializes every accumulator, including empty
+/// routes, and prevents a mutation from inventing an accumulator or domain.
+pub fn rebuild_sccp_replay_archive_from_kura_v1(
+    kura: &crate::kura::Kura,
+    finalized_height: NonZeroUsize,
+    expected: &BTreeMap<SccpReplayAccumulatorIdV1, (SccpReplayDomainV1, SccpReplayForestV1)>,
+) -> Result<SccpReplayArchiveV1, SccpReplayRebuildErrorV1> {
+    if kura.blocks_count() < finalized_height.get() {
+        return Err(SccpReplayRebuildErrorV1::MalformedBlock);
+    }
+    let tip_hash = kura
+        .get_block_hash(finalized_height)
+        .ok_or(SccpReplayRebuildErrorV1::MalformedBlock)?;
+    let mut archive = SccpReplayArchiveV1::default();
+    for (accumulator_id, (domain, _)) in expected {
+        archive
+            .initialize_accumulator(accumulator_id.clone(), *domain)
+            .map_err(|_| SccpReplayRebuildErrorV1::UnknownAccumulator)?;
+    }
+    for height in 1..=finalized_height.get() {
+        let height = NonZeroUsize::new(height).expect("range begins at one");
+        let block = kura
+            .get_block(height)
+            .ok_or(SccpReplayRebuildErrorV1::MalformedBlock)?;
+        if usize::try_from(block.header().height().get()).ok() != Some(height.get()) {
+            return Err(SccpReplayRebuildErrorV1::MalformedBlock);
+        }
+        let merge_entry = kura
+            .get_merge_entry_by_carrier_height(height)
+            .map_err(|_| SccpReplayRebuildErrorV1::MalformedMerge)?;
+        for admission in
+            collect_sccp_replay_admissions_from_finalized_execution(&block, merge_entry.as_ref())?
+        {
+            let (expected_domain, _) = expected
+                .get(&admission.accumulator_id)
+                .ok_or(SccpReplayRebuildErrorV1::UnknownAccumulator)?;
+            if expected_domain != &admission.domain {
+                return Err(SccpReplayRebuildErrorV1::UnknownAccumulator);
+            }
+            let mut forest = archive
+                .forest(&admission.accumulator_id)
+                .map_err(|_| SccpReplayRebuildErrorV1::UnknownAccumulator)?
+                .1
+                .clone();
+            let delta = forest
+                .occupy(&admission.domain, &admission.record, &admission.witness)
+                .map_err(|_| SccpReplayRebuildErrorV1::ForestMismatch)?;
+            archive
+                .apply_delta(admission.accumulator_id, delta)
+                .map_err(|_| SccpReplayRebuildErrorV1::ForestMismatch)?;
+        }
+    }
+    if kura.get_block_hash(finalized_height) != Some(tip_hash) {
+        return Err(SccpReplayRebuildErrorV1::FinalityChanged);
+    }
+    for (accumulator_id, (domain, forest)) in expected {
+        let (rebuilt_domain, rebuilt_forest) = archive
+            .forest(accumulator_id)
+            .map_err(|_| SccpReplayRebuildErrorV1::UnknownAccumulator)?;
+        if &rebuilt_domain != domain || rebuilt_forest != forest {
+            return Err(SccpReplayRebuildErrorV1::ForestMismatch);
+        }
+    }
+    Ok(archive)
 }
 #[cfg(test)]
 mod tests {
@@ -2130,7 +2603,6 @@ mod tests {
         for (domain, expected) in [
             (iroha_sccp::SCCP_DOMAIN_ETH, SccpNetworkV1::EthereumMainnet),
             (iroha_sccp::SCCP_DOMAIN_BSC, SccpNetworkV1::BscMainnet),
-            (iroha_sccp::SCCP_DOMAIN_SOLANA, SccpNetworkV1::SolanaTestnet),
             (iroha_sccp::SCCP_DOMAIN_TON, SccpNetworkV1::TonMainnet),
             (iroha_sccp::SCCP_DOMAIN_TRON, SccpNetworkV1::TronMainnet),
         ] {
@@ -2219,7 +2691,7 @@ mod tests {
         let wrong_lane_key = SccpOutboundMessageKeyV1 {
             lane: iroha_data_model::bridge::SccpLaneIdV1 {
                 source: iroha_data_model::bridge::SccpNetworkV1::SoraTaira,
-                target: iroha_data_model::bridge::SccpNetworkV1::EthereumSepolia,
+                target: iroha_data_model::bridge::SccpNetworkV1::BscMainnet,
             },
             ..validated.key
         };
@@ -2885,6 +3357,94 @@ mod tests {
         assert_eq!(
             iroha_sccp::merkle_root_from_commitment(&messages[1].commitment, &proof),
             root
+        );
+    }
+    #[test]
+    fn committed_replay_extraction_derives_one_outbound_leaf_from_proved_execution() {
+        let payload = sample_transfer_payload(301, [0x42; 20]);
+        let payload_bytes = canonical_test_sccp_payload_bytes(&payload);
+        let (block, _) = signed_block_with_sccp_payloads(&[payload_bytes.clone()], 1);
+        let admissions = collect_sccp_replay_admissions_from_finalized_execution(&block, None)
+            .expect("finalized proved execution rebuilds");
+        assert_eq!(admissions.len(), 1);
+        let admission = &admissions[0];
+        let transaction = block
+            .external_signed_transaction_ref_at(0)
+            .expect("fixture contains one signed transaction");
+        assert_eq!(
+            admission.accumulator_id.boundary,
+            SccpReplayBoundaryV1::SoraOutboundLock
+        );
+        assert_eq!(
+            admission.accumulator_id.route_key.lane_id,
+            SccpLaneIdV1 {
+                source: iroha_data_model::bridge::SccpNetworkV1::EthereumMainnet,
+                target: iroha_data_model::bridge::SccpNetworkV1::SoraTaira,
+            }
+        );
+        assert_eq!(
+            admission.domain.source_network,
+            iroha_data_model::bridge::SccpNetworkV1::SoraTaira
+        );
+        assert_eq!(
+            admission.domain.target_network,
+            iroha_data_model::bridge::SccpNetworkV1::EthereumMainnet
+        );
+        assert_eq!(
+            admission.record.replay_id,
+            test_sccp_outbound_message_key(&payload).message_id
+        );
+        assert_eq!(
+            admission.record.payload_sha256,
+            <[u8; 32]>::from(sha2::Sha256::digest(payload_bytes))
+        );
+        assert_eq!(admission.record.amount, 77);
+        assert_eq!(
+            admission.record.principal,
+            SccpReplayPrincipalV1::SoraAccount(transaction.authority().clone())
+        );
+        assert_eq!(
+            admission.witness,
+            iroha_data_model::bridge::SccpSparseMerkleWitnessV1::empty_shard()
+        );
+    }
+    #[test]
+    fn committed_replay_extraction_rejects_multiple_mutations_in_one_transaction() {
+        let payloads = [
+            canonical_test_sccp_payload_bytes(&sample_transfer_payload(302, [0x42; 20])),
+            canonical_test_sccp_payload_bytes(&sample_transfer_payload(303, [0x43; 20])),
+        ];
+        let (block, _) = signed_block_with_sccp_payloads(&payloads, 1);
+        assert_eq!(
+            collect_sccp_replay_admissions_from_finalized_execution(&block, None),
+            Err(SccpReplayRebuildErrorV1::MultipleMutations)
+        );
+    }
+    #[test]
+    fn committed_replay_extraction_ignores_rejected_execution() {
+        let payload = canonical_test_sccp_payload_bytes(&sample_transfer_payload(304, [0x44; 20]));
+        let (mut block, _) = signed_block_with_sccp_payloads(&[payload], 1);
+        let entry_hash = block
+            .external_signed_transaction_at(0)
+            .expect("fixture contains one signed transaction")
+            .0;
+        block
+            .set_transaction_results(
+                Vec::new(),
+                &[entry_hash],
+                vec![TransactionResultInner::Err(
+                    iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
+                        iroha_data_model::ValidationFail::NotPermitted(
+                            "rejected replay rebuild fixture".to_owned(),
+                        ),
+                    ),
+                )],
+            )
+            .expect("fixture result commitment updates");
+        assert!(
+            collect_sccp_replay_admissions_from_finalized_execution(&block, None)
+                .expect("rejected execution is structurally valid")
+                .is_empty()
         );
     }
     #[test]

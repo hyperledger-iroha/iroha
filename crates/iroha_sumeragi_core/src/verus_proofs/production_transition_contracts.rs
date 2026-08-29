@@ -1,4 +1,5 @@
 verus! {
+/// Complete fixed-vector effect relation.
 pub open spec fn production_effect_trace_relation(
     trace: ProductionEffectTraceProjection,
     event_kind: u8,

@@ -1246,9 +1246,7 @@ pub(super) mod tests {
             .expect("encode history-fixture proposal");
         let block = Arc::new(executed_block);
         let mut context = fixture.context.clone();
-        context.da_layout.chunk_size_bytes = 2_048;
-        context.da_layout.max_payload_size_bytes = 1_048_576;
-        context.da_layout.max_chunk_count = 1024;
+        context.da_layout = wire::SumeragiV2GenesisContextParameters::recommended().da_layout;
         context.validate().expect("valid history-fixture context");
         let subject = wire::BlockSubject {
             parent_block_hash: None,
@@ -2150,8 +2148,7 @@ pub(super) mod tests {
         assert!(proposal.is_resultless_proposal());
         let block = Arc::new(executed_block);
         let mut context = fixture.context.clone();
-        context.da_layout.max_payload_size_bytes = 1_048_576;
-        context.da_layout.max_chunk_count = 1024;
+        context.da_layout = wire::SumeragiV2GenesisContextParameters::recommended().da_layout;
         context.validate().expect("historical context");
         let subject = wire::BlockSubject {
             parent_block_hash: None,
@@ -2364,8 +2361,10 @@ pub(super) mod tests {
         )
         .payload()
         .to_vec();
+        let mut invalid_server =
+            V2BlockSyncServer::new(context.network_id.clone(), 1).expect("invalid-proof server");
         assert!(matches!(
-            server.serve_historical_body(
+            invalid_server.serve_historical_body(
                 kura.as_ref(),
                 forged,
                 &peer(&fixture.requester),
@@ -2375,6 +2374,7 @@ pub(super) mod tests {
                 V2TransportError::CertificateRejected(_)
             ))
         ));
-        assert_eq!(server.body_len(), 0);
+        assert_eq!(invalid_server.body_len(), 0);
+        assert_eq!(server.body_len(), 1);
     }
 }

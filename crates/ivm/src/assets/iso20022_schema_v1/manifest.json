@@ -1,19 +1,15 @@
 {
   "format_version": 1,
-  "source_commit": "51deea83409635f99ce2fcbb6a983b7cca18b99b",
-  "source_slice_hash_scope": "line-count-pinned Rust structured-table projection span including trailing LF",
+  "source_slice_hash_scope": "current Rust compile-time include consumer",
   "assets": [
     {
       "path": "schema_v1.tsv",
-      "byte_length": 28962,
-      "sha256": "72911659ac3349c68a6f25ad5fcdd0dabcbe7a34f5a7d32b94caef14b84f0822",
+      "byte_length": 28963,
+      "sha256": "fecd8317ab0a49f92be6e6ee5acedce79601a42b80d973f144e2c9b1f503311a",
       "layout": "19 ordered schema records, 193 ordered field records, and 183 ordered alias records in fixed eight-column TSV form",
       "source_preimages": [
         {
-          "path": "../../iso20022.rs",
-          "start_line": 231,
-          "physical_lines": 1282,
-          "sha256": "511516f0c8adc3bd6169f11b6fdcc5408ff84ddb67eea99a96323f9297d31b38"
+          "path": "../../../build.rs"
         }
       ]
     }

@@ -308,7 +308,7 @@ public final class HttpClientTransportExactReadTests {
 
     final String retired =
         privacyCapabilitySnapshotJson()
-            .replace("zk-ace-pq-authorization-v0", "sis-with-hints");
+            .replace("zk-ace-pq-authorization-v1", "sis-with-hints");
     boolean retiredRejected = false;
     try {
       HttpClientTransport.withExecutor(

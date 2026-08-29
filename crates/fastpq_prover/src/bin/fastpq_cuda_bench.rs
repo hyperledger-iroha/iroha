@@ -121,7 +121,7 @@ struct Config {
     #[arg(long, default_value = "fastpq_cuda_bench.json")]
     output: PathBuf,
     /// Parameter set name (defaults to the canonical FASTPQ set).
-    #[arg(long, default_value = "fastpq-lane-balanced")]
+    #[arg(long, default_value = "fastpq-state-transition-stark-v1")]
     parameter: String,
     /// Optional annotation describing the host or run.
     #[arg(long)]
@@ -1528,7 +1528,7 @@ mod tests {
     }
     #[test]
     fn collect_operations_includes_ifft_and_explicit_lde_shape() {
-        let params = find_by_name("fastpq-lane-balanced").expect("parameter set");
+        let params = find_by_name("fastpq-state-transition-stark-v1").expect("parameter set");
         let planner = Planner::new(params);
         let padded = 8usize;
         let eval_len = padded
@@ -1541,7 +1541,7 @@ mod tests {
             warmups: 0,
             column_count: 2,
             output: PathBuf::from("fastpq_cuda_bench.json"),
-            parameter: "fastpq-lane-balanced".to_owned(),
+            parameter: "fastpq-state-transition-stark-v1".to_owned(),
             notes: None,
             device: None,
             row_usage: None,
@@ -1625,7 +1625,7 @@ mod tests {
     }
     #[test]
     fn collect_operations_honors_single_operation_filter() {
-        let params = find_by_name("fastpq-lane-balanced").expect("parameter set");
+        let params = find_by_name("fastpq-state-transition-stark-v1").expect("parameter set");
         let planner = Planner::new(params);
         let padded = 8usize;
         let eval_len = padded
@@ -1638,7 +1638,7 @@ mod tests {
             warmups: 0,
             column_count: 2,
             output: PathBuf::from("fastpq_cuda_bench.json"),
-            parameter: "fastpq-lane-balanced".to_owned(),
+            parameter: "fastpq-state-transition-stark-v1".to_owned(),
             notes: None,
             device: None,
             row_usage: None,
@@ -1694,7 +1694,7 @@ mod tests {
             warmups: 0,
             column_count: 2,
             output: PathBuf::from("fastpq_cuda_bench.json"),
-            parameter: "fastpq-lane-balanced".to_owned(),
+            parameter: "fastpq-state-transition-stark-v1".to_owned(),
             notes: None,
             device: None,
             row_usage: None,
@@ -1720,7 +1720,7 @@ mod tests {
             warmups: 0,
             column_count: 2,
             output: PathBuf::from("fastpq_cuda_bench.json"),
-            parameter: "fastpq-lane-balanced".to_owned(),
+            parameter: "fastpq-state-transition-stark-v1".to_owned(),
             notes: None,
             device: None,
             row_usage: None,

@@ -726,9 +726,9 @@ impl V2CandidateAssembler {
                 continue;
             }
             let entrypoint_hash = transaction.hash_as_entrypoint();
-            let queue_plan_binding = if transaction.entrypoint().admission_intent()
-                == TransactionAdmissionIntent::QueuePlanSynced
-            {
+            let queue_plan_synced = transaction.entrypoint().admission_intent()
+                == TransactionAdmissionIntent::QueuePlanSynced;
+            let queue_plan_binding = if queue_plan_synced {
                 match carrier_queue_plan_bindings.get(&entrypoint_hash) {
                     Some(binding) => Some(binding.clone()),
                     None => match state
@@ -769,6 +769,15 @@ impl V2CandidateAssembler {
                 return Err(CandidateError::RestartRequired);
             }
             report.routable = report.routable.saturating_add(1);
+            if queue_plan_synced {
+                // The certificate is proposal-native control work; the
+                // transaction itself must cross the autonomous lane and merge
+                // corridor. Keep it as a strict FIFO cut even after the exact
+                // admission binding becomes canonical, so later ordinary work
+                // cannot overtake it while the lane author takes ownership.
+                report.work_deferred = report.work_deferred.saturating_add(1);
+                break;
+            }
             let encoded_len = transaction.encoded_len();
             if encoded_len > payload_limit {
                 report.payload_deferred = report.payload_deferred.saturating_add(1);
@@ -1598,7 +1607,7 @@ mod tests {
         account::AccountId,
         block::consensus::{LaneBlockDescriptorV1, LaneBlockProposalV1},
         consensus::VALIDATOR_SET_HASH_VERSION_V1,
-        nexus::{DataSpaceId, LaneId},
+        nexus::{AxtPolicySnapshot, DataSpaceId, LaneId},
         peer::PeerId,
         transaction::TransactionBuilder,
     };
@@ -1640,8 +1649,21 @@ mod tests {
         .sign(key.private_key());
         AcceptedTransaction::new_unchecked(Cow::Owned(tx))
     }
+    fn autonomous_accepted(seed: u8) -> AcceptedTransaction<'static> {
+        accepted_with_intent(seed, TransactionAdmissionIntent::QueuePlanSynced)
+    }
     fn record(seed: u8, label: &str, source_ordinal: usize) -> CandidateRecord {
         let transaction = accepted(seed, label);
+        CandidateRecord {
+            entrypoint_hash: transaction.hash_as_entrypoint(),
+            encoded_len: transaction.encoded_len(),
+            transaction,
+            routing_plan: RoutingPlan::single(RoutingDecision::default()),
+            source_ordinal,
+        }
+    }
+    fn autonomous_record(seed: u8, source_ordinal: usize) -> CandidateRecord {
+        let transaction = autonomous_accepted(seed);
         CandidateRecord {
             entrypoint_hash: transaction.hash_as_entrypoint(),
             encoded_len: transaction.encoded_len(),
@@ -1780,14 +1802,27 @@ mod tests {
         );
         let mut parent_hash = None;
         for height in 1..=2 {
-            let block = ValidBlock::new_dummy_and_modify_header(key.private_key(), |header| {
+            let valid = ValidBlock::new_dummy_and_modify_header(key.private_key(), |header| {
                 header.set_height(NonZeroU64::new(height).expect("non-zero fixture height"));
                 header.set_prev_block_hash(parent_hash);
                 header.creation_time_ms = height;
                 header.merkle_root = None;
-            })
-            .commit_unchecked()
-            .unpack(|_| {});
+            });
+            let mut signed: SignedBlock = valid.into();
+            signed
+                .set_transaction_results_with_transcripts(
+                    Vec::new(),
+                    &[],
+                    Vec::new(),
+                    BTreeMap::new(),
+                    Vec::new(),
+                    AxtPolicySnapshot::default(),
+                )
+                .expect("fixture parent carries the canonical empty AXT policy snapshot");
+            signed.set_committed_fragment_count(0);
+            let block = ValidBlock::new_unverified_for_tests(signed)
+                .commit_unchecked()
+                .unpack(|_| {});
             parent_hash = Some(block.as_ref().hash());
             let mut state_block = state.block(block.as_ref().header());
             let _events = state_block.apply_without_execution(&block, topology.as_ref().to_owned());
@@ -1957,7 +1992,7 @@ mod tests {
         assert_eq!(report, CandidateScanReport::default());
     }
     #[test]
-    fn queue_plan_intent_is_a_fifo_barrier_until_parent_state_owns_its_exact_binding() {
+    fn queue_plan_intent_remains_an_autonomous_fifo_barrier_after_exact_binding() {
         let (state, _context, anchor, key) = snapshot_parent_fixture();
         let (_, time_source) = TimeSource::new_mock(Duration::from_millis(3));
         let queue = Queue::test(
@@ -2023,28 +2058,21 @@ mod tests {
             .install_queue_plan_pending_binding_for_test(&binding)
             .expect("install exact parent-state binding");
 
-        let mut ready_report = CandidateScanReport::default();
-        let ready = assembler
+        let mut bound_report = CandidateScanReport::default();
+        let bound = assembler
             .snapshot_routable_candidates(
                 &queue,
                 &state,
                 &CandidateAttachments::default(),
                 vec![queue_plan.clone(), follower.clone()],
                 64 * 1024,
-                &mut ready_report,
+                &mut bound_report,
             )
-            .expect("exact parent-state binding makes the FIFO prefix eligible");
-        assert_eq!(
-            ready
-                .iter()
-                .map(|candidate| candidate.entrypoint_hash)
-                .collect::<Vec<_>>(),
-            vec![
-                queue_plan.hash_as_entrypoint(),
-                follower.hash_as_entrypoint()
-            ]
-        );
-        assert_eq!(ready_report.inspected, 2);
+            .expect("exact parent-state binding preserves the autonomous FIFO cut");
+        assert!(bound.is_empty());
+        assert_eq!(bound_report.inspected, 1);
+        assert_eq!(bound_report.routable, 1);
+        assert_eq!(bound_report.work_deferred, 1);
     }
     #[test]
     fn proposal_work_gate_normalizes_empty_control_bundles() {
@@ -2291,8 +2319,8 @@ mod tests {
     #[test]
     fn autonomous_anchors_validate_without_ordinary_candidates() {
         let (_state, context, _anchor, _key) = snapshot_parent_fixture();
-        let first_tx = accepted(31, "autonomous-one");
-        let second_tx = accepted(32, "autonomous-two");
+        let first_tx = autonomous_accepted(31);
+        let second_tx = autonomous_accepted(32);
         let envelopes = vec![
             autonomous_envelope(
                 &context,
@@ -2335,8 +2363,8 @@ mod tests {
     #[test]
     fn autonomous_anchor_order_and_identity_duplicates_fail_closed() {
         let (_state, context, _anchor, _key) = snapshot_parent_fixture();
-        let first_tx = accepted(33, "autonomous-order-one");
-        let second_tx = accepted(34, "autonomous-order-two");
+        let first_tx = autonomous_accepted(33);
+        let second_tx = autonomous_accepted(34);
         let first = autonomous_envelope(
             &context,
             LaneId::new(3),
@@ -2381,7 +2409,7 @@ mod tests {
     #[test]
     fn autonomous_anchor_entrypoints_are_disjoint_from_global_and_each_other() {
         let (_state, context, _anchor, _key) = snapshot_parent_fixture();
-        let ordinary = record(35, "global-overlap", 0);
+        let ordinary = autonomous_record(35, 0);
         let envelope = autonomous_envelope(
             &context,
             LaneId::new(5),
@@ -2397,7 +2425,7 @@ mod tests {
             validate_autonomous_lane_payloads(&context, &candidates, &[envelope]),
             Err(CandidateError::AutonomousLanePayloadOverlapsOrdinary)
         ));
-        let shared_tx = accepted(36, "cross-lane-duplicate");
+        let shared_tx = autonomous_accepted(36);
         let first = autonomous_envelope(
             &context,
             LaneId::new(6),
@@ -2426,7 +2454,7 @@ mod tests {
     #[test]
     fn autonomous_anchor_height_and_payload_authentication_fail_closed() {
         let (_state, context, _anchor, _key) = snapshot_parent_fixture();
-        let transaction = accepted(37, "autonomous-authentication");
+        let transaction = autonomous_accepted(37);
         let envelope = autonomous_envelope(
             &context,
             LaneId::new(8),
@@ -2453,7 +2481,7 @@ mod tests {
     #[test]
     fn autonomous_anchor_count_and_aggregate_bytes_are_bounded() {
         let (_state, context, _anchor, _key) = snapshot_parent_fixture();
-        let transaction = accepted(38, "autonomous-bounds");
+        let transaction = autonomous_accepted(38);
         let envelope = autonomous_envelope(
             &context,
             LaneId::new(9),

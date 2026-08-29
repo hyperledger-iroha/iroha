@@ -414,14 +414,10 @@ test("package privacy capability policy is isolated behind its explicit subpath"
   const optionalExports = [
     "compiledProfileCatalogV1",
     "decodePrivacyExact12CapabilityManifestV1",
-    "getPrivacyCapabilitiesV1",
     "getPrivacyExact12CapabilityManifestV1",
-    "parsePrivacyCapabilitySnapshotV1",
-    "PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1",
     "PRIVACY_EXACT12_CAPABILITY_MANIFEST_MAX_BYTES_V1",
     "PRIVACY_EXACT12_CAPABILITY_MANIFEST_VERSION_V1",
     "PRIVACY_PROTOCOL_IDS_V1",
-    "PrivacyCapabilitySnapshotError",
     "PrivacyExact12CapabilityManifestError",
     "PrivacyExact12CapabilityManifestV1",
     "requirePrivacyExact12CapabilityAdmissionV1",
@@ -449,7 +445,7 @@ test("package privacy capability policy is isolated behind its explicit subpath"
   );
 });
 
-test("package SCCP exports expose the exact Solana-aware inventory", () => {
+test("package SCCP exports expose the exact four-mainnet inventory", () => {
   assert.deepEqual(
     Object.fromEntries(
       Object.entries(packageSccpExports)
@@ -459,8 +455,8 @@ test("package SCCP exports expose the exact Solana-aware inventory", () => {
     {
       SCCP_DOMAIN_BSC: 2,
       SCCP_DOMAIN_ETH: 1,
-      SCCP_DOMAIN_SOLANA: 3,
       SCCP_DOMAIN_SORA: 0,
+      SCCP_DOMAIN_TON: 4,
       SCCP_DOMAIN_TRON: 5,
     },
   );
@@ -473,33 +469,29 @@ test("package SCCP exports expose the exact Solana-aware inventory", () => {
     {
       SCCP_CODEC_CANONICAL_TEXT: 1,
       SCCP_CODEC_EVM_ADDRESS20: 2,
-      SCCP_CODEC_SOLANA_PUBKEY32: 6,
+      SCCP_CODEC_TON_ACCOUNT36: 7,
       SCCP_CODEC_TRON_ADDRESS21: 5,
     },
   );
-  assert.deepEqual(Object.keys(packageSccpExports.SCCP_CODEC_KEYS), ["1", "2", "5", "6"]);
+  assert.deepEqual(Object.keys(packageSccpExports.SCCP_CODEC_KEYS), ["1", "2", "5", "7"]);
   assert.deepEqual(Object.keys(packageSccpExports.SCCP_NETWORK_PROFILES), [
     "sora-taira",
     "ethereum-mainnet",
-    "ethereum-sepolia",
     "bsc-mainnet",
-    "bsc-testnet",
     "tron-mainnet",
-    "tron-nile",
-    "tron-shasta",
-    "solana-testnet",
+    "ton-mainnet",
   ]);
-  assert.deepEqual(packageSccpExports.SCCP_NETWORK_PROFILES["solana-testnet"], {
-    profile: "solana-testnet",
-    tag: 13,
-    domain: packageSccpExports.SCCP_DOMAIN_SOLANA,
+  assert.deepEqual(packageSccpExports.SCCP_NETWORK_PROFILES["ton-mainnet"], {
+    profile: "ton-mainnet",
+    tag: 0x44,
+    domain: packageSccpExports.SCCP_DOMAIN_TON,
     sora: false,
-    genesisHash: packageSccpExports.SCCP_SOLANA_TESTNET_GENESIS_HASH,
+    globalId: -239,
   });
   assert.deepEqual(packageSccpExports.SCCP_PAYLOAD_KINDS, ["transfer"]);
   for (const name of [
-    "SCCP_DOMAIN_SOLANA",
-    "SCCP_CODEC_SOLANA_PUBKEY32",
+    "SCCP_DOMAIN_TON",
+    "SCCP_CODEC_TON_ACCOUNT36",
     "SCCP_NETWORK_PROFILES",
   ]) {
     assert.equal(packageExports[name], packageSccpExports[name], `${name} root/subpath parity`);
@@ -514,7 +506,13 @@ test("package SCCP exports expose TON while rejecting diagnostic helper surfaces
     "sccpBuildTonMessageBundleSourceProofWithDeployment",
     "sccpTonFixtureValidatorSetHash",
     "SCCP_DOMAIN_SOL",
+    "SCCP_DOMAIN_SOLANA",
+    "SCCP_CODEC_SOLANA_PUBKEY32",
     "SCCP_CODEC_SOLANA_BASE58",
+    "SCCP_SOLANA_TESTNET_GENESIS_HASH",
+    "deriveSccpSolanaDestinationHashesV1",
+    "deriveSccpSolanaNativeVerifierConfigHashV1",
+    "deriveSccpSolanaSourceIdentityHashesV1",
     "SCCP_CODEC_SORA_ASSET_ID",
     "normalizeSccpProofManifests",
     "normalizeSccpSourceAdapterEngineDeployment",
@@ -908,7 +906,7 @@ test("package dist privacy compiled-profile catalog wrapper defensively copies n
   assert.equal(published[1], PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE[1]);
 });
 
-test("package declarations expose readonly snapshot metadata without retired privacy types", () => {
+test("package declarations expose the Exact12 manifest without retired privacy types", () => {
   const rootDeclarations = readFileSync(
     new URL("../index.d.ts", import.meta.url),
     "utf8",
@@ -938,13 +936,34 @@ test("package declarations expose readonly snapshot metadata without retired pri
     assert.doesNotMatch(rootDeclarations, retiredPattern);
     assert.doesNotMatch(optionalDeclarations, retiredPattern);
   }
+  for (const retiredPattern of [
+    /\bPrivacyCapabilitySnapshotV1\b/u,
+    /\bPrivacyCapabilitySnapshotError\b/u,
+    /\bparsePrivacyCapabilitySnapshotV1\b/u,
+    /\bgetPrivacyCapabilitiesV1\b/u,
+    /\bPRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1\b/u,
+  ]) {
+    assert.doesNotMatch(optionalDeclarations, retiredPattern);
+  }
   assert.match(
     optionalDeclarations,
-    /export interface PrivacyCapabilitySnapshotV1\s*\{[\s\S]*readonly version:\s*1;[\s\S]*readonly committed_height:\s*PrivacyU64V1;[\s\S]*readonly consensus_policy:\s*PrivacyConsensusPolicyV1;[\s\S]*readonly protocols:\s*readonly PrivacyCapabilityRowV1\[\];/u,
+    /export interface PrivacyExact12CapabilityRowV1\s*\{[\s\S]*readonly protocol_id:\s*PrivacyProtocolTagV1;[\s\S]*readonly operation_schema:[\s\S]*readonly execution_mode:[\s\S]*readonly privacy_feature_mask:\s*number;[\s\S]*readonly compiled_profile:\s*PrivacyCompiledProfileResultV1;[\s\S]*readonly readiness:\s*PrivacyCapabilityReadinessV1;[\s\S]*readonly activation:\s*PrivacyProtocolActivationRecordV1 \| null;/u,
   );
   assert.match(
     optionalDeclarations,
-    /export declare class PrivacyCapabilitySnapshotError extends TypeError\s*\{[\s\S]*readonly path:\s*string;/u,
+    /readiness:\s*"production-qualified";\s*detail:\s*null/u,
+  );
+  assert.doesNotMatch(
+    optionalDeclarations,
+    /\bPrivacyProtocolProductionQualificationV1\b|\bproduction_qualification\b/u,
+  );
+  assert.match(
+    optionalDeclarations,
+    /readonly qualification:\s*PrivacyExact12QualificationRecordV1 \| null;/u,
+  );
+  assert.doesNotMatch(
+    optionalDeclarations,
+    /\b(?:available-experimental|activation_state|limitation|assurance)\b/u,
   );
   assert.match(
     rootDeclarations,
@@ -952,7 +971,7 @@ test("package declarations expose readonly snapshot metadata without retired pri
   );
   assert.match(
     rootDeclarations,
-    /network readiness requires `getPrivacyCapabilitiesV1` and a[\s\S]*fresh committed Torii response/u,
+    /network readiness requires the native-validated Exact12[\s\S]*authenticated Torii state/u,
   );
   assert.doesNotMatch(
     readFileSync(new URL("../browser.d.ts", import.meta.url), "utf8"),
@@ -964,7 +983,7 @@ test("package declarations expose readonly snapshot metadata without retired pri
   );
   assert.match(
     rootDeclarations,
-    /export type ToriiVerifierBackendLabelV1 =\s*\| "halo2\/ipa"\s*\| "halo2\/pasta\/kaigi-roster-v1"\s*\| "halo2\/pasta\/kaigi-usage-v1"\s*\| "halo2\/pasta\/ivm-execution-v1"\s*\| "halo2\/pasta\/kagemusha-topup-shield-merkle16-axiom-poseidon-v3"\s*\| "halo2\/pasta\/confidential-transfer-2x2-merkle16-axiom-poseidon-v3"\s*\| "halo2\/pasta\/confidential-unshield-full-merkle16-axiom-poseidon-v3"\s*\| "halo2\/pasta\/confidential-unshield-change-merkle16-axiom-poseidon-v4"\s*\| "stark\/fri"\s*\| "stark\/fri\/sha256-goldilocks"\s*\| "stark\/fri\/poseidon2-goldilocks"\s*\| "stark\/fri\/sha256_goldilocks\.v1";/u,
+    /export type ToriiVerifierBackendLabelV1 =\s*\| "halo2\/ipa"\s*\| "halo2\/pasta\/kaigi-roster-v1"\s*\| "halo2\/pasta\/kaigi-usage-v1"\s*\| "halo2\/pasta\/ivm-execution-v1"\s*\| "halo2\/pasta\/kagemusha-topup-shield-merkle16-axiom-poseidon-v3"\s*\| "halo2\/pasta\/confidential-transfer-2x2-merkle16-axiom-poseidon-v3"\s*\| "halo2\/pasta\/confidential-unshield-full-merkle16-axiom-poseidon-v3"\s*\| "halo2\/pasta\/confidential-unshield-change-merkle16-axiom-poseidon-v4"\s*\| "stark\/fri\/poseidon-x7-goldilocks-6x64-v1";/u,
   );
 });
 

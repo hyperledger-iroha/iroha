@@ -318,10 +318,17 @@ ConcreteLifecycleWorkKind::DurableRecoveredDecisionApply(apply)
         scheduler_path,
         scheduler_dispatch,
         (
+            "let mut live_apply_successor_outputs =",
             "prepare_ready_live_decision_apply_reconciliation(&self.coordinator, ordinal)",
             "executor.exactly_owns_live_lifecycle_decision_apply(&authority)",
+            "executor.has_pending_lifecycle_output_admissions()",
+            "attest_lifecycle_decision_apply_successor_outputs(",
+            "executor.pending_lifecycle_output_admission_census()",
+            "live_apply_successor_outputs",
+            ".insert(protected_ordinal, attestation)",
             "let fence = executor.lifecycle_reducer_fence_observation()",
             "attest_ready_lifecycle_decision_apply(&self.coordinator, *ordinal)",
+            "live_apply_successor_outputs.get(ordinal)",
             "services.capture_lifecycle_completion_capacity_census(probes)",
             ".select_apply(ordinal)",
             ".prepare_lifecycle_decision_apply_dispatch(&self.coordinator, &lease)",
@@ -335,8 +342,12 @@ ConcreteLifecycleWorkKind::DurableRecoveredDecisionApply(apply)
 if !reservation.preflight(&prepared) {
     return Err(ProductionCompletionDispatchErrorV1::ReservedOwnerMismatch);
 }
+let successor_outputs = live_apply_successor_outputs.remove(&ordinal);
 let executor_dispatch = executor
-    .prepare_lifecycle_decision_apply_executor_dispatch(&prepared)
+    .prepare_lifecycle_decision_apply_executor_dispatch(
+        &prepared,
+        successor_outputs,
+    )
     .map_err(ProductionCompletionDispatchErrorV1::LiveApplyReconciliation)?;
 reservation.commit(prepared, executor_dispatch);
 Ok(ProductionCompletionDispatchV1::ApplyQueued { ordinal })
@@ -422,6 +433,7 @@ project_lifecycle_decision_apply_completion(
     LifecycleDecisionApplyLineageV1::Live,
     context,
     address,
+    validate_predecessor_ordinal,
     installed_digest,
     effect,
     validated_receipt,
@@ -442,6 +454,8 @@ project_lifecycle_decision_apply_completion(
         shared_projection,
         """
 if !key.matches_carrier(context, address, installed_digest, lineage)
+    || validate_predecessor_ordinal == 0
+    || validate_predecessor_ordinal >= key.lifecycle_ordinal()
     || completion.subject() != *subject
     || completion.certificate() != certificate
     || completion.validated_receipt() != validated_receipt
@@ -945,7 +959,9 @@ let mut next_block_sync_attempt =
             lifecycle_runner_path,
             active_height,
             """
-let discovery_was_outstanding = if lane_only_completion_barrier {
+let discovery_was_outstanding = if terminal_finalization_fenced {
+    false
+} else if lane_only_completion_barrier {
     block_sync_request.is_some()
 } else {
     activated.with_runner_runtime(
@@ -1218,7 +1234,7 @@ let discovery_was_outstanding = if lane_only_completion_barrier {
                     "run_pending_active_height(",
                     "successor.verified_context",
                     "Some(successor.pending_activation)",
-                    "false",
+                    "reservation_reconciliation_pending",
                     "true",
                 ),
             )
@@ -2001,6 +2017,8 @@ deferred_admission_ordinals: DeferredAdmissionOrdinalSource,
             """
 replay_complete: false,
 status_publication_enabled: publish_initial_status,
+#[cfg(test)]
+status_publication_attempts: 0,
 fail_closed: false,
 """,
             "deferred status publication latch must initialize from publish_initial_status",
@@ -2329,12 +2347,11 @@ Ok(ProductionLifecycleDecisionApplyCompletionV1::Applied)
                 "authenticate_certified_body_request_with_validator_pops(",
                 "let request = authenticated.request()",
                 "request.subject != artifact.subject",
-                "let Some(responder_position)",
-                ".position(|entry| entry.validator == responder_peer)",
-                "return Ok(None);",
+                "let responder = PeerId::new(responder_key.public_key().clone())",
                 "kura\n        .get_block(block_height)",
                 "block.hash() != request.subject.block_hash",
                 "block.canonical_resultless_proposal()",
+                "!proposal.is_resultless_proposal()",
                 *HISTORICAL_BODY_RESPONSE_PHASE_MARKERS,
                 "encode_payload(",
                 "Signature::new(responder_key.private_key(), &response.signature_preimage())",
@@ -2759,7 +2776,7 @@ Ok(ProductionLifecycleDecisionApplyCompletionV1::Applied)
             )
             require_token_count(
                 lifecycle_selector_path,
-                "certified Fetch durable-terminal restart boundary",
+                "certified Fetch durable-terminal and locked-body wake restart boundaries",
                 post_dequeue,
                 "RestartRequiredAfterCommit",
                 2,

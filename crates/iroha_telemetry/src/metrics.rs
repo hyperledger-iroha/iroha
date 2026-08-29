@@ -1128,7 +1128,7 @@ mod tests {
             &dump,
             "governance_parliament_no_result_total{class=\"confirmation_jury_capacity_unavailable\"}",
         );
-        assert_eq!(parse_metric_value(line), 0.0);
+        assert!(parse_metric_value(line).abs() <= f64::EPSILON);
     }
 }
 impl JsonSerialize for Uptime {

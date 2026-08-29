@@ -1,3 +1,17 @@
+#[derive(Default)]
+struct AutonomousReplicaClaimStartupCapacityCache {
+    snapshot: Option<AutonomousReplicaClaimStartupCapacitySnapshot>,
+}
+
+struct AutonomousReplicaClaimStartupCapacitySnapshot {
+    pending_canonical_bytes: u64,
+    used_bytes: u64,
+    stable_terminal_reservations: u64,
+    shared_terminal_transient: u64,
+    post_wsv_reservations: u64,
+    certified_bundle_reservations: u64,
+}
+
 impl Kura {
     fn autonomous_lane_attempt_inventory_counts_locked(
         &self,
@@ -441,6 +455,126 @@ impl Kura {
         }
         Ok(())
     }
+    /// Validate one incomplete Complete-replica claim group against a single
+    /// authenticated startup capacity snapshot.
+    ///
+    /// The startup seal corridor holds prune, canonical-chain, geometry, and
+    /// sidecar locks for the lifetime of `cache`. Claim sealing changes none of
+    /// the reserved terminal, post-WSV, or certified-bundle inventories, so
+    /// only the exact stable physical-byte total must advance between groups.
+    fn validate_autonomous_replica_claim_startup_disk_peak_locked(
+        &self,
+        cache: &mut AutonomousReplicaClaimStartupCapacityCache,
+        pending_canonical_bytes: u64,
+        additional_physical_peak_bytes: u64,
+        path: &Path,
+    ) -> Result<()> {
+        if self.max_disk_usage_bytes == 0 || self.store_root.as_os_str().is_empty() {
+            return Ok(());
+        }
+        if cache.snapshot.is_none() {
+            let (missing, incomplete) = self
+                .autonomous_global_terminal_reservation_counts_with_allowed_view_temp_locked(
+                    None,
+                )?;
+            let terminal_max = u64::try_from(AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_MAX_BYTES)?;
+            let stable_terminal_reservations = u64::try_from(missing)
+                .ok()
+                .and_then(|count| count.checked_mul(terminal_max))
+                .ok_or_else(|| {
+                    Self::invalid_lane_artifact_error(
+                        path.to_path_buf(),
+                        "replica Complete startup seal reservation bytes overflowed",
+                    )
+                })?;
+            let shared_terminal_transient = if incomplete == 0 { 0 } else { terminal_max };
+            cache.snapshot = Some(AutonomousReplicaClaimStartupCapacitySnapshot {
+                pending_canonical_bytes,
+                used_bytes: self.kura_disk_usage_bytes()?,
+                stable_terminal_reservations,
+                shared_terminal_transient,
+                post_wsv_reservations: self.post_wsv_lane_artifact_budget_reserved_bytes()?,
+                certified_bundle_reservations: self.certified_bundle_capacity_reserved_bytes()?,
+            });
+        }
+        let snapshot = cache
+            .snapshot
+            .as_ref()
+            .expect("replica Complete startup capacity snapshot was initialized");
+        if snapshot.pending_canonical_bytes != pending_canonical_bytes {
+            return Err(Self::invalid_lane_artifact_error(
+                path.to_path_buf(),
+                "replica Complete startup seal changed its canonical capacity snapshot",
+            ));
+        }
+        let physical_and_transient = additional_physical_peak_bytes
+            .checked_add(snapshot.shared_terminal_transient)
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    path.to_path_buf(),
+                    "replica Complete startup seal transient accounting overflowed",
+                )
+            })?;
+        let required = snapshot
+            .used_bytes
+            .checked_add(snapshot.pending_canonical_bytes)
+            .and_then(|bytes| bytes.checked_add(physical_and_transient))
+            .and_then(|bytes| bytes.checked_add(snapshot.stable_terminal_reservations))
+            .and_then(|bytes| bytes.checked_add(snapshot.post_wsv_reservations))
+            .and_then(|bytes| bytes.checked_add(snapshot.certified_bundle_reservations))
+            .and_then(|bytes| {
+                bytes.checked_add(Self::canonical_prune_intent_maintenance_headroom_bytes())
+            })
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    path.to_path_buf(),
+                    "replica Complete startup seal configured disk accounting overflowed",
+                )
+            })?;
+        if required > self.max_disk_usage_bytes {
+            return Err(Self::invalid_lane_artifact_error(
+                path.to_path_buf(),
+                "replica Complete startup seal would consume globally reserved capacity",
+            ));
+        }
+        Ok(())
+    }
+    fn record_autonomous_replica_claim_startup_stable_delta_locked(
+        &self,
+        cache: &mut AutonomousReplicaClaimStartupCapacityCache,
+        pending_canonical_bytes: u64,
+        before_bytes: u64,
+        after_bytes: u64,
+        path: &Path,
+    ) -> Result<()> {
+        if self.max_disk_usage_bytes == 0 || self.store_root.as_os_str().is_empty() {
+            return Ok(());
+        }
+        let snapshot = cache.snapshot.as_mut().ok_or_else(|| {
+            Self::invalid_lane_artifact_error(
+                path.to_path_buf(),
+                "replica Complete startup seal lacks its capacity snapshot",
+            )
+        })?;
+        if snapshot.pending_canonical_bytes != pending_canonical_bytes {
+            return Err(Self::invalid_lane_artifact_error(
+                path.to_path_buf(),
+                "replica Complete startup seal changed its canonical capacity snapshot",
+            ));
+        }
+        snapshot.used_bytes = if after_bytes >= before_bytes {
+            snapshot.used_bytes.checked_add(after_bytes - before_bytes)
+        } else {
+            snapshot.used_bytes.checked_sub(before_bytes - after_bytes)
+        }
+        .ok_or_else(|| {
+            Self::invalid_lane_artifact_error(
+                path.to_path_buf(),
+                "replica Complete startup seal stable-byte accounting overflowed",
+            )
+        })?;
+        Ok(())
+    }
     /// Snapshot canonical blocks that are still represented only in memory.
     ///
     /// Callers hold `prune_lock` and `canonical_chain_lock`. This helper must
@@ -453,44 +587,72 @@ impl Kura {
         let (persisted_count, unindexed_bytes) = self.persisted_count_and_unindexed_bytes()?;
         self.pending_block_bytes(persisted_count, unindexed_bytes)
     }
-    fn validate_configured_kura_capacity_after_startup_recovery(&self) -> Result<()> {
-        if self.max_disk_usage_bytes == 0 || self.store_root.as_os_str().is_empty() {
-            return Ok(());
+    fn validate_and_publish_configured_kura_capacity_after_startup_recovery(
+        &self,
+        capacity_recovery_complete: bool,
+    ) -> Result<()> {
+        let publication = (|| -> Result<()> {
+            let _prune_guard = self.prune_lock.lock();
+            self.ensure_prune_recovery_not_required()?;
+            let _canonical_chain_guard = self.canonical_chain_lock.lock();
+            let pending_canonical_bytes = if capacity_recovery_complete {
+                self.pending_canonical_capacity_bytes_under_prune_and_canonical_guards()?
+            } else {
+                0
+            };
+            let _geometry_guard = self.lane_geometry_lock.lock();
+            let _sidecar_guard = self.sidecar_lock.lock();
+            let (used, total) = self.kura_disk_usage_bytes_with_total()?;
+            if capacity_recovery_complete
+                && self.max_disk_usage_bytes != 0
+                && !self.store_root.as_os_str().is_empty()
+            {
+                let terminal_reservations =
+                    self.autonomous_global_terminal_outcome_reserved_bytes_locked()?;
+                let post_wsv_reservations = self.post_wsv_lane_artifact_budget_reserved_bytes()?;
+                let certified_bundle_reservations =
+                    self.certified_bundle_capacity_reserved_bytes()?;
+                let required = used
+                    .checked_add(pending_canonical_bytes)
+                    .and_then(|bytes| bytes.checked_add(terminal_reservations))
+                    .and_then(|bytes| bytes.checked_add(post_wsv_reservations))
+                    .and_then(|bytes| bytes.checked_add(certified_bundle_reservations))
+                    .and_then(|bytes| {
+                        bytes.checked_add(Self::canonical_prune_intent_maintenance_headroom_bytes())
+                    })
+                    .ok_or_else(|| {
+                        Self::invalid_lane_artifact_error(
+                            self.store_root.clone(),
+                            "startup configured Kura capacity accounting overflowed",
+                        )
+                    })?;
+                if required > self.max_disk_usage_bytes {
+                    return Err(Error::StorageBudgetExceeded {
+                        limit: self.max_disk_usage_bytes,
+                        used,
+                        required,
+                    });
+                }
+            }
+            self.disk_usage.store(used, Ordering::Relaxed);
+            self.disk_usage_initialized.store(true, Ordering::Relaxed);
+            self.disk_usage_total.store(total, Ordering::Relaxed);
+            self.disk_usage_total_initialized
+                .store(true, Ordering::Relaxed);
+            self.disk_usage_total_last_refresh
+                .store(Self::now_unix_secs(), Ordering::Relaxed);
+            Ok(())
+        })();
+        match publication {
+            Ok(()) => Ok(()),
+            Err(err) => {
+                self.disk_usage_initialized.store(false, Ordering::Relaxed);
+                self.disk_usage_total_initialized
+                    .store(false, Ordering::Relaxed);
+                self.invalidate_durable_budget_snapshot();
+                Err(err)
+            }
         }
-        let _prune_guard = self.prune_lock.lock();
-        self.ensure_prune_recovery_not_required()?;
-        let _canonical_chain_guard = self.canonical_chain_lock.lock();
-        let pending_canonical_bytes =
-            self.pending_canonical_capacity_bytes_under_prune_and_canonical_guards()?;
-        let _geometry_guard = self.lane_geometry_lock.lock();
-        let _sidecar_guard = self.sidecar_lock.lock();
-        let used = self.kura_disk_usage_bytes()?;
-        let terminal_reservations =
-            self.autonomous_global_terminal_outcome_reserved_bytes_locked()?;
-        let post_wsv_reservations = self.post_wsv_lane_artifact_budget_reserved_bytes()?;
-        let certified_bundle_reservations = self.certified_bundle_capacity_reserved_bytes()?;
-        let required = used
-            .checked_add(pending_canonical_bytes)
-            .and_then(|bytes| bytes.checked_add(terminal_reservations))
-            .and_then(|bytes| bytes.checked_add(post_wsv_reservations))
-            .and_then(|bytes| bytes.checked_add(certified_bundle_reservations))
-            .and_then(|bytes| {
-                bytes.checked_add(Self::canonical_prune_intent_maintenance_headroom_bytes())
-            })
-            .ok_or_else(|| {
-                Self::invalid_lane_artifact_error(
-                    self.store_root.clone(),
-                    "startup configured Kura capacity accounting overflowed",
-                )
-            })?;
-        if required > self.max_disk_usage_bytes {
-            return Err(Error::StorageBudgetExceeded {
-                limit: self.max_disk_usage_bytes,
-                used,
-                required,
-            });
-        }
-        Ok(())
     }
     fn validate_autonomous_lifecycle_cursor_cas_budget(
         related_files: usize,

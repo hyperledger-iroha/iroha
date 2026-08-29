@@ -77,11 +77,13 @@ public struct ToriiBridgeMessageSubmitRequest: Encodable, Equatable, Sendable {
     public let signatureB64: String?
     public let transactionPayloadB64: String?
     public let nativeProofB64: String
+    public let replayWitnessB64: String
     public let creationTimeMs: UInt64?
 
     public init(
         authority: String,
         nativeProofB64: String,
+        replayWitnessB64: String,
         signatureB64: String? = nil,
         transactionPayloadB64: String? = nil,
         creationTimeMs: UInt64? = nil,
@@ -113,6 +115,16 @@ public struct ToriiBridgeMessageSubmitRequest: Encodable, Equatable, Sendable {
             expectedTypeName: SccpSubmitValidation.nativeInboundProofTypeName
         )
         self.nativeProofB64 = nativeProofB64
+        let replayWitnessArchive = try SccpSubmitValidation.canonicalNoritoBase64(
+            replayWitnessB64,
+            field: "replay_witness_b64",
+            maximumBytes: SccpSubmitValidation.maximumReplayWitnessBytes,
+            expectedTypeName: SccpSubmitValidation.replayWitnessTypeName
+        )
+        try SccpSubmitValidation.requireCanonicalReplayNonMembershipWitness(
+            replayWitnessArchive
+        )
+        self.replayWitnessB64 = replayWitnessB64
         if let creationTimeMs, creationTimeMs == 0 {
             throw SccpV1Error.invalid("creation_time_ms must be positive")
         }
@@ -130,6 +142,7 @@ public struct ToriiBridgeMessageSubmitRequest: Encodable, Equatable, Sendable {
         case signatureB64 = "signature_b64"
         case transactionPayloadB64 = "transaction_payload_b64"
         case nativeProofB64 = "native_proof_b64"
+        case replayWitnessB64 = "replay_witness_b64"
         case creationTimeMs = "creation_time_ms"
     }
 }
@@ -153,8 +166,8 @@ public struct SccpBridgeResponseExpectation: Equatable, Sendable {
         self.messageIdHex = try messageIdHex.map {
             try SccpSubmitValidation.responseHash($0, field: "expected message_id_hex")
         }
-        if let counterpartyDomain, !(1...5).contains(counterpartyDomain) {
-            throw SccpV1Error.invalid("expected counterparty_domain must be in 1...5")
+        if let counterpartyDomain, !(1...4).contains(counterpartyDomain) {
+            throw SccpV1Error.invalid("expected counterparty_domain must be in 1...4")
         }
         if let counterpartyChain, !counterpartyChain.isExternal {
             throw SccpV1Error.invalid("expected counterparty_chain must be external")
@@ -214,11 +227,12 @@ public struct SccpBridgeSubmitResponse: Equatable, Sendable {
         let exactBackends = Set(SccpNativeBackendV1.allCases.map(\.backendLabel)).union([
             "evm-groth16-bn254-v1",
             "tron-groth16-bn254-v1",
+            "ton-groth16-bls12381-v1",
         ])
         guard exactBackends.contains(backend) else {
             throw SccpV1Error.invalid("backend must be one closed SCCP V1 backend label")
         }
-        let domain = try SccpStrictJSON.uint32(object, "counterparty_domain", minimum: 1, maximum: 5)
+        let domain = try SccpStrictJSON.uint32(object, "counterparty_domain", minimum: 1, maximum: 4)
         let chainKey = try SccpStrictJSON.text(object, "counterparty_chain")
         guard let chain = SccpNetworkV1(rawValue: chainKey), chain.isExternal, chain.domainId == domain else {
             throw SccpV1Error.invalid("counterparty_chain and counterparty_domain must identify one exact external network")
@@ -234,6 +248,11 @@ public struct SccpBridgeSubmitResponse: Equatable, Sendable {
             backendsForDomain = [
                 "evm-groth16-bn254-v1",
                 "bridge/sccp/native/bsc-parlia-v1",
+            ]
+        case 4:
+            backendsForDomain = [
+                "ton-groth16-bls12381-v1",
+                "bridge/sccp/native/ton-masterchain-v1",
             ]
         case 5:
             backendsForDomain = [
@@ -327,6 +346,8 @@ enum SccpSubmitValidation {
         "iroha_data_model::bridge::BridgeSccpDestinationProofV1"
     static let nativeInboundProofTypeName =
         "iroha_sccp::native_admission::SccpNativeInboundMessageProofV1"
+    static let replayWitnessTypeName =
+        "iroha_data_model::bridge::sccp_replay::SccpSparseMerkleWitnessV1"
     static let registryTypeName =
         "iroha_data_model::bridge::sccp_registry::SccpRegistryV1"
     static let messageBundleTypeName = "iroha_sccp::TairaSccpMessageProofV1"
@@ -338,6 +359,7 @@ enum SccpSubmitValidation {
         tonProofRequestTypeName,
     ]
     static let maximumNativeArtifactBytes = 16 * 1024 * 1024
+    static let maximumReplayWitnessBytes = 16 * 1024
     static let maximumGroth16ArtifactBytes = maximumNativeArtifactBytes + 64 * 1024
     static let maximumDestinationArtifactBytes = maximumGroth16ArtifactBytes + 64 * 1024
     static let maximumDestinationArtifactBase64Bytes =
@@ -844,6 +866,51 @@ enum SccpSubmitValidation {
         return data
     }
 
+    static func requireCanonicalReplayNonMembershipWitness(_ archive: Data) throws {
+        guard let frame = noritoDecodeFrame(archive),
+              frame.header.flags == NoritoHeader.compactLen else {
+            throw SccpV1Error.invalid(
+                "replay_witness_b64 must use the exact compact Norito layout"
+            )
+        }
+        var witness = SccpCompactTransactionCursor(frame.payload)
+        let expectedShardRoot = try witness.takeField("replay witness expected shard root")
+        let priorRecordDigest = try witness.takeField("replay witness prior record digest")
+        let siblingBitmap = try witness.takeField("replay witness sibling bitmap")
+        let encodedSiblings = try witness.takeField("replay witness siblings")
+        guard witness.isFinished,
+              priorRecordDigest.count == 32,
+              priorRecordDigest.allSatisfy({ $0 == 0 }) else {
+            throw SccpV1Error.invalid(
+                "replay_witness_b64 must contain one replay non-membership witness"
+            )
+        }
+        var siblingSequence = SccpCompactTransactionCursor(encodedSiblings)
+        let siblingCount = try siblingSequence.takeUInt64("replay witness sibling count")
+        guard siblingCount <= UInt64(SccpReplayV1.depth) else {
+            throw SccpV1Error.invalid("replay witness contains too many siblings")
+        }
+        var siblings: [Data] = []
+        siblings.reserveCapacity(Int(siblingCount))
+        for index in 0..<Int(siblingCount) {
+            siblings.append(try siblingSequence.takeField("replay witness sibling[\(index)]"))
+        }
+        guard siblingSequence.isFinished else {
+            throw SccpV1Error.invalid("replay witness sibling sequence contains trailing bytes")
+        }
+        let decoded = try SccpSparseMerkleWitnessV1(
+            expectedShardRoot: expectedShardRoot,
+            priorRecordDigest: priorRecordDigest,
+            siblingBitmap: siblingBitmap,
+            siblings: siblings
+        )
+        _ = try SccpReplayV1.rootFromWitness(
+            key: Data(repeating: 1, count: 32),
+            recordDigest: nil,
+            witness: decoded
+        )
+    }
+
     static func canonicalBase64(
         _ value: String,
         field: String,
@@ -987,11 +1054,69 @@ private struct SccpCompactTransactionCursor {
 
 enum SccpStrictJSON {
     static func object(_ data: Data, label: String) throws -> [String: Any] {
-        let losslessData = try quoteUInt128IntegerValues(data)
-        guard let value = try JSONSerialization.jsonObject(with: losslessData) as? [String: Any] else {
+        guard let text = String(data: data, encoding: .utf8), Data(text.utf8) == data else {
+            throw SccpV1Error.invalid("JSON must be valid UTF-8")
+        }
+        var parser = ExactParser(text)
+        guard let value = try parser.parse() as? [String: Any] else {
             throw SccpV1Error.invalid("\(label) must be a JSON object")
         }
         return value
+    }
+
+    /// Serialize a value returned by the exact parser without routing wide integers
+    /// through Foundation's floating-point JSON representation.
+    static func canonicalData(_ value: Any) throws -> Data {
+        var data = Data()
+        try appendCanonical(value, to: &data)
+        return data
+    }
+
+    private static func appendCanonical(_ value: Any, to data: inout Data) throws {
+        switch value {
+        case let value as Bool:
+            data.append(value ? Data("true".utf8) : Data("false".utf8))
+        case is NSNull:
+            data.append(Data("null".utf8))
+        case let value as String:
+            // Foundation is used only to escape text; numeric values never enter this path.
+            let encoded = try JSONSerialization.data(withJSONObject: [value], options: [])
+            guard encoded.count >= 2, encoded.first == 0x5b, encoded.last == 0x5d else {
+                throw SccpV1Error.invalid("failed to encode canonical JSON text")
+            }
+            data.append(encoded.dropFirst().dropLast())
+        case let value as ExactUnsignedInteger:
+            data.append(Data(value.text.utf8))
+        case let value as NSNumber:
+            guard CFGetTypeID(value) != CFBooleanGetTypeID(),
+                  !CFNumberIsFloatType(value),
+                  let integer = UInt64(value.stringValue),
+                  String(integer) == value.stringValue else {
+                throw SccpV1Error.invalid("canonical JSON contains a non-integer number")
+            }
+            data.append(Data(value.stringValue.utf8))
+        case let value as [Any]:
+            data.append(0x5b)
+            for (index, item) in value.enumerated() {
+                if index != 0 { data.append(0x2c) }
+                try appendCanonical(item, to: &data)
+            }
+            data.append(0x5d)
+        case let value as [String: Any]:
+            data.append(0x7b)
+            for (index, key) in value.keys.sorted().enumerated() {
+                if index != 0 { data.append(0x2c) }
+                try appendCanonical(key, to: &data)
+                data.append(0x3a)
+                guard let item = value[key] else {
+                    throw SccpV1Error.invalid("canonical JSON object changed during encoding")
+                }
+                try appendCanonical(item, to: &data)
+            }
+            data.append(0x7d)
+        default:
+            throw SccpV1Error.invalid("canonical JSON contains an unsupported value")
+        }
     }
 
     static func exactFields(_ value: [String: Any], _ fields: Set<String>, label: String) throws {
@@ -1065,108 +1190,70 @@ enum SccpStrictJSON {
         return result
     }
 
-    static func uint128(_ value: [String: Any], _ field: String) throws -> String {
-        guard let result = value[field] as? String else {
-            throw SccpV1Error.invalid("\(field) must be a canonical positive UInt128 JSON integer")
-        }
-        guard SccpUInt128.parse(result, positive: true) != nil else {
-            throw SccpV1Error.invalid("\(field) must be a canonical positive UInt128 JSON integer")
-        }
-        return result
+    struct ExactUnsignedInteger {
+        let text: String
     }
 
-    /// Quote the two UInt128 wire integers only after the lexical scanner has
-    /// proved that they are unquoted canonical JSON integers. Foundation's
-    /// generic JSON number bridge rounds some 39-digit values through Decimal,
-    /// so retaining their original digit strings is required for exact bounds
-    /// checks and route-hash construction.
-    private static func quoteUInt128IntegerValues(_ data: Data) throws -> Data {
-        guard let text = String(data: data, encoding: .utf8), Data(text.utf8) == data else {
-            throw SccpV1Error.invalid("JSON must be valid UTF-8")
-        }
-        var parser = DuplicateKeyParser(text)
-        let ranges = try parser.parse()
-        var transformed = ""
-        transformed.reserveCapacity(text.utf8.count + ranges.count * 2)
-        var cursor = text.startIndex
-        for range in ranges {
-            transformed.append(contentsOf: text[cursor..<range.lowerBound])
-            transformed.append("\"")
-            transformed.append(contentsOf: text[range])
-            transformed.append("\"")
-            cursor = range.upperBound
-        }
-        transformed.append(contentsOf: text[cursor...])
-        return Data(transformed.utf8)
-    }
-
-    private struct DuplicateKeyParser {
+    private struct ExactParser {
         let text: String
         var index: String.Index
-        var uint128Ranges: [Range<String.Index>] = []
 
         init(_ text: String) {
             self.text = text
             index = text.startIndex
         }
 
-        mutating func parse() throws -> [Range<String.Index>] {
-            try value()
+        mutating func parse() throws -> Any {
+            let result = try value()
             whitespace()
             guard index == text.endIndex else { throw SccpV1Error.invalid("invalid JSON") }
-            return uint128Ranges
+            return result
         }
 
-        mutating func value() throws {
+        mutating func value() throws -> Any {
             whitespace()
             guard let char = peek() else { throw SccpV1Error.invalid("invalid JSON") }
             switch char {
-            case "{": try object()
-            case "[": try array()
-            case "\"": _ = try string()
-            case "-", "0"..."9": try number()
-            case "t": try consume("true")
-            case "f": try consume("false")
-            case "n": try consume("null")
+            case "{": return try object()
+            case "[": return try array()
+            case "\"": return try string()
+            case "0"..."9": return try number()
+            case "t": try consume("true"); return true
+            case "f": try consume("false"); return false
+            case "n": try consume("null"); return NSNull()
             default: throw SccpV1Error.invalid("invalid JSON")
             }
         }
 
-        mutating func object() throws {
+        mutating func object() throws -> [String: Any] {
             try consume("{")
             whitespace()
-            var keys = Set<String>()
-            if consumeIf("}") { return }
+            var result: [String: Any] = [:]
+            if consumeIf("}") { return result }
             while true {
                 whitespace()
                 let key = try string()
-                guard keys.insert(key).inserted else {
+                guard result[key] == nil else {
                     throw SccpV1Error.invalid("JSON contains duplicate object key `\(key)`")
                 }
                 whitespace()
                 try consume(":")
-                if key == "max_wrapped_supply" || key == "max_outstanding_liability" {
-                    whitespace()
-                    let start = index
-                    try number()
-                    uint128Ranges.append(start..<index)
-                } else {
-                    try value()
-                }
+                result[key] = try value()
                 whitespace()
-                if consumeIf("}") { return }
+                if consumeIf("}") { return result }
                 try consume(",")
             }
         }
 
-        mutating func array() throws {
+        mutating func array() throws -> [Any] {
             try consume("[")
             whitespace()
-            if consumeIf("]") { return }
+            var result: [Any] = []
+            if consumeIf("]") { return result }
             while true {
-                try value()
+                result.append(try value())
                 whitespace()
-                if consumeIf("]") { return }
+                if consumeIf("]") { return result }
                 try consume(",")
             }
         }
@@ -1225,27 +1312,37 @@ enum SccpStrictJSON {
         mutating func hexQuad() throws -> UInt32 {
             var result: UInt32 = 0
             for _ in 0..<4 {
-                guard let char = peek(), let digit = char.hexDigitValue else {
+                guard let char = peek(), let digit = asciiHexDigit(char) else {
                     throw SccpV1Error.invalid("invalid JSON Unicode escape")
                 }
-                result = result * 16 + UInt32(digit)
+                result = result * 16 + digit
                 advance()
             }
             return result
         }
 
-        mutating func number() throws {
-            guard let first = peek(), first.isNumber else { throw SccpV1Error.invalid("invalid JSON number") }
+        mutating func number() throws -> Any {
+            let start = index
+            guard let first = peek(), isASCIIDigit(first) else {
+                throw SccpV1Error.invalid("invalid JSON number")
+            }
             if first == "0" {
                 advance()
-                if let next = peek(), next.isNumber { throw SccpV1Error.invalid("invalid JSON number") }
+                if let next = peek(), isASCIIDigit(next) {
+                    throw SccpV1Error.invalid("invalid JSON number")
+                }
             } else {
-                while let char = peek(), char.isNumber { advance() }
+                while let char = peek(), isASCIIDigit(char) { advance() }
             }
             // SCCP V1 has no signed or fractional JSON fields. The scanner
             // deliberately leaves '.', 'e', and 'E' unconsumed so the
             // surrounding grammar rejects coercible spellings such as 1.0,
-            // 1e0, or -0 before JSONSerialization loses their wire form.
+            // 1e0, or -0 without first coercing their exact wire form.
+            let canonical = String(text[start..<index])
+            if let value = UInt64(canonical) {
+                return NSNumber(value: value)
+            }
+            return ExactUnsignedInteger(text: canonical)
         }
 
         mutating func whitespace() {
@@ -1264,65 +1361,16 @@ enum SccpStrictJSON {
         }
 
         func peek() -> Character? { index == text.endIndex ? nil : text[index] }
-        mutating func advance() { index = text.index(after: index) }
-    }
-}
-
-enum SccpUInt128 {
-    struct Words: Equatable {
-        let low: UInt64
-        let high: UInt64
-    }
-
-    static func parse(_ decimal: String, positive: Bool = false) -> Words? {
-        guard !decimal.isEmpty,
-              decimal == "0" || decimal.first != "0",
-              !positive || decimal != "0"
-        else { return nil }
-
-        var words = Words(low: 0, high: 0)
-        for byte in decimal.utf8 {
-            guard byte >= 0x30, byte <= 0x39 else { return nil }
-            let digit = UInt64(byte - 0x30)
-            let lowProduct = words.low.multipliedFullWidth(by: 10)
-            let (highProduct, highOverflow) = words.high.multipliedReportingOverflow(by: 10)
-            let (highWithCarry, carryOverflow) = highProduct.addingReportingOverflow(lowProduct.high)
-            let (low, lowOverflow) = lowProduct.low.addingReportingOverflow(digit)
-            let (high, digitOverflow) = highWithCarry.addingReportingOverflow(lowOverflow ? 1 : 0)
-            guard !highOverflow, !carryOverflow, !digitOverflow else { return nil }
-            words = Words(low: low, high: high)
+        func isASCIIDigit(_ character: Character) -> Bool { ("0"..."9").contains(character) }
+        func asciiHexDigit(_ character: Character) -> UInt32? {
+            guard let byte = character.asciiValue else { return nil }
+            switch byte {
+            case 48...57: return UInt32(byte - 48)
+            case 65...70: return UInt32(byte - 55)
+            case 97...102: return UInt32(byte - 87)
+            default: return nil
+            }
         }
-        return words
-    }
-
-    static func littleEndianData(_ decimal: String) -> Data? {
-        guard let words = parse(decimal) else { return nil }
-        var low = words.low.littleEndian
-        var high = words.high.littleEndian
-        var data = Data(capacity: 16)
-        withUnsafeBytes(of: &low) { data.append(contentsOf: $0) }
-        withUnsafeBytes(of: &high) { data.append(contentsOf: $0) }
-        return data
-    }
-
-    static func abiWord(_ decimal: String) -> Data? {
-        guard let words = parse(decimal) else { return nil }
-        var high = words.high.bigEndian
-        var low = words.low.bigEndian
-        var data = Data(repeating: 0, count: 16)
-        withUnsafeBytes(of: &high) { data.append(contentsOf: $0) }
-        withUnsafeBytes(of: &low) { data.append(contentsOf: $0) }
-        return data
-    }
-
-    static func product(_ decimal: String, by multiplier: UInt64, equals expected: String) -> Bool {
-        guard let value = parse(decimal, positive: true),
-              let expectedValue = parse(expected, positive: true)
-        else { return false }
-        let lowProduct = value.low.multipliedFullWidth(by: multiplier)
-        let highProduct = value.high.multipliedFullWidth(by: multiplier)
-        let (high, overflow) = highProduct.low.addingReportingOverflow(lowProduct.high)
-        guard highProduct.high == 0, !overflow else { return false }
-        return Words(low: lowProduct.low, high: high) == expectedValue
+        mutating func advance() { index = text.index(after: index) }
     }
 }

@@ -63,7 +63,9 @@ mod party_local_rkg_ephemeral_v1;
 mod persistent_direct_opening_v1;
 #[path = "collective/prepared_public_a.rs"]
 mod prepared_public_a;
-pub(in crate::vega::zk_ams::mkhe) use incremental_source::RnsNativeClaimedDirectNumericOriginV2;
+pub(in crate::vega::zk_ams::mkhe) use incremental_source::{
+    RnsNativeClaimedDirectNumericOriginV2, RnsNativeQpcsCompositeAuthorityV2,
+};
 #[expect(
     unused_imports,
     reason = "sealed sibling-only streaming capabilities share one narrow reexport seam"
@@ -3180,10 +3182,6 @@ impl ZkAmsMkheCollectiveLevelOneV1 {
     pub(super) const fn linear(&self) -> &RnsPolynomial {
         &self.linear
     }
-    #[allow(
-        dead_code,
-        reason = "used by the private fail-closed collective evaluated-key runtime"
-    )]
     pub(super) const fn quadratic(&self) -> &RnsPolynomial {
         &self.quadratic
     }

@@ -412,6 +412,17 @@ self.try_recv_if_at_checked_classified(
         "queue-local leader-wire gate verdict",
         errors,
     )
+    _require_rust_token_sequence(
+        ingress_path,
+        queue_gate,
+        _CORE_RUNTIME_TRANSPORT_TOKEN_SEQUENCES[
+            "historical_replica_release_dependency"
+        ],
+        "a blocked Control-or-Chunk owner may expose only an authenticated "
+        "writable historical request for a nonzero predecessor height, without "
+        "retiring the owner or consuming certified-fence capacity",
+        errors,
+    )
 
     selector = _require_rust_item(
         ingress_path,
@@ -528,10 +539,35 @@ for entry in state.lanes.values().flat_map(|lane| lane.entries.iter()) {
 let carrier_ordinal = carrier_ordinals
     .remove(&owner.token)
     .ok_or_else(|| "leader-wire selector lost its exact fair-ingress carrier".to_owned())?;
+for (source, lane) in &state.lanes {
+    let actual_predecessors = lane
+        .entries
+        .iter()
+        .filter(|entry| entry.admission_ordinal < carrier_ordinal)
+        .count();
+    let retained_predecessors =
+        owner.ingress_predecessors.get(source).copied().unwrap_or(0);
+    if retained_predecessors != actual_predecessors {
+        return Err(format!(
+            "leader-wire selector changed its exact ingress predecessor geometry for source class {:?}: retained {retained_predecessors}, actual {actual_predecessors}",
+            source.class(),
+        ));
+    }
+}
+if let Some((source, retained_predecessors)) = owner
+    .ingress_predecessors
+    .iter()
+    .find(|(source, count)| **count != 0 && !state.lanes.contains_key(*source))
+{
+    return Err(format!(
+        "leader-wire selector changed its exact ingress predecessor geometry for removed source class {:?}: retained {retained_predecessors}, actual 0",
+        source.class(),
+    ));
+}
 active_carriers.push((owner, carrier_ordinal));
 """,
             "every active logical Ingress owner must consume its one exact "
-            "physical carrier",
+            "physical carrier and reauthenticate its complete physical source prefix",
         ),
         (
             """
@@ -818,7 +854,7 @@ def _require_exact_output_mandatory_identity_markers(
     worker_path: Path,
     errors: list[str],
 ) -> None:
-    """Bind mandatory authenticated identities and the v11 process-local domain."""
+    """Bind mandatory authenticated identities and the v12 process-local domain."""
 
     for path, item_key, marker, description in (
         (
@@ -848,11 +884,11 @@ def _require_exact_output_mandatory_identity_markers(
             errors,
         )
     projection_item = ingress_seam_items["ingress::process_local_projection_hash"][1]
-    projection_domain = b"iroha:sumeragi:v2:fair-ingress-owner:v11"
+    projection_domain = b"iroha:sumeragi:v2:fair-ingress-owner:v12"
     if projection_item is not None and projection_item.source.encode().count(projection_domain) != 1:
         errors.append(
             f"{ingress_path}:{projection_item.line}: fair-ingress process-local "
-            "projection must contain exactly one v11 domain separator"
+            "projection must contain exactly one v12 domain separator"
         )
 
 

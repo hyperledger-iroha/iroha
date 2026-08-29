@@ -8,7 +8,7 @@ fn autonomous_merge_source_for_queue_plan_admission_test(
     entrypoint: TransactionEntrypoint,
     routing_plan: crate::queue::RoutingPlan,
     activation_validator_keypairs: &[KeyPair],
-) -> MergeExecutionSource {
+) -> Result<MergeExecutionSource, crate::lane_consensus::LaneAutonomousArtifactError> {
     let coordinator = binding
         .admission_context
         .route_incarnations
@@ -114,8 +114,7 @@ fn autonomous_merge_source_for_queue_plan_admission_test(
         vec![None],
         producer,
         producer_keypair.private_key(),
-    )
-    .expect("canonical autonomous QueuePlan fixture payload");
+    )?;
     let validator_pops = validator_set
         .iter()
         .map(|validator| {
@@ -235,13 +234,13 @@ fn autonomous_merge_source_for_queue_plan_admission_test(
             routing_plans: payload.routing_plans.clone(),
             native_amx_receipts: payload.native_amx_receipts.clone(),
         });
-    MergeExecutionSource {
+    Ok(MergeExecutionSource {
         bundle_hash: merge_execution_source_bundle_hash(&source_bundle),
         source_bundle,
         origin_proposal: proposal,
         certified,
         input,
-    }
+    })
 }
 fn seed_exact_queue_plan_admission_state_for_test(state: &State, certificate: &[u8]) {
     let admission = crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v1(
@@ -734,7 +733,8 @@ fn autonomous_merge_commit_authorization_fixture_inner(
         entrypoint,
         routing_plan,
         &validator_keypairs,
-    );
+    )
+    .expect("canonical autonomous QueuePlan fixture source");
     let application_header = BlockHeader::new(
         NonZeroU64::new(carrier_height).expect("fixture carrier height is non-zero"),
         Some(parent.hash()),

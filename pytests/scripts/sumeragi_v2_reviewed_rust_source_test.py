@@ -180,6 +180,138 @@ def test_reviewed_rust_source_expands_manifest_path_module_in_lexical_order(
     )
 
 
+def test_reviewed_rust_source_expands_manifest_plain_module_in_lexical_order(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    helper = reviewed_rust_source_module()
+    root = write_reviewed_rust_fixture(
+        tmp_path,
+        {
+            "src/root.rs": (
+                'include!("first.rs");\n'
+                "pub(super) mod plain;\n"
+                '#[path = "declared.rs"]\n'
+                "mod declared;\n"
+                'include!("last.rs");\n'
+            ),
+            "src/first.rs": "fn reviewed_first() {}\n",
+            "src/root/plain.rs": "fn reviewed_plain() {}\n",
+            "src/declared.rs": "fn reviewed_declared() {}\n",
+            "src/last.rs": "fn reviewed_last() {}\n",
+        },
+    )
+    monkeypatch.setattr(
+        helper,
+        "_REVIEWED_RUST_INCLUDE_MANIFESTS",
+        {
+            "src/root.rs": (
+                "first.rs",
+                "root/plain.rs",
+                "declared.rs",
+                "last.rs",
+            )
+        },
+    )
+    errors: list[str] = []
+    closure = helper._resolve_reviewed_rust_source(
+        root, "src/root.rs", "plain-module fixture", errors
+    )
+
+    assert errors == []
+    assert closure is not None
+    assert closure.providers == (
+        Path("src/root.rs"),
+        Path("src/first.rs"),
+        Path("src/root/plain.rs"),
+        Path("src/declared.rs"),
+        Path("src/last.rs"),
+    )
+    assert tuple(
+        (edge.provider, edge.line) for edge in closure.provenance
+    ) == (
+        (Path("src/first.rs"), 1),
+        (Path("src/root/plain.rs"), 2),
+        (Path("src/declared.rs"), 3),
+        (Path("src/last.rs"), 5),
+    )
+    offsets = tuple(
+        closure.source.index(name)
+        for name in (
+            "fn reviewed_first()",
+            "fn reviewed_plain()",
+            "fn reviewed_declared()",
+            "fn reviewed_last()",
+        )
+    )
+    assert offsets == tuple(sorted(offsets))
+
+
+def test_reviewed_rust_source_rejects_ambiguous_plain_module_layout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    helper = reviewed_rust_source_module()
+    root = write_reviewed_rust_fixture(
+        tmp_path,
+        {
+            "src/root.rs": "mod child;\n",
+            "src/root/child.rs": "fn flat_child() {}\n",
+            "src/root/child/mod.rs": "fn directory_child() {}\n",
+        },
+    )
+    monkeypatch.setattr(
+        helper,
+        "_REVIEWED_RUST_INCLUDE_MANIFESTS",
+        {
+            "src/root.rs": (
+                "root/child.rs",
+                "root/child/mod.rs",
+            )
+        },
+    )
+    errors: list[str] = []
+    closure = helper._resolve_reviewed_rust_source(
+        root, "src/root.rs", "ambiguous plain-module fixture", errors
+    )
+
+    assert closure is None
+    assert any(
+        "plain module 'child' is ambiguous" in error for error in errors
+    ), errors
+
+
+def test_reviewed_rust_source_does_not_treat_path_module_as_plain_module(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    helper = reviewed_rust_source_module()
+    root = write_reviewed_rust_fixture(
+        tmp_path,
+        {
+            "src/root.rs": '#[path = "substitute.rs"]\nmod child;\n',
+            "src/substitute.rs": "fn substituted_child() {}\n",
+            "src/root/child.rs": "fn reviewed_child() {}\n",
+        },
+    )
+    monkeypatch.setattr(
+        helper,
+        "_REVIEWED_RUST_INCLUDE_MANIFESTS",
+        {"src/root.rs": ("root/child.rs",)},
+    )
+    errors: list[str] = []
+    closure = helper._resolve_reviewed_rust_source(
+        root, "src/root.rs", "path-bound plain-module fixture", errors
+    )
+
+    assert closure is None
+    assert any(
+        "reviewed Rust include inventory must equal ('root/child.rs',)" in error
+        and "found ()" in error
+        for error in errors
+    ), errors
+
+
 def test_reviewed_rust_source_rejects_duplicate_include_and_path_binding(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

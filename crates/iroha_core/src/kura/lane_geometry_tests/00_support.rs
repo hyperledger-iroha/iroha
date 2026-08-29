@@ -2,7 +2,7 @@ use super::*;
 use crate::{
     block::BlockBuilder,
     kura::{
-        CertifiedLaneBlockArtifact, CommitManifest,
+        AutonomousLaneClaimReleaseAuthorizationMode, CertifiedLaneBlockArtifact, CommitManifest,
         NativeAmxParticipantApplicationManifestArtifactV1,
         NativeAmxParticipantApplicationReceiptArtifact,
     },

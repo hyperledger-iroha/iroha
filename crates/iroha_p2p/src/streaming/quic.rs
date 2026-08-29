@@ -47,6 +47,7 @@ const MAX_MEDIA_FRAMES_PER_WINDOW: usize =
     MAX_MEDIA_DATA_FRAMES_PER_WINDOW + MAX_MEDIA_PARITY_FRAMES_PER_WINDOW;
 const MAX_MEDIA_FRAME_LEN: usize = 4 * 1024 * 1024;
 const MAX_MEDIA_WINDOW_LEN: usize = 16 * 1024 * 1024;
+const MAX_MEDIA_WINDOW_TRANSFER_TIME: Duration = Duration::from_secs(30);
 const MAX_CONCURRENT_UNI_STREAMS: u32 = 16;
 const CONTROL_STREAM_PRIORITY: i32 = 256;
 const MEDIA_STREAM_PRIORITY: i32 = 128;
@@ -672,6 +673,7 @@ pub struct StreamingConnection {
     setup_state: Arc<AtomicU8>,
     setup_watchdog: JoinHandle<()>,
     pending_publisher_ack: Option<PendingCapabilityAck>,
+    media_window_timeout: Duration,
     last_sent_media_segment: Option<u64>,
     last_received_media_segment: Option<u64>,
 }
@@ -764,6 +766,7 @@ impl StreamingConnection {
             setup_state,
             setup_watchdog,
             pending_publisher_ack: None,
+            media_window_timeout: settings.idle_timeout.min(MAX_MEDIA_WINDOW_TRANSFER_TIME),
             last_sent_media_segment: None,
             last_received_media_segment: None,
         })
@@ -886,12 +889,21 @@ impl StreamingConnection {
         self.ensure_stream_fallback(EndpointRole::Publisher)?;
         validate_media_window(segment_number, self.last_sent_media_segment, chunks)?;
 
-        let stream = self
-            .connection
-            .open_uni()
-            .await
-            .map_err(|error| Error::Io(std::io::Error::from(error)))?;
-        write_media_window(stream, segment_number, chunks).await?;
+        let deadline = media_window_deadline(self.media_window_timeout)?;
+        let result = tokio::time::timeout_at(deadline, async {
+            let mut stream = self
+                .connection
+                .open_uni()
+                .await
+                .map_err(|error| Error::Io(std::io::Error::from(error)))?;
+            write_media_window(&mut stream, segment_number, chunks).await
+        })
+        .await
+        .unwrap_or_else(|_| Err(media_window_timeout_error()));
+        if result.is_err() {
+            self.close_invalid_media_stream();
+        }
+        result?;
         self.last_sent_media_segment = Some(segment_number);
         Ok(())
     }
@@ -901,18 +913,20 @@ impl StreamingConnection {
     /// numbers before returning any payloads to the caller.
     pub async fn recv_media_window(&mut self) -> Result<MediaSegmentWindow> {
         self.ensure_stream_fallback(EndpointRole::Viewer)?;
-        let stream = self.connection.accept_uni().await?;
-        let result = read_media_window(stream, self.last_received_media_segment).await;
+        let deadline = media_window_deadline(self.media_window_timeout)?;
+        let result = tokio::time::timeout_at(deadline, async {
+            let stream = self.connection.accept_uni().await?;
+            read_media_window(stream, self.last_received_media_segment).await
+        })
+        .await
+        .unwrap_or_else(|_| Err(media_window_timeout_error()));
         match result {
             Ok(window) => {
                 self.last_received_media_segment = Some(window.segment_number);
                 Ok(window)
             }
             Err(error) => {
-                self.connection.close(
-                    VarInt::from_u32(MEDIA_PROTOCOL_ERROR_CODE),
-                    b"invalid media stream",
-                );
+                self.close_invalid_media_stream();
                 Err(error)
             }
         }
@@ -942,6 +956,12 @@ impl StreamingConnection {
             ));
         }
         Ok(())
+    }
+    fn close_invalid_media_stream(&self) {
+        self.connection.close(
+            VarInt::from_u32(MEDIA_PROTOCOL_ERROR_CODE),
+            b"invalid media stream",
+        );
     }
     fn finish_setup(&mut self) -> Result<()> {
         let Some(deadline) = self.setup_deadline else {
@@ -1015,17 +1035,114 @@ impl StreamingConnection {
     }
 }
 
+fn media_window_deadline(timeout: Duration) -> Result<tokio::time::Instant> {
+    tokio::time::Instant::now()
+        .checked_add(timeout)
+        .ok_or_else(|| Error::TransportConfig("media window deadline cannot be represented".into()))
+}
+
+fn media_window_timeout_error() -> Error {
+    Error::InvalidMediaWindow("media stream exceeded its absolute transfer deadline".into())
+}
+
+fn validate_media_segment_number(segment_number: u64, previous_segment: Option<u64>) -> Result<()> {
+    if let Some(previous) = previous_segment
+        && segment_number <= previous
+    {
+        return Err(Error::InvalidMediaWindow(format!(
+            "segment number {segment_number} must be greater than previously completed segment {previous}"
+        )));
+    }
+    Ok(())
+}
+
+#[derive(Default)]
+struct MediaWindowValidator {
+    data_frames: usize,
+    parity_frames: usize,
+    parity_started: bool,
+    previous_chunk: Option<u16>,
+    payload_bytes: usize,
+}
+
+impl MediaWindowValidator {
+    fn admit(&mut self, chunk_id: u16, is_parity: bool, payload_len: usize) -> Result<()> {
+        if payload_len == 0 {
+            return Err(Error::InvalidMediaWindow(format!(
+                "chunk {chunk_id} has an empty payload"
+            )));
+        }
+        if payload_len > MAX_MEDIA_FRAME_LEN {
+            return Err(Error::InvalidMediaWindow(format!(
+                "chunk {chunk_id} payload is {payload_len} bytes; maximum is {MAX_MEDIA_FRAME_LEN}"
+            )));
+        }
+        self.payload_bytes = self
+            .payload_bytes
+            .checked_add(payload_len)
+            .ok_or_else(|| Error::InvalidMediaWindow("payload byte count overflow".into()))?;
+        if self.payload_bytes > MAX_MEDIA_WINDOW_LEN {
+            return Err(Error::InvalidMediaWindow(format!(
+                "segment payload is {} bytes; maximum is {MAX_MEDIA_WINDOW_LEN}",
+                self.payload_bytes
+            )));
+        }
+        if self
+            .previous_chunk
+            .is_some_and(|previous| chunk_id <= previous)
+        {
+            return Err(Error::InvalidMediaWindow(format!(
+                "chunk id {chunk_id} is not strictly greater than its predecessor"
+            )));
+        }
+        self.previous_chunk = Some(chunk_id);
+        if is_parity {
+            if self.data_frames == 0 {
+                return Err(Error::InvalidMediaWindow(
+                    "source chunks must precede every parity shard".into(),
+                ));
+            }
+            self.parity_started = true;
+            self.parity_frames += 1;
+            if self.parity_frames > MAX_MEDIA_PARITY_FRAMES_PER_WINDOW {
+                return Err(Error::InvalidMediaWindow(format!(
+                    "segment window contains {} parity frames; maximum is {MAX_MEDIA_PARITY_FRAMES_PER_WINDOW}",
+                    self.parity_frames
+                )));
+            }
+        } else {
+            if self.parity_started {
+                return Err(Error::InvalidMediaWindow(
+                    "source chunks must precede every parity shard".into(),
+                ));
+            }
+            self.data_frames += 1;
+            if self.data_frames > MAX_MEDIA_DATA_FRAMES_PER_WINDOW {
+                return Err(Error::InvalidMediaWindow(format!(
+                    "segment window contains {} source frames; maximum is {MAX_MEDIA_DATA_FRAMES_PER_WINDOW}",
+                    self.data_frames
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    fn finish(self) -> Result<()> {
+        if self.data_frames == 0 {
+            return Err(Error::InvalidMediaWindow(
+                "a segment window must contain at least one source chunk".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
 fn validate_media_window(
     segment_number: u64,
     previous_segment: Option<u64>,
     chunks: &[MediaChunk],
 ) -> Result<()> {
-    if previous_segment.is_some_and(|previous| segment_number <= previous) {
-        return Err(Error::InvalidMediaWindow(format!(
-            "segment number {segment_number} must be greater than previously completed segment {}",
-            previous_segment.expect("checked as some")
-        )));
-    }
+    validate_media_segment_number(segment_number, previous_segment)?;
     if chunks.is_empty() {
         return Err(Error::InvalidMediaWindow(
             "a segment window must contain at least one source chunk".into(),
@@ -1038,72 +1155,15 @@ fn validate_media_window(
         )));
     }
 
-    let mut data_frames = 0_usize;
-    let mut parity_frames = 0_usize;
-    let mut parity_started = false;
-    let mut previous_chunk = None;
-    let mut payload_bytes = 0_usize;
+    let mut validator = MediaWindowValidator::default();
     for chunk in chunks {
-        if chunk.payload.is_empty() {
-            return Err(Error::InvalidMediaWindow(format!(
-                "chunk {} has an empty payload",
-                chunk.chunk_id
-            )));
-        }
-        if chunk.payload.len() > MAX_MEDIA_FRAME_LEN {
-            return Err(Error::InvalidMediaWindow(format!(
-                "chunk {} payload is {} bytes; maximum is {MAX_MEDIA_FRAME_LEN}",
-                chunk.chunk_id,
-                chunk.payload.len()
-            )));
-        }
-        payload_bytes = payload_bytes
-            .checked_add(chunk.payload.len())
-            .ok_or_else(|| Error::InvalidMediaWindow("payload byte count overflow".into()))?;
-        if payload_bytes > MAX_MEDIA_WINDOW_LEN {
-            return Err(Error::InvalidMediaWindow(format!(
-                "segment payload is {payload_bytes} bytes; maximum is {MAX_MEDIA_WINDOW_LEN}"
-            )));
-        }
-        if previous_chunk.is_some_and(|previous| chunk.chunk_id <= previous) {
-            return Err(Error::InvalidMediaWindow(format!(
-                "chunk id {} is not strictly greater than its predecessor",
-                chunk.chunk_id
-            )));
-        }
-        previous_chunk = Some(chunk.chunk_id);
-        if chunk.is_parity {
-            parity_started = true;
-            parity_frames += 1;
-            if parity_frames > MAX_MEDIA_PARITY_FRAMES_PER_WINDOW {
-                return Err(Error::InvalidMediaWindow(format!(
-                    "segment window contains {parity_frames} parity frames; maximum is {MAX_MEDIA_PARITY_FRAMES_PER_WINDOW}"
-                )));
-            }
-        } else {
-            if parity_started {
-                return Err(Error::InvalidMediaWindow(
-                    "source chunks must precede every parity shard".into(),
-                ));
-            }
-            data_frames += 1;
-            if data_frames > MAX_MEDIA_DATA_FRAMES_PER_WINDOW {
-                return Err(Error::InvalidMediaWindow(format!(
-                    "segment window contains {data_frames} source frames; maximum is {MAX_MEDIA_DATA_FRAMES_PER_WINDOW}"
-                )));
-            }
-        }
+        validator.admit(chunk.chunk_id, chunk.is_parity, chunk.payload.len())?;
     }
-    if data_frames == 0 {
-        return Err(Error::InvalidMediaWindow(
-            "a segment window must contain at least one source chunk".into(),
-        ));
-    }
-    Ok(())
+    validator.finish()
 }
 
 async fn write_media_window(
-    mut stream: SendStream,
+    stream: &mut SendStream,
     segment_number: u64,
     chunks: &[MediaChunk],
 ) -> Result<()> {
@@ -1172,6 +1232,7 @@ async fn read_media_window(
     let mut segment_bytes = [0_u8; 8];
     read_media_exact(&mut stream, &mut segment_bytes).await?;
     let segment_number = u64::from_le_bytes(segment_bytes);
+    validate_media_segment_number(segment_number, previous_segment)?;
     let mut count_bytes = [0_u8; 2];
     read_media_exact(&mut stream, &mut count_bytes).await?;
     let frame_count = usize::from(u16::from_le_bytes(count_bytes));
@@ -1182,7 +1243,7 @@ async fn read_media_window(
     }
 
     let mut chunks = Vec::with_capacity(frame_count);
-    let mut payload_bytes = 0_usize;
+    let mut validator = MediaWindowValidator::default();
     for _ in 0..frame_count {
         let mut chunk_id_bytes = [0_u8; 2];
         read_media_exact(&mut stream, &mut chunk_id_bytes).await?;
@@ -1202,19 +1263,7 @@ async fn read_media_window(
         read_media_exact(&mut stream, &mut payload_len_bytes).await?;
         let payload_len = usize::try_from(u32::from_le_bytes(payload_len_bytes))
             .expect("u32 payload length fits supported platforms");
-        if payload_len == 0 || payload_len > MAX_MEDIA_FRAME_LEN {
-            return Err(Error::InvalidMediaWindow(format!(
-                "chunk {chunk_id} declared {payload_len} payload bytes; expected 1..={MAX_MEDIA_FRAME_LEN}"
-            )));
-        }
-        payload_bytes = payload_bytes
-            .checked_add(payload_len)
-            .ok_or_else(|| Error::InvalidMediaWindow("payload byte count overflow".into()))?;
-        if payload_bytes > MAX_MEDIA_WINDOW_LEN {
-            return Err(Error::InvalidMediaWindow(format!(
-                "segment payload exceeds {MAX_MEDIA_WINDOW_LEN} bytes"
-            )));
-        }
+        validator.admit(chunk_id, is_parity, payload_len)?;
         let mut payload = Vec::new();
         payload.try_reserve_exact(payload_len).map_err(|_| {
             Error::InvalidMediaWindow(format!(
@@ -1229,6 +1278,7 @@ async fn read_media_window(
             payload: Bytes::from(payload),
         });
     }
+    validator.finish()?;
     if stream
         .read_chunk(1, true)
         .await
@@ -1239,7 +1289,6 @@ async fn read_media_window(
             "media stream contains bytes after its declared frames".into(),
         ));
     }
-    validate_media_window(segment_number, previous_segment, &chunks)?;
     Ok(MediaSegmentWindow {
         segment_number,
         chunks,
@@ -1654,6 +1703,7 @@ where
     }
     Ok(port)
 }
+
 fn build_transport_config(settings: TransportConfigSettings) -> Result<Arc<TransportConfig>> {
     if settings.max_datagram_size != 0
         || settings.datagram_receive_buffer != 0
@@ -1670,7 +1720,9 @@ fn build_transport_config(settings: TransportConfigSettings) -> Result<Arc<Trans
     // Each endpoint permanently consumes one unidirectional stream for control. The remaining 15
     // bound the number of unfinished per-segment media streams a peer can hold concurrently.
     transport.max_concurrent_uni_streams(VarInt::from_u32(MAX_CONCURRENT_UNI_STREAMS));
-    transport.max_concurrent_bidi_streams(VarInt::from_u32(16));
+    // The protocol has no bidirectional stream role. Advertising any credit would let a peer
+    // retain streams that the application never accepts or validates.
+    transport.max_concurrent_bidi_streams(VarInt::from_u32(0));
     // `None` omits max_datagram_frame_size from the transport parameters, so
     // peers cannot send a conforming DATAGRAM and a raw unexpected frame is a
     // transport-level protocol violation before Quinn queues it. A zero send
@@ -1887,8 +1939,27 @@ mod tests {
             .expect("ordered bounded window");
 
         for (chunks, expected) in [
-            (vec![parity.clone(), source.clone()], "strictly greater"),
+            (
+                vec![
+                    source.clone(),
+                    MediaChunk {
+                        chunk_id: 0,
+                        ..source.clone()
+                    },
+                ],
+                "strictly greater",
+            ),
             (vec![source.clone(), source.clone()], "strictly greater"),
+            (
+                vec![
+                    parity.clone(),
+                    MediaChunk {
+                        chunk_id: 3,
+                        ..source.clone()
+                    },
+                ],
+                "source chunks must precede",
+            ),
             (
                 vec![MediaChunk {
                     payload: Bytes::new(),
@@ -2812,7 +2883,39 @@ mod tests {
                 )
                 .await
                 .expect("stream fallback media window");
+                let mut unfinished =
+                    within("open unfinished media stream", conn.connection.open_uni())
+                        .await
+                        .expect("open unfinished media stream");
+                unfinished
+                    .set_priority(MEDIA_STREAM_PRIORITY)
+                    .expect("set unfinished stream priority");
+                unfinished
+                    .write_all(MEDIA_STREAM_PREFACE)
+                    .await
+                    .expect("unfinished stream preface");
+                unfinished
+                    .write_all(&43_u64.to_le_bytes())
+                    .await
+                    .expect("unfinished segment number");
+                unfinished
+                    .write_all(&1_u16.to_le_bytes())
+                    .await
+                    .expect("unfinished frame count");
+                unfinished
+                    .write_all(&6_u16.to_le_bytes())
+                    .await
+                    .expect("unfinished chunk id");
+                unfinished
+                    .write_all(&[0])
+                    .await
+                    .expect("unfinished parity flag");
+                unfinished
+                    .write_all(&1_u32.to_le_bytes())
+                    .await
+                    .expect("unfinished payload length");
                 let _ = within("wait_client_close", conn.closed()).await;
+                drop(unfinished);
             }
         };
         let viewer_task = async move {
@@ -2899,7 +3002,14 @@ mod tests {
                 .send_datagram(Bytes::from_static(&[1]))
                 .expect_err("the local transport must disable DATAGRAM sends");
             assert!(matches!(error, SendDatagramError::Disabled));
-            client.connection().close();
+            client.connection().media_window_timeout = TokioDuration::from_millis(50);
+            let error = within(
+                "unfinished media stream deadline",
+                client.connection().recv_media_window(),
+            )
+            .await
+            .expect_err("an unfinished media stream must hit its absolute deadline");
+            assert!(error.to_string().contains("absolute transfer deadline"));
             within("client.close", client.close()).await;
         };
         tokio::join!(server_task, viewer_task);

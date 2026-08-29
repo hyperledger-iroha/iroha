@@ -32,6 +32,69 @@ export function createNoritoProofValueCodecs(
   isPlainObject,
   normalizeFlexibleBytes,
 ) {
+  const CONFIDENTIAL_MEMO_WIRE_MAGIC_V1 = Buffer.from([
+    0x49, 0x52, 0x48, 0x43, 0x4d, 0x31, 0xa5, 0x5a,
+  ]);
+  const CONFIDENTIAL_MEMO_RECIPIENT_SLOTS_V1 = 8;
+  const CONFIDENTIAL_MEMO_NONCE_BYTES_V1 = 24;
+  const CONFIDENTIAL_MEMO_WRAPPED_KEY_BYTES_V1 = 48;
+  const CONFIDENTIAL_MEMO_TAG_BYTES_V1 = 16;
+  const CONFIDENTIAL_MEMO_MAX_CIPHERTEXT_BYTES_V1 = 64 * 1024;
+  const CONFIDENTIAL_MEMO_SUITES_V1 = Object.freeze({
+    "ml-kem-768-xchacha20-poly1305-v1": Object.freeze({
+      tag: 0,
+      encapsulationBytes: 1088,
+    }),
+    "ml-kem-1024-xchacha20-poly1305-v1": Object.freeze({
+      tag: 1,
+      encapsulationBytes: 1568,
+    }),
+  });
+
+  function assertExactObjectKeys(value, expected, context) {
+    if (!isPlainObject(value)) {
+      throw new TypeError(`${context} must be an object`);
+    }
+    const expectedSet = new Set(expected);
+    for (const key of Object.keys(value)) {
+      if (!expectedSet.has(key)) {
+        throw new TypeError(`${context} contains unknown field ${key}`);
+      }
+    }
+    for (const key of expected) {
+      if (!Object.prototype.hasOwnProperty.call(value, key)) {
+        throw new TypeError(`${context}.${key} is required`);
+      }
+    }
+  }
+
+  function requireNonzero(bytes, context) {
+    if (bytes.every((byte) => byte === 0)) {
+      throw new Error(`${context} must not be all zero`);
+    }
+    return bytes;
+  }
+
+  function confidentialMemoSuite(label, context) {
+    if (typeof label !== JS_TYPE_STRING) {
+      throw new TypeError(`${context} must be a canonical confidential memo suite label`);
+    }
+    const suite = CONFIDENTIAL_MEMO_SUITES_V1[label];
+    if (suite === undefined) {
+      throw new Error(`${context} uses unsupported confidential memo suite ${label}`);
+    }
+    return suite;
+  }
+
+  function confidentialMemoSuiteFromTag(tag, context) {
+    for (const [label, suite] of Object.entries(CONFIDENTIAL_MEMO_SUITES_V1)) {
+      if (suite.tag === tag) {
+        return [label, suite];
+      }
+    }
+    throw new Error(`${context} uses unsupported confidential memo suite tag ${tag}`);
+  }
+
   function encodeMerkleProofValue(value, context) {
     return encodeTupleValue([
       encodeU32Value(value.leaf_index ?? value.leafIndex, `${context}.leaf_index`),
@@ -63,40 +126,165 @@ export function createNoritoProofValueCodecs(
     };
   }
 
-  function encodeConfidentialEncryptedPayloadValue(value, context) {
-    if (!isPlainObject(value)) {
-      throw new TypeError(`${context} must be an object`);
+  function encodeConfidentialMemoEnvelopeV1Value(value, context) {
+    assertExactObjectKeys(value, ["slots", "payload_nonce", "ciphertext"], context);
+    if (!Array.isArray(value.slots) || value.slots.length !== CONFIDENTIAL_MEMO_RECIPIENT_SLOTS_V1) {
+      throw new RangeError(
+        `${context}.slots must contain exactly ${CONFIDENTIAL_MEMO_RECIPIENT_SLOTS_V1} entries`,
+      );
     }
-    const version = encodeU8Value(value.version, `${context}.version`);
-    const ephemeral = encodeFixedBytesValue(value.ephemeral_pubkey, 32, `${context}.ephemeral_pubkey`);
-    const nonce = encodeFixedBytesValue(value.nonce, 24, `${context}.nonce`);
-    const ciphertext = Buffer.from(normalizeFlexibleBytes(value.ciphertext, `${context}.ciphertext`));
+
+    const encodedSlots = value.slots.map((slot, index) => {
+      const slotContext = `${context}.slots[${index}]`;
+      assertExactObjectKeys(
+        slot,
+        ["suite", "encapsulation", "wrap_nonce", "wrapped_memo_key"],
+        slotContext,
+      );
+      const suite = confidentialMemoSuite(slot.suite, `${slotContext}.suite`);
+      const encapsulation = requireNonzero(
+        Buffer.from(
+          normalizeFlexibleBytes(slot.encapsulation, `${slotContext}.encapsulation`),
+        ),
+        `${slotContext}.encapsulation`,
+      );
+      if (encapsulation.length !== suite.encapsulationBytes) {
+        throw new RangeError(
+          `${slotContext}.encapsulation must be exactly ${suite.encapsulationBytes} bytes`,
+        );
+      }
+      const wrapNonce = requireNonzero(
+        encodeFixedBytesValue(
+          slot.wrap_nonce,
+          CONFIDENTIAL_MEMO_NONCE_BYTES_V1,
+          `${slotContext}.wrap_nonce`,
+        ),
+        `${slotContext}.wrap_nonce`,
+      );
+      const wrappedMemoKey = requireNonzero(
+        encodeFixedBytesValue(
+          slot.wrapped_memo_key,
+          CONFIDENTIAL_MEMO_WRAPPED_KEY_BYTES_V1,
+          `${slotContext}.wrapped_memo_key`,
+        ),
+        `${slotContext}.wrapped_memo_key`,
+      );
+      return Buffer.concat([
+        encodeU8Value(suite.tag, `${slotContext}.suite`),
+        encapsulation,
+        wrapNonce,
+        wrappedMemoKey,
+      ]);
+    });
+    const seenSlots = new Set();
+    for (const [index, slot] of encodedSlots.entries()) {
+      const identity = slot.toString(HEX_ENCODING);
+      if (seenSlots.has(identity)) {
+        throw new Error(`${context}.slots[${index}] duplicates an earlier slot`);
+      }
+      seenSlots.add(identity);
+    }
+
+    const payloadNonce = requireNonzero(
+      encodeFixedBytesValue(
+        value.payload_nonce,
+        CONFIDENTIAL_MEMO_NONCE_BYTES_V1,
+        `${context}.payload_nonce`,
+      ),
+      `${context}.payload_nonce`,
+    );
+    const ciphertext = Buffer.from(
+      normalizeFlexibleBytes(value.ciphertext, `${context}.ciphertext`),
+    );
+    if (
+      ciphertext.length < CONFIDENTIAL_MEMO_TAG_BYTES_V1 ||
+      ciphertext.length > CONFIDENTIAL_MEMO_MAX_CIPHERTEXT_BYTES_V1
+    ) {
+      throw new RangeError(
+        `${context}.ciphertext must be ${CONFIDENTIAL_MEMO_TAG_BYTES_V1}..${CONFIDENTIAL_MEMO_MAX_CIPHERTEXT_BYTES_V1} bytes`,
+      );
+    }
     return Buffer.concat([
-      version,
-      ephemeral,
-      nonce,
+      CONFIDENTIAL_MEMO_WIRE_MAGIC_V1,
+      ...encodedSlots,
+      payloadNonce,
       encodeCompactLength(ciphertext.length),
       ciphertext,
     ]);
   }
 
-  function decodeConfidentialEncryptedPayloadValue(payload, context) {
+  function decodeConfidentialMemoEnvelopeV1Value(payload, context) {
     const reader = new BufferReader(payload, context);
-    const version = reader.readU8("version");
-    const ephemeral_pubkey = Array.from(reader.readBytes(32, "ephemeral_pubkey"));
-    const nonce = Array.from(reader.readBytes(24, "nonce"));
+    const magic = reader.readBytes(
+      CONFIDENTIAL_MEMO_WIRE_MAGIC_V1.length,
+      "wire_magic",
+    );
+    if (!magic.equals(CONFIDENTIAL_MEMO_WIRE_MAGIC_V1)) {
+      throw new Error(`${context} has invalid confidential memo V1 wire magic`);
+    }
+    const slots = [];
+    const encodedSlotIdentities = new Set();
+    for (let index = 0; index < CONFIDENTIAL_MEMO_RECIPIENT_SLOTS_V1; index += 1) {
+      const slotContext = `${context}.slots[${index}]`;
+      const tag = reader.readU8(`${slotContext}.suite`);
+      const [suiteLabel, suite] = confidentialMemoSuiteFromTag(tag, `${slotContext}.suite`);
+      const encapsulation = requireNonzero(
+        reader.readBytes(suite.encapsulationBytes, `${slotContext}.encapsulation`),
+        `${slotContext}.encapsulation`,
+      );
+      const wrapNonce = requireNonzero(
+        reader.readBytes(CONFIDENTIAL_MEMO_NONCE_BYTES_V1, `${slotContext}.wrap_nonce`),
+        `${slotContext}.wrap_nonce`,
+      );
+      const wrappedMemoKey = requireNonzero(
+        reader.readBytes(
+          CONFIDENTIAL_MEMO_WRAPPED_KEY_BYTES_V1,
+          `${slotContext}.wrapped_memo_key`,
+        ),
+        `${slotContext}.wrapped_memo_key`,
+      );
+      const identity = Buffer.concat([
+        Buffer.from([tag]),
+        encapsulation,
+        wrapNonce,
+        wrappedMemoKey,
+      ]).toString(HEX_ENCODING);
+      if (encodedSlotIdentities.has(identity)) {
+        throw new Error(`${slotContext} duplicates an earlier slot`);
+      }
+      encodedSlotIdentities.add(identity);
+      slots.push({
+        suite: suiteLabel,
+        encapsulation: Buffer.from(encapsulation).toString(BASE64_ENCODING),
+        wrap_nonce: Array.from(wrapNonce),
+        wrapped_memo_key: Array.from(wrappedMemoKey),
+      });
+    }
+    const payload_nonce = Array.from(
+      requireNonzero(
+        reader.readBytes(CONFIDENTIAL_MEMO_NONCE_BYTES_V1, "payload_nonce"),
+        `${context}.payload_nonce`,
+      ),
+    );
     const [ciphertextLength, lengthBytes] = decodeUnsignedLeb128(
       payload,
       reader.offset,
       `${context}.ciphertext.length`,
     );
+    if (
+      ciphertextLength < CONFIDENTIAL_MEMO_TAG_BYTES_V1 ||
+      ciphertextLength > CONFIDENTIAL_MEMO_MAX_CIPHERTEXT_BYTES_V1
+    ) {
+      throw new RangeError(
+        `${context}.ciphertext must be ${CONFIDENTIAL_MEMO_TAG_BYTES_V1}..${CONFIDENTIAL_MEMO_MAX_CIPHERTEXT_BYTES_V1} bytes`,
+      );
+    }
     reader.offset += lengthBytes;
     const ciphertext = reader.readBytes(ciphertextLength, "ciphertext");
     reader.assertEof();
     return {
-      version,
-      ephemeral_pubkey,
-      nonce,
+      slots,
+      payload_nonce,
       ciphertext: Buffer.from(ciphertext).toString(BASE64_ENCODING),
     };
   }
@@ -104,8 +292,8 @@ export function createNoritoProofValueCodecs(
   return [
     encodeMerkleProofValue,
     decodeMerkleProofValue,
-    encodeConfidentialEncryptedPayloadValue,
-    decodeConfidentialEncryptedPayloadValue,
+    encodeConfidentialMemoEnvelopeV1Value,
+    decodeConfidentialMemoEnvelopeV1Value,
   ];
 }
 

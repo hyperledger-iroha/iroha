@@ -32,10 +32,7 @@ public static class VerifyingKeyBackendTags
     private static readonly HashSet<string> StarkFriProductionBackends =
         new(StringComparer.Ordinal)
         {
-            "stark/fri",
-            "stark/fri/sha256-goldilocks",
-            "stark/fri/poseidon2-goldilocks",
-            "stark/fri/sha256_goldilocks.v1",
+            "stark/fri/poseidon-x7-goldilocks-6x64-v1",
         };
 
     private static readonly HashSet<string> ProductionNativeHalo2PastaBackends =

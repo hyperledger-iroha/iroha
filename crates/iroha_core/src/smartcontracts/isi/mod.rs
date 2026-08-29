@@ -455,6 +455,7 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::bridge::SubmitBridgeProof>,
     dispatch_instruction::<iroha_data_model::isi::bridge::RecordBridgeReceipt>,
     dispatch_instruction::<iroha_data_model::isi::bridge::RecordSccpMessage>,
+    dispatch_instruction::<iroha_data_model::isi::bridge::SubmitSccpTonBreakerObservationV1>,
     dispatch_instruction::<iroha_data_model::isi::bridge::ApplySccpRouteGovernance>,
     dispatch_instruction::<confidential::PublishPedersenParams>,
     dispatch_instruction::<confidential::SetPedersenParamsLifecycle>,
@@ -494,6 +495,9 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::governance::RestituteGovernanceLock>,
     dispatch_instruction::<
         iroha_data_model::isi::privacy::RegisterPrivacyProtocolActivationV1
+    >,
+    dispatch_instruction::<
+        iroha_data_model::isi::privacy::RegisterPrivacyExact12QualificationV1
     >,
     dispatch_instruction::<
         iroha_data_model::isi::privacy::SchedulePrivacyConsensusPolicyTighteningV1
@@ -602,6 +606,7 @@ mod registry_dispatch_tests {
     fn every_canonical_privacy_instruction_has_a_native_dispatch_impl() {
         use iroha_data_model::isi::privacy;
         assert_native_registration::<privacy::RegisterPrivacyProtocolActivationV1>();
+        assert_native_registration::<privacy::RegisterPrivacyExact12QualificationV1>();
         assert_native_registration::<privacy::SchedulePrivacyConsensusPolicyTighteningV1>();
         assert_native_registration::<privacy::SchedulePrivacyProtocolLimitsTighteningV1>();
         assert_native_registration::<privacy::TransitionPrivacyProtocolLifecycleV1>();

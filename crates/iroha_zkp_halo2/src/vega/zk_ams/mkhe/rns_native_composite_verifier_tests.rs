@@ -19,6 +19,11 @@ use crate::vega::zk_ams::mkhe::{
         ZkAmsMkheRnsNativeQpcsRootsV1, ZkAmsMkheRnsNativeTerminalBridgeV1,
         ZkAmsMkheRnsNativeTerminalRootsV1, ZkAmsMkheRnsNativeTranscriptV1,
     },
+    rns_native_zero_padding_commitment::deterministic_zero_padding_stage_fixture_v1,
+};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
 };
 
 const TYPED_SECTION_COMMON_PREFIX_BYTES_V1: usize = 4 + 1 + 1 + 4 + 5 * 32;
@@ -161,6 +166,14 @@ fn opening_role(ordinal: usize) -> (ZkAmsMkheRnsNativeFamilyV1, u8) {
 }
 
 fn composite_fixture(context: u16) -> CompositeFixtureV1 {
+    composite_fixture_with_zero_padding(context, digest(b"zero-padding-root", context, 0), None)
+}
+
+fn composite_fixture_with_zero_padding(
+    context: u16,
+    zero_padding_root: [u8; 32],
+    zero_padding_fixture: Option<(&[[u8; 32]; 40], &[u8])>,
+) -> CompositeFixtureV1 {
     let profile = zk_ams_mkhe_rns_native_profile_v1().expect("canonical profile");
     let topology = zk_ams_mkhe_rns_native_topology_v1().expect("canonical topology");
     let release = zk_ams_mkhe_rns_native_release_candidate_digest_v1().expect("candidate");
@@ -243,7 +256,7 @@ fn composite_fixture(context: u16) -> CompositeFixtureV1 {
         transcript.binding_digest(),
         digest(b"cross-field-root", context, 0),
         digest(b"global-lookup-root", context, 0),
-        digest(b"zero-padding-root", context, 0),
+        zero_padding_root,
     )
     .expect("terminal roots");
     let transcript = transcript
@@ -286,8 +299,10 @@ fn composite_fixture(context: u16) -> CompositeFixtureV1 {
     .expect("cross-field/lookup encoding");
     let padding_digests: [[u8; 32]; 40] = indexed_digests(b"padding-limb", context);
     let padding_proof = [0x44, context.to_be_bytes()[0], context.to_be_bytes()[1]];
+    let (padding_digests, padding_proof): (&[[u8; 32]; 40], &[u8]) =
+        zero_padding_fixture.unwrap_or((&padding_digests, &padding_proof));
     let padding_section =
-        ZkAmsMkheRnsNativeZeroPaddingSectionV1::new(&transcript, &padding_digests, &padding_proof)
+        ZkAmsMkheRnsNativeZeroPaddingSectionV1::new(&transcript, padding_digests, padding_proof)
             .expect("zero-padding section")
             .to_canonical_bytes_v1()
             .expect("zero-padding encoding");
@@ -318,6 +333,67 @@ fn exact_authority(
         fixture.source_receipt,
         &fixture.transcript,
     )
+}
+
+fn rebuild_envelope_with_cross_and_padding(
+    fixture: &CompositeFixtureV1,
+    cross_section: Vec<u8>,
+    padding_section: Vec<u8>,
+) -> ZkAmsMkheRnsNativeProofEnvelopeV1 {
+    ZkAmsMkheRnsNativeProofEnvelopeV1::new(
+        fixture.layout,
+        fixture.source_receipt,
+        fixture
+            .envelope
+            .section(ZkAmsMkheRnsNativeProofSectionKindV1::TerminalHyraxBpBridge)
+            .to_vec(),
+        fixture
+            .envelope
+            .section(ZkAmsMkheRnsNativeProofSectionKindV1::RnsRelationQpcs)
+            .to_vec(),
+        cross_section,
+        padding_section,
+    )
+    .expect("transport-valid rebuilt envelope")
+}
+
+fn rebuild_envelope_with_terminal_and_rns(
+    fixture: &CompositeFixtureV1,
+    terminal_section: Vec<u8>,
+    rns_section: Vec<u8>,
+) -> ZkAmsMkheRnsNativeProofEnvelopeV1 {
+    ZkAmsMkheRnsNativeProofEnvelopeV1::new(
+        fixture.layout,
+        fixture.source_receipt,
+        terminal_section,
+        rns_section,
+        fixture
+            .envelope
+            .section(ZkAmsMkheRnsNativeProofSectionKindV1::CrossFieldGlobalLookup)
+            .to_vec(),
+        fixture
+            .envelope
+            .section(ZkAmsMkheRnsNativeProofSectionKindV1::ZeroPadding)
+            .to_vec(),
+    )
+    .expect("transport-valid rebuilt envelope")
+}
+
+struct RetainedAuthorityDropProbe {
+    name: &'static str,
+    finish_materialized: Rc<Cell<bool>>,
+    dropped: Rc<Cell<bool>>,
+}
+
+impl Drop for RetainedAuthorityDropProbe {
+    fn drop(&mut self) {
+        assert!(
+            self.finish_materialized.get(),
+            "{} dropped before the composite result was materialized",
+            self.name,
+        );
+        self.dropped.set(true);
+    }
 }
 
 #[test]
@@ -410,6 +486,238 @@ fn all_typed_sections_are_validated_before_first_unavailable_stage() {
         Err(
             ZkAmsMkheRnsNativeCompositeVerificationErrorV1::InvalidSection(
                 ZkAmsMkheRnsNativeVerificationStageV1::RnsRelationQpcs,
+            )
+        )
+    ));
+}
+
+#[test]
+fn source_bound_context_rejects_terminal_and_rns_framing_before_authentication() {
+    let terminal_fixture = composite_fixture(41);
+    let mut malformed_terminal = terminal_fixture
+        .envelope
+        .section(ZkAmsMkheRnsNativeProofSectionKindV1::TerminalHyraxBpBridge)
+        .to_vec();
+    malformed_terminal.push(0);
+    let terminal_envelope = rebuild_envelope_with_terminal_and_rns(
+        &terminal_fixture,
+        malformed_terminal,
+        terminal_fixture
+            .envelope
+            .section(ZkAmsMkheRnsNativeProofSectionKindV1::RnsRelationQpcs)
+            .to_vec(),
+    );
+    let terminal_auth_called = Cell::new(false);
+    let qpcs_auth_called = Cell::new(false);
+    assert!(matches!(
+        validate_then_authenticate_source_bound_context_v2(
+            &terminal_envelope,
+            terminal_fixture.layout,
+            terminal_fixture.source_receipt,
+            terminal_fixture.transcript,
+            |_| {
+                terminal_auth_called.set(true);
+                Ok(())
+            },
+            |_| {
+                qpcs_auth_called.set(true);
+                Ok(())
+            },
+        ),
+        Err(
+            ZkAmsMkheRnsNativeCompositeVerificationErrorV1::InvalidSection(
+                ZkAmsMkheRnsNativeVerificationStageV1::TerminalHyraxBpBridge,
+            )
+        )
+    ));
+    assert!(!terminal_auth_called.get());
+    assert!(!qpcs_auth_called.get());
+
+    let qpcs_fixture = composite_fixture(42);
+    let mut malformed_qpcs = qpcs_fixture
+        .envelope
+        .section(ZkAmsMkheRnsNativeProofSectionKindV1::RnsRelationQpcs)
+        .to_vec();
+    malformed_qpcs.push(0);
+    let qpcs_envelope = rebuild_envelope_with_terminal_and_rns(
+        &qpcs_fixture,
+        qpcs_fixture
+            .envelope
+            .section(ZkAmsMkheRnsNativeProofSectionKindV1::TerminalHyraxBpBridge)
+            .to_vec(),
+        malformed_qpcs,
+    );
+    let terminal_auth_called = Cell::new(false);
+    let qpcs_auth_called = Cell::new(false);
+    assert!(matches!(
+        validate_then_authenticate_source_bound_context_v2(
+            &qpcs_envelope,
+            qpcs_fixture.layout,
+            qpcs_fixture.source_receipt,
+            qpcs_fixture.transcript,
+            |_| {
+                terminal_auth_called.set(true);
+                Ok(())
+            },
+            |_| {
+                qpcs_auth_called.set(true);
+                Ok(())
+            },
+        ),
+        Err(
+            ZkAmsMkheRnsNativeCompositeVerificationErrorV1::InvalidSection(
+                ZkAmsMkheRnsNativeVerificationStageV1::RnsRelationQpcs,
+            )
+        )
+    ));
+    assert!(!terminal_auth_called.get());
+    assert!(!qpcs_auth_called.get());
+
+    let ordered_fixture = composite_fixture(44);
+    let authentication_order = RefCell::new(Vec::new());
+    let checked = validate_then_authenticate_source_bound_context_v2(
+        &ordered_fixture.envelope,
+        ordered_fixture.layout,
+        ordered_fixture.source_receipt,
+        ordered_fixture.transcript,
+        |_| {
+            authentication_order.borrow_mut().push("terminal");
+            Ok(())
+        },
+        |_| {
+            authentication_order.borrow_mut().push("qpcs");
+            Ok(())
+        },
+    )
+    .expect("valid context reaches both authenticators");
+    assert_eq!(authentication_order.into_inner(), vec!["terminal", "qpcs"]);
+    drop(checked);
+}
+
+#[test]
+fn source_bound_stage_router_uses_each_exact_authenticator() {
+    let fixture = composite_fixture(43);
+    let axes = validate_context_v1(
+        &fixture.envelope,
+        fixture.layout,
+        fixture.source_receipt,
+        &fixture.transcript,
+    )
+    .expect("validated source-bound context");
+    let authority = FirstPartyStageAuthorityV1::ProductionSourceBoundAllStages;
+
+    for stage in [
+        ZkAmsMkheRnsNativeVerificationStageV1::TerminalHyraxBpBridge,
+        ZkAmsMkheRnsNativeVerificationStageV1::RnsRelationQpcs,
+    ] {
+        let descriptor = fixture.envelope.descriptors()[stage.index()];
+        assert!(
+            authority
+                .verify_v1(stage, &axes, &fixture.transcript, descriptor, &[])
+                .is_ok(),
+            "preauthenticated {stage:?} must not run a detached authenticator",
+        );
+    }
+
+    let cross_field = ZkAmsMkheRnsNativeVerificationStageV1::CrossFieldGlobalLookup;
+    let cross_descriptor = fixture.envelope.descriptors()[cross_field.index()];
+    assert!(
+        authority
+            .verify_v1(
+                cross_field,
+                &axes,
+                &fixture.transcript,
+                cross_descriptor,
+                fixture.envelope.section(cross_field.section_kind()),
+            )
+            .is_ok(),
+        "the source-bound cross-field section must use its typed authenticator",
+    );
+    assert!(matches!(
+        authority.verify_v1(
+            cross_field,
+            &axes,
+            &fixture.transcript,
+            cross_descriptor,
+            &[],
+        ),
+        Err(
+            ZkAmsMkheRnsNativeCompositeVerificationErrorV1::StageRejected(
+                ZkAmsMkheRnsNativeVerificationStageV1::CrossFieldGlobalLookup,
+            )
+        )
+    ));
+
+    let (padding_root, padding_digests, padding_proof) =
+        deterministic_zero_padding_stage_fixture_v1(|root| {
+            composite_fixture_with_zero_padding(45, root, None).transcript
+        })
+        .expect("valid zero-padding stage fixture");
+    let padding_fixture = composite_fixture_with_zero_padding(
+        45,
+        padding_root,
+        Some((&padding_digests, &padding_proof)),
+    );
+    let padding_axes = validate_context_v1(
+        &padding_fixture.envelope,
+        padding_fixture.layout,
+        padding_fixture.source_receipt,
+        &padding_fixture.transcript,
+    )
+    .expect("validated zero-padding source-bound context");
+    let zero_padding = ZkAmsMkheRnsNativeVerificationStageV1::ZeroPadding;
+    let padding_descriptor = padding_fixture.envelope.descriptors()[zero_padding.index()];
+    assert!(
+        authority
+            .verify_v1(
+                zero_padding,
+                &padding_axes,
+                &padding_fixture.transcript,
+                padding_descriptor,
+                padding_fixture
+                    .envelope
+                    .section(zero_padding.section_kind()),
+            )
+            .is_ok(),
+        "the source-bound zero-padding section must use its typed authenticator",
+    );
+
+    let mut mutated_padding_proof = padding_proof;
+    let mutation_index = mutated_padding_proof.len() / 2;
+    mutated_padding_proof[mutation_index] ^= 1;
+    let mutated_padding_section = ZkAmsMkheRnsNativeZeroPaddingSectionV1::new(
+        &padding_fixture.transcript,
+        &padding_digests,
+        &mutated_padding_proof,
+    )
+    .expect("mutated zero-padding section")
+    .to_canonical_bytes_v1()
+    .expect("mutated zero-padding encoding");
+    assert!(matches!(
+        authority.verify_v1(
+            zero_padding,
+            &padding_axes,
+            &padding_fixture.transcript,
+            padding_descriptor,
+            &mutated_padding_section,
+        ),
+        Err(
+            ZkAmsMkheRnsNativeCompositeVerificationErrorV1::StageRejected(
+                ZkAmsMkheRnsNativeVerificationStageV1::ZeroPadding,
+            )
+        )
+    ));
+    assert!(matches!(
+        authority.verify_v1(
+            zero_padding,
+            &padding_axes,
+            &padding_fixture.transcript,
+            padding_descriptor,
+            &[],
+        ),
+        Err(
+            ZkAmsMkheRnsNativeCompositeVerificationErrorV1::StageRejected(
+                ZkAmsMkheRnsNativeVerificationStageV1::ZeroPadding,
             )
         )
     ));
@@ -678,6 +986,272 @@ fn transcript_section_and_stage_order_splices_are_rejected() {
 }
 
 #[test]
+fn omitted_duplicated_and_trailing_lookup_padding_frames_are_rejected_atomically() {
+    let omitted = composite_fixture(35);
+    let mut omitted_cross = omitted
+        .envelope
+        .section(ZkAmsMkheRnsNativeProofSectionKindV1::CrossFieldGlobalLookup)
+        .to_vec();
+    omitted_cross.pop().expect("nonempty cross section");
+    let omitted_padding = omitted
+        .envelope
+        .section(ZkAmsMkheRnsNativeProofSectionKindV1::ZeroPadding)
+        .to_vec();
+    let omitted_envelope =
+        rebuild_envelope_with_cross_and_padding(&omitted, omitted_cross, omitted_padding);
+    let omitted_source = omitted.source_snapshot();
+    assert!(matches!(
+        verify_zk_ams_mkhe_rns_native_composite_v1(
+            omitted_envelope,
+            omitted_source,
+            omitted.transcript,
+        ),
+        Err(
+            ZkAmsMkheRnsNativeCompositeVerificationErrorV1::InvalidSection(
+                ZkAmsMkheRnsNativeVerificationStageV1::CrossFieldGlobalLookup,
+            )
+        )
+    ));
+
+    let duplicated = composite_fixture(36);
+    let duplicated_cross = duplicated
+        .envelope
+        .section(ZkAmsMkheRnsNativeProofSectionKindV1::RnsRelationQpcs)
+        .to_vec();
+    let duplicated_padding = duplicated
+        .envelope
+        .section(ZkAmsMkheRnsNativeProofSectionKindV1::ZeroPadding)
+        .to_vec();
+    let duplicated_envelope =
+        rebuild_envelope_with_cross_and_padding(&duplicated, duplicated_cross, duplicated_padding);
+    let duplicated_source = duplicated.source_snapshot();
+    assert!(matches!(
+        verify_zk_ams_mkhe_rns_native_composite_v1(
+            duplicated_envelope,
+            duplicated_source,
+            duplicated.transcript,
+        ),
+        Err(
+            ZkAmsMkheRnsNativeCompositeVerificationErrorV1::InvalidSection(
+                ZkAmsMkheRnsNativeVerificationStageV1::CrossFieldGlobalLookup,
+            )
+        )
+    ));
+
+    let trailing = composite_fixture(37);
+    let trailing_cross = trailing
+        .envelope
+        .section(ZkAmsMkheRnsNativeProofSectionKindV1::CrossFieldGlobalLookup)
+        .to_vec();
+    let mut trailing_padding = trailing
+        .envelope
+        .section(ZkAmsMkheRnsNativeProofSectionKindV1::ZeroPadding)
+        .to_vec();
+    trailing_padding.push(0);
+    let trailing_envelope =
+        rebuild_envelope_with_cross_and_padding(&trailing, trailing_cross, trailing_padding);
+    let trailing_source = trailing.source_snapshot();
+    assert!(matches!(
+        verify_zk_ams_mkhe_rns_native_composite_v1(
+            trailing_envelope,
+            trailing_source,
+            trailing.transcript,
+        ),
+        Err(
+            ZkAmsMkheRnsNativeCompositeVerificationErrorV1::InvalidSection(
+                ZkAmsMkheRnsNativeVerificationStageV1::ZeroPadding,
+            )
+        )
+    ));
+}
+
+#[test]
+fn composite_stage_cursor_rejects_skips_before_any_partial_stage_can_escape() {
+    let fixture = composite_fixture(38);
+    let authority = exact_authority(&fixture).expect("exact authority");
+    let checked = ContextCheckedV1::new(
+        &fixture.envelope,
+        fixture.layout,
+        fixture.source_receipt,
+        fixture.transcript,
+        FirstPartyStageAuthorityV1::ExactFixture(Box::new(authority)),
+    )
+    .expect("context-bound composite");
+    assert!(matches!(
+        checked.verify_stage_v1(ZkAmsMkheRnsNativeVerificationStageV1::RnsRelationQpcs),
+        Err(
+            ZkAmsMkheRnsNativeCompositeVerificationErrorV1::InvalidSection(
+                ZkAmsMkheRnsNativeVerificationStageV1::RnsRelationQpcs,
+            )
+        )
+    ));
+
+    let source = include_str!("rns_native_composite_verifier.rs");
+    let cursor = source
+        .split_once("fn verify_stage_v1(")
+        .and_then(|(_, suffix)| suffix.split_once("fn verify_terminal_bridge_v1"))
+        .map(|(cursor, _)| cursor)
+        .expect("stage cursor implementation");
+    assert!(cursor.contains("mut self"));
+    assert!(cursor.contains("stage.index() != self.next_stage"));
+    assert!(cursor.contains("self.next_stage = self"));
+    assert!(cursor.contains(".checked_add(1)"));
+    assert!(!cursor.contains("&mut self"));
+}
+
+#[test]
+fn retained_authority_set_outlives_composite_result_materialization() {
+    let fixture = composite_fixture(45);
+    let authority = exact_authority(&fixture).expect("exact fixture authority");
+    let CompositeFixtureV1 {
+        layout,
+        source_receipt,
+        envelope,
+        transcript,
+        ..
+    } = fixture;
+    let finish_materialized = Rc::new(Cell::new(false));
+    let source_dropped = Rc::new(Cell::new(false));
+    let source_packing_dropped = Rc::new(Cell::new(false));
+    let qpcs_dropped = Rc::new(Cell::new(false));
+
+    let result: Result<
+        ZkAmsMkheRnsNativeCompositeCandidateReceiptV1,
+        ZkAmsMkheRnsNativeCompositeVerificationErrorV1,
+    > = retain_composite_authorities_through_result_v2(
+        RetainedAuthorityDropProbe {
+            name: "source owner",
+            finish_materialized: Rc::clone(&finish_materialized),
+            dropped: Rc::clone(&source_dropped),
+        },
+        RetainedAuthorityDropProbe {
+            name: "source-packing authority",
+            finish_materialized: Rc::clone(&finish_materialized),
+            dropped: Rc::clone(&source_packing_dropped),
+        },
+        RetainedAuthorityDropProbe {
+            name: "qPCS authority",
+            finish_materialized: Rc::clone(&finish_materialized),
+            dropped: Rc::clone(&qpcs_dropped),
+        },
+        |source_owner, source_packing_authority, qpcs_authority| {
+            assert!(!source_owner.dropped.get());
+            assert!(!source_packing_authority.dropped.get());
+            assert!(!qpcs_authority.dropped.get());
+            let receipt = ContextCheckedV1::new(
+                &envelope,
+                layout,
+                source_receipt,
+                transcript,
+                FirstPartyStageAuthorityV1::ExactFixture(Box::new(authority)),
+            )?
+            .verify_terminal_bridge_v1()?
+            .verify_rns_relation_qpcs_v1()?
+            .verify_cross_field_global_lookup_v1()?
+            .verify_zero_padding_v1()?
+            .finish_v1()?;
+            assert!(!source_owner.dropped.get());
+            assert!(!source_packing_authority.dropped.get());
+            assert!(!qpcs_authority.dropped.get());
+            finish_materialized.set(true);
+            Ok(receipt)
+        },
+    );
+
+    let receipt = result.expect("actual finish_v1 materializes a candidate");
+    assert_ne!(receipt.candidate_digest(), [0; 32]);
+    assert!(finish_materialized.get());
+    assert!(source_dropped.get());
+    assert!(source_packing_dropped.get());
+    assert!(qpcs_dropped.get());
+}
+
+#[test]
+fn source_bound_all_stage_authority_is_pre_authenticated_narrow_and_consuming() {
+    let source = include_str!("rns_native_composite_verifier.rs");
+    let entry = source
+        .split_once("verify_zk_ams_mkhe_rns_native_composite_from_source_chain_v2")
+        .and_then(|(_, suffix)| {
+            suffix.split_once("fn validate_then_authenticate_source_bound_context_v2")
+        })
+        .map(|(entry, _)| entry)
+        .expect("source-bound composite entry");
+    let retention = entry
+        .find("retain_composite_authorities_through_result_v2(")
+        .expect("retained-authority calculation");
+    let context_orchestration = entry
+        .find("validate_then_authenticate_source_bound_context_v2(")
+        .expect("typed context orchestration");
+    let terminal_pre_auth = entry
+        .find("authenticate_terminal_candidate_v2")
+        .expect("retained terminal preauthentication");
+    let qpcs_pre_auth = entry
+        .find("authenticate_qpcs_candidate_v2")
+        .expect("retained qPCS preauthentication");
+    let cursor = entry
+        .find(".verify_terminal_bridge_v1()")
+        .expect("all-stage cursor walk");
+    let finish = entry
+        .find(".finish_v1()")
+        .expect("candidate materialization");
+    assert!(retention < context_orchestration);
+    assert!(context_orchestration < terminal_pre_auth);
+    assert!(terminal_pre_auth < qpcs_pre_auth);
+    assert!(qpcs_pre_auth < cursor);
+    assert!(cursor < finish);
+
+    let context_helper = source
+        .split_once("fn validate_then_authenticate_source_bound_context_v2")
+        .and_then(|(_, suffix)| {
+            suffix.split_once("fn retain_composite_authorities_through_result_v2")
+        })
+        .map(|(context_helper, _)| context_helper)
+        .expect("typed context orchestration helper");
+    let context_validation = context_helper
+        .find("let context_checked = ContextCheckedV1::new")
+        .expect("typed context validation");
+    let terminal_auth = context_helper
+        .find("authenticate_terminal(&context_checked)")
+        .expect("terminal authentication call");
+    let qpcs_auth = context_helper
+        .find("authenticate_qpcs(&context_checked)")
+        .expect("qPCS authentication call");
+    assert!(context_validation < terminal_auth);
+    assert!(terminal_auth < qpcs_auth);
+    assert!(context_helper.contains("FirstPartyStageAuthorityV1::ProductionSourceBoundAllStages"));
+
+    let retention_helper = source
+        .split_once("fn retain_composite_authorities_through_result_v2")
+        .and_then(|(_, suffix)| suffix.split_once("fn verify_with_first_party_authority_v1"))
+        .map(|(retention_helper, _)| retention_helper)
+        .expect("retained-authority helper");
+    let materialized = retention_helper
+        .find("let result = calculation(")
+        .expect("materialized composite result");
+    for owner_drop in [
+        "drop(source_owner);",
+        "drop(source_packing_authority);",
+        "drop(qpcs_authority);",
+    ] {
+        let owner_drop = retention_helper
+            .find(owner_drop)
+            .expect("retained authority drop");
+        assert!(materialized < owner_drop);
+    }
+    let authority = source
+        .split_once("Self::ProductionSourceBoundAllStages => match stage")
+        .and_then(|(_, suffix)| suffix.split_once("#[cfg(test)]"))
+        .map(|(authority, _)| authority)
+        .expect("narrow source-bound authority");
+    assert!(authority.contains("authenticate_source_bound_cross_field_global_lookup_v2"));
+    assert!(authority.contains("authenticate_zero_padding_production_v1"));
+    assert!(authority.contains("TerminalHyraxBpBridge"));
+    assert!(authority.contains("RnsRelationQpcs"));
+    assert_eq!(authority.matches("=> Ok(())").count(), 1);
+    assert!(!authority.contains("verify_production_stage_v1"));
+}
+
+#[test]
 fn boundary_exposes_no_accept_all_or_release_authority_surface() {
     let source = include_str!("rns_native_composite_verifier.rs");
     assert!(!source.contains("pub trait"));
@@ -692,7 +1266,11 @@ fn boundary_exposes_no_accept_all_or_release_authority_surface() {
 
     let public_boundary = source
         .split_once("pub fn verify_zk_ams_mkhe_rns_native_composite_v1<S>")
-        .and_then(|(_, suffix)| suffix.split_once("fn verify_with_first_party_authority_v1<S>"))
+        .and_then(|(_, suffix)| {
+            suffix.split_once(
+                "pub(super) fn verify_zk_ams_mkhe_rns_native_composite_from_source_chain_v2",
+            )
+        })
         .map(|(boundary, _)| boundary)
         .expect("generic public ownership boundary");
     assert!(public_boundary.contains("source_snapshot: S"));

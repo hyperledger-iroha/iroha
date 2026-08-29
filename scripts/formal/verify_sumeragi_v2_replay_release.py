@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -12,20 +13,54 @@ import stat
 import sys
 from typing import Any
 
-import check_sumeragi_v2_replay_receipt as receipt_checker
-from sumeragi_v2_replay_signing import (
-    MAX_POLICY_BYTES,
-    MAX_RECEIPT_BYTES,
-    MAX_SIGNATURE_BYTES,
-    MAX_TOOL_BYTES,
-    SSHSIG_NAMESPACE,
-    SIGNATURE_FORMAT,
-    SigningError,
-    read_snapshot,
-    require_unchanged,
-    validate_signing_contract,
-    verify_exact_signature_bytes,
+
+def _load_local_module(module_name: str, filename: str) -> Any:
+    """Load one authenticated sibling without relying on ambient import paths."""
+
+    path = Path(__file__).absolute().parent / filename
+    if path.is_symlink() or not path.is_file():
+        raise RuntimeError(f"replay support module is unavailable: {path}")
+    canonical_path = path.resolve(strict=True)
+    if canonical_path != path:
+        raise RuntimeError(f"replay support module path is not canonical: {path}")
+    path = canonical_path
+    loaded = sys.modules.get(module_name)
+    if loaded is not None:
+        loaded_path = Path(getattr(loaded, "__file__", "")).resolve()
+        if loaded_path != path:
+            raise RuntimeError(
+                f"replay support module identity differs: {loaded_path} != {path}"
+            )
+        return loaded
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load replay support module: {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(module_name, None)
+        raise
+    return module
+
+
+receipt_checker = _load_local_module(
+    "check_sumeragi_v2_replay_receipt",
+    "check_sumeragi_v2_replay_receipt.py",
 )
+_REPLAY_SIGNING = receipt_checker._REPLAY_SIGNING
+MAX_POLICY_BYTES = _REPLAY_SIGNING.MAX_POLICY_BYTES
+MAX_RECEIPT_BYTES = _REPLAY_SIGNING.MAX_RECEIPT_BYTES
+MAX_SIGNATURE_BYTES = _REPLAY_SIGNING.MAX_SIGNATURE_BYTES
+MAX_TOOL_BYTES = _REPLAY_SIGNING.MAX_TOOL_BYTES
+SSHSIG_NAMESPACE = _REPLAY_SIGNING.SSHSIG_NAMESPACE
+SIGNATURE_FORMAT = _REPLAY_SIGNING.SIGNATURE_FORMAT
+SigningError = _REPLAY_SIGNING.SigningError
+read_snapshot = _REPLAY_SIGNING.read_snapshot
+require_unchanged = _REPLAY_SIGNING.require_unchanged
+validate_signing_contract = _REPLAY_SIGNING.validate_signing_contract
+verify_exact_signature_bytes = _REPLAY_SIGNING.verify_exact_signature_bytes
 
 
 ATTESTATION_SCHEMA = "iroha-sumeragi-v2-replay-release-attestation-v1"
@@ -38,6 +73,15 @@ FILE_MODES = {
     "revocation.krl": 0o400,
     "release-attestation.json": 0o400,
 }
+PROJECTION_DIRECTORY_NAME = "tlapm-projection"
+PROJECTION_FILE_NAMES = ("Folds.tla", "Functions.tla")
+PROJECTION_LOGICAL_NAMES = tuple(
+    f"{PROJECTION_DIRECTORY_NAME}/{name}" for name in PROJECTION_FILE_NAMES
+)
+PROJECTION_FILE_MODES = {
+    logical: 0o444 for logical in PROJECTION_LOGICAL_NAMES
+}
+ARTIFACT_MODES = {**FILE_MODES, **PROJECTION_FILE_MODES}
 FILE_BOUNDS = {
     "receipt.json": MAX_RECEIPT_BYTES,
     "receipt.json.sig": MAX_SIGNATURE_BYTES,
@@ -45,8 +89,12 @@ FILE_BOUNDS = {
     "allowed_signers": MAX_POLICY_BYTES,
     "revocation.krl": MAX_POLICY_BYTES,
     "release-attestation.json": 256 * 1024,
+    **{logical: 1024 * 1024 for logical in PROJECTION_LOGICAL_NAMES},
 }
-PAYLOAD_NAMES = tuple(name for name in FILE_MODES if name != "release-attestation.json")
+PAYLOAD_NAMES = (
+    *(name for name in FILE_MODES if name != "release-attestation.json"),
+    *PROJECTION_LOGICAL_NAMES,
+)
 
 
 class ReleaseVerificationError(RuntimeError):
@@ -116,6 +164,27 @@ def _private_directory(
         metadata.st_ino,
         metadata.st_mtime_ns,
         metadata.st_ctime_ns,
+    )
+
+
+def _read_only_projection_directory(
+    metadata: os.stat_result, label: str
+) -> tuple[int, int, int, int, int, int]:
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or stat.S_IMODE(metadata.st_mode) != 0o555
+        or metadata.st_uid != os.geteuid()
+    ):
+        raise ReleaseVerificationError(
+            f"{label} is not an owner-owned read-only mode 0555 directory"
+        )
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_mtime_ns,
+        metadata.st_ctime_ns,
+        metadata.st_mode,
+        metadata.st_uid,
     )
 
 
@@ -196,19 +265,26 @@ def _require_root_identity(
         raise ReleaseVerificationError("release root was renamed or replaced")
 
 
-def _read_file(descriptor: int, name: str) -> tuple[bytes, int, tuple[int, int]]:
+def _read_file(
+    descriptor: int, name: str, *, logical_name: str | None = None
+) -> tuple[bytes, int, tuple[int, int]]:
+    logical_name = name if logical_name is None else logical_name
     try:
         before = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
     except OSError as error:
-        raise ReleaseVerificationError(f"release artifact {name} is unavailable") from error
+        raise ReleaseVerificationError(
+            f"release artifact {logical_name} is unavailable"
+        ) from error
     if (
         not stat.S_ISREG(before.st_mode)
         or before.st_uid != os.geteuid()
         or before.st_nlink != 1
-        or stat.S_IMODE(before.st_mode) != FILE_MODES[name]
-        or before.st_size > FILE_BOUNDS[name]
+        or stat.S_IMODE(before.st_mode) != ARTIFACT_MODES[logical_name]
+        or before.st_size > FILE_BOUNDS[logical_name]
     ):
-        raise ReleaseVerificationError(f"release artifact {name} metadata differs")
+        raise ReleaseVerificationError(
+            f"release artifact {logical_name} metadata differs"
+        )
     flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW
@@ -216,21 +292,23 @@ def _read_file(descriptor: int, name: str) -> tuple[bytes, int, tuple[int, int]]
     try:
         opened = os.fstat(opened_descriptor)
         if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
-            raise ReleaseVerificationError(f"release artifact {name} changed")
+            raise ReleaseVerificationError(
+                f"release artifact {logical_name} changed"
+            )
         chunks: list[bytes] = []
         total = 0
         while True:
             block = os.read(
                 opened_descriptor,
-                min(1024 * 1024, FILE_BOUNDS[name] + 1 - total),
+                min(1024 * 1024, FILE_BOUNDS[logical_name] + 1 - total),
             )
             if not block:
                 break
             chunks.append(block)
             total += len(block)
-            if total > FILE_BOUNDS[name]:
+            if total > FILE_BOUNDS[logical_name]:
                 raise ReleaseVerificationError(
-                    f"release artifact {name} exceeds its bound"
+                    f"release artifact {logical_name} exceeds its bound"
                 )
         after = os.fstat(opened_descriptor)
     finally:
@@ -251,7 +329,9 @@ def _read_file(descriptor: int, name: str) -> tuple[bytes, int, tuple[int, int]]
         or any(getattr(opened, key) != getattr(after, key) for key in stable)
         or any(getattr(after, key) != getattr(linked, key) for key in stable)
     ):
-        raise ReleaseVerificationError(f"release artifact {name} drifted")
+        raise ReleaseVerificationError(
+            f"release artifact {logical_name} drifted"
+        )
     return (
         b"".join(chunks),
         stat.S_IMODE(after.st_mode),
@@ -274,9 +354,75 @@ def _read_bundle(
         root_identity,
     )
     names = os.listdir(descriptor)
-    if len(names) != len(set(names)) or set(names) != set(FILE_MODES):
+    expected_root_names = {*FILE_MODES, PROJECTION_DIRECTORY_NAME}
+    if len(names) != len(set(names)) or set(names) != expected_root_names:
         raise ReleaseVerificationError("release artifact path set differs")
-    result = {name: _read_file(descriptor, name) for name in sorted(names)}
+    result = {
+        name: _read_file(descriptor, name) for name in sorted(FILE_MODES)
+    }
+    try:
+        projection_linked = os.stat(
+            PROJECTION_DIRECTORY_NAME,
+            dir_fd=descriptor,
+            follow_symlinks=False,
+        )
+        projection_descriptor = os.open(
+            PROJECTION_DIRECTORY_NAME,
+            _directory_flags(),
+            dir_fd=descriptor,
+        )
+    except OSError as error:
+        raise ReleaseVerificationError(
+            "release TLAPM projection is unavailable"
+        ) from error
+    try:
+        projection_identity = _read_only_projection_directory(
+            projection_linked, "release TLAPM projection"
+        )
+        if (
+            _read_only_projection_directory(
+                os.fstat(projection_descriptor), "release TLAPM projection"
+            )
+            != projection_identity
+        ):
+            raise ReleaseVerificationError(
+                "release TLAPM projection identity differs"
+            )
+        projection_names = os.listdir(projection_descriptor)
+        if (
+            len(projection_names) != len(set(projection_names))
+            or set(projection_names) != set(PROJECTION_FILE_NAMES)
+        ):
+            raise ReleaseVerificationError(
+                "release TLAPM projection path set differs"
+            )
+        for logical in PROJECTION_LOGICAL_NAMES:
+            name = logical.rsplit("/", 1)[-1]
+            result[logical] = _read_file(
+                projection_descriptor,
+                name,
+                logical_name=logical,
+            )
+        projection_after = os.stat(
+            PROJECTION_DIRECTORY_NAME,
+            dir_fd=descriptor,
+            follow_symlinks=False,
+        )
+        if (
+            _read_only_projection_directory(
+                os.fstat(projection_descriptor), "release TLAPM projection"
+            )
+            != projection_identity
+            or _read_only_projection_directory(
+                projection_after, "release TLAPM projection"
+            )
+            != projection_identity
+        ):
+            raise ReleaseVerificationError(
+                "release TLAPM projection changed while reading"
+            )
+    finally:
+        os.close(projection_descriptor)
     _require_root_identity(
         root,
         parent_descriptor,
@@ -328,6 +474,12 @@ def _derived_attestation(
             "symlinks_allowed": False,
             "hard_links_allowed": False,
             "partial": False,
+            "projection": {
+                "path": PROJECTION_DIRECTORY_NAME,
+                "mode": 0o555,
+                "read_only": True,
+                "files": list(PROJECTION_LOGICAL_NAMES),
+            },
         },
     }
 
@@ -357,6 +509,34 @@ def verify_release(args: argparse.Namespace) -> dict[str, Any]:
             validate_signing_contract(receipt_value.get("signing"))
         except SigningError as error:
             raise ReleaseVerificationError(str(error)) from error
+        tool_identity = receipt_value.get("tool_identity")
+        tool_files = (
+            tool_identity.get("files")
+            if isinstance(tool_identity, dict)
+            else None
+        )
+        if not isinstance(tool_files, list):
+            raise ReleaseVerificationError(
+                "archived receipt tool identity is absent"
+            )
+        projection_records = {
+            record.get("path"): record
+            for record in tool_files
+            if isinstance(record, dict)
+            and record.get("path") in PROJECTION_LOGICAL_NAMES
+        }
+        expected_projection_records = {
+            logical: _record(
+                logical,
+                before[logical][0],
+                before[logical][1],
+            )
+            for logical in PROJECTION_LOGICAL_NAMES
+        }
+        if projection_records != expected_projection_records:
+            raise ReleaseVerificationError(
+                "archived TLAPM projection differs from the signed receipt"
+            )
 
         source_receipt = read_snapshot(
             args.source_receipt,

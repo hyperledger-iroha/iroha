@@ -451,7 +451,12 @@ def test_receipt_replays_archived_git_and_rejects_runtime_divergence(
             "'Good fixture SSH signature' >&2; exit 73 ;;",
         )
     elif failure == "metadata-change":
-        source = source.replace("SHA256:" + "A" * 43, "SHA256:" + "B" * 43)
+        fingerprint = str(evidence["expected_signer_fingerprint"])
+        replacement = "SHA256:" + "B" * 43
+        if fingerprint == replacement:
+            replacement = "SHA256:" + "C" * 43
+        assert fingerprint in source
+        source = source.replace(fingerprint, replacement)
     elif failure == "raw-commit-change":
         source = source.replace(
             "Sumeragi v2 release fixture", "Sumeragi v2 changed release fixture"

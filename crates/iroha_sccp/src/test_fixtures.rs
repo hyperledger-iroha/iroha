@@ -46,7 +46,6 @@ use norito::to_bytes;
 use std::collections::BTreeSet;
 
 const TEST_MAX_OUTSTANDING_LIABILITY: u128 = 1_000_000_000_000;
-
 const fn test_max_wrapped_supply(multiplier: u64) -> u128 {
     TEST_MAX_OUTSTANDING_LIABILITY * multiplier as u128
 }
@@ -406,10 +405,8 @@ pub fn sccp_exact_evm_governed_route_test_fixture_v1(
     activation: SccpRouteActivationV1,
 ) -> SccpGovernedRouteV1 {
     let route_id = match network {
-        SccpNetworkV1::EthereumMainnet | SccpNetworkV1::EthereumSepolia => {
-            SCCP_TAIRA_ETH_XOR_ROUTE_ID_V1
-        }
-        SccpNetworkV1::BscMainnet | SccpNetworkV1::BscTestnet => SCCP_TAIRA_BSC_XOR_ROUTE_ID_V1,
+        SccpNetworkV1::EthereumMainnet => SCCP_TAIRA_ETH_XOR_ROUTE_ID_V1,
+        SccpNetworkV1::BscMainnet => SCCP_TAIRA_BSC_XOR_ROUTE_ID_V1,
         _ => panic!("exact EVM SCCP fixture requires an Ethereum or BSC profile"),
     };
     let lane_id = SccpLaneIdV1 {
@@ -428,6 +425,10 @@ pub fn sccp_exact_evm_governed_route_test_fixture_v1(
         outbound_proof_policy: outbound_policy(),
         route_address: [0x51; 20],
         route_code_hash: [0x61; 32],
+        replay_verifier_address: [0x71; 20],
+        replay_verifier_code_hash: [0x72; 32],
+        mint_breaker_address: [0x81; 20],
+        mint_breaker_code_hash: [0x82; 32],
         taira_to_token_multiplier: SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER,
         max_wrapped_supply: test_max_wrapped_supply(SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER),
     };
@@ -441,10 +442,6 @@ pub fn sccp_exact_evm_governed_route_test_fixture_v1(
             SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE,
         )
         .expect("exact SCCP fixture route configuration is valid");
-    let custody = KeyPair::try_from_seed(vec![0x81; 32], Algorithm::Ed25519)
-        .expect("exact SCCP custody fixture key")
-        .public_key()
-        .clone();
     let route = SccpGovernedRouteV1 {
         lane_id,
         route_id: route_id.to_owned(),
@@ -464,7 +461,6 @@ pub fn sccp_exact_evm_governed_route_test_fixture_v1(
         sora_outbound_execution_policy: sccp_sora_outbound_execution_policy_test_fixture_v1(),
         settlement: SccpSoraSettlementV1 {
             asset_definition_id: sccp_v1_taira_xor_asset_definition_id(),
-            custody_owner: AccountId::new(custody),
             payload_amount_scale: SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE,
             max_outstanding_liability: TEST_MAX_OUTSTANDING_LIABILITY,
         },
@@ -493,10 +489,7 @@ pub fn sccp_exact_ton_governed_route_test_fixture_v1(
     activation: SccpRouteActivationV1,
 ) -> SccpGovernedRouteV1 {
     assert!(
-        matches!(
-            network,
-            SccpNetworkV1::TonMainnet | SccpNetworkV1::TonTestnet
-        ),
+        matches!(network, SccpNetworkV1::TonMainnet),
         "exact TON SCCP fixture requires a TON profile"
     );
     let lane_id = SccpLaneIdV1 {
@@ -522,6 +515,8 @@ pub fn sccp_exact_ton_governed_route_test_fixture_v1(
         verifier_key_hash: sccp_groth16_bls12381_verifying_key_hash_v1(&verifying_key)
             .expect("exact SCCP TON verification key is curve-valid"),
         proof_profile_commitment: sccp_ton_groth16_bls12381_proof_profile_commitment_v1(),
+        mint_breaker_guardian_keys: [[0xa1; 32], [0xa2; 32], [0xa3; 32], [0xa4; 32], [0xa5; 32]]
+            .into(),
         outbound_proof_policy: ton_outbound_policy(),
         taira_to_token_multiplier: SCCP_V1_TAIRA_TO_TON_TOKEN_MULTIPLIER,
         max_wrapped_supply: test_max_wrapped_supply(SCCP_V1_TAIRA_TO_TON_TOKEN_MULTIPLIER),
@@ -536,10 +531,6 @@ pub fn sccp_exact_ton_governed_route_test_fixture_v1(
             SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE,
         )
         .expect("exact SCCP TON route configuration is valid");
-    let custody = KeyPair::try_from_seed(vec![0x82; 32], Algorithm::Ed25519)
-        .expect("exact SCCP TON custody fixture key")
-        .public_key()
-        .clone();
     let route = SccpGovernedRouteV1 {
         lane_id,
         route_id: SCCP_TAIRA_TON_XOR_ROUTE_ID_V1.to_owned(),
@@ -559,7 +550,6 @@ pub fn sccp_exact_ton_governed_route_test_fixture_v1(
         sora_outbound_execution_policy: sccp_sora_outbound_execution_policy_test_fixture_v1(),
         settlement: SccpSoraSettlementV1 {
             asset_definition_id: sccp_v1_taira_xor_asset_definition_id(),
-            custody_owner: AccountId::new(custody),
             payload_amount_scale: SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE,
             max_outstanding_liability: TEST_MAX_OUTSTANDING_LIABILITY,
         },
@@ -1024,6 +1014,7 @@ fn exact_sccp_fixture_block(
             overlay: vec![InstructionBox::from(RecordSccpMessage::new(
                 context,
                 payload_bytes,
+                iroha_data_model::bridge::SccpSparseMerkleWitnessV1::empty_shard(),
             ))]
             .into(),
             events_commitment: Hash::new(b"exact SCCP fixture events"),

@@ -44,6 +44,7 @@ use super::{
         ZkX509ShaCallActivationV1, ZkX509ShaCallBusChallengesV1, ZkX509ShaCallRoleV1,
         ZkX509ShaCallScheduleV1, ZkX509ShaCallWordKindV1, compress_sha_call_fields_v1,
     },
+    stark::ZK_X509_DIGEST_CONTEXT_V1,
 };
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use crate::privacy_engines::prover_randomness::{
@@ -55,10 +56,10 @@ use crate::privacy_engines::{
     aggregate_stark::{self as aggregate, AggregateStarkErrorV1},
     prover_randomness::TRY_CRYPTO_PROVER_RANDOMNESS_POLICY_V1,
     transparent_stark::{
-        GOLDILOCKS_GENERATOR_V1, GoldilocksFieldV1 as F, GoldilocksFp4V1 as E,
-        TransparentStarkErrorV1, TransparentTranscriptV1, append_u16_v1, append_u32_v1,
-        append_u64_v1, goldilocks_evaluate_coset_v1, goldilocks_ifft_v1,
-        goldilocks_primitive_root_v1, sha256_frame_v1, transparent_stark_zk_mask_geometry_v1,
+        GOLDILOCKS_GENERATOR_V1, GoldilocksDigest384V1, GoldilocksFieldV1 as F,
+        GoldilocksFp4V1 as E, TransparentStarkErrorV1, TransparentTranscriptV1, append_u16_v1,
+        append_u32_v1, append_u64_v1, goldilocks_digest384_frame_v1, goldilocks_evaluate_coset_v1,
+        goldilocks_ifft_v1, goldilocks_primitive_root_v1, transparent_stark_zk_mask_geometry_v1,
         verify_grinding_nonce_v1,
     },
 };
@@ -301,6 +302,7 @@ const CA_AGGREGATE_PARAMETERS_V1: aggregate::AggregateStarkParametersV1 =
     };
 const CA_AGGREGATE_DOMAINS_V1: aggregate::AggregateStarkDomainsV1 =
     aggregate::AggregateStarkDomainsV1 {
+        digest_context: ZK_X509_DIGEST_CONTEXT_V1,
         base_leaf: CA_BASE_LEAF_DOMAIN_V1,
         base_node: CA_BASE_NODE_DOMAIN_V1,
         aux_leaf: CA_AUX_LEAF_DOMAIN_V1,
@@ -1883,7 +1885,7 @@ fn validate_ca_proof_schedule_v1(
 }
 fn ca_schedule_digest_v1(
     schedule: &ZkX509ShaCallScheduleV1,
-) -> Result<[u8; 32], ZkX509CaAccumulatorProofErrorV1> {
+) -> Result<GoldilocksDigest384V1, ZkX509CaAccumulatorProofErrorV1> {
     validate_ca_proof_schedule_v1(schedule)?;
     let mut encoding = Vec::new();
     encoding
@@ -1923,10 +1925,19 @@ fn ca_schedule_digest_v1(
                 .map_err(|_| ZkX509CaAccumulatorProofErrorV1::Resource)?,
         );
     }
-    sha256_frame_v1(CA_SCHEDULE_DIGEST_DOMAIN_V1, &[&encoding])
-        .map_err(map_transparent_proof_error_v1)
+    goldilocks_digest384_frame_v1(
+        ZK_X509_DIGEST_CONTEXT_V1,
+        CA_SCHEDULE_DIGEST_DOMAIN_V1,
+        b"ca-sha-call-schedule",
+        0,
+        0,
+        0,
+        &[&encoding],
+    )
+    .map_err(map_transparent_proof_error_v1)
 }
-pub(crate) fn ca_profile_digest_v1() -> Result<[u8; 32], ZkX509CaAccumulatorProofErrorV1> {
+pub(crate) fn ca_profile_digest_v1()
+-> Result<GoldilocksDigest384V1, ZkX509CaAccumulatorProofErrorV1> {
     let mut parameters = Vec::new();
     parameters.extend_from_slice(&CA_INNER_PROOF_MAGIC_V1);
     append_u16_v1(&mut parameters, ZK_X509_PROOF_VERSION_V1);
@@ -1957,8 +1968,13 @@ pub(crate) fn ca_profile_digest_v1() -> Result<[u8; 32], ZkX509CaAccumulatorProo
         u32::try_from(CA_INNER_MAXIMUM_PROOF_BYTES_V1)
             .map_err(|_| ZkX509CaAccumulatorProofErrorV1::Resource)?,
     );
-    sha256_frame_v1(
+    goldilocks_digest384_frame_v1(
+        ZK_X509_DIGEST_CONTEXT_V1,
         CA_PROFILE_DIGEST_DOMAIN_V1,
+        b"ca-proof-profile",
+        0,
+        0,
+        0,
         &[
             ZK_X509_ACCUMULATOR_STARK_DESCRIPTOR_V1,
             TRY_CRYPTO_PROVER_RANDOMNESS_POLICY_V1,
@@ -1986,7 +2002,7 @@ fn validate_ca_proof_public_v1(
 pub(crate) fn ca_public_digest_v1(
     public: ZkX509CaAccumulatorStarkPublicV1,
     schedule: &ZkX509ShaCallScheduleV1,
-) -> Result<[u8; 32], ZkX509CaAccumulatorProofErrorV1> {
+) -> Result<GoldilocksDigest384V1, ZkX509CaAccumulatorProofErrorV1> {
     validate_ca_proof_public_v1(public, schedule)?;
     let root = public
         .governed_root
@@ -1998,8 +2014,14 @@ pub(crate) fn ca_public_digest_v1(
         .map_err(|_| ZkX509CaAccumulatorProofErrorV1::InvalidStatementOrWitness)?
         .to_be_bytes();
     let schedule_digest = ca_schedule_digest_v1(schedule)?;
-    sha256_frame_v1(
+    let schedule_digest = schedule_digest.to_le_bytes();
+    goldilocks_digest384_frame_v1(
+        ZK_X509_DIGEST_CONTEXT_V1,
         CA_PUBLIC_DIGEST_DOMAIN_V1,
+        b"ca-public-statement",
+        0,
+        0,
+        0,
         &[&root, &channel, &schedule_digest],
     )
     .map_err(map_transparent_proof_error_v1)
@@ -2011,9 +2033,13 @@ fn new_ca_transcript_v1(
 ) -> Result<TransparentTranscriptV1, ZkX509CaAccumulatorProofErrorV1> {
     let profile_digest = ca_profile_digest_v1()?;
     let public_digest = ca_public_digest_v1(public, schedule)?;
-    let mut transcript =
-        TransparentTranscriptV1::new(ZK_X509_SUITE_V1, &profile_digest, &public_digest)
-            .map_err(map_transparent_proof_error_v1)?;
+    let mut transcript = TransparentTranscriptV1::new(
+        ZK_X509_DIGEST_CONTEXT_V1,
+        ZK_X509_SUITE_V1,
+        &profile_digest,
+        &public_digest,
+    )
+    .map_err(map_transparent_proof_error_v1)?;
     transcript
         .absorb(
             b"zk-x509-ca-accumulator-proof-profile-v1",
@@ -2045,7 +2071,7 @@ fn new_ca_transcript_v1(
         append_u64_v1(&mut registration, value.0);
     }
     append_u64_v1(&mut registration, public.root_spki_channel.0);
-    registration.extend_from_slice(&schedule_digest);
+    registration.extend_from_slice(&schedule_digest.to_le_bytes());
     transcript
         .absorb(CA_REGISTRATION_DOMAIN_V1, &[&registration])
         .map_err(map_transparent_proof_error_v1)?;
@@ -2773,6 +2799,7 @@ pub(crate) fn prove_zk_x509_ca_accumulator_stark_v1_with_rng<R: TryCryptoRng + ?
         &mut checked_rng,
     )?;
     let base_tree = aggregate::row_tree_v1(
+        CA_AGGREGATE_DOMAINS_V1.digest_context,
         CA_BASE_LEAF_DOMAIN_V1,
         CA_BASE_NODE_DOMAIN_V1,
         0,
@@ -2782,7 +2809,7 @@ pub(crate) fn prove_zk_x509_ca_accumulator_stark_v1_with_rng<R: TryCryptoRng + ?
     .map_err(map_aggregate_proof_error_v1)?;
     let mut trace_group_proofs = vec![aggregate::AggregateTraceGroupProofV1 {
         base_root: base_tree.root(),
-        aux_root: [0; 32],
+        aux_root: GoldilocksDigest384V1::default(),
         base_frontier: Vec::new(),
         aux_frontier: Vec::new(),
     }];
@@ -2818,6 +2845,7 @@ pub(crate) fn prove_zk_x509_ca_accumulator_stark_v1_with_rng<R: TryCryptoRng + ?
         &mut checked_rng,
     )?;
     let aux_tree = aggregate::row_tree_v1(
+        CA_AGGREGATE_DOMAINS_V1.digest_context,
         CA_AUX_LEAF_DOMAIN_V1,
         CA_AUX_NODE_DOMAIN_V1,
         0,
@@ -2861,9 +2889,13 @@ pub(crate) fn prove_zk_x509_ca_accumulator_stark_v1_with_rng<R: TryCryptoRng + ?
         &composition_roots,
     )
     .map_err(map_aggregate_proof_error_v1)?;
-    let fri_masks =
-        aggregate::build_fri_mask_oracles_v1(CA_AGGREGATE_PARAMETERS_V1, &layout, &mut checked_rng)
-            .map_err(map_aggregate_proof_error_v1)?;
+    let fri_masks = aggregate::build_fri_mask_oracles_v1(
+        CA_AGGREGATE_PARAMETERS_V1,
+        CA_AGGREGATE_DOMAINS_V1,
+        &layout,
+        &mut checked_rng,
+    )
+    .map_err(map_aggregate_proof_error_v1)?;
     let fri_mask_roots = fri_masks
         .iter()
         .map(|mask| mask.tree.root())
@@ -2871,6 +2903,7 @@ pub(crate) fn prove_zk_x509_ca_accumulator_stark_v1_with_rng<R: TryCryptoRng + ?
     aggregate::absorb_fri_mask_roots_v1(
         &mut transcript,
         CA_AGGREGATE_PARAMETERS_V1,
+        CA_AGGREGATE_DOMAINS_V1,
         &fri_mask_roots,
     )
     .map_err(map_aggregate_proof_error_v1)?;
@@ -2919,8 +2952,12 @@ pub(crate) fn prove_zk_x509_ca_accumulator_stark_v1_with_rng<R: TryCryptoRng + ?
         );
     }
     let grinding_state = transcript.state();
-    let grinding_nonce = grind_nonce_v1(&grinding_state, ZK_X509_GRINDING_BITS_V1)
-        .map_err(map_transparent_proof_error_v1)?;
+    let grinding_nonce = grind_nonce_v1(
+        ZK_X509_DIGEST_CONTEXT_V1,
+        &grinding_state,
+        ZK_X509_GRINDING_BITS_V1,
+    )
+    .map_err(map_transparent_proof_error_v1)?;
     absorb_ca_grinding_nonce_v1(&mut transcript, grinding_nonce)?;
     let query_indices = aggregate::query_indices_v1(
         &transcript,
@@ -3015,7 +3052,7 @@ pub(crate) fn prove_zk_x509_ca_accumulator_stark_v1(
 /// [`verify_zk_x509_ca_accumulator_stark_v1`] for the same exact proof bytes.
 pub(crate) fn ca_accumulator_base_root_from_proof_v1(
     proof_bytes: &[u8],
-) -> Result<[u8; 32], ZkX509CaAccumulatorProofErrorV1> {
+) -> Result<GoldilocksDigest384V1, ZkX509CaAccumulatorProofErrorV1> {
     let layout = ca_aggregate_layout_v1()?;
     let (_, inner) = decode_ca_proof_envelope_v1(proof_bytes)?;
     let (proof, _) =
@@ -3091,6 +3128,7 @@ fn verify_ca_accumulator_and_binding_v1(
     aggregate::absorb_fri_mask_roots_v1(
         &mut transcript,
         CA_AGGREGATE_PARAMETERS_V1,
+        CA_AGGREGATE_DOMAINS_V1,
         &proof.fri_mask_roots,
     )
     .map_err(map_aggregate_proof_error_v1)?;
@@ -3110,6 +3148,7 @@ fn verify_ca_accumulator_and_binding_v1(
     .map_err(map_aggregate_proof_error_v1)?;
     let grinding_state = transcript.state();
     verify_grinding_nonce_v1(
+        ZK_X509_DIGEST_CONTEXT_V1,
         &grinding_state,
         ZK_X509_GRINDING_BITS_V1,
         proof.grinding_nonce,
@@ -3190,7 +3229,7 @@ pub(crate) fn ca_accumulator_proof_binding_digest_v1(
     sha_schedule: &ZkX509ShaCallScheduleV1,
     credential_main_pre_aux: ZkX509CredentialMainPreAuxV1,
     proof_bytes: &[u8],
-) -> Result<[u8; 32], ZkX509CaAccumulatorProofErrorV1> {
+) -> Result<GoldilocksDigest384V1, ZkX509CaAccumulatorProofErrorV1> {
     verify_ca_accumulator_and_binding_v1(
         public,
         sha_schedule,
@@ -3206,13 +3245,16 @@ pub(crate) fn ca_accumulator_proof_binding_digest_v1(
     )
     .map_err(map_credential_pre_aux_error_v1)?;
     let public_digest = ca_public_digest_v1(public, sha_schedule)?;
-    sha256_frame_v1(
+    let public_digest = public_digest.to_le_bytes();
+    let transcript_state = credential_pre_aux.transcript_state().to_le_bytes();
+    goldilocks_digest384_frame_v1(
+        ZK_X509_DIGEST_CONTEXT_V1,
         CA_BINDING_DIGEST_DOMAIN_V1,
-        &[
-            &public_digest,
-            &credential_pre_aux.transcript_state(),
-            proof_bytes,
-        ],
+        b"verified-ca-proof-binding",
+        0,
+        0,
+        0,
+        &[&public_digest, &transcript_state, proof_bytes],
     )
     .map_err(map_transparent_proof_error_v1)
 }
@@ -3229,6 +3271,7 @@ mod tests {
             ca_root_from_complete_spkis_v1,
         },
         sha_call_bus_stark::{ZkX509ShaCallBusLaneChallengesV1, ZkX509ShaCallPublicShapeV1},
+        stark::zk_x509_test_digest384_v1,
     };
     use rand::{SeedableRng as _, TryCryptoRng, TryRngCore, rngs::StdRng};
     use std::sync::OnceLock;
@@ -3295,7 +3338,7 @@ mod tests {
             [0x91; 32],
             [0x92; 32],
             core::array::from_fn(|index| {
-                [u8::try_from(0xa0 + index).expect("fixture root byte"); 32]
+                zk_x509_test_digest384_v1(u8::try_from(0xa0 + index).expect("fixture root byte"))
             }),
         )
     }
@@ -4181,7 +4224,7 @@ mod tests {
         )
         .expect("deterministic binding digest");
         assert_eq!(first_digest, second_digest);
-        assert_ne!(first_digest, [0; 32]);
+        assert_ne!(first_digest, GoldilocksDigest384V1::default());
         let (_, inner) = decode_ca_proof_envelope_v1(proof).expect("outer decode");
         let layout = ca_aggregate_layout_v1().expect("layout");
         let (decoded, deep) =
@@ -4236,7 +4279,7 @@ mod tests {
             verify_zk_x509_ca_accumulator_stark_v1(*public, schedule, canonical, &changed_proof,)
                 .is_err()
         );
-        assert_ne!(canonical_digest, [0; 32]);
+        assert_ne!(canonical_digest, GoldilocksDigest384V1::default());
     }
     #[test]
     fn dedicated_proof_rejects_public_claim_root_deep_fri_query_and_frontier_mutations() {

@@ -814,6 +814,8 @@ def _validate_terminal_release_evidence(
             "allowed_signers",
             "revocation",
             "attestation",
+            "tlapm_folds",
+            "tlapm_functions",
         },
         "terminal formal replay release",
     )
@@ -969,6 +971,30 @@ def _validate_terminal_release_evidence(
             expected_mode=mode,
             containment_root=replay_release_root,
         )
+    projection_specs = (
+        (
+            "tlapm_folds",
+            "tlapm-projection/Folds.tla",
+            0o444,
+            16 * 1024 * 1024,
+        ),
+        (
+            "tlapm_functions",
+            "tlapm-projection/Functions.tla",
+            0o444,
+            16 * 1024 * 1024,
+        ),
+    )
+    for field, relative, mode, maximum_bytes in projection_specs:
+        finalized[field] = capture_artifact(
+            formal_replay[field],
+            f"terminal formal replay finalized {field}",
+            full=True,
+            expected_path=replay_release_root / relative,
+            maximum_bytes=maximum_bytes,
+            expected_mode=mode,
+            containment_root=replay_release_root,
+        )
     if (
         finalized["receipt"].sha256 != source_receipt.sha256
         or finalized["receipt"].size != source_receipt.size
@@ -986,10 +1012,20 @@ def _validate_terminal_release_evidence(
         )
     require_inventory(
         replay_release_root,
-        {filename for _field, filename, _mode, _maximum in finalized_specs},
+        {
+            *(filename for _field, filename, _mode, _maximum in finalized_specs),
+            "tlapm-projection",
+        },
         "terminal formal replay finalized root",
         containment_root=replay_release_root,
         expected_mode=0o700,
+    )
+    require_inventory(
+        replay_release_root / "tlapm-projection",
+        {"Folds.tla", "Functions.tla"},
+        "terminal formal replay finalized TLAPM projection",
+        containment_root=replay_release_root,
+        expected_mode=0o555,
     )
 
     simple_specs = (

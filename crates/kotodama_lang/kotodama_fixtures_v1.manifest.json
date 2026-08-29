@@ -3554,8 +3554,8 @@
     },
     {
       "asset": "crates/kotodama_lang/src/ir/fixtures/v1/i026.ko",
-      "byte_len": 391,
-      "content_sha256": "b35be2f7e0445f4a8b2b078eeda148442baf3e42bf41be0c0597f9c7a82a2095",
+      "byte_len": 390,
+      "content_sha256": "02aa97e6454567865b0b74155218d1f4d8f59d3ed1ae3345bc0c07b9d2f85433",
       "ends_with_lf": false,
       "include_path": "ir/fixtures/v1/i026.ko",
       "newline_count": 10,
@@ -3564,14 +3564,14 @@
       "owner_is_test": true,
       "owner_source": "crates/kotodama_lang/src/ir.rs",
       "raw_hashes": 1,
-      "raw_literal_sha256": "03e9d88cc2aad015cf50043a8c894931c4f76d2302b7621a5f85bb12776f8365",
+      "raw_literal_sha256": "eb41bc5ed0b51549fe9b5189619c9e39fa7ffb76ca06eb63e8059f6877034399",
       "source_line_before_migration": 10650,
       "starts_with_lf": true
     },
     {
       "asset": "crates/kotodama_lang/src/ir/fixtures/v1/i027.ko",
-      "byte_len": 475,
-      "content_sha256": "5029a712685fc278b525ca750b92a6db457445ffdf88d56e8a99024476b375b6",
+      "byte_len": 474,
+      "content_sha256": "549718d3ddd0fcdb24a92681bc1e3c57c6dc1bfb45c5b30748fb08bbc74a2cd7",
       "ends_with_lf": false,
       "include_path": "ir/fixtures/v1/i027.ko",
       "newline_count": 11,
@@ -3580,14 +3580,14 @@
       "owner_is_test": true,
       "owner_source": "crates/kotodama_lang/src/ir.rs",
       "raw_hashes": 1,
-      "raw_literal_sha256": "83f8ab81a7daa500b20907d1a3b8637975cc9b9902f15fc91dee891f6527c7e5",
+      "raw_literal_sha256": "50b5eb7d8fd0a42fb622f2c1ba1ad6e86e373aa85e9ffa0f381ef39cf8bf8456",
       "source_line_before_migration": 10729,
       "starts_with_lf": true
     },
     {
       "asset": "crates/kotodama_lang/src/ir/fixtures/v1/i028.ko",
-      "byte_len": 691,
-      "content_sha256": "3e76cf51b97702bfe7d3a679bc38d194b595ca7e27741ad69241dadc9b860308",
+      "byte_len": 689,
+      "content_sha256": "4b2cf9e8a4d8a500b83d3e083cf1e14f61c03f570b91f0fcc03d9f1ace8e84cf",
       "ends_with_lf": false,
       "include_path": "ir/fixtures/v1/i028.ko",
       "newline_count": 19,
@@ -3596,14 +3596,14 @@
       "owner_is_test": true,
       "owner_source": "crates/kotodama_lang/src/ir.rs",
       "raw_hashes": 1,
-      "raw_literal_sha256": "dddb6a5a8326f347151c920981491ba4104faa3c73ab74456e8145631f18d41c",
+      "raw_literal_sha256": "15869287134eaa4c620378e4bdb7069eb1bd454f2576782bb291e104ba8edecf",
       "source_line_before_migration": 10779,
       "starts_with_lf": true
     },
     {
       "asset": "crates/kotodama_lang/src/ir/fixtures/v1/i029.ko",
-      "byte_len": 590,
-      "content_sha256": "6a6350c4c73dc91ca10510a4cc0344546c25a245e8c78c5feb12c57e07d15f1d",
+      "byte_len": 589,
+      "content_sha256": "a01a0150d89290dfa06c0a47f4d52ae058e8c8f7babc9cc864e06112b76ed618",
       "ends_with_lf": false,
       "include_path": "ir/fixtures/v1/i029.ko",
       "newline_count": 15,
@@ -3612,7 +3612,7 @@
       "owner_is_test": true,
       "owner_source": "crates/kotodama_lang/src/ir.rs",
       "raw_hashes": 1,
-      "raw_literal_sha256": "2214154d46e93076310b3d6292be68d5348b1407e1599c3fbb5266bf956f8ae4",
+      "raw_literal_sha256": "12cefbaa977cddc79dd758d3f097a4bc547349646e3c331f6cf208a0a70ab2b7",
       "source_line_before_migration": 10838,
       "starts_with_lf": true
     },
@@ -3730,8 +3730,8 @@
     },
     {
       "asset": "crates/kotodama_lang/src/ir/fixtures/v1/i037.ko",
-      "byte_len": 204,
-      "content_sha256": "ae8cf4c9da55e141fc5481c4c2b0df0a15dbe23848cb99138f209205040a73fd",
+      "byte_len": 202,
+      "content_sha256": "03e9841e3dd1516de7764bac6c5022e24691270b7ab9e124cd994f357872c8f2",
       "ends_with_lf": false,
       "include_path": "ir/fixtures/v1/i037.ko",
       "newline_count": 6,
@@ -3740,7 +3740,7 @@
       "owner_is_test": true,
       "owner_source": "crates/kotodama_lang/src/ir.rs",
       "raw_hashes": 1,
-      "raw_literal_sha256": "f3966c7080b6fd82d67a7edae0418171b94ffdc3f92cd20ac89d14a31cfcef3c",
+      "raw_literal_sha256": "a4278714f2e98a2756c1a9335b237cf69417e93a6f7fe2ad0a7040077793edd2",
       "source_line_before_migration": 11419,
       "starts_with_lf": true
     },
@@ -3969,7 +3969,7 @@
       "starts_with_lf": true
     }
   ],
-  "fixtures_sha256": "40dcd3b9e8cf6b61eacb870a6d4d0c0db68f3f96978e48bf6e83ef6cafa7f8b4",
+  "fixtures_sha256": "2889701e2723486242e6adab37c9d1f350c97b27ec6e5c3e1475656bf4b0f991",
   "format": "iroha.kotodama.test-sources",
   "schema_version": 1,
   "source_files": [
@@ -3992,7 +3992,7 @@
         "shared_host_requests_drive_canonical_roots_tally_and_vrf_access_hints",
         "default_max_cycles_matches_pipeline_bound",
         "expression_and_named_call_sugar_emit_identical_executable_bytecode",
-        "source_metadata_changes_sidecars_but_not_optimized_ir_or_artifact_bytes",
+        "source_metadata_changes_sidecars_but_not_lowered_ir_or_artifact_bytes",
         "compiler_api_rejects_bare_fragments_and_implicit_main",
         "selected_max_cycles_is_embedded_in_artifact",
         "zero_max_cycles_is_rejected_before_artifact_generation",
@@ -4024,6 +4024,8 @@
         "entrypoint_hints_include_access_hidden_behind_helper_chain",
         "entrypoint_hints_inherit_helper_incompleteness",
         "unknown_state_path_call_before_literal_keeps_helper_hints_conservative",
+        "unknown_ledger_argument_before_literal_keeps_helper_hints_conservative",
+        "dynamic_account_before_authority_keeps_helper_hints_conservative",
         "encode_addi_rejects_out_of_range_immediate",
         "parallel_abi_moves_preserve_cycles_and_are_deterministic",
         "private_numeric_valcom_staging_preserves_cross_aliased_operands",
@@ -4234,12 +4236,15 @@
         "compile_report_sidecars_are_hash_bound_and_preserve_locations",
         "legacy_source_facade_cannot_bypass_canonical_resolution_audits"
       ],
-      "test_names_sha256": "a029d92be26369dd6b277acd55cbe88777b63e53373049a83f856c064b379f22"
+      "test_names_sha256": "e63a8f2423961b09d1c99f6508e5915404dff36ddf6eb68c880393cf54da53d0"
     },
     {
       "fixture_directory": "crates/kotodama_lang/src/semantic/fixtures/v1",
       "path": "crates/kotodama_lang/src/semantic.rs",
       "test_names": [
+        "typed_aggregate_traits_are_spawn_free_for_flat_width",
+        "semantic_type_and_expression_traits_are_iterative_at_the_depth_boundary",
+        "public_semantic_apis_handoff_from_a_small_caller",
         "large_shared_struct_references_and_expression_checks_reuse_one_canonical_dag",
         "runtime_word_count_stops_at_the_fixed_register_window_for_shared_dags",
         "modest_shared_struct_references_preserve_ordinary_semantics",
@@ -4273,6 +4278,8 @@
         "decimal_literal_ignores_leading_zeroes_before_width_checks",
         "exact_constant_numeric_arithmetic_uses_runtime_primitives",
         "exact_literals_inherit_decimal_and_quantity_expression_context",
+        "ternary_literals_inherit_the_enclosing_numeric_context",
+        "raw_semantic_analysis_does_not_leak_range_iterators",
         "rounded_decimal_division_supports_every_v1_rounding_mode",
         "unknown_rounding_spellings_are_rejected",
         "rounded_numeric_methods_reject_noncanonical_signatures",
@@ -4322,6 +4329,7 @@
         "scalar_state_hajimari_reports_every_missing_write",
         "scalar_state_initialization_intersects_conditional_paths",
         "scalar_state_initialization_checks_early_returns",
+        "scalar_state_initialization_checks_early_returns_inside_expressions",
         "scalar_state_initialization_does_not_trust_optional_execution",
         "scalar_state_hajimari_accepts_transitive_complete_initialization",
         "map_assignment_requires_map_target",
@@ -4449,12 +4457,13 @@
         "wholly_divergent_expression_without_a_type_context_fails_closed",
         "sum_and_expression_control_flow_fail_closed"
       ],
-      "test_names_sha256": "ff3a53dc61d53ef611556e17bde9eeac1ee8ba6e12a364a7edbae0c63300c852"
+      "test_names_sha256": "406e7383c898758f9d016f739a26dad77bfa0bd1561a6d374ef4e1b1b35bc5ba"
     },
     {
       "fixture_directory": "crates/kotodama_lang/src/ir/fixtures/v1",
       "path": "crates/kotodama_lang/src/ir.rs",
       "test_names": [
+        "public_lowering_apis_handoff_from_a_small_caller",
         "malformed_typed_member_access_fails_closed_during_lowering",
         "source_int_and_internal_scalar_have_an_explicit_ir_boundary",
         "contextually_typed_integer_quantity_literal_lowers_as_quantity_data",
@@ -4555,8 +4564,8 @@
         "rounded_numeric_division_is_constant_folded_or_one_numeric_round_instruction",
         "wrapping_builtins_have_distinct_ir"
       ],
-      "test_names_sha256": "7fbc4a176d3742729351a719009091235b08acc52c0987ba7d7e3d9cfb51d761"
+      "test_names_sha256": "527e21bb794c3cd98755bfeafc9eb864bd850600f757c628b02d89cdfa52dc06"
     }
   ],
-  "test_inventory_sha256": "c62dbcbe37aeb3972a1f301af0676787c0dde2c22b9cd3ce3331d582ba07e884"
+  "test_inventory_sha256": "a79f5678a363d1e72f9a1a6f765e0c4e32a7233f947595396d38ac5b738b69ac"
 }

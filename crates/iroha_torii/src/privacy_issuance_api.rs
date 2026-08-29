@@ -1258,10 +1258,9 @@ fn committed_snapshot_v1(
             return Err(BootleLanternIssuanceApiErrorV1::PolicyUnavailable);
         }
     };
-    let activation = row
-        .activation
-        .filter(|activation| activation.lifecycle.is_active())
-        .ok_or(BootleLanternIssuanceApiErrorV1::PolicyUnavailable)?;
+    let activation = view
+        .qualified_privacy_activation_v1(PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1)
+        .map_err(|_| BootleLanternIssuanceApiErrorV1::PolicyUnavailable)?;
     let committed_height = capabilities.committed_height;
     if committed_height == 0
         || committed_height

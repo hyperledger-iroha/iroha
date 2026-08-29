@@ -2951,12 +2951,13 @@ impl ProductionLifecycleOwnerV1 {
                 });
             }
         }
-        let (dispatch_key, round, subject, apply_is_authorized) = successor
+        let (dispatch_key, incumbent_dispatch_key, round, subject, apply_is_authorized) = successor
             .preliminary_retransmit_identity(attestation)
             .ok_or(ProductionCompletionDispatchErrorV1::InvalidCarrier)?;
         executor
             .arm_live_lifecycle_validate_successor(
                 dispatch_key,
+                incumbent_dispatch_key,
                 round,
                 subject,
                 apply_is_authorized,
@@ -3696,7 +3697,7 @@ impl ProductionLifecycleOwnerV1 {
             } => (reservation, prepared),
         };
         if !reservation.preflight_recovered_decision_fetch_target_absent() {
-            let prepared = reservation.abort_into_prepared(prepared);
+            let prepared = reservation.fail_closed_into_prepared(prepared);
             return Err(
                 ProductionRecoveredDecisionFetchPersistenceErrorV1::InFlightSelectedWork(prepared),
             );
@@ -3956,7 +3957,8 @@ impl ProductionLifecycleOwnerV1 {
                 );
             }
             ProductionCertifiedFetchAdmissionSettlementV1::RestartRequired => {
-                drop(reservation.abort_into_prepared(prepared));
+                drop(reservation);
+                drop(prepared);
                 return Err(
                     ProductionIngressSchedulerInputsError::CertifiedFetchAdmissionSettlement,
                 );
@@ -3973,7 +3975,8 @@ impl ProductionLifecycleOwnerV1 {
                     error = ?error,
                     "selected certified Fetch failed scheduler-carrier attestation"
                 );
-                drop(reservation.abort_into_prepared(prepared));
+                drop(reservation);
+                drop(prepared);
                 return Err(ProductionIngressSchedulerInputsError::InvalidSelectedCarrier);
             }
         };

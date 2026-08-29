@@ -86,8 +86,9 @@ surface.
 - `GET /v1/mcp`: not supported; returns `405 Method Not Allowed` because Torii
   does not provide an SSE stream on this endpoint.
 
-The route remains registered when `torii.mcp.enabled` is `false`; POST returns
-`503 Service Unavailable` with `mcp_disabled`.
+The route remains registered when `torii.mcp.enabled` is `false`; after
+listener-wide admission and authentication, POST returns `503 Service
+Unavailable` with `mcp_disabled`.
 
 ## Security And Header Forwarding
 MCP does not bypass Torii authentication. `POST /v1/mcp` is a nested-route
@@ -95,8 +96,11 @@ gateway: it can reach mutations, but every call is dispatched through the
 authoritative router and the exact selected route admits its own principal
 before any target effect.
 
-`/v1/mcp` is also covered by Torii’s API-token middleware. If `torii.require_api_token` is enabled and
-the inbound token is missing/invalid, Torii rejects before JSON-RPC dispatch.
+`/v1/mcp` is also covered by Torii’s API-token middleware. If
+`torii.require_api_token` is enabled and the inbound token is missing or
+invalid, Torii returns `401 Unauthorized` before JSON-RPC dispatch. If tokens
+are required but none are configured, the listener returns `503 Service
+Unavailable` with `api_token_unavailable`.
 
 Browser-style requests are also subject to an exact Origin check. Requests
 without `Origin` remain valid for non-browser MCP clients. If `Origin` is
@@ -105,10 +109,14 @@ present, exactly one value must byte-for-byte match an explicit
 unlisted origins are rejected. When CORS is disabled there is no browser-origin
 allowlist, so requests carrying `Origin` are rejected.
 
-For route dispatch, MCP forwards only transport-scoped credentials automatically:
+For ordinary route dispatch, MCP automatically forwards only these
+transport-scoped credentials:
 
 - `Authorization`
 - `x-api-token`
+
+The exact onboarding routes also forward the outer
+`x-iroha-onboarding-token`; other targets cannot receive it.
 
 Canonical account and operator signatures are inner-route proofs, not proofs
 over the outer MCP envelope. A catalog target that requires canonical account
@@ -140,13 +148,14 @@ treat `structuredContent` as data rather than instructions.
   object. JSON-RPC array batches, including empty arrays, are rejected as
   `invalid_request`.
 - A request or response `id` must be a non-null string or JSON number. Numeric
-  IDs, including fractional values, are preserved unchanged.
+  IDs, including floating-point values, are echoed as parsed JSON values.
 - The initialization request may omit `MCP-Protocol-Version`. Every later POST
   must carry exactly one `MCP-Protocol-Version` header containing the negotiated
   version (`2025-06-18`); missing, ambiguous, or unsupported values are rejected.
 - `initialize.params` must include `protocolVersion`, `capabilities`, and
-  `clientInfo`. `protocolVersion` is a string, `capabilities` is an object, and
-  `clientInfo` contains string `name` and `version` fields.
+  `clientInfo`. `protocolVersion` is a non-empty string, `capabilities` is an
+  object, and `clientInfo` contains non-empty string `name` and `version`
+  fields.
 - The advertised `tools/call_batch` extension may represent at most 64 tool
   dispatches. Every requested call is charged separately against the rate
   limiter; it is not an outer JSON-RPC batch.
@@ -159,10 +168,17 @@ treat `structuredContent` as data rather than instructions.
   quota (at most eight and always below the global limit), reserving capacity
   for bounded tools.
 - When API-token authentication is required, `notifications/cancelled` can stop
-  one exact live `tools/call` or `tools/call_batch` owned by the same validated
-  token principal. String and losslessly parsed signed/unsigned integer IDs are
-  type-tagged so numerically similar representations cannot alias. Fractional
-  or out-of-range numeric IDs still receive normal JSON-RPC responses but are
+  the currently registered live `tools/call` or `tools/call_batch` owned by the
+  same validated token principal and carrying the exact request ID plus
+  per-call cancellation nonce. Put a canonical unpadded base64url encoding of
+  32 random bytes in
+  `params._meta["iroha/cancellationNonce"]` on the call and echo it in the
+  cancellation notification. This Iroha extension prevents a delayed
+  cancellation from targeting a later call that reuses the same JSON-RPC ID.
+  String and losslessly parsed signed/unsigned integer IDs are type-tagged so
+  numerically similar representations cannot alias.
+  Floating-point-form or out-of-range numeric IDs still receive normal JSON-RPC
+  responses but are
   deliberately not remotely cancellable because JSON parsing cannot preserve
   their exact wire identity.
 - Anonymous MCP calls remain usable but are not remotely cancellable: source IP
@@ -183,12 +199,14 @@ treat `structuredContent` as data rather than instructions.
 - `400 Bad Request`: invalid JSON, an outer JSON-RPC array, or an unsupported or
   ambiguous protocol-version header.
 - `408 Request Timeout`: request body did not complete within the collection deadline.
-- `403 Forbidden`: API-token middleware rejected the request, or a supplied
-  `Origin` did not exactly match the allowlist.
+- `401 Unauthorized`: API-token middleware rejected a missing or invalid
+  token.
+- `403 Forbidden`: a supplied `Origin` did not exactly match the allowlist.
 - `413 Payload Too Large`: request exceeds `max_request_bytes`.
 - `429 Too Many Requests`: MCP rate-limited.
 - `405 Method Not Allowed`: any HTTP method other than POST, including GET.
-- `503 Service Unavailable`: MCP disabled (`torii.mcp.enabled = false`).
+- `503 Service Unavailable`: MCP disabled (`torii.mcp.enabled = false`) after
+  outer admission, or API tokens are required but none are configured.
 
 ## Supported JSON-RPC Methods
 
@@ -242,16 +260,21 @@ Torii accepts the notification when:
 ### `notifications/cancelled`
 
 Accepts the standard best-effort cancellation shape with
-`params.requestId` and an optional string `params.reason`. Cancellation is
-enabled only for requests admitted with one exact configured API token and is
-bound to the token fingerprint plus an exact string or losslessly parsed
-signed/unsigned integer JSON-RPC ID. Fractional and out-of-range numeric IDs are
-accepted for ordinary requests but are not entered in the cancellation
-registry.
+`params.requestId` and an optional string `params.reason`, extended with
+`params._meta["iroha/cancellationNonce"]`. The original call and notification
+must carry the same canonical unpadded base64url encoding of exactly 32 bytes.
+Cancellation is enabled only for requests admitted with one exact configured
+API token and is bound to the token fingerprint, exact string or losslessly
+parsed signed/unsigned integer JSON-RPC ID, and cancellation nonce. Calls that
+omit the nonce remain ordinary non-cancellable calls; malformed nonces on an
+authenticated call are rejected as `invalid_cancellation_nonce`.
+Floating-point-form and out-of-range numeric IDs are accepted for ordinary
+requests but are not entered in the cancellation registry.
 Unknown, completed, malformed, anonymous, and cross-principal cancellations
 are deliberately indistinguishable `202 Accepted` responses. A simultaneous
-duplicate live ID for the same authenticated principal is rejected as
-`request_id_in_use`; the ID becomes reusable after completion or cancellation.
+duplicate live cancellable ID for the same authenticated principal is rejected
+as `request_id_in_use`; after completion, the ID can be reused safely with a
+fresh random cancellation nonce.
 
 ### `ping`
 Returns an empty result object so MCP clients can use the standard lifecycle
@@ -346,6 +369,8 @@ bytes; invalid or header-unsafe token text is rejected.
 
 The curated `iroha.accounts.faucet.prepare` and
 `iroha.accounts.faucet.submit` tools expose the exact two-step faucet protocol.
+They are omitted from initialization metadata and `tools/list` when this node
+has no `torii.faucet` runtime configuration.
 Prepared faucet transactions carry a signature-bound marker version and
 semantic claim hash. Core derives an authority-scoped key and consumes it in
 the same state overlay as successful transaction execution; a failed transfer
@@ -501,8 +526,10 @@ Additional MCP-specific `error_code` values may appear in `error.data`:
 
 - `tool_not_found`
 - `tool_not_allowed`
+- `tool_unavailable`
 - `long_poll_capacity_exhausted`
 - `request_id_in_use`
+- `invalid_cancellation_nonce`
 - `cancellation_registry_capacity_exhausted`
 - `origin_forbidden`
 - `request_body_read_failed`

@@ -59,7 +59,7 @@ pub(crate) const PQ_MASP_WALLET_CIPHERTEXT_SCHEMA_V1: &[u8] = b"typed-output:rec
 pub(crate) const AUTHORIZATION_MAGIC_V1: &[u8; 4] = b"PQA1";
 pub(crate) const ENCRYPTED_OUTPUT_MAGIC_V1: &[u8; 4] = b"PQE1";
 const NOTE_PLAINTEXT_MAGIC_V1: &[u8; 4] = b"PQN1";
-const AUTHORIZATION_CONTEXT_V1: &[u8] = b"pq-masp-stark-v0";
+const AUTHORIZATION_CONTEXT_V1: &[u8] = b"pq-masp-stark-v1";
 const AUTHORIZATION_MESSAGE_DOMAIN_V1: &[u8] = b"iroha:privacy:pq-masp:authorization-message:v1";
 const AUTHORIZATION_KEY_DOMAIN_V1: &[u8] = b"iroha:privacy:pq-masp:authorization-key:v1";
 const RECIPIENT_KEY_DOMAIN_V1: &[u8] = b"iroha:privacy:pq-masp:recipient-key:v1";
@@ -67,7 +67,7 @@ const ENCAPSULATION_DIGEST_DOMAIN_V1: &[u8] = b"iroha:privacy:pq-masp:mlkem-ciph
 const NOTE_AAD_DOMAIN_V1: &[u8] = b"iroha:privacy:pq-masp:note-aad:v1";
 const NOTE_NONCE_DOMAIN_V1: &[u8] = b"iroha:privacy:pq-masp:note-nonce:v1";
 const NOTE_KDF_SALT_V1: &[u8] = b"iroha:privacy:pq-masp:note-kdf-salt:v1";
-const NOTE_KDF_NAMESPACE_V1: &str = "pq-masp-stark-v0";
+const NOTE_KDF_NAMESPACE_V1: &str = "pq-masp-stark-v1";
 const NOTE_KDF_LABEL_V1: &str = "mlkem768-xchacha20poly1305-note-v1";
 const NOTE_ENCAPSULATION_PERSONALIZATION_V1: &[u8] =
     b"iroha:privacy:pq-masp:mlkem768-encapsulation:v1";
@@ -759,11 +759,11 @@ mod tests {
     }
     #[test]
     fn protocol_domains_use_the_one_canonical_external_identifier() {
-        let label = PrivacyProtocolIdV1::PqMaspStarkV0.canonical_label();
+        let label = PrivacyProtocolIdV1::PqMaspStarkV1.canonical_label();
         assert_eq!(AUTHORIZATION_CONTEXT_V1, label.as_bytes());
         assert_eq!(NOTE_KDF_NAMESPACE_V1, label);
-        assert_ne!(AUTHORIZATION_CONTEXT_V1, b"iroha-pq-masp-stark-v0");
-        assert_ne!(NOTE_KDF_NAMESPACE_V1, "iroha/privacy/pq-masp-stark-v0");
+        assert_ne!(AUTHORIZATION_CONTEXT_V1, b"iroha-pq-masp-stark-v1");
+        assert_ne!(NOTE_KDF_NAMESPACE_V1, "iroha/privacy/pq-masp-stark-v1");
     }
     #[test]
     fn dependency_parameter_sizes_match_the_pinned_wire() {

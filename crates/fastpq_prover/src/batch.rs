@@ -209,7 +209,8 @@ mod tests {
             ]
         );
 
-        let batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
+        let batch =
+            TransitionBatch::new("fastpq-state-transition-stark-v1", PublicInputs::default());
         let mut encoded = norito::core::to_bytes(&batch).expect("encode release batch");
         assert_eq!(&encoded[6..22], expected.as_slice());
         let pre_release =
@@ -222,7 +223,8 @@ mod tests {
     }
     #[test]
     fn sort_orders_by_key() {
-        let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
+        let mut batch =
+            TransitionBatch::new("fastpq-state-transition-stark-v1", PublicInputs::default());
         batch.push(StateTransition::new(
             b"b".to_vec(),
             vec![],
@@ -241,7 +243,8 @@ mod tests {
     }
     #[test]
     fn sort_respects_operation_rank() {
-        let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
+        let mut batch =
+            TransitionBatch::new("fastpq-state-transition-stark-v1", PublicInputs::default());
         batch.push(StateTransition::new(
             b"key".to_vec(),
             vec![0],
@@ -264,7 +267,8 @@ mod tests {
     }
     #[test]
     fn stable_sort_and_norito_roundtrip_preserve_equal_row_order() {
-        let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
+        let mut batch =
+            TransitionBatch::new("fastpq-state-transition-stark-v1", PublicInputs::default());
         batch.push(StateTransition::new(
             b"b".to_vec(),
             vec![0],
@@ -302,7 +306,8 @@ mod tests {
 
     #[test]
     fn canonicalized_borrows_sorted_batches_and_owns_unsorted_batches() {
-        let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
+        let mut batch =
+            TransitionBatch::new("fastpq-state-transition-stark-v1", PublicInputs::default());
         batch.push(StateTransition::new(
             b"b".to_vec(),
             vec![0],

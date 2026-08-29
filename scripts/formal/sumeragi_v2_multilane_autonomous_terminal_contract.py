@@ -113,7 +113,7 @@ AUTONOMOUS_TERMINAL_TLA_POSITIVE_ACTION_CHECKS = (
             "deferredCarrierPlannedFromSnapshot",
             "canonicalGroupATerminalPublished' = TRUE",
             "canonicalGroupBTerminalPublished' = TRUE",
-            "normalCarrierApplyCompleted' = normalCarrierApplyCompleted \\/ canonicalCarrierUnitDeferred",
+            "normalCarrierApplyCompleted' = (normalCarrierApplyCompleted \\/ canonicalCarrierUnitDeferred)",
         ),
     ),
     (
@@ -595,9 +595,12 @@ AUTONOMOUS_TERMINAL_ALL_BINDINGS = (
         "Queue::preflight_lane_reservation_plan_journal",
         (
             "let guard = self.plan_journal.lock();",
-            "journal.observe_startup_replay_receipt_with_finalized_absence(",
+            "if !preflight.replica_keys.is_empty()",
+            "LaneQueueReservationError::JournalNotInstalled",
+            "journal.observe_startup_replay_receipt_with_terminal_cuts(",
             "&preflight.active_phases",
             "&preflight.finalized_keys",
+            "&preflight.replica_keys",
         ),
     ),
     (
@@ -613,9 +616,18 @@ AUTONOMOUS_TERMINAL_ALL_BINDINGS = (
         "fn",
         "observe_startup_replay_receipt_with_finalized_absence",
         (
-            "if phases.len() > self.limits.max_live_records",
+            "self.observe_startup_replay_receipt_with_terminal_cuts(phases, finalized_keys, &[])",
+        ),
+    ),
+    (
+        QUEUE_JOURNAL_RESERVATION_COMMIT_PREFLIGHT_RELATIVE,
+        "fn",
+        "observe_startup_replay_receipt_with_terminal_cuts",
+        (
+            ".checked_add(replica_keys.len())",
             "for phase in phases",
             "for key in finalized_keys",
+            "for key in replica_keys",
             "let mut replay = self.prepare_replay_with_removed_entrypoints(Some(&entrypoints))?;",
             "replay.verify_snapshot_content()?;",
             "let live_claims =",
@@ -739,6 +751,7 @@ AUTONOMOUS_TERMINAL_ALL_BINDINGS = (
             "for authority in bootstraps",
             "complete_autonomous_lifecycle_bootstrap",
             "if recover_one_attempt(",
+            "recovered_attempts = recovered_attempts.saturating_add(1);",
             "revalidate_lane_reservation_startup_reconciliation_receipt(&receipt, &snapshot)",
             "changed the Queue owner-quarantine state",
         ),
@@ -1136,15 +1149,17 @@ AUTONOMOUS_TERMINAL_ORDERED_SOURCE_CHECKS = (
     (
         QUEUE_JOURNAL_RESERVATION_COMMIT_PREFLIGHT_RELATIVE,
         "fn",
-        "observe_startup_replay_receipt_with_finalized_absence",
+        "observe_startup_replay_receipt_with_terminal_cuts",
         (
-            "if phases.len() > self.limits.max_live_records",
+            ".checked_add(replica_keys.len())",
             "for phase in phases",
             "for key in finalized_keys",
+            "for key in replica_keys",
             "let mut replay = self.prepare_replay_with_removed_entrypoints(Some(&entrypoints))?;",
             "replay.verify_snapshot_content()?;",
             "for phase in phases",
             "for key in finalized_keys",
+            "for key in replica_keys",
             "let live_claims =",
             "queue_plan_startup_reservation_phase_root(phases)?",
             "replay.verify_snapshot_content()?;",
@@ -1455,6 +1470,7 @@ AUTONOMOUS_TERMINAL_ORDERED_SOURCE_CHECKS = (
             "let cursor = attempt.cursor().ok_or_else",
             "require_local_producer_queue_owner(payload, cursor, &current_queue_groups)",
             "if recover_one_attempt(",
+            "recovered_attempts = recovered_attempts.saturating_add(1);",
             "revalidate_lane_reservation_startup_reconciliation_receipt(&receipt, &snapshot)",
         ),
     ),
@@ -1914,7 +1930,7 @@ def validate_autonomous_terminal_recovery_contract(
     journal_key = (
         QUEUE_JOURNAL_RESERVATION_COMMIT_PREFLIGHT_RELATIVE,
         "fn",
-        "observe_startup_replay_receipt_with_finalized_absence",
+        "observe_startup_replay_receipt_with_terminal_cuts",
     )
     journal_item = binding_items.get(journal_key)
     if journal_item is not None:

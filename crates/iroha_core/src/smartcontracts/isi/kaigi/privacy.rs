@@ -691,7 +691,7 @@ mod tests {
         );
         let err = validate_privacy_proof_envelope_metadata(
             &envelope,
-            "stark/fri/sha256-goldilocks",
+            "stark/fri/poseidon-x7-goldilocks-6x64-v1",
             BackendTag::Halo2IpaPasta,
             "kaigi/roster",
             commitment,

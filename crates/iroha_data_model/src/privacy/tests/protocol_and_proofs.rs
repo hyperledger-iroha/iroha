@@ -5,8 +5,9 @@ use super::{
         jindo_field, network_id, nullifier, orchard_action, p256_ciphertext, p256_point, proof_for,
         proof_variant_name, raw, redigest_bootle_lantern_policy, redigest_zk_ace_policy,
         sample_statements, sorted_fcmp_outputs, statement_for, statement_variant_name,
-        zk_ace_allowlist, zk_ace_policy, zk_ams_anchor, zk_ams_provision_statement,
-        zk_ams_seed_key, zk_x509_certificate_policy, zk_x509_crl, zk_x509_trust_anchor,
+        zk_ace_allowlist, zk_ace_identity_commitment, zk_ace_policy, zk_ams_anchor,
+        zk_ams_provision_statement, zk_ams_seed_key, zk_x509_certificate_policy, zk_x509_crl,
+        zk_x509_trust_anchor,
     },
     *,
 };
@@ -77,7 +78,7 @@ fn corrupt_root_transition(statement: &mut PrivacyStatementV1, corruption: RootC
         }
         PrivacyStatementV1::MoneroFcmpPlusPlusV1(_)
         | PrivacyStatementV1::IrohaIvmPrivateNoteStarkV1(_)
-        | PrivacyStatementV1::PqMaspStarkV0(_) => {
+        | PrivacyStatementV1::PqMaspStarkV1(_) => {
             panic!("FCMP++ and private-note successor roots are validator-derived")
         }
         _ => panic!("protocol does not manage a root transition"),
@@ -85,8 +86,8 @@ fn corrupt_root_transition(statement: &mut PrivacyStatementV1, corruption: RootC
 }
 fn protocol_limits(protocol: PrivacyProtocolIdV1) -> PrivacyProtocolActivationLimitsV1 {
     match protocol {
-        PrivacyProtocolIdV1::ZkAcePqAuthorizationV0 => {
-            PrivacyProtocolActivationLimitsV1::ZkAcePqAuthorizationV0
+        PrivacyProtocolIdV1::ZkAcePqAuthorizationV1 => {
+            PrivacyProtocolActivationLimitsV1::ZkAcePqAuthorizationV1
         }
         PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1 => {
             PrivacyProtocolActivationLimitsV1::AnonymousPgcKOutOfNV1(
@@ -109,14 +110,14 @@ fn protocol_limits(protocol: PrivacyProtocolIdV1) -> PrivacyProtocolActivationLi
                 max_ring_size: ZK_AMS_MAX_RING_SIZE_V1,
             })
         }
-        PrivacyProtocolIdV1::VegaExistingCredentialZkV0 => {
-            PrivacyProtocolActivationLimitsV1::VegaExistingCredentialZkV0
+        PrivacyProtocolIdV1::VegaExistingCredentialZkV1 => {
+            PrivacyProtocolActivationLimitsV1::VegaExistingCredentialZkV1
         }
-        PrivacyProtocolIdV1::IrohaZkX509StarkP256V0 => {
-            PrivacyProtocolActivationLimitsV1::IrohaZkX509StarkP256V0
+        PrivacyProtocolIdV1::IrohaZkX509StarkP256V1 => {
+            PrivacyProtocolActivationLimitsV1::IrohaZkX509StarkP256V1
         }
-        PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0 => {
-            PrivacyProtocolActivationLimitsV1::IrohaJindoPolynomialCommitmentV0(
+        PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1 => {
+            PrivacyProtocolActivationLimitsV1::IrohaJindoPolynomialCommitmentV1(
                 JindoActivationLimitsV1 {
                     max_polynomial_count: IROHA_JINDO_MAX_POLYNOMIALS_V1,
                 },
@@ -144,8 +145,8 @@ fn protocol_limits(protocol: PrivacyProtocolIdV1) -> PrivacyProtocolActivationLi
                 },
             )
         }
-        PrivacyProtocolIdV1::PqMaspStarkV0 => {
-            PrivacyProtocolActivationLimitsV1::PqMaspStarkV0(PqMaspActivationLimitsV1 {
+        PrivacyProtocolIdV1::PqMaspStarkV1 => {
+            PrivacyProtocolActivationLimitsV1::PqMaspStarkV1(PqMaspActivationLimitsV1 {
                 max_input_count: PQ_MASP_MAX_INPUTS_V1,
                 max_output_count: PQ_MASP_MAX_OUTPUTS_V1,
             })
@@ -209,14 +210,14 @@ where
 }
 #[test]
 fn first_release_privacy_schema_names_and_old_headers_are_frozen() {
-    let statement = statement_for(PrivacyProtocolIdV1::ZkAcePqAuthorizationV0);
-    let PrivacyStatementV1::ZkAcePqAuthorizationV0(authorization_statement) = &statement else {
+    let statement = statement_for(PrivacyProtocolIdV1::ZkAcePqAuthorizationV1);
+    let PrivacyStatementV1::ZkAcePqAuthorizationV1(authorization_statement) = &statement else {
         unreachable!("ZK-ACE fixture must use the typed authorization statement")
     };
     let authorization_statement = authorization_statement.clone();
     let public_inputs =
         crate::zk::ZkAcePrivacyPublicInputsV1::new(authorization_statement.clone(), raw(0xD1));
-    let proof = proof_for(PrivacyProtocolIdV1::ZkAcePqAuthorizationV0);
+    let proof = proof_for(PrivacyProtocolIdV1::ZkAcePqAuthorizationV1);
     let proof_envelope = envelope(statement.clone());
     let policy = zk_ace_policy(
         PRIVACY_ZK_ACE_POLICY_INITIAL_EPOCH_V1,
@@ -290,7 +291,6 @@ fn activation(envelope: &PrivacyProofEnvelopeV1) -> PrivacyProtocolActivationRec
         }),
         protocol_limits: protocol_limits(envelope.protocol_id),
         pending_protocol_limits_tightening: None,
-        assurance: PrivacyAssuranceV1::Experimental,
     }
 }
 fn compiled_profile_snapshot(
@@ -317,6 +317,7 @@ fn capability_snapshot() -> PrivacyCapabilitySnapshotV1 {
         version: PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1,
         committed_height: 2,
         consensus_policy: PrivacyConsensusPolicyV1::taira_default(),
+        qualification: None,
         protocols: PrivacyProtocolIdV1::ALL
             .into_iter()
             .map(|protocol_id| {
@@ -395,8 +396,8 @@ fn protocol_ids_keep_closed_norito_discriminants() {
 fn protocol_ids_have_unique_exact_external_labels() {
     let expected = [
         (
-            PrivacyProtocolIdV1::ZkAcePqAuthorizationV0,
-            "zk-ace-pq-authorization-v0",
+            PrivacyProtocolIdV1::ZkAcePqAuthorizationV1,
+            "zk-ace-pq-authorization-v1",
         ),
         (
             PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
@@ -408,16 +409,16 @@ fn protocol_ids_have_unique_exact_external_labels() {
         ),
         (PrivacyProtocolIdV1::IrohaZkAmsV1, "iroha-zk-ams-v1"),
         (
-            PrivacyProtocolIdV1::VegaExistingCredentialZkV0,
-            "vega-existing-credential-zk-v0",
+            PrivacyProtocolIdV1::VegaExistingCredentialZkV1,
+            "vega-existing-credential-zk-v1",
         ),
         (
-            PrivacyProtocolIdV1::IrohaZkX509StarkP256V0,
-            "iroha-zk-x509-stark-p256-v0",
+            PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
+            "iroha-zk-x509-stark-p256-v1",
         ),
         (
-            PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0,
-            "iroha-jindo-polynomial-commitment-v0",
+            PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1,
+            "iroha-jindo-polynomial-commitment-v1",
         ),
         (
             PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1,
@@ -435,7 +436,7 @@ fn protocol_ids_have_unique_exact_external_labels() {
             PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
             "iroha-ivm-private-note-stark-v1",
         ),
-        (PrivacyProtocolIdV1::PqMaspStarkV0, "pq-masp-stark-v0"),
+        (PrivacyProtocolIdV1::PqMaspStarkV1, "pq-masp-stark-v1"),
     ];
     assert_eq!(expected.len(), PrivacyProtocolIdV1::COUNT);
     for (index, (protocol, label)) in expected.into_iter().enumerate() {
@@ -453,36 +454,87 @@ fn protocol_ids_have_unique_exact_external_labels() {
         );
     }
 }
+
 #[test]
-fn active_and_retired_protocol_labels_share_one_exact_reservation_namespace() {
-    let mut reserved = std::collections::BTreeSet::new();
+fn final_catalog_binds_ordinals_labels_and_weakest_security_models() {
+    let expected_models = [
+        PrivacySecurityModelV1::PostQuantumQrom,
+        PrivacySecurityModelV1::ClassicalRom,
+        PrivacySecurityModelV1::ClassicalRom,
+        PrivacySecurityModelV1::ClassicalRom,
+        PrivacySecurityModelV1::ClassicalRom,
+        PrivacySecurityModelV1::ClassicalRom,
+        PrivacySecurityModelV1::PostQuantumQrom,
+        PrivacySecurityModelV1::PostQuantumQrom,
+        PrivacySecurityModelV1::ClassicalRom,
+        PrivacySecurityModelV1::ClassicalRom,
+        PrivacySecurityModelV1::PostQuantumQrom,
+        PrivacySecurityModelV1::PostQuantumQrom,
+    ];
+    for (protocol, expected) in PrivacyProtocolIdV1::ALL.into_iter().zip(expected_models) {
+        assert_eq!(protocol.security_model(), expected);
+    }
+    assert_eq!(PRIVACY_EXACT12_CATALOG_PREIMAGE_V1.len(), 525);
+    assert_eq!(
+        compute_privacy_exact12_catalog_commitment_v1().into_words(),
+        PRIVACY_EXACT12_CATALOG_COMMITMENT_WORDS_V1
+    );
+    assert_eq!(
+        PrivacyExact12CatalogCommitmentV1::canonical()
+            .digest()
+            .into_words(),
+        PRIVACY_EXACT12_CATALOG_COMMITMENT_WORDS_V1
+    );
+}
+
+#[test]
+fn proof_envelope_wire_rejects_pre_release_layout_magic_and_catalog() {
+    let envelope = envelope(statement_for(PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1));
+    let encoded = envelope.encode();
+    let magic_bytes = PrivacyProofWireMagicV1::canonical().encode();
+    let catalog_bytes = PrivacyExact12CatalogCommitmentV1::canonical()
+        .digest()
+        .to_le_bytes();
+    assert_eq!(magic_bytes, PRIVACY_PROOF_WIRE_MAGIC_BYTES_V1);
+    assert_eq!(usize::from(encoded[0]), magic_bytes.len());
+    assert_eq!(&encoded[1..1 + magic_bytes.len()], &magic_bytes);
+    let catalog_length_offset = 1 + magic_bytes.len();
+    assert_eq!(
+        usize::from(encoded[catalog_length_offset]),
+        GoldilocksDigest384V1::BYTES
+    );
+    let catalog_offset = catalog_length_offset + 1;
+    assert_eq!(
+        &encoded[catalog_offset..catalog_offset + GoldilocksDigest384V1::BYTES],
+        &catalog_bytes
+    );
+
+    let pre_release_layout = &encoded[catalog_offset + GoldilocksDigest384V1::BYTES..];
+    let mut pre_release_cursor = pre_release_layout;
+    assert!(PrivacyProofEnvelopeV1::decode(&mut pre_release_cursor).is_err());
+
+    let mut bad_magic = encoded.clone();
+    bad_magic[1] ^= 1;
+    assert!(PrivacyProofEnvelopeV1::decode(&mut bad_magic.as_slice()).is_err());
+
+    let mut bad_catalog = encoded;
+    bad_catalog[catalog_offset] ^= 1;
+    assert!(PrivacyProofEnvelopeV1::decode(&mut bad_catalog.as_slice()).is_err());
+}
+
+#[test]
+fn exact12_protocol_labels_form_one_closed_namespace() {
+    let mut exact12 = std::collections::BTreeSet::new();
     for protocol in PrivacyProtocolIdV1::ALL {
         let label = protocol.canonical_label();
         assert!(
-            privacy_protocol_label_is_reserved_v1(label),
-            "active label {label} must be reserved"
+            privacy_protocol_label_is_exact12_v1(label),
+            "Exact12 label {label} must be recognized"
         );
-        assert!(reserved.insert(label), "duplicate active label {label}");
+        assert!(exact12.insert(label), "duplicate Exact12 label {label}");
     }
-    for label in PRIVACY_RETIRED_PROTOCOL_LABELS_V1 {
-        assert!(
-            PrivacyProtocolIdV1::from_canonical_label(label).is_none(),
-            "retired label {label} must not become active"
-        );
-        assert!(
-            privacy_protocol_label_is_reserved_v1(label),
-            "retired label {label} must remain reserved"
-        );
-        assert!(
-            reserved.insert(label),
-            "retired label {label} overlaps another reservation"
-        );
-    }
-    assert_eq!(
-        reserved.len(),
-        PrivacyProtocolIdV1::COUNT + PRIVACY_RETIRED_PROTOCOL_LABELS_V1.len()
-    );
-    for label in reserved {
+    assert_eq!(exact12.len(), PrivacyProtocolIdV1::COUNT);
+    for label in exact12 {
         for near_miss in [
             format!("generic-{label}"),
             format!("{label}-generic"),
@@ -491,7 +543,7 @@ fn active_and_retired_protocol_labels_share_one_exact_reservation_namespace() {
             label.to_ascii_uppercase(),
         ] {
             assert!(
-                !privacy_protocol_label_is_reserved_v1(&near_miss),
+                !privacy_protocol_label_is_exact12_v1(&near_miss),
                 "near-miss label {near_miss:?} must not alias {label:?}"
             );
         }
@@ -562,8 +614,8 @@ fn assert_protocol_json_labels_roundtrip() {
 fn assert_proof_system_json_labels_roundtrip() {
     let proof_systems = [
         (
-            PrivacyProofSystemIdV1::StarkFriSha256Goldilocks,
-            "stark-fri-sha256-goldilocks",
+            PrivacyProofSystemIdV1::StarkFriPoseidonX7Goldilocks6x64,
+            "stark-fri-poseidon-x7-goldilocks-6x64-v1",
         ),
         (
             PrivacyProofSystemIdV1::ZkAmsMaskedRelaxedSpartanT256Ristretto255Sha3_512,
@@ -611,8 +663,8 @@ fn assert_proof_system_json_labels_roundtrip() {
 fn assert_engine_json_labels_roundtrip() {
     let engines = [
         (
-            PrivacyEngineIdV1::NativeGoldilocksStarkFri,
-            "native-goldilocks-stark-fri",
+            PrivacyEngineIdV1::NativeGoldilocksPoseidonX7StarkFri6x64,
+            "native-goldilocks-poseidon-x7-stark-fri-6x64-v1",
         ),
         (
             PrivacyEngineIdV1::NativeZkAmsMaskedRelaxedSpartanT256Ristretto255,
@@ -692,8 +744,9 @@ fn privacy_public_json_labels_are_exact_and_roundtrip() {
     assert_engine_json_labels_roundtrip();
     assert_unavailable_reason_json_labels_roundtrip();
     assert_eq!(
-        norito::json::to_json(&PrivacyAssuranceV1::Experimental).expect("serialize assurance"),
-        "{\"assurance\":\"experimental\",\"value\":null}"
+        norito::json::to_json(&PrivacySecurityModelV1::PostQuantumQrom)
+            .expect("serialize security model"),
+        "{\"security_model\":\"pq-qrom\",\"value\":null}"
     );
     let lifecycle = PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
         proposed_at_height: 1,
@@ -746,7 +799,7 @@ fn privacy_public_json_rejects_aliases_case_whitespace_confusables_and_unknown_f
             && norito::json::from_json::<PrivacyEngineIdV1>(hostile).is_err()
             && norito::json::from_json::<PrivacyCompiledProfileUnavailableReasonV1>(hostile)
                 .is_err()
-            && norito::json::from_json::<PrivacyAssuranceV1>(hostile).is_err();
+            && norito::json::from_json::<PrivacySecurityModelV1>(hostile).is_err();
         assert!(rejected, "hostile closed-enum JSON {hostile} must fail");
     }
 }
@@ -786,14 +839,14 @@ fn assert_capability_snapshot_json_adversaries(
         norito::json::from_json::<PrivacyCapabilitySnapshotV1>(&duplicate).is_err(),
         "duplicate top-level field must fail"
     );
-    let assurance_alias = canonical.replacen(
-        "\"assurance\":\"experimental\"",
-        "\"assurance\":\"production\"",
-        1,
+    let security_model_alias = canonical.replacen("\"classical-rom\"", "\"classical-rom-v1\"", 1);
+    assert_ne!(
+        security_model_alias, canonical,
+        "fixture must carry a security claim"
     );
     assert!(
-        norito::json::from_json::<PrivacyCapabilitySnapshotV1>(&assurance_alias).is_err(),
-        "non-Experimental assurance must fail"
+        norito::json::from_json::<PrivacyCapabilitySnapshotV1>(&security_model_alias).is_err(),
+        "security-model aliases must fail"
     );
     let pgc_profile = available_pgc_profile(snapshot);
     let parameter_json =
@@ -1195,7 +1248,7 @@ fn all_protocol_mappings_and_typed_variants_are_exact() {
         PrivacyProofSystemIdV1::IrohaVeRangeP256
     );
     assert_eq!(
-        PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0.expected_proof_system(),
+        PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1.expected_proof_system(),
         PrivacyProofSystemIdV1::JindoPolynomialCommitment
     );
     assert_eq!(
@@ -1207,14 +1260,14 @@ fn all_protocol_mappings_and_typed_variants_are_exact() {
         PrivacyEngineIdV1::NativeZkAmsMaskedRelaxedSpartanT256Ristretto255
     );
     for protocol in [
-        PrivacyProtocolIdV1::ZkAcePqAuthorizationV0,
-        PrivacyProtocolIdV1::IrohaZkX509StarkP256V0,
+        PrivacyProtocolIdV1::ZkAcePqAuthorizationV1,
+        PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
         PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
-        PrivacyProtocolIdV1::PqMaspStarkV0,
+        PrivacyProtocolIdV1::PqMaspStarkV1,
     ] {
         assert_eq!(
             protocol.expected_proof_system(),
-            PrivacyProofSystemIdV1::StarkFriSha256Goldilocks,
+            PrivacyProofSystemIdV1::StarkFriPoseidonX7Goldilocks6x64,
             "{protocol:?} must identify the SHA-256 transcript/Merkle STARK"
         );
     }
@@ -1528,7 +1581,6 @@ fn exact12_cross_sdk_matrix_binds_registry_routes_and_typed_envelopes() {
     let mut registry_sha256 = None;
     let mut protocols = Vec::new();
     let mut typed_envelopes = Vec::new();
-    let mut retired = Vec::new();
     for (line_index, line) in matrix.lines().enumerate() {
         if line.is_empty() || line.starts_with('#') {
             continue;
@@ -1569,14 +1621,12 @@ fn exact12_cross_sdk_matrix_binds_registry_routes_and_typed_envelopes() {
                 *statement_digest,
                 *envelope_sha256,
             )),
-            ["retired", label] => retired.push(*label),
             _ => panic!("malformed exact12 matrix row {}", line_index + 1),
         }
     }
     assert_eq!(matrix_version, Some("1"));
     assert_eq!(protocols.len(), PrivacyProtocolIdV1::COUNT);
     assert_eq!(typed_envelopes.len(), PrivacyProtocolIdV1::COUNT);
-    assert!(!retired.is_empty());
     let semantic_rows =
         privacy_exact12_typed_envelope_rows_v1().expect("compiled exact12 semantics");
     assert_eq!(semantic_rows.len(), PrivacyProtocolIdV1::COUNT);
@@ -1642,14 +1692,6 @@ fn exact12_cross_sdk_matrix_binds_registry_routes_and_typed_envelopes() {
             expected_envelope_sha256
         );
     }
-    let mut unique_retired = std::collections::BTreeSet::new();
-    for label in retired {
-        assert!(unique_retired.insert(label), "duplicate retired label");
-        assert!(
-            PrivacyProtocolIdV1::from_canonical_label(label).is_none(),
-            "retired label {label:?} must remain unrepresentable"
-        );
-    }
 }
 #[test]
 fn exact12_compiled_semantics_are_closed_unique_and_context_bound() {
@@ -1679,8 +1721,8 @@ fn exact12_compiled_semantics_are_closed_unique_and_context_bound() {
             .len(),
         PrivacyProtocolIdV1::COUNT
     );
-    let mut mutated = statement_for(PrivacyProtocolIdV1::ZkAcePqAuthorizationV0);
-    let PrivacyStatementV1::ZkAcePqAuthorizationV0(statement) = &mut mutated else {
+    let mut mutated = statement_for(PrivacyProtocolIdV1::ZkAcePqAuthorizationV1);
+    let PrivacyStatementV1::ZkAcePqAuthorizationV1(statement) = &mut mutated else {
         unreachable!("closed first row is ZK-ACE")
     };
     statement.context.action_index = 1;
@@ -1721,6 +1763,12 @@ fn fixed_digest_types_are_exact_and_nonzero_checked() {
     check_type!(PrivacyVerifierDigestV1, 3);
     check_type!(PrivacyStatementSchemaDigestV1, 4);
     check_type!(PrivacyEngineManifestDigestV1, 5);
+    check_type!(PrivacyExact12CapabilityManifestDigestV1, 24);
+    check_type!(PrivacySecurityReductionDigestV1, 25);
+    check_type!(PrivacySecurityClaimDigestV1, 26);
+    check_type!(PrivacyExact12ReleaseManifestDigestV1, 27);
+    check_type!(PrivacyExact12DeploymentQualificationDigestV1, 28);
+    check_type!(PrivacyAuditBundleDigestV1, 29);
     check_type!(PrivacyStatementDigestV1, 6);
     check_type!(PrivacyTransactionIntentDigestV1, 17);
     check_type!(PrivacyOrchardPoolBootstrapDigestV1, 20);
@@ -2162,11 +2210,11 @@ fn first_release_statements_reject_nested_unknown_json_fields() {
         );
     }
     for (protocol_id, removed_field) in [
-        (PrivacyProtocolIdV1::ZkAcePqAuthorizationV0, "fee"),
+        (PrivacyProtocolIdV1::ZkAcePqAuthorizationV1, "fee"),
         (PrivacyProtocolIdV1::OrchardHalo2ActionsV1, "fee"),
         (PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1, "fee"),
         (PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1, "fee"),
-        (PrivacyProtocolIdV1::PqMaspStarkV0, "fee"),
+        (PrivacyProtocolIdV1::PqMaspStarkV1, "fee"),
         (
             PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
             "next_state_root",
@@ -2175,8 +2223,8 @@ fn first_release_statements_reject_nested_unknown_json_fields() {
             PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
             "next_state_root_epoch",
         ),
-        (PrivacyProtocolIdV1::PqMaspStarkV0, "next_anchor"),
-        (PrivacyProtocolIdV1::PqMaspStarkV0, "next_anchor_epoch"),
+        (PrivacyProtocolIdV1::PqMaspStarkV1, "next_anchor"),
+        (PrivacyProtocolIdV1::PqMaspStarkV1, "next_anchor_epoch"),
     ] {
         let canonical = norito::json::to_json(&statement_for(protocol_id))
             .expect("encode validator-derived-successor statement");
@@ -2647,6 +2695,62 @@ fn goldilocks_digest384_wire_is_six_canonical_little_endian_words() {
     noncanonical[16..24].copy_from_slice(&fastpq_isi::poseidon::FIELD_MODULUS.to_le_bytes());
     assert!(GoldilocksDigest384V1::decode(&mut noncanonical.as_slice()).is_err());
     assert!(GoldilocksDigest384V1::from_le_bytes(noncanonical).is_none());
+}
+
+#[test]
+fn goldilocks_digest384_slice_decode_consumes_one_fixed_width_prefix() {
+    let digest =
+        GoldilocksDigest384V1::new([1, 2, 3, 4, 5, 6]).expect("fixture digest words are canonical");
+    let mut bytes = digest.to_le_bytes().to_vec();
+    bytes.extend_from_slice(&[0xAA, 0xBB, 0xCC]);
+
+    let (decoded, consumed) =
+        <GoldilocksDigest384V1 as norito::core::DecodeFromSlice>::decode_from_slice(&bytes)
+            .expect("decode fixed-width digest prefix");
+    assert_eq!(decoded, digest);
+    assert_eq!(consumed, GoldilocksDigest384V1::BYTES);
+
+    let short = &bytes[..GoldilocksDigest384V1::BYTES - 1];
+    assert!(
+        <GoldilocksDigest384V1 as norito::core::DecodeFromSlice>::decode_from_slice(short).is_err()
+    );
+
+    let mut noncanonical = digest.to_le_bytes().to_vec();
+    noncanonical[..8].copy_from_slice(&fastpq_isi::poseidon::FIELD_MODULUS.to_le_bytes());
+    noncanonical.push(0xAA);
+    assert!(
+        <GoldilocksDigest384V1 as norito::core::DecodeFromSlice>::decode_from_slice(&noncanonical)
+            .is_err()
+    );
+}
+
+#[test]
+fn zk_ace_digest384_wrappers_reject_noncanonical_field_elements() {
+    let identity = PrivacyZkAceIdentityCommitmentV1::new([1, 2, 3, 4, 5, 6])
+        .expect("canonical identity words");
+    let replay =
+        PrivacyZkAceReplayNullifierV1::new([6, 5, 4, 3, 2, 1]).expect("canonical replay words");
+    let identity_bytes = identity.encode();
+    let replay_bytes = replay.encode();
+    assert_eq!(identity_bytes.len(), GoldilocksDigest384V1::BYTES);
+    assert_eq!(replay_bytes.len(), GoldilocksDigest384V1::BYTES);
+    assert_eq!(
+        PrivacyZkAceIdentityCommitmentV1::decode(&mut identity_bytes.as_slice())
+            .expect("decode canonical identity commitment"),
+        identity
+    );
+    assert_eq!(
+        PrivacyZkAceReplayNullifierV1::decode(&mut replay_bytes.as_slice())
+            .expect("decode canonical replay nullifier"),
+        replay
+    );
+
+    let mut noncanonical = [0_u8; GoldilocksDigest384V1::BYTES];
+    noncanonical[..8].copy_from_slice(&fastpq_isi::poseidon::FIELD_MODULUS.to_le_bytes());
+    assert!(PrivacyZkAceIdentityCommitmentV1::decode(&mut noncanonical.as_slice()).is_err());
+    assert!(PrivacyZkAceReplayNullifierV1::decode(&mut noncanonical.as_slice()).is_err());
+    assert!(PrivacyZkAceIdentityCommitmentV1::from_le_bytes(noncanonical).is_none());
+    assert!(PrivacyZkAceReplayNullifierV1::from_le_bytes(noncanonical).is_none());
 }
 
 #[cfg(feature = "json")]

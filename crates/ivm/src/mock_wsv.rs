@@ -6327,14 +6327,17 @@ mod tests_null_decode {
         let context = iroha_data_model::bridge::SccpOutboundMessageContextV1::new(
             iroha_data_model::bridge::SccpLaneIdV1 {
                 source: iroha_data_model::bridge::SccpNetworkV1::SoraTaira,
-                target: iroha_data_model::bridge::SccpNetworkV1::BscTestnet,
+                target: iroha_data_model::bridge::SccpNetworkV1::BscMainnet,
             },
             [0x44; 32],
             [0x45; 32],
         )
         .expect("valid SCCP context");
-        let record =
-            iroha_data_model::isi::bridge::RecordSccpMessage::new(context, vec![0xAA, 0xBB]);
+        let record = iroha_data_model::isi::bridge::RecordSccpMessage::new(
+            context,
+            vec![0xAA, 0xBB],
+            iroha_data_model::bridge::SccpSparseMerkleWitnessV1::empty_shard(),
+        );
         let record_payload = encode_canonical_norito(&DMInstructionBox::from(record))
             .expect("encode RecordSccpMessage InstructionBox");
         let ptr = vm
@@ -6675,16 +6678,14 @@ mod tests_null_decode {
             crate::sum::SumLayoutV1::option(1).expect("int Option layout"),
         )
         .expect("read int Option");
-        assert!(present, "numeric JSON integer tokens must be accepted");
-        assert_eq!(words.len(), 1);
-        let int = vm.validate_tlv(words[0]).expect("int TLV");
-        assert_eq!(int.type_id, PointerType::Int);
+        assert!(
+            !present,
+            "generic JSON_SET_I64 number tokens stay outside the exact-number surface"
+        );
+        assert!(words.is_empty());
         assert_eq!(
             get_gas,
-            WsvHost::json_gas(
-                object_with_value_len + key_name_bytes.len(),
-                int.payload.len() + 16,
-            )
+            WsvHost::json_gas(object_with_value_len + key_name_bytes.len(), 16)
         );
         let name: Name = "wonderland".parse().expect("name");
         let name_bytes = norito::to_bytes(&name).expect("encode name");

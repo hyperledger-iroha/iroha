@@ -53,6 +53,8 @@ use super::{
         P256_VALUE_BUS_SEGMENT_ROWS_V1,
     },
 };
+#[cfg(test)]
+use crate::privacy_engines::transparent_stark::GoldilocksDigest384V1;
 use crate::privacy_engines::transparent_stark::{
     GoldilocksFieldV1 as F, TransparentStarkErrorV1, TransparentTranscriptV1,
 };
@@ -2327,9 +2329,13 @@ mod tests {
             unique_labels.len(),
             P256_CROSS_TRACE_LANES_V1 * P256_CROSS_TRACE_CHALLENGE_TERMS_V1
         );
-        let mut transcript =
-            TransparentTranscriptV1::new(b"p256-cross-trace-test", &[0x43; 32], &[0xb8; 32])
-                .expect("transcript");
+        let mut transcript = TransparentTranscriptV1::new(
+            super::super::stark::ZK_X509_DIGEST_CONTEXT_V1,
+            b"p256-cross-trace-test",
+            &GoldilocksDigest384V1::new([0x43; 6]).expect("profile digest"),
+            &GoldilocksDigest384V1::new([0xb8; 6]).expect("public digest"),
+        )
+        .expect("transcript");
         let transcript_challenges =
             derive_zk_x509_p256_cross_trace_challenges_v1(&mut transcript).expect("challenges");
         transcript_challenges

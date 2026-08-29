@@ -29,6 +29,15 @@ public sealed class PrivacyExact12CapabilityManifestV1Tests
     private static readonly byte[] FeatureMasks =
         [0, 6, 1, 2, 2, 2, 0, 2, 7, 2, 7, 31];
 
+    private static readonly uint[] ProofSystems =
+        [0, 2, 3, 1, 4, 0, 5, 8, 6, 7, 0, 0];
+
+    private static readonly uint[] Engines =
+        [0, 2, 3, 1, 4, 0, 5, 8, 6, 7, 0, 0];
+
+    private static readonly uint[] SecurityModels =
+        [0, 1, 1, 1, 1, 1, 0, 0, 1, 1, 0, 0];
+
     [Fact]
     public void CanonicalManifestValidationPreservesTheCommittedProjection()
     {
@@ -38,16 +47,29 @@ public sealed class PrivacyExact12CapabilityManifestV1Tests
             fixture.Catalog);
 
         Assert.Equal(1U, decoded.Version);
-        Assert.Equal(2UL, decoded.CommittedHeight);
+        Assert.Equal(3UL, decoded.CommittedHeight);
+        var qualification = Assert.IsType<PrivacyExact12QualificationRecordV1>(
+            decoded.Qualification);
+        Assert.Equal(12, qualification.ReleaseManifest.Protocols.Count);
+        Assert.Equal(
+            qualification.ReleaseManifest.ManifestDigest,
+            qualification.DeploymentQualification.ReleaseManifestDigest);
         Assert.Equal(12, decoded.Protocols.Count);
         Assert.True(decoded.Protocols[0].IsNetworkAvailable);
         Assert.All(decoded.Protocols, row => Assert.True(row.LocalCompiledTupleMatches));
         Assert.Equal(
-            PrivacyCapabilityReadinessV1.AvailableExperimental,
-            decoded.Protocols[(int)PrivacyProtocolIdV1.IrohaJindoPolynomialCommitmentV0].Readiness);
+            PrivacyCapabilityReadinessV1.Unavailable,
+            decoded.Protocols[(int)PrivacyProtocolIdV1.IrohaJindoPolynomialCommitmentV1].Readiness);
         Assert.Equal(
-            PrivacyCapabilityLimitationV1.MissingDistributionWideKnowledgeSoundnessEvidence,
-            decoded.Protocols[(int)PrivacyProtocolIdV1.IrohaJindoPolynomialCommitmentV0].Limitation);
+            PrivacyCapabilityUnavailableReasonV1.NotRegistered,
+            decoded.Protocols[(int)PrivacyProtocolIdV1.IrohaJindoPolynomialCommitmentV1]
+                .UnavailableReason);
+        Assert.Equal(
+            PrivacyCapabilityUnavailableReasonV1.CompiledProfile,
+            decoded.Protocols[1].UnavailableReason);
+        Assert.Equal(
+            PrivacyCompiledProfileUnavailableReasonV1.EngineUnavailable,
+            decoded.Protocols[1].CompiledProfileUnavailableReason);
         Assert.Equal(ConsensusPolicy(), decoded.ConsensusPolicy);
         Assert.Equal(
             Option(ActivationForProfileZero(), present: true),
@@ -93,12 +115,125 @@ public sealed class PrivacyExact12CapabilityManifestV1Tests
     public void RecomputedDigestCannotHideActivationProjectionDrift()
     {
         var fixture = BuildFixture(
-            rowZeroActivationState: PrivacyCapabilityActivationStateV1.Suspended);
+            rowZeroReadiness: UnavailableReadiness(3));
 
         Assert.Throws<PrivacyExact12CapabilityManifestException>(() =>
             PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(
                 fixture.Manifest,
                 fixture.Catalog));
+    }
+
+    [Fact]
+    public void ActiveProtocolWithoutRegisteredQualificationStaysUnavailable()
+    {
+        var fixture = BuildFixture(includeQualification: false);
+
+        var decoded = PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(
+            fixture.Manifest,
+            fixture.Catalog);
+
+        Assert.Equal(PrivacyCapabilityReadinessV1.Unavailable, decoded.Protocols[0].Readiness);
+        Assert.Equal(
+            PrivacyCapabilityUnavailableReasonV1.MissingProductionQualification,
+            decoded.Protocols[0].UnavailableReason);
+        Assert.False(decoded.Protocols[0].IsNetworkAvailable);
+    }
+
+    [Fact]
+    public void MismatchedRegisteredQualificationDerivesOnlyInvalidReadiness()
+    {
+        var fixture = BuildFixture(
+            rowZeroReadiness: UnavailableReadiness(6),
+            committedHeight: 4,
+            qualificationActivationHeight: 3,
+            qualificationConvergenceHeight: 4);
+        var decoded = PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(
+            fixture.Manifest,
+            fixture.Catalog);
+        Assert.Equal(
+            PrivacyCapabilityUnavailableReasonV1.InvalidProductionQualification,
+            decoded.Protocols[0].UnavailableReason);
+
+        var forged = BuildFixture(
+            committedHeight: 4,
+            qualificationActivationHeight: 3,
+            qualificationConvergenceHeight: 4);
+        Assert.Throws<PrivacyExact12CapabilityManifestException>(() =>
+            PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(
+                forged.Manifest,
+                forged.Catalog));
+    }
+
+    [Fact]
+    public void GovernanceLifecycleProjectsEveryClosedUnavailableReason()
+    {
+        var cases = new[]
+        {
+            (
+                Lifecycle: EnumValue(0, Struct(U64(1), U64(4))),
+                Reason: PrivacyCapabilityUnavailableReasonV1.Proposed,
+                ReasonTag: 2U),
+            (
+                Lifecycle: EnumValue(2, Struct(U64(1), U64(2), U64(3))),
+                Reason: PrivacyCapabilityUnavailableReasonV1.Suspended,
+                ReasonTag: 3U),
+            (
+                Lifecycle: EnumValue(
+                    3,
+                    Struct(U64(1), Option(U64(2), present: true), U64(3))),
+                Reason: PrivacyCapabilityUnavailableReasonV1.Retired,
+                ReasonTag: 4U),
+        };
+
+        foreach (var item in cases)
+        {
+            var fixture = BuildFixture(
+                rowZeroReadiness: UnavailableReadiness(item.ReasonTag),
+                rowZeroLifecycle: item.Lifecycle,
+                committedHeight: 3);
+            var decoded = PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(
+                fixture.Manifest,
+                fixture.Catalog);
+
+            Assert.Equal(PrivacyCapabilityReadinessV1.Unavailable, decoded.Protocols[0].Readiness);
+            Assert.Equal(item.Reason, decoded.Protocols[0].UnavailableReason);
+            Assert.False(decoded.Protocols[0].IsNetworkAvailable);
+        }
+    }
+
+    [Fact]
+    public void LegacyNineFieldRowAndExperimentalAssuranceArchivesAreRejected()
+    {
+        var legacyRows = BuildFixture(useLegacyNineFieldRows: true);
+        var legacyAssurance = BuildFixture(useLegacyAssurance: true);
+
+        Assert.Throws<PrivacyExact12CapabilityManifestException>(() =>
+            PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(
+                legacyRows.Manifest,
+                legacyRows.Catalog));
+        Assert.Throws<PrivacyExact12CapabilityManifestException>(() =>
+            PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(
+                legacyAssurance.Manifest,
+                legacyAssurance.Catalog));
+    }
+
+    [Fact]
+    public void ReleaseQualificationMustBindItsCanonicalSecurityClaim()
+    {
+        var fixture = BuildFixture(corruptSecurityClaimDigest: true);
+
+        Assert.Throws<PrivacyExact12CapabilityManifestException>(() =>
+            PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(
+                fixture.Manifest,
+                fixture.Catalog));
+    }
+
+    [Fact]
+    public void ReadinessSurfaceContainsOnlyTheFinalHardCutStates()
+    {
+        Assert.Equal(
+            new[] { "ProductionQualified", "Unavailable" },
+            Enum.GetNames<PrivacyCapabilityReadinessV1>());
     }
 
     [Fact]
@@ -156,10 +291,17 @@ public sealed class PrivacyExact12CapabilityManifestV1Tests
     }
 
     private static Fixture BuildFixture(
-        PrivacyCapabilityActivationStateV1 rowZeroActivationState =
-            PrivacyCapabilityActivationStateV1.Active,
+        byte[]? rowZeroReadiness = null,
+        byte[]? rowZeroLifecycle = null,
+        ulong committedHeight = 3,
         uint maxActionsPerTransaction = 1,
-        byte activationDigestByte = 0x31)
+        byte activationDigestByte = 0x31,
+        bool includeQualification = true,
+        bool useLegacyNineFieldRows = false,
+        bool useLegacyAssurance = false,
+        bool corruptSecurityClaimDigest = false,
+        ulong qualificationActivationHeight = 2,
+        ulong qualificationConvergenceHeight = 3)
     {
         var profiles = new byte[12][];
         profiles[0] = AvailableProfile(
@@ -188,39 +330,76 @@ public sealed class PrivacyExact12CapabilityManifestV1Tests
         var rows = new byte[12][];
         for (var index = 0; index < rows.Length; index++)
         {
-            var available = index is 0 or 6;
-            var readiness = available
-                ? EnumValue(index == 6 ? 1U : 0U)
-                : EnumValue(2, EnumValue(0));
+            var readiness = useLegacyNineFieldRows
+                ? index switch
+                {
+                    0 => EnumValue(0),
+                    6 => EnumValue(1),
+                    _ => EnumValue(2, EnumValue(0)),
+                }
+                : index switch
+                {
+                    0 => rowZeroReadiness ?? (includeQualification
+                        ? EnumValue(0)
+                        : UnavailableReadiness(5)),
+                    6 => UnavailableReadiness(1),
+                    _ => UnavailableReadiness(0, EnumValue(0)),
+                };
             var activation = index == 0
-                ? Option(ActivationForProfileZero(activationDigestByte), present: true)
+                ? Option(
+                    ActivationForProfileZero(
+                        activationDigestByte,
+                        useLegacyAssurance || useLegacyNineFieldRows,
+                        rowZeroLifecycle),
+                    present: true)
                 : Option(Array.Empty<byte>(), present: false);
-            var activationState = index == 0
-                ? rowZeroActivationState
-                : PrivacyCapabilityActivationStateV1.NotRegistered;
-            var limitation = index == 6
-                ? Option(EnumValue(0), present: true)
-                : Option(Array.Empty<byte>(), present: false);
-            rows[index] = Struct(
+            var fields = new List<byte[]>
+            {
                 EnumValue(checked((uint)index)),
                 EnumValue(checked((uint)index)),
                 EnumValue((uint)ExecutionModes[index]),
                 Struct(new[] { FeatureMasks[index] }),
                 profiles[index],
                 readiness,
-                EnumValue((uint)activationState),
-                activation,
-                limitation);
+            };
+            if (useLegacyNineFieldRows)
+            {
+                fields.Add(EnumValue(index == 0 ? 2U : 0U));
+                fields.Add(activation);
+                fields.Add(index == 6
+                    ? Option(EnumValue(0), present: true)
+                    : Option(Array.Empty<byte>(), present: false));
+            }
+            else
+            {
+                fields.Add(activation);
+            }
+            rows[index] = Struct(fields.ToArray());
         }
 
         var catalog = BuildCatalog(profiles);
+        var qualification = includeQualification
+            ? Exact12Qualification(
+                corruptSecurityClaimDigest,
+                qualificationActivationHeight,
+                qualificationConvergenceHeight)
+            : Array.Empty<byte>();
         var manifestWithZeroDigest = BuildManifestArchive(
             rows,
+            qualification,
+            includeQualification,
             new byte[32],
-            maxActionsPerTransaction);
+            maxActionsPerTransaction,
+            committedHeight);
         var digest = ComputeManifestDigest(manifestWithZeroDigest);
         return new Fixture(
-            BuildManifestArchive(rows, digest, maxActionsPerTransaction),
+            BuildManifestArchive(
+                rows,
+                qualification,
+                includeQualification,
+                digest,
+                maxActionsPerTransaction,
+                committedHeight),
             catalog,
             profiles);
     }
@@ -247,11 +426,15 @@ public sealed class PrivacyExact12CapabilityManifestV1Tests
                 limits));
     }
 
-    private static byte[] ActivationForProfileZero(byte digestByte = 0x31)
+    private static byte[] ActivationForProfileZero(
+        byte digestByte = 0x31,
+        bool useLegacyAssurance = false,
+        byte[]? lifecycleOverride = null)
     {
         var digest = Struct(Enumerable.Repeat(digestByte, 32).ToArray());
-        var lifecycle = EnumValue(1, Struct(U64(1), U64(2), U64(2)));
-        return Struct(
+        var lifecycle = lifecycleOverride ?? EnumValue(1, Struct(U64(1), U64(2), U64(2)));
+        var fields = new List<byte[]>
+        {
             EnumValue(0),
             EnumValue(0),
             EnumValue(0),
@@ -263,7 +446,150 @@ public sealed class PrivacyExact12CapabilityManifestV1Tests
             lifecycle,
             EnumValue(0),
             Option(Array.Empty<byte>(), present: false),
-            EnumValue(0));
+        };
+        if (useLegacyAssurance)
+        {
+            fields.Add(EnumValue(0));
+        }
+        return Struct(fields.ToArray());
+    }
+
+    private static (byte[] Claim, byte[] Digest) SecurityClaim(
+        int protocolIndex,
+        byte digestByte,
+        bool corruptDigest)
+    {
+        var activationDigest = Struct(Enumerable.Repeat(digestByte, 32).ToArray());
+        var securityClaim = Struct(
+            Exact12CatalogCommitment(),
+            EnumValue(checked((uint)protocolIndex)),
+            EnumValue(SecurityModels[protocolIndex]),
+            U16(128),
+            U16(128),
+            activationDigest,
+            activationDigest,
+            Struct(Enumerable.Repeat((byte)0xe1, 32).ToArray()),
+            Struct(Enumerable.Repeat((byte)0xe2, 32).ToArray()));
+        var claimDigest = ComputeSecurityClaimDigest(securityClaim);
+        if (corruptDigest)
+        {
+            claimDigest[0] ^= 0x80;
+        }
+        return (securityClaim, claimDigest);
+    }
+
+    private static byte[] Exact12Qualification(
+        bool corruptSecurityClaimDigest,
+        ulong firstActivationHeight,
+        ulong convergenceHeight)
+    {
+        var releaseDigest = Enumerable.Repeat((byte)0xe3, 32).ToArray();
+        var bindings = Enumerable.Range(0, 12)
+            .Select(index => ReleaseBinding(
+                index,
+                ProfileDigestByte(index),
+                corruptSecurityClaimDigest && index == 0))
+            .ToArray();
+        var source = Struct(
+            Digest(0xa1),
+            new byte[] { 1 },
+            CompactString("csharp-test-toolchain"),
+            Digest(0xa2),
+            Digest(0xa3));
+        var release = Struct(
+            U16(1),
+            CompactString("iroha-privacy-exact12-v1"),
+            Exact12CatalogCommitment(),
+            source,
+            U16(1),
+            Digest(0xa4),
+            Digest(0xa5),
+            Sequence(Array.Empty<byte[]>()),
+            Sequence(bindings),
+            Sequence(Array.Empty<byte[]>()),
+            Sequence(Array.Empty<byte[]>()),
+            Sequence(Array.Empty<byte[]>()),
+            Sequence(Array.Empty<byte[]>()),
+            Digest(0xa6),
+            Sequence(Array.Empty<byte[]>()),
+            Digest(0xe2),
+            Sequence(Array.Empty<byte[]>()),
+            Struct(releaseDigest));
+        var activations = Enumerable.Range(0, 12)
+            .Select(index => Struct(
+                EnumValue(checked((uint)index)),
+                U64(index == 0 ? firstActivationHeight : 2)))
+            .ToArray();
+        var deployment = Struct(
+            U16(1),
+            CompactString("csharp-test-chain"),
+            Digest(0xd0),
+            Digest(0xd0),
+            Struct(releaseDigest),
+            Digest(0xd1),
+            Sequence(activations),
+            Digest(0xd2),
+            CompactString("v1"),
+            U64(convergenceHeight),
+            Digest(0xd3),
+            Sequence(Array.Empty<byte[]>()),
+            Sequence(Array.Empty<byte[]>()),
+            Digest(0xe4));
+        return Struct(release, deployment);
+    }
+
+    private static byte[] ReleaseBinding(
+        int protocolIndex,
+        byte digestByte,
+        bool corruptSecurityClaimDigest)
+    {
+        var binding = Digest(digestByte);
+        var claim = SecurityClaim(
+            protocolIndex,
+            digestByte,
+            corruptSecurityClaimDigest);
+        return Struct(
+            EnumValue(checked((uint)protocolIndex)),
+            EnumValue(ProofSystems[protocolIndex]),
+            EnumValue(Engines[protocolIndex]),
+            binding,
+            binding,
+            binding,
+            binding,
+            binding,
+            claim.Claim,
+            Struct(claim.Digest));
+    }
+
+    private static byte ProfileDigestByte(int index) => index switch
+    {
+        0 => 0x31,
+        6 => 0x61,
+        _ => checked((byte)(0x40 + index)),
+    };
+
+    private static byte[] Digest(byte value) =>
+        Struct(Enumerable.Repeat(value, 32).ToArray());
+
+    private static byte[] Exact12CatalogCommitment() =>
+        Convert.FromHexString(
+            "E037F13904A0307C00DB15D85CFB406BD79772D20144A949" +
+            "DEF0F3FDA78E342E747F65787CBFBFFAC94F11C369E2BBFF");
+
+    private static byte[] ComputeSecurityClaimDigest(byte[] claim)
+    {
+        var domain = Encoding.UTF8.GetBytes("iroha:privacy:security-claim:v1");
+        var canonicalClaim = NoritoCodec.Encode(
+            "iroha_data_model::privacy::protocol::PrivacySecurityClaimV1",
+            claim,
+            NoritoCodec.CanonicalLayoutFlags);
+        Span<byte> length = stackalloc byte[sizeof(ulong)];
+        BinaryPrimitives.WriteUInt64LittleEndian(length, checked((ulong)canonicalClaim.Length));
+        var input = new byte[domain.Length + length.Length + canonicalClaim.Length];
+        domain.CopyTo(input, 0);
+        length.CopyTo(input.AsSpan(domain.Length));
+        canonicalClaim.CopyTo(input, domain.Length + length.Length);
+        return SHA256.HashData(input);
     }
 
     private static byte[] BuildCatalog(IReadOnlyList<byte[]> profiles)
@@ -296,15 +622,19 @@ public sealed class PrivacyExact12CapabilityManifestV1Tests
 
     private static byte[] BuildManifestArchive(
         IReadOnlyList<byte[]> rows,
+        byte[] qualification,
+        bool includeQualification,
         byte[] digest,
-        uint maxActionsPerTransaction)
+        uint maxActionsPerTransaction,
+        ulong committedHeight)
     {
         return NoritoCodec.Encode(
             PrivacyExact12CapabilityManifestCodecV1.ManifestSchemaName,
             Struct(
                 U32(1),
-                U64(2),
+                U64(committedHeight),
                 ConsensusPolicy(maxActionsPerTransaction),
+                Option(qualification, includeQualification),
                 Sequence(rows),
                 Struct(digest)),
             NoritoCodec.CanonicalLayoutFlags);
@@ -355,6 +685,13 @@ public sealed class PrivacyExact12CapabilityManifestV1Tests
         return writer.ToArray();
     }
 
+    private static byte[] UnavailableReadiness(uint reasonTag, byte[]? detail = null) =>
+        EnumValue(
+            1,
+            detail is null
+                ? EnumValue(reasonTag)
+                : EnumValue(reasonTag, detail));
+
     private static byte[] Option(byte[] value, bool present)
     {
         var writer = new CanonicalNoritoWriter();
@@ -373,10 +710,26 @@ public sealed class PrivacyExact12CapabilityManifestV1Tests
         return writer.ToArray();
     }
 
+    private static byte[] U16(ushort value)
+    {
+        var writer = new CanonicalNoritoWriter();
+        writer.WriteUInt16LittleEndian(value);
+        return writer.ToArray();
+    }
+
     private static byte[] U64(ulong value)
     {
         var writer = new CanonicalNoritoWriter();
         writer.WriteUInt64LittleEndian(value);
+        return writer.ToArray();
+    }
+
+    private static byte[] CompactString(string value)
+    {
+        var bytes = Encoding.UTF8.GetBytes(value);
+        var writer = new CanonicalNoritoWriter();
+        writer.WriteCompactLength(checked((ulong)bytes.Length));
+        writer.WriteBytes(bytes);
         return writer.ToArray();
     }
 
