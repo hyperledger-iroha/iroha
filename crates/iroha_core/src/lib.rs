@@ -1573,6 +1573,29 @@ mod tests {
             "unexpected bounded-decode rejection: {error:?}"
         );
     }
+
+    #[test]
+    fn native_amx_and_lane_relay_fall_back_to_canonical_global_decode_limits() {
+        for (tag, label) in [(2_u32, "LaneRelay"), (6_u32, "NativeAmx")] {
+            let payload = tag.to_le_bytes();
+            assert!(
+                <NetworkMessage as ClassifyTopic>::inbound_decode_limits(
+                    &payload,
+                    payload.len(),
+                    ncore::default_encode_flags(),
+                )
+                .unwrap_or_else(|error| panic!("derive {label} decode policy: {error}"))
+                .is_none(),
+                "{label} intentionally uses Norito's canonical payload-derived global limits"
+            );
+        }
+        let canonical = norito::canonical_decode_limits(4 * 1024);
+        assert_eq!(
+            canonical.max_nesting_depth(),
+            norito::core::MAX_OWNED_VALUE_DECODE_DEPTH
+        );
+        assert!(canonical.max_total_allocated_bytes() > 4 * 1024);
+    }
     #[test]
     fn oversized_lane_drain_vote_frame_is_rejected_by_raw_policy() {
         use iroha_crypto::{Algorithm, HashOf};

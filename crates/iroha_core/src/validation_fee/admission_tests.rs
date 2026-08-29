@@ -28,6 +28,50 @@ fn newly_dispatchable_native_instruction_fails_until_explicitly_classified() {
     );
 }
 #[test]
+fn moderation_challenge_custody_paths_are_classified_as_state_derived_ds_effects() {
+    use iroha_data_model::{
+        isi::sorafs::{
+            ExpireSorafsModerationChallenge, FinalizeSorafsModerationCase,
+            RaiseSorafsModerationChallenge, ResolveSorafsModerationChallenge,
+        },
+        sorafs::moderation_ledger::{ModerationChallengeDecisionV1, ModerationChallengeKindV1},
+    };
+
+    let policy = policy(&account(3));
+    let instructions: Vec<InstructionBox> = vec![
+        RaiseSorafsModerationChallenge::new(
+            "case-1".to_owned(),
+            "round-1".to_owned(),
+            "challenge-1".to_owned(),
+            ModerationChallengeKindV1::Other,
+            None,
+            [0x41; 32],
+            "evidence".to_owned(),
+        )
+        .into(),
+        ResolveSorafsModerationChallenge::new(
+            "case-1".to_owned(),
+            "round-1".to_owned(),
+            "challenge-1".to_owned(),
+            ModerationChallengeDecisionV1::Rejected,
+        )
+        .into(),
+        ExpireSorafsModerationChallenge::new(
+            "case-1".to_owned(),
+            "round-1".to_owned(),
+            "challenge-1".to_owned(),
+        )
+        .into(),
+        FinalizeSorafsModerationCase::new("case-1".to_owned(), "round-1".to_owned()).into(),
+    ];
+    for instruction in instructions {
+        assert!(matches!(
+            native_instruction_ds_effect_disposition(&instruction, &policy_fee_asset(&policy),),
+            NativeInstructionDsEffectDisposition::RejectKnownDsCapable(_)
+        ));
+    }
+}
+#[test]
 fn threshold_key_lifecycle_certificate_is_balance_neutral() {
     use iroha_data_model::isi::consensus_keys::{
         ApplyThresholdKeyLifecycleCertificateV1, ThresholdKeyLifecycleActionV1,
@@ -357,6 +401,7 @@ fn active_policy_allows_balance_neutral_permissionless_contract_deployment_steps
         .into(),
         ActivateContractInstance {
             contract_address: contract_address.clone(),
+            expected_revision: 1,
             code_hash,
         }
         .into(),
@@ -396,6 +441,7 @@ fn active_policy_rejects_contract_rebinding_and_artifact_removal_steps() {
     let instructions: Vec<InstructionBox> = vec![
         DeactivateContractInstance {
             contract_address: contract_address.clone(),
+            expected_revision: 1,
             reason: Some("attempted policy-era rebind".to_owned()),
         }
         .into(),

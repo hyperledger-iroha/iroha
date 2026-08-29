@@ -49,22 +49,23 @@ use iroha_smart_contract::data_model::{
         CancelSorafsOrderbookOrder, ChargeSorafsReserveRent, CommitSorafsPopCredentialBatch,
         CompleteReplicationOrder, DecideSorafsReserveAppeal, DecideSorafsReserveMovement,
         DrawSorafsReserveCredit, ExitPublicLaneValidator, ExpireReplicationOrder,
-        FinalizeSorafsModerationCase, FinalizeSorafsModerationSortition, IssueReplicationOrder,
-        MaintainSorafsOrderbook, MatchSorafsOrderbook, PublishSorafsPopRevocationList,
-        RaiseSorafsModerationChallenge, RecordCapacityTelemetry,
-        RecordSorafsOrderbookSettlementReceipt, RegisterCapacityDeclaration,
-        RegisterCapacityDispute, RegisterPeerWithPop, RegisterPinManifest, RegisterProviderOwner,
-        RegisterPublicLaneValidator, RegisterSorafsModerationJurorEligibility,
-        RegisterSorafsReserveAccount, RemoveAssetKeyValue, RepaySorafsReserveCredit,
-        RequestSorafsReserveMovement, ResolveSorafsCapacityDispute,
-        ResolveSorafsModerationChallenge, RetirePinManifest, ReviseReplicationOrderAssignments,
-        RevokeProviderIngestCompletionAuthority, SetAssetKeyValue, SetLaneRelayEmergencyValidators,
-        SetPricingSchedule, SetProviderIngestCompletionAuthority, SetSorafsModerationPolicy,
-        SetSorafsOrderbookPolicy, SetSorafsPopIssuerPolicy,
-        SetSorafsReputationJournalAuthorityPolicy, SetSorafsReservePolicy,
-        SubmitSorafsModerationAppeal, SubmitSorafsModerationCommit, SubmitSorafsModerationReveal,
-        SubmitSorafsOrderbookOrder, SubmitSorafsRepairAppeal, SubmitSorafsRepairTask,
-        SubmitSorafsReserveAppeal, UnregisterProviderOwner, UpsertProviderCredit,
+        ExpireSorafsModerationChallenge, FinalizeSorafsModerationCase,
+        FinalizeSorafsModerationSortition, IssueReplicationOrder, MaintainSorafsOrderbook,
+        MatchSorafsOrderbook, PublishSorafsPopRevocationList, RaiseSorafsModerationChallenge,
+        RecordCapacityTelemetry, RecordSorafsOrderbookSettlementReceipt,
+        RegisterCapacityDeclaration, RegisterCapacityDispute, RegisterPeerWithPop,
+        RegisterPinManifest, RegisterProviderOwner, RegisterPublicLaneValidator,
+        RegisterSorafsModerationJurorEligibility, RegisterSorafsReserveAccount,
+        RemoveAssetKeyValue, RepaySorafsReserveCredit, RequestSorafsReserveMovement,
+        ResolveSorafsCapacityDispute, ResolveSorafsModerationChallenge, RetirePinManifest,
+        ReviseReplicationOrderAssignments, RevokeProviderIngestCompletionAuthority,
+        SetAssetKeyValue, SetLaneRelayEmergencyValidators, SetPricingSchedule,
+        SetProviderIngestCompletionAuthority, SetSorafsModerationPolicy, SetSorafsOrderbookPolicy,
+        SetSorafsPopIssuerPolicy, SetSorafsReputationJournalAuthorityPolicy,
+        SetSorafsReservePolicy, SubmitSorafsModerationAppeal, SubmitSorafsModerationCommit,
+        SubmitSorafsModerationReveal, SubmitSorafsOrderbookOrder, SubmitSorafsRepairAppeal,
+        SubmitSorafsRepairTask, SubmitSorafsReserveAppeal, UnregisterProviderOwner,
+        UpsertProviderCredit,
         alias_setup::{
             CompareAndSetPrimaryAccountAlias, ConfigureAliasAutoRenew, EnsureAlias,
             RebindAccountAlias, RenewAliasLease,
@@ -74,6 +75,7 @@ use iroha_smart_contract::data_model::{
         contract_alias::SetContractAlias,
         defi::DeFiInstructionBox,
         governance::{
+            ProposeContractEmergencyHold, ProposeContractLifecycleGovernance,
             ProposeSccpRouteGovernance, ProposeSorafsProviderGovernance,
             ProposeValidationFeePayoutLifecycle, ProposeValidationFeePolicy, RegisterCitizen,
         },
@@ -94,9 +96,10 @@ use iroha_smart_contract::data_model::{
         repo::{RepoInstructionBox, RepoIsi, RepoMarginCallIsi, ReverseRepoIsi},
         settlement::SettlementInstructionBox,
         smart_contract_code::{
-            ActivateContractInstance, CancelSmartContractCodeUpload, CommitContractDeployment,
-            DeactivateContractInstance, FinalizeSmartContractCodeUpload,
-            RegisterSmartContractBytes, RegisterSmartContractCode, RemoveSmartContractBytes,
+            AcceptContractOwnership, ActivateContractInstance, CancelContractOwnershipOffer,
+            CancelSmartContractCodeUpload, CommitContractDeployment, DeactivateContractInstance,
+            FinalizeSmartContractCodeUpload, OfferContractOwnership, RegisterSmartContractBytes,
+            RegisterSmartContractCode, RemoveSmartContractBytes, SetContractParliamentDelegation,
             UploadSmartContractCodeChunk,
         },
         vpn::{OpenVpnLeaseEscrow, RefundExpiredVpnLease, SettleVpnLease},
@@ -553,11 +556,13 @@ mod contract_deployment_bootstrap_tests {
             .into(),
             DeactivateContractInstance {
                 contract_address: contract_address.clone(),
+                expected_revision: 1,
                 reason: Some("dispatch fixture".to_owned()),
             }
             .into(),
             ActivateContractInstance {
                 contract_address: contract_address.clone(),
+                expected_revision: 1,
                 code_hash,
             }
             .into(),
@@ -985,6 +990,18 @@ impl InstructionDispatch for InstructionBox {
         if let Some(isi) = any.downcast_ref::<ActivateContractInstance>() {
             execute!(executor, isi);
         }
+        if let Some(isi) = any.downcast_ref::<SetContractParliamentDelegation>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<OfferContractOwnership>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<AcceptContractOwnership>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<CancelContractOwnershipOffer>() {
+            execute!(executor, isi);
+        }
         if let Some(isi) = any.downcast_ref::<CommitContractDeployment>() {
             execute!(executor, isi);
         }
@@ -1225,6 +1242,12 @@ impl InstructionDispatch for InstructionBox {
             governance::visit_propose_sccp_route_governance(executor, isi);
             return;
         }
+        if let Some(isi) = any.downcast_ref::<ProposeContractLifecycleGovernance>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<ProposeContractEmergencyHold>() {
+            execute!(executor, isi);
+        }
         if let Some(isi) = any.downcast_ref::<ProposeSorafsProviderGovernance>() {
             governance::visit_propose_sorafs_provider_governance(executor, isi);
             return;
@@ -1387,6 +1410,10 @@ impl InstructionDispatch for InstructionBox {
         }
         if let Some(isi) = any.downcast_ref::<ResolveSorafsModerationChallenge>() {
             sorafs::visit_resolve_moderation_challenge(executor, isi);
+            return;
+        }
+        if let Some(isi) = any.downcast_ref::<ExpireSorafsModerationChallenge>() {
+            sorafs::visit_expire_moderation_challenge(executor, isi);
             return;
         }
         if let Some(isi) = any.downcast_ref::<SubmitSorafsModerationReveal>() {
@@ -2497,8 +2524,10 @@ pub mod sorafs {
     declare_execute_visitors! {
         /// Submit a juror commitment; native execution binds it to the authority.
         visit_submit_moderation_commit(SubmitSorafsModerationCommit);
-        /// Raise an authenticated payload-free moderation challenge.
+        /// Raise an authenticated, bonded, payload-free public moderation challenge.
         visit_raise_moderation_challenge(RaiseSorafsModerationChallenge);
+        /// Permissionlessly expire a pending challenge after its resolution grace.
+        visit_expire_moderation_challenge(ExpireSorafsModerationChallenge);
     }
     /// Resolve a moderation challenge when the caller is authorised.
     pub fn visit_resolve_moderation_challenge<V: Execute + Visit + ?Sized>(
@@ -2792,6 +2821,7 @@ pub mod domain {
             | AnyPermission::CanReadAllLedgerData(_)
             | AnyPermission::CanReadAccountData(_)
             | AnyPermission::CanReadRestrictedDataspace(_)
+            | AnyPermission::CanRegisterGlobalDataTrigger(_)
             | AnyPermission::CanRegisterTrigger(_)
             | AnyPermission::CanUnregisterTrigger(_)
             | AnyPermission::CanExecuteTrigger(_)
@@ -2884,6 +2914,15 @@ pub mod account {
         executor: &mut V,
         isi: &SetKeyValue<Account>,
     ) {
+        if isi.key().as_ref() == iroha_data_model::asset::ASSET_TRANSFER_CONTROL_METADATA_KEY {
+            deny!(
+                executor,
+                ValidationFail::NotPermitted(format!(
+                    "account metadata key `{}` is reserved for native asset transfer controls",
+                    isi.key()
+                ))
+            );
+        }
         if crate::default::isi::is_reserved_multisig_metadata_key(isi.key()) {
             deny!(
                 executor,
@@ -2918,6 +2957,15 @@ pub mod account {
         executor: &mut V,
         isi: &RemoveKeyValue<Account>,
     ) {
+        if isi.key().as_ref() == iroha_data_model::asset::ASSET_TRANSFER_CONTROL_METADATA_KEY {
+            deny!(
+                executor,
+                ValidationFail::NotPermitted(format!(
+                    "account metadata key `{}` is reserved for native asset transfer controls",
+                    isi.key()
+                ))
+            );
+        }
         if crate::default::isi::is_reserved_multisig_metadata_key(isi.key()) {
             deny!(
                 executor,
@@ -3066,6 +3114,7 @@ pub mod account {
             | AnyPermission::CanManageAssetDefinitionAlias(_)
             | AnyPermission::CanReadAllLedgerData(_)
             | AnyPermission::CanReadRestrictedDataspace(_)
+            | AnyPermission::CanRegisterGlobalDataTrigger(_)
             | AnyPermission::CanManagePeers(_)
             | AnyPermission::CanManageLaneRelayEmergency(_)
             | AnyPermission::CanManageRuntimeUpgrades(_)
@@ -3377,6 +3426,7 @@ pub mod asset_definition {
             | AnyPermission::CanReadAllLedgerData(_)
             | AnyPermission::CanReadAccountData(_)
             | AnyPermission::CanReadRestrictedDataspace(_)
+            | AnyPermission::CanRegisterGlobalDataTrigger(_)
             | AnyPermission::CanRegisterTrigger(_)
             | AnyPermission::CanUnregisterTrigger(_)
             | AnyPermission::CanExecuteTrigger(_)
@@ -4760,6 +4810,7 @@ pub mod trigger {
             | AnyPermission::DpnInori(_)
             | AnyPermission::DpnSettlement(_)
             | AnyPermission::DpnEprGuard(_)
+            | AnyPermission::CanRegisterGlobalDataTrigger(_)
             | AnyPermission::CanRegisterTrigger(_)
             | AnyPermission::CanManagePeers(_)
             | AnyPermission::CanManageLaneRelayEmergency(_)
@@ -5262,16 +5313,17 @@ mod sorafs_permission_tests {
             AcceptSorafsModerationJurorAssignment, ActivateSorafsModerationCase,
             AppendSorafsPorReputationJournalEntry, AppendSorafsStreamTokenReputationJournalEntry,
             ApprovePinManifest, BindManifestAlias, CommitSorafsPopCredentialBatch,
-            CompleteReplicationOrder, ExpireReplicationOrder, FinalizeSorafsModerationSortition,
-            IssueReplicationOrder, PublishSorafsPopRevocationList, RecordCapacityTelemetry,
-            RegisterCapacityDeclaration, RegisterCapacityDispute, RegisterPinManifest,
-            RegisterProviderOwner, RegisterSorafsModerationJurorEligibility,
-            ResolveSorafsCapacityDispute, RetirePinManifest, ReviseReplicationOrderAssignments,
-            RevokeProviderIngestCompletionAuthority, SetPricingSchedule,
-            SetProviderIngestCompletionAuthority, SetSorafsModerationPolicy,
+            CompleteReplicationOrder, ExpireReplicationOrder, ExpireSorafsModerationChallenge,
+            FinalizeSorafsModerationCase, FinalizeSorafsModerationSortition, IssueReplicationOrder,
+            PublishSorafsPopRevocationList, RaiseSorafsModerationChallenge,
+            RecordCapacityTelemetry, RegisterCapacityDeclaration, RegisterCapacityDispute,
+            RegisterPinManifest, RegisterProviderOwner, RegisterSorafsModerationJurorEligibility,
+            ResolveSorafsCapacityDispute, ResolveSorafsModerationChallenge, RetirePinManifest,
+            ReviseReplicationOrderAssignments, RevokeProviderIngestCompletionAuthority,
+            SetPricingSchedule, SetProviderIngestCompletionAuthority, SetSorafsModerationPolicy,
             SetSorafsPopIssuerPolicy, SetSorafsReputationJournalAuthorityPolicy,
-            SubmitSorafsModerationAppeal, SubmitSorafsModerationCommit, UnregisterProviderOwner,
-            UpsertProviderCredit,
+            SubmitSorafsModerationAppeal, SubmitSorafsModerationCommit,
+            SubmitSorafsModerationReveal, UnregisterProviderOwner, UpsertProviderCredit,
         },
         metadata::Metadata,
         permission::Permission as PermissionObject,
@@ -5298,7 +5350,8 @@ mod sorafs_permission_tests {
             },
             moderation_ledger::{
                 MODERATION_APPEAL_INTAKE_VERSION_V1, MODERATION_LEDGER_POLICY_VERSION_V1,
-                ModerationAppealIntakeV1, ModerationFinalizedCursorV1, ModerationLedgerPolicyV1,
+                ModerationAppealIntakeV1, ModerationChallengeDecisionV1, ModerationChallengeKindV1,
+                ModerationFinalizedCursorV1, ModerationLedgerPolicyV1,
             },
             pin_registry::{
                 ManifestAliasBinding, ManifestDigest, ProviderIngestCompletionAuthorityV1,
@@ -5693,11 +5746,26 @@ mod sorafs_permission_tests {
             version: MODERATION_LEDGER_POLICY_VERSION_V1,
             revision: 1,
             predecessor_policy_digest: None,
+            challenge_voting_asset_id:
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    iroha_data_model::domain::DomainId::try_new("sora", "universal")
+                        .expect("governance domain"),
+                    "xor".parse().expect("governance asset name"),
+                ),
+            challenge_bond_amount: Quantity::from(
+                iroha_data_model::sorafs::moderation_ledger::MODERATION_CHALLENGE_BOND_AMOUNT_V1,
+            ),
+            challenge_escrow_account: authority_account_id(),
+            challenge_slash_receiver_account: authority_account_id(),
+            challenge_rejected_slash_bps:
+                iroha_data_model::sorafs::moderation_ledger::MODERATION_CHALLENGE_REJECTED_SLASH_BPS_V1,
+            challenge_resolution_grace_ms:
+                iroha_data_model::sorafs::moderation_ledger::MODERATION_CHALLENGE_RESOLUTION_GRACE_MS_V1,
             max_panel_size: 8,
             max_candidate_pool_size: 32,
             max_waitlist_size: 8,
             max_exclusions_per_case: 16,
-            max_total_window_ms: 60_000,
+            max_total_window_ms: 90_000_000,
             max_challenges_per_case: 4,
             missing_commit_penalty_points: 10,
             unrevealed_commit_penalty_points: 20,
@@ -5724,8 +5792,9 @@ mod sorafs_permission_tests {
             registration_deadline_unix_ms: 1_000,
             acceptance_deadline_unix_ms: 2_000,
             commit_deadline_unix_ms: 3_000,
-            challenge_deadline_unix_ms: 4_000,
-            reveal_deadline_unix_ms: 5_000,
+            challenge_submission_deadline_unix_ms: 4_000,
+            challenge_resolution_deadline_unix_ms: 86_404_000,
+            reveal_deadline_unix_ms: 86_405_000,
             policy_digest: [0x15; 32],
         }
     }
@@ -5952,6 +6021,50 @@ mod sorafs_permission_tests {
             sorafs::visit_submit_moderation_commit,
         );
     }
+    #[test]
+    fn moderation_challenge_raise_expiry_and_reveal_are_public_at_executor_layer() {
+        assert_allowed_without_permission(
+            RaiseSorafsModerationChallenge::new(
+                "appeal-case".to_owned(),
+                "round-1".to_owned(),
+                "challenge-1".to_owned(),
+                ModerationChallengeKindV1::Other,
+                None,
+                [0x31; 32],
+                "public challenge".to_owned(),
+            ),
+            sorafs::visit_raise_moderation_challenge,
+        );
+        assert_allowed_without_permission(
+            ExpireSorafsModerationChallenge::new(
+                "appeal-case".to_owned(),
+                "round-1".to_owned(),
+                "challenge-1".to_owned(),
+            ),
+            sorafs::visit_expire_moderation_challenge,
+        );
+        assert_allowed_without_permission(
+            SubmitSorafsModerationReveal::new(vec![0x01]),
+            sorafs::visit_submit_moderation_reveal,
+        );
+    }
+    sorafs_permission_case!(
+        resolve_moderation_challenge_requires_permission,
+        ResolveSorafsModerationChallenge::new(
+            "appeal-case".to_owned(),
+            "round-1".to_owned(),
+            "challenge-1".to_owned(),
+            ModerationChallengeDecisionV1::Accepted,
+        ),
+        CanManageSorafsModeration,
+        sorafs::visit_resolve_moderation_challenge
+    );
+    sorafs_permission_case!(
+        finalize_moderation_case_requires_permission,
+        FinalizeSorafsModerationCase::new("appeal-case".to_owned(), "round-1".to_owned()),
+        CanManageSorafsModeration,
+        sorafs::visit_finalize_moderation_case
+    );
     #[test]
     fn moderation_transparency_queries_are_public() {
         assert_allowed_without_permission(

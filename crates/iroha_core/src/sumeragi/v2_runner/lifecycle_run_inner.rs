@@ -863,6 +863,22 @@ fn run_lifecycle_active_height(
                 },
             )?;
         } else if lane_only_completion_barrier {
+            if let Some(permit) = producer_claim.validate_sidecar_pacemaker_escape_permit()
+                && let Some(prepared) =
+                    activated.prepare_validate_sidecar_pacemaker_ingress_turn(permit)?
+            {
+                let _ = activated.consume_prepared_ordinary_ingress_turn(
+                    &mut active_runner,
+                    prepared,
+                    &mut lane_work,
+                    kura.as_ref(),
+                    &common_config.key_pair,
+                    block_sync_server,
+                    block_sync,
+                    &mut block_sync_request,
+                    npos_beacon,
+                )?;
+            }
             if let Some(permit) = producer_claim.decided_lane_recovery_permit() {
                 let _ = activated
                     .reconcile_decided_lane_certified_serve(&mut active_runner, permit)
@@ -872,7 +888,8 @@ fn run_lifecycle_active_height(
                 &mut active_runner,
                 |_owner, executor, services, local_proposal| {
                     // Keep only the lane transport needed to recover an exact
-                    // certified sidecar or finish durable output handoff alive.
+                    // certified sidecar or finish durable output handoff, plus
+                    // the sealed pacemaker escape serviced below.
                     // In particular, do not reconcile or advance the reducer,
                     // wake generic deferred Apply work, or admit ordinary
                     // consensus ingress while the lane-only Completion barrier
@@ -889,6 +906,33 @@ fn run_lifecycle_active_height(
                             &mut block_sync_request,
                             block_sync,
                             services,
+                        )?;
+                    }
+                    if producer_claim
+                        .validate_sidecar_pacemaker_escape_permit()
+                        .is_some()
+                    {
+                        // A missing merge sidecar is an I/O dependency, not
+                        // authority to stop the absolute view clock. Preserve
+                        // the exact fair-ingress cut which ordinary Runtime
+                        // would have installed, then service only the typed
+                        // timeout/Progress escape while generic reducer work
+                        // remains fenced by the registered Validate owner.
+                        executor
+                            .set_ingress_physical_cut(receiver.next_physical_admission_ordinal())?;
+                        let _ = executor.step_pacemaker_once(Instant::now(), services)?;
+                        let directive = reconcile_executor_locked_body(executor, services)?;
+                        local_proposal
+                            .state
+                            .reconcile(LocalProposalOwner::from(directive));
+                        lane_work.retain_merge_sidecars_for_global_view(
+                            directive.tag().view(),
+                            directive.locked_subject(),
+                            directive.decided_subject(),
+                        )?;
+                        executor.acknowledge_runner_decision_cleanup(
+                            directive.tag(),
+                            directive.decided_subject(),
                         )?;
                     }
                     if producer_claim.permits_decided_lane_recovery_ingress() {

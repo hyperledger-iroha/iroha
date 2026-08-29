@@ -343,7 +343,7 @@ test("timed-OVN corpus transitions preflight one through 32 records per chunk", 
   }
 });
 
-test("attempt drafts admit all seven exact proposal wire variants", () => {
+test("attempt drafts admit all nine exact proposal wire variants", () => {
   const proposals = parliamentProposalFixtures();
   assert.deepEqual(
     proposals.map((proposal) => (
@@ -357,6 +357,8 @@ test("attempt drafts admit all seven exact proposal wire variants", () => {
       "ValidationFeePayoutLifecycle",
       "MusubiRegistryGovernance",
       "SorafsProviderGovernance",
+      "ContractLifecycleGovernance",
+      "ContractEmergencyHold",
     ],
   );
   const musubi = buildParliamentAttemptDraftRequestV1(proposals[5], 1).proposal;
@@ -364,6 +366,9 @@ test("attempt drafts admit all seven exact proposal wire variants", () => {
   assert.deepEqual(musubi.payload.value.target.name, ["governed-package"]);
   const provider = buildParliamentAttemptDraftRequestV1(proposals[6], 1).proposal;
   assert.deepEqual(provider.payload.action.value.provider_id, [Array(32).fill(0x31)]);
+  const retrospective = buildParliamentAttemptDraftRequestV1(proposals[7], 1).proposal;
+  assert.equal(retrospective.payload.action.action, "CompleteEmergencyHoldRetrospective");
+  assert.deepEqual(retrospective.payload.action.payload.retrospective_finding_root, Array(32).fill(0x45));
 });
 
 test("Parliament declarations expose the closed wire union and tuple newtypes", () => {
@@ -380,7 +385,25 @@ test("Parliament declarations expose the closed wire union and tuple newtypes", 
     proposalDeclarations,
     /provider_id: readonly \[ReadonlyArray<number>\];/u,
   );
+  assert.match(proposalDeclarations, /kind: "ContractLifecycleGovernance";/u);
+  assert.match(proposalDeclarations, /kind: "ContractEmergencyHold";/u);
   assert.doesNotMatch(proposalDeclarations, /payload: Record<string, unknown>/u);
+});
+
+test("contract lifecycle unit actions retain their explicit null wire payload", () => {
+  for (const action of ["CancelOwnershipOffer", "AcceptParliamentOwnership"]) {
+    const proposal = structuredClone(parliamentProposalFixtures()[7]);
+    proposal.payload.action = { action, payload: null };
+    assert.deepEqual(
+      buildParliamentAttemptDraftRequestV1(proposal, 0).proposal.payload.action,
+      { action, payload: null },
+    );
+    delete proposal.payload.action.payload;
+    assert.throws(
+      () => buildParliamentAttemptDraftRequestV1(proposal, 0),
+      /missing required fields/u,
+    );
+  }
 });
 
 test("attempt drafts reject malformed nested fields and open proposal shapes", () => {
@@ -392,6 +415,8 @@ test("attempt drafts reject malformed nested fields and open proposal shapes", (
     (proposal) => { proposal.payload.payout_binding.recipients[0].future = null; },
     (proposal) => { proposal.payload.value.target.name = "governed-package"; },
     (proposal) => { proposal.payload.action.value.provider_id = Array(32).fill(0x31); },
+    (proposal) => { proposal.payload.action.payload.future = null; },
+    (proposal) => { proposal.payload.future = null; },
   ];
   for (const [index, canonical] of parliamentProposalFixtures().entries()) {
     const malformed = structuredClone(canonical);
@@ -956,6 +981,8 @@ test("ToriiClient typed proposal reads use the strict local V1 parser", async ()
     "ValidationFeePayoutLifecycle",
     "MusubiRegistryGovernance",
     "SorafsProviderGovernance",
+    "ContractLifecycleGovernance",
+    "ContractEmergencyHold",
   ]);
 
   const malformed = structuredClone(parliamentProposalFixtures()[0]);
@@ -1112,6 +1139,33 @@ function parliamentProposalFixtures() {
           action: "establish",
           value: { provider_id: [Array(32).fill(0x31)], owner: treasury },
         },
+      },
+    },
+    {
+      kind: "ContractLifecycleGovernance",
+      payload: {
+        contract_address: CONTRACT_ADDRESS,
+        expected_revision: 3,
+        action: {
+          action: "CompleteEmergencyHoldRetrospective",
+          payload: {
+            hold_proposal_content_id: Array(32).fill(0x42),
+            hold_governance_attempt_id: Array(32).fill(0x43),
+            incident_digest: Array(32).fill(0x44),
+            retrospective_finding_root: Array(32).fill(0x45),
+          },
+        },
+      },
+    },
+    {
+      kind: "ContractEmergencyHold",
+      payload: {
+        contract_address: CONTRACT_ADDRESS,
+        expected_revision: 2,
+        expected_code_hash: "cc".repeat(32),
+        incident_digest: Array(32).fill(0x46),
+        reason: "contain active exploit",
+        duration_blocks: 3600,
       },
     },
   ];

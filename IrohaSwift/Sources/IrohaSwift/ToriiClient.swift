@@ -18274,6 +18274,8 @@ public enum ToriiGovernanceProposalKind: Decodable, Sendable, Equatable {
     case validationFeePayoutLifecycle(ToriiGovernanceValidationFeePayoutLifecycleProposal)
     case musubiRegistryGovernance(ToriiGovernanceMusubiRegistryAction)
     case sorafsProviderGovernance(ToriiGovernanceSorafsProviderProposal)
+    case contractLifecycleGovernance(ToriiGovernanceContractLifecycleProposalV1)
+    case contractEmergencyHold(ToriiGovernanceContractEmergencyHoldProposalV1)
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
         case kind
@@ -18327,6 +18329,20 @@ public enum ToriiGovernanceProposalKind: Decodable, Sendable, Equatable {
         case "SorafsProviderGovernance":
             self = .sorafsProviderGovernance(
                 try container.decode(ToriiGovernanceSorafsProviderProposal.self, forKey: .payload)
+            )
+        case "ContractLifecycleGovernance":
+            self = .contractLifecycleGovernance(
+                try container.decode(
+                    ToriiGovernanceContractLifecycleProposalV1.self,
+                    forKey: .payload
+                )
+            )
+        case "ContractEmergencyHold":
+            self = .contractEmergencyHold(
+                try container.decode(
+                    ToriiGovernanceContractEmergencyHoldProposalV1.self,
+                    forKey: .payload
+                )
             )
         default:
             throw DecodingError.dataCorruptedError(

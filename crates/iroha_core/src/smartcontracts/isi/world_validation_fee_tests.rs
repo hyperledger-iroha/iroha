@@ -145,9 +145,18 @@ fn contract_subject_binding_materializes_missing_account_and_preserves_existing_
     .expect("missing-subject contract address");
     let missing_subject = missing_address.subject_id();
     assert!(state_transaction.world.account(&missing_subject).is_err());
-    let bound_subject =
-        super::ensure_contract_subject_binding(&ALICE_ID, &mut state_transaction, &missing_address)
-            .expect("bind and materialize missing contract subject");
+    let bound_subject = super::ensure_contract_subject_binding(
+        &ALICE_ID,
+        &mut state_transaction,
+        &missing_address,
+        Some(
+            crate::smartcontracts::code::ContractSubjectBinding::new_direct(
+                &missing_address,
+                ALICE_ID.clone(),
+            ),
+        ),
+    )
+    .expect("bind and materialize missing contract subject");
     assert_eq!(bound_subject, missing_subject);
     assert!(state_transaction.world.account(&missing_subject).is_ok());
     assert!(crate::smartcontracts::code::is_historical_contract_subject(
@@ -174,6 +183,12 @@ fn contract_subject_binding_materializes_missing_account_and_preserves_existing_
         &ALICE_ID,
         &mut state_transaction,
         &existing_address,
+        Some(
+            crate::smartcontracts::code::ContractSubjectBinding::new_direct(
+                &existing_address,
+                ALICE_ID.clone(),
+            ),
+        ),
     )
     .expect("bind existing contract subject without replacing it");
     assert_eq!(bound_existing, existing_subject);

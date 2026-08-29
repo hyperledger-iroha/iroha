@@ -105,6 +105,7 @@ import { generateConnectSid, validateConnectSessionResponseIdentity } from "./co
 import { isCanonicalGovernanceSelectorV1 } from "./governanceSelector.js";
 import { parseCanonicalContractAddress } from "./contractAddress.js";
 import { contractPayloadDigestHex } from "./contractPayload.js";
+import { normalizeGovernanceProposalWireV1 } from "./governanceProposalV1.js";
 import {
   createToriiGovernanceNormalizers,
   VERIFYING_KEY_PRIVATE_KEY_FIELDS,
@@ -14322,6 +14323,30 @@ function normalizeIsoSubmissionResponse(payload, context, options = {}) {
             record.embedded_signature_detected,
             `${context}.embedded_signature_detected`,
           ),
+    originator_participant_id: normalizeIsoOptionalString(
+      record.originator_participant_id,
+      `${context}.originator_participant_id`,
+    ),
+    counterparty_participant_id: normalizeIsoOptionalString(
+      record.counterparty_participant_id,
+      `${context}.counterparty_participant_id`,
+    ),
+    admitting_participant_id: normalizeIsoOptionalString(
+      record.admitting_participant_id,
+      `${context}.admitting_participant_id`,
+    ),
+    admitting_operator_key: normalizeIsoOptionalString(
+      record.admitting_operator_key,
+      `${context}.admitting_operator_key`,
+    ),
+    pinned_profile_id: normalizeIsoOptionalString(
+      record.pinned_profile_id,
+      `${context}.pinned_profile_id`,
+    ),
+    pinned_signature_policy: normalizeIsoOptionalString(
+      record.pinned_signature_policy,
+      `${context}.pinned_signature_policy`,
+    ),
     status_history: normalizeIsoStatusHistory(record.status_history, `${context}.status_history`),
     hold_reason_code: normalizeIsoOptionalString(record.hold_reason_code, `${context}.hold_reason_code`),
     change_reason_codes: normalizeIsoStringArray(
@@ -15340,6 +15365,22 @@ async function parseGovernanceProposalKind(payload, context) {
           details,
           `${context}.payload`,
         ),
+      };
+    case "ContractLifecycleGovernance":
+      return {
+        variant,
+        contract_lifecycle_governance: normalizeGovernanceProposalWireV1(
+          record,
+          context,
+        ).payload,
+      };
+    case "ContractEmergencyHold":
+      return {
+        variant,
+        contract_emergency_hold: normalizeGovernanceProposalWireV1(
+          record,
+          context,
+        ).payload,
       };
     default:
       throw new TypeError(`${context}.kind contains unsupported proposal variant: ${variant}`);

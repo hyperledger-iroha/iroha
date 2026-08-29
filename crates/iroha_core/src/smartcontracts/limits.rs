@@ -39,6 +39,28 @@ pub fn enforce_json_size(
     }
     Ok(())
 }
+/// Enforce the configured per-value JSON bound for every entry in `metadata`.
+///
+/// Registration paths use this helper before inserting any state so that they
+/// apply the same bound as later `SetKeyValue` operations.
+///
+/// # Errors
+///
+/// Returns an error when any metadata value exceeds `max_metadata_value_bytes`.
+pub fn enforce_metadata_value_sizes(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    metadata: &Metadata,
+) -> Result<(), Error> {
+    for (_, value) in metadata.iter() {
+        enforce_json_size(
+            state_transaction,
+            value,
+            "max_metadata_value_bytes",
+            DEFAULT_JSON_LIMIT,
+        )?;
+    }
+    Ok(())
+}
 /// Return the canonical IVM gas schedule entries in opcode order.
 #[must_use]
 pub fn ivm_gas_schedule_entries() -> Vec<GasScheduleEntry> {

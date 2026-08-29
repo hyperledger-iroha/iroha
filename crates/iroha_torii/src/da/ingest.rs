@@ -12,7 +12,7 @@ use super::{
     DaSpoolBatchReport, persistence, storage_class_label, taikai, taikai::taikai_ingest,
 };
 use crate::{
-    NoritoQuery, SharedAppState,
+    NoritoQuery, SharedAppState, panic_recovery,
     routing::MaybeTelemetry,
     sorafs::api::ResponseError,
     utils::{self, ResponseFormat},
@@ -304,14 +304,14 @@ where
             "DA ingest compute capacity is saturated".to_owned(),
         ),
     })?;
-    tokio::task::spawn_blocking(move || {
+    panic_recovery::join_recoverable(panic_recovery::spawn_blocking_recoverable(move || {
         let result = job();
         // The owned permit lives in the physical worker. Dropping the request
         // future only detaches this task; capacity is not released until the
         // blocking computation has actually stopped.
         drop(permit);
         result
-    })
+    }))
     .await
     .map_err(|err| {
         (

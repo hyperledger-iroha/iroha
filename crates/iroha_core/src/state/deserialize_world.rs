@@ -5730,9 +5730,13 @@ fn timed_ovn_phase_matches_ballot_status_v1(
             BallotStatus::NoResult | BallotStatus::Superseded,
             Some(FailureKind::ReleasePulseUnavailable | FailureKind::OpeningDeadlineExpired),
         ) => phase == PersistedTimedOvnPhaseV1::Sealed,
-        (BallotStatus::NoResult, Some(FailureKind::ConfirmationJuryCapacityUnavailable)) => {
-            phase == PersistedTimedOvnPhaseV1::Released
-        }
+        (
+            BallotStatus::NoResult,
+            Some(
+                FailureKind::ConfirmationJuryCapacityUnavailable
+                | FailureKind::RandomnessRedrawBudgetExhausted,
+            ),
+        ) => phase == PersistedTimedOvnPhaseV1::Released,
         _ => false,
     }
 }
@@ -5742,6 +5746,7 @@ fn validate_tle_ovn_persistence(world: &World) -> Result<(), json::Error> {
     let parliament_attempts = world.parliament_attempts.view();
     let timed_ovn_evidence = world.timed_ovn_evidence.view();
     let tle_key_session_rosters = world.tle_key_session_rosters.view();
+    let tle_key_session_lifecycles = world.tle_key_session_lifecycles.view();
     let finalized_beacon_heights = world
         .global_beacon_pulses
         .view()
@@ -5775,6 +5780,28 @@ fn validate_tle_ovn_persistence(world: &World) -> Result<(), json::Error> {
                 ),
             )
         })?;
+        let lifecycle = tle_key_session_lifecycles
+            .get(key_session_id)
+            .copied()
+            .ok_or_else(|| {
+                invalid_tle_ovn_persistence(
+                    "tle_key_session_lifecycles",
+                    format!("TLE key session {key_session_id} is missing lifecycle metadata"),
+                )
+            })?
+            .validate()
+            .map_err(|error| {
+                invalid_tle_ovn_persistence(
+                    "tle_key_session_lifecycles",
+                    format!("invalid TLE key-session lifecycle {key_session_id}: {error}"),
+                )
+            })?;
+        if lifecycle.key_session_id != *key_session_id {
+            return Err(invalid_tle_ovn_persistence(
+                "tle_key_session_lifecycles",
+                "TLE lifecycle storage key differs from its embedded session id",
+            ));
+        }
         validated_key_sessions.insert(*key_session_id, validated);
     }
     for (key_session_id, _) in tle_key_session_rosters.iter() {
@@ -5787,6 +5814,31 @@ fn validate_tle_ovn_persistence(world: &World) -> Result<(), json::Error> {
             ));
         }
     }
+    for (key_session_id, _) in tle_key_session_lifecycles.iter() {
+        if !validated_key_sessions.contains_key(key_session_id) {
+            return Err(invalid_tle_ovn_persistence(
+                "tle_key_session_lifecycles",
+                format!(
+                    "TLE lifecycle metadata references missing public session {key_session_id}"
+                ),
+            ));
+        }
+    }
+    let lifecycle_rows = tle_key_session_lifecycles.iter().collect::<Vec<_>>();
+    for left_index in 0..lifecycle_rows.len() {
+        for right_index in left_index + 1..lifecycle_rows.len() {
+            let (_, left) = lifecycle_rows[left_index];
+            let (_, right) = lifecycle_rows[right_index];
+            if left.activation_height <= right.selectable_through_height
+                && right.activation_height <= left.selectable_through_height
+            {
+                return Err(invalid_tle_ovn_persistence(
+                    "tle_key_session_lifecycles",
+                    "TLE key-session new-ballot selection intervals overlap",
+                ));
+            }
+        }
+    }
     let active_tle_sessions = world.tle_active_key_session.view();
     for (key, key_session_id) in active_tle_sessions.iter() {
         if *key != TLE_KEY_SESSION_SINGLETON_KEY {
@@ -5795,7 +5847,9 @@ fn validate_tle_ovn_persistence(world: &World) -> Result<(), json::Error> {
                 "active TLE session pointer uses a noncanonical singleton key",
             ));
         }
-        if !validated_key_sessions.contains_key(key_session_id) {
+        if !validated_key_sessions.contains_key(key_session_id)
+            || tle_key_session_lifecycles.get(key_session_id).is_none()
+        {
             return Err(invalid_tle_ovn_persistence(
                 "tle_active_key_session",
                 "active TLE session pointer references a missing or invalid public session",
@@ -6061,6 +6115,52 @@ fn validate_tle_ovn_persistence(world: &World) -> Result<(), json::Error> {
             }
         }
     }
+    let mut counted_fresh_ballots = BTreeMap::<_, u32>::new();
+    for (_, governance_attempt) in parliament_attempts.iter() {
+        for (_, ballot) in governance_attempt.ballot_attempts() {
+            let Some(key_session_id) = ballot.tle_key_session_id() else {
+                continue;
+            };
+            let lifecycle = tle_key_session_lifecycles
+                .get(&key_session_id)
+                .ok_or_else(|| {
+                    invalid_tle_ovn_persistence(
+                        "parliament_attempts",
+                        "Parliament ballot references missing TLE lifecycle metadata",
+                    )
+                })?;
+            if !(lifecycle.activation_height..=lifecycle.selectable_through_height)
+                .contains(&ballot.registered_at_height())
+            {
+                return Err(invalid_tle_ovn_persistence(
+                    "parliament_attempts",
+                    "Parliament ballot was registered outside its TLE session selection interval",
+                ));
+            }
+            let count = counted_fresh_ballots.entry(key_session_id).or_insert(0);
+            *count = count.checked_add(1).ok_or_else(|| {
+                invalid_tle_ovn_persistence(
+                    "parliament_attempts",
+                    "TLE fresh-ballot use count overflowed",
+                )
+            })?;
+        }
+    }
+    for (key_session_id, lifecycle) in tle_key_session_lifecycles.iter() {
+        if lifecycle.fresh_ballot_uses
+            != counted_fresh_ballots
+                .get(key_session_id)
+                .copied()
+                .unwrap_or(0)
+        {
+            return Err(invalid_tle_ovn_persistence(
+                "tle_key_session_lifecycles",
+                format!(
+                    "TLE key session {key_session_id} fresh-ballot counter disagrees with committed Parliament history"
+                ),
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -6173,23 +6273,28 @@ mod timed_ovn_persistence_phase_tests {
             }
         }
         for phase in phases {
-            assert_eq!(
-                timed_ovn_phase_matches_ballot_status_v1(
-                    BallotStatus::NoResult,
-                    Some(FailureKind::ConfirmationJuryCapacityUnavailable),
-                    phase,
-                ),
-                phase == Phase::Released,
-                "Confirmation-capacity NoResult must retain its released timed-OVN evidence"
-            );
-            assert!(
-                !timed_ovn_phase_matches_ballot_status_v1(
-                    BallotStatus::Superseded,
-                    Some(FailureKind::ConfirmationJuryCapacityUnavailable),
-                    phase,
-                ),
-                "terminal Confirmation-capacity failure must not become retryable"
-            );
+            for failure_kind in [
+                FailureKind::ConfirmationJuryCapacityUnavailable,
+                FailureKind::RandomnessRedrawBudgetExhausted,
+            ] {
+                assert_eq!(
+                    timed_ovn_phase_matches_ballot_status_v1(
+                        BallotStatus::NoResult,
+                        Some(failure_kind),
+                        phase,
+                    ),
+                    phase == Phase::Released,
+                    "post-opening NoResult must retain its released timed-OVN evidence"
+                );
+                assert!(
+                    !timed_ovn_phase_matches_ballot_status_v1(
+                        BallotStatus::Superseded,
+                        Some(failure_kind),
+                        phase,
+                    ),
+                    "terminal post-opening failure must not become retryable"
+                );
+            }
         }
         for status in [
             BallotStatus::Registration,
@@ -6281,6 +6386,11 @@ mod timed_ovn_persistence_phase_tests {
         world
             .tle_key_session_rosters
             .insert(key_session_id, ordered_roster.clone());
+        world.tle_key_session_lifecycles.insert(
+            key_session_id,
+            TleKeySessionLifecycleV1::new(key_session_id, 1, 100, 1)
+                .expect("valid frozen-roster lifecycle fixture"),
+        );
         (world, key_session_id, ordered_roster)
     }
 
@@ -6360,6 +6470,65 @@ mod timed_ovn_persistence_phase_tests {
                         && message.contains("references missing TLE key session")
             ),
             "unexpected orphan-roster rejection: {orphan}"
+        );
+    }
+
+    #[test]
+    fn restore_rejects_missing_misbound_or_miscounted_tle_lifecycle_metadata() {
+        let (mut world, _, _) = world_with_frozen_tle_roster_binding_v1();
+        world.tle_key_session_lifecycles = Storage::default();
+        let missing = validate_tle_ovn_persistence(&world)
+            .expect_err("a public TLE session without lifecycle metadata must fail restore");
+        assert!(
+            matches!(
+                &missing,
+                json::Error::InvalidField { field, message }
+                    if field == "tle_key_session_lifecycles"
+                        && message.contains("missing lifecycle metadata")
+            ),
+            "unexpected missing-lifecycle rejection: {missing}"
+        );
+
+        let (mut world, key_session_id, _) = world_with_frozen_tle_roster_binding_v1();
+        let mut misbound = *world
+            .tle_key_session_lifecycles
+            .get(&key_session_id)
+            .expect("fixture lifecycle");
+        misbound.key_session_id = TleKeySessionId::new([0xDD; 32]);
+        world
+            .tle_key_session_lifecycles
+            .insert(key_session_id, misbound);
+        let mismatch = validate_tle_ovn_persistence(&world)
+            .expect_err("a lifecycle stored under another session id must fail restore");
+        assert!(
+            matches!(
+                &mismatch,
+                json::Error::InvalidField { field, message }
+                    if field == "tle_key_session_lifecycles"
+                        && message.contains("storage key differs")
+            ),
+            "unexpected lifecycle-id rejection: {mismatch}"
+        );
+
+        let (mut world, key_session_id, _) = world_with_frozen_tle_roster_binding_v1();
+        let mut miscounted = *world
+            .tle_key_session_lifecycles
+            .get(&key_session_id)
+            .expect("fixture lifecycle");
+        miscounted.fresh_ballot_uses = 1;
+        world
+            .tle_key_session_lifecycles
+            .insert(key_session_id, miscounted);
+        let mismatch = validate_tle_ovn_persistence(&world)
+            .expect_err("a lifecycle counter without committed ballots must fail restore");
+        assert!(
+            matches!(
+                &mismatch,
+                json::Error::InvalidField { field, message }
+                    if field == "tle_key_session_lifecycles"
+                        && message.contains("counter disagrees")
+            ),
+            "unexpected lifecycle-counter rejection: {mismatch}"
         );
     }
 }
@@ -6536,6 +6705,11 @@ mod validation_fee_registry_restore_tests {
             world
                 .tle_key_session_rosters
                 .insert(key_session_id, ordered_roster);
+        }
+        for (key_session_id, lifecycle) in stored_fixture.tle_key_session_lifecycles {
+            world
+                .tle_key_session_lifecycles
+                .insert(key_session_id, lifecycle);
         }
         for (ballot_attempt_id, lifecycle) in stored_fixture.timed_ovn_evidence {
             world
@@ -7349,6 +7523,7 @@ fn parse_world(
     let parliament_attempts = take_required(&mut map, "parliament_attempts")?;
     let tle_key_sessions = take_required(&mut map, "tle_key_sessions")?;
     let tle_key_session_rosters = take_required(&mut map, "tle_key_session_rosters")?;
+    let tle_key_session_lifecycles = take_required(&mut map, "tle_key_session_lifecycles")?;
     let tle_active_key_session = take_required(&mut map, "tle_active_key_session")?;
     let timed_ovn_evidence = take_required(&mut map, "timed_ovn_evidence")?;
     let global_beacon_dkg = take_required(&mut map, "global_beacon_dkg")?;
@@ -7629,6 +7804,7 @@ fn parse_world(
         parliament_timed_ovn_resource_reservations: Storage::default(),
         tle_key_sessions,
         tle_key_session_rosters,
+        tle_key_session_lifecycles,
         tle_active_key_session,
         timed_ovn_evidence,
         global_beacon_dkg,
@@ -7751,6 +7927,15 @@ fn parse_world(
                 .map(|(_, attempt)| attempt)
                 .collect::<Vec<_>>();
             proposal_attempts.sort_unstable_by_key(|attempt| attempt.attempt().sequence);
+            crate::governance::parliament::validate_parliament_randomness_redraw_lineage_v1(
+                proposal_attempts.iter().copied(),
+            )
+            .map_err(|error| json::Error::InvalidField {
+                field: "parliament_attempts".into(),
+                message: format!(
+                    "governance Parliament randomness-redraw lineage is invalid: {error}"
+                ),
+            })?;
             for (index, attempt) in proposal_attempts.iter().enumerate() {
                 let expected_sequence =
                     u32::try_from(index).map_err(|_| json::Error::InvalidField {
@@ -8449,6 +8634,8 @@ fn default_governance() -> iroha_config::parameters::actual::Governance {
         parliament_public_finding_phase_blocks:
             iroha_config::parameters::defaults::governance::PARLIAMENT_PUBLIC_FINDING_PHASE_BLOCKS,
         parliament_timed_ovn: iroha_config::parameters::actual::ParliamentTimedOvn::default(),
+        parliament_tle_key_lifecycle:
+            iroha_config::parameters::actual::ParliamentTleKeyLifecycle::default(),
         parliament_tle_partial_release_signer_provider_handle: None,
         parliament_tle_partial_release_signer_provider_revision: None,
         parliament_tle_partial_release_signer_provider_policy_digest: None,

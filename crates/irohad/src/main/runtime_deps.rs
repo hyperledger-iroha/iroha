@@ -274,7 +274,9 @@ fn validate_threshold_signer_startup_readiness_v1(
         )?;
     }
 
-    let active_tle_key_session_id = world.active_tle_key_session();
+    let next_height = committed_height.checked_add(1).unwrap_or(committed_height);
+    let active_tle_key_session_id =
+        world.selectable_tle_key_session_for_fresh_ballot_at(next_height);
     let required_tle_key_sessions = world
         .tle_key_sessions_required_for_runtime_custody_v1(committed_height)
         .map_err(|_| "committed Parliament state is invalid for TLE custody readiness")?;

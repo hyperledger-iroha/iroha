@@ -1333,6 +1333,30 @@ async fn execute_torii_fanout_list_read(
     )
     .await
 }
+
+#[cfg(feature = "app_api")]
+async fn execute_torii_visible_fanout_list_read(
+    app: &SharedAppState,
+    caller: Option<&AccountId>,
+    endpoint: ToriiReadEndpointV1,
+    path_args: Vec<String>,
+    query_string: Option<String>,
+    body: Vec<u8>,
+) -> Response {
+    execute_torii_read_fanout_via_nexus(
+        app,
+        ToriiFanoutRouteScopeV1::VisibleAccount {
+            caller_account_id: caller.map(ToString::to_string),
+        },
+        ToriiReadFanoutMergeV1::List,
+        endpoint,
+        path_args,
+        query_string,
+        body,
+        ToriiProxyResponseFormatV1::Json,
+    )
+    .await
+}
 #[cfg(feature = "app_api")]
 async fn execute_torii_list_read_for_routes(
     app: &SharedAppState,

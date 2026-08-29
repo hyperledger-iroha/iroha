@@ -48,6 +48,8 @@ final class ParliamentProposalValidatorV1 {
       case "ValidationFeePayoutLifecycle" -> validationFeePayoutLifecycle(payload);
       case "MusubiRegistryGovernance" -> musubiAction(payload);
       case "SorafsProviderGovernance" -> sorafsProvider(payload);
+      case "ContractLifecycleGovernance" -> contractLifecycle(payload);
+      case "ContractEmergencyHold" -> contractEmergencyHold(payload);
       default -> throw invalid("proposal.kind is unknown or retired");
     }
     return proposal;
@@ -518,6 +520,119 @@ final class ParliamentProposalValidatorV1 {
         account(payload.get("expected_owner"), "expected_owner");
       }
       default -> throw invalid("Sorafs provider action is unsupported");
+    }
+  }
+
+  private static void contractLifecycle(final Map<String, Object> value) {
+    exact(
+        value,
+        fields("contract_address", "expected_revision", "action"),
+        "ContractLifecycleGovernance");
+    ContractAddressValidator.requireCanonicalV1(
+        text(
+            value.get("contract_address"),
+            "ContractLifecycleGovernance.contract_address"));
+    requirePositive(
+        uint(
+            value.get("expected_revision"),
+            "ContractLifecycleGovernance.expected_revision"),
+        "ContractLifecycleGovernance.expected_revision");
+    final Map<String, Object> action =
+        objectValue(value.get("action"), "ContractLifecycleGovernance.action");
+    exact(action, fields("action", "payload"), "ContractLifecycleGovernance.action");
+    final String kind =
+        text(action.get("action"), "ContractLifecycleGovernance.action.action");
+    if ("CancelOwnershipOffer".equals(kind) || "AcceptParliamentOwnership".equals(kind)) {
+      if (action.get("payload") != null) throw invalid(kind + " payload must be null");
+      return;
+    }
+    final Map<String, Object> payload =
+        objectValue(action.get("payload"), "ContractLifecycleGovernance.action.payload");
+    switch (kind) {
+      case "Activate" -> {
+        exact(
+            payload,
+            fields("code_hash", "abi_hash", "abi_version", "manifest_provenance"),
+            kind);
+        lowerHex32(payload.get("code_hash"), kind + ".code_hash");
+        lowerHex32(payload.get("abi_hash"), kind + ".abi_hash");
+        if (!BigInteger.ONE.equals(uint(payload.get("abi_version"), kind + ".abi_version"))) {
+          throw invalid(kind + ".abi_version must equal 1");
+        }
+        if (payload.get("manifest_provenance") != null) {
+          manifestProvenance(
+              objectValue(
+                  payload.get("manifest_provenance"), kind + ".manifest_provenance"),
+              kind + ".manifest_provenance");
+        }
+      }
+      case "Deactivate" -> {
+        exact(payload, fields("expected_code_hash", "reason"), kind);
+        lowerHex32(payload.get("expected_code_hash"), kind + ".expected_code_hash");
+        if (payload.get("reason") != null) {
+          reason(string(payload.get("reason"), kind + ".reason"), kind + ".reason");
+        }
+      }
+      case "OfferOwnership" -> {
+        exact(payload, fields("new_owner"), kind);
+        account(payload.get("new_owner"), kind + ".new_owner");
+      }
+      case "CompleteEmergencyHoldRetrospective" -> {
+        exact(
+            payload,
+            fields(
+                "hold_proposal_content_id",
+                "hold_governance_attempt_id",
+                "incident_digest",
+                "retrospective_finding_root"),
+            kind);
+        bytes(
+            payload.get("hold_proposal_content_id"),
+            32,
+            kind + ".hold_proposal_content_id",
+            true);
+        bytes(
+            payload.get("hold_governance_attempt_id"),
+            32,
+            kind + ".hold_governance_attempt_id",
+            true);
+        bytes(payload.get("incident_digest"), 32, kind + ".incident_digest", true);
+        bytes(
+            payload.get("retrospective_finding_root"),
+            32,
+            kind + ".retrospective_finding_root",
+            true);
+      }
+      default -> throw invalid("contract lifecycle action is unsupported");
+    }
+  }
+
+  private static void contractEmergencyHold(final Map<String, Object> value) {
+    exact(
+        value,
+        fields(
+            "contract_address",
+            "expected_revision",
+            "expected_code_hash",
+            "incident_digest",
+            "reason",
+            "duration_blocks"),
+        "ContractEmergencyHold");
+    ContractAddressValidator.requireCanonicalV1(
+        text(value.get("contract_address"), "ContractEmergencyHold.contract_address"));
+    requirePositive(
+        uint(value.get("expected_revision"), "ContractEmergencyHold.expected_revision"),
+        "ContractEmergencyHold.expected_revision");
+    lowerHex32(
+        value.get("expected_code_hash"), "ContractEmergencyHold.expected_code_hash");
+    bytes(value.get("incident_digest"), 32, "ContractEmergencyHold.incident_digest", true);
+    reason(
+        string(value.get("reason"), "ContractEmergencyHold.reason"),
+        "ContractEmergencyHold.reason");
+    final BigInteger duration =
+        uint(value.get("duration_blocks"), "ContractEmergencyHold.duration_blocks");
+    if (duration.signum() == 0 || duration.compareTo(BigInteger.valueOf(3_600)) > 0) {
+      throw invalid("ContractEmergencyHold.duration_blocks must be in 1..3600");
     }
   }
 

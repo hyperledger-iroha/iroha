@@ -6510,6 +6510,15 @@ impl RelayRuntime {
             return Err(IncentiveStreamError::TrailingBytes(cursor.len()));
         }
         let verifier_label = proof.verifier_id.to_string();
+        let incentive_logger = incentives
+            .as_ref()
+            .ok_or(IncentiveStreamError::IncentivesDisabled)?;
+        if !incentive_logger.trusts_verifier(&proof.verifier_id) {
+            return Err(IncentiveStreamError::UntrustedVerifier(verifier_label));
+        }
+        proof
+            .verify_signature()
+            .map_err(|error| IncentiveStreamError::InvalidSignature(error.to_string()))?;
         enum ProofOutcome {
             Accepted { summary: Option<EpochSummary> },
             Duplicate,

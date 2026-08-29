@@ -2,16 +2,18 @@
 
 use iroha_data_model::{
     account::AccountId,
-    governance::types::{
-        GovernanceAttemptStatusV1, MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1, ProposalContentId,
-        ProposalKind,
-    },
+    governance::types::{GovernanceAttemptStatusV1, ProposalContentId, ProposalKind},
     isi::error::InstructionExecutionError,
     validation_fee::ValidationFeeTreasuryPayoutBindingV1,
 };
 use mv::storage::StorageReadOnly;
 
-use crate::state::{GovernanceProposalStatus, StateTransaction};
+use crate::{
+    governance::parliament::{
+        MAX_PARLIAMENT_RANDOMNESS_REDRAWS_V1, validate_parliament_randomness_redraw_lineage_v1,
+    },
+    state::{GovernanceProposalStatus, StateTransaction},
+};
 
 fn payout_binding_references_account(
     binding: &ValidationFeeTreasuryPayoutBindingV1,
@@ -47,7 +49,9 @@ fn validation_fee_proposal_references_account(
         | ProposalKind::RuntimeUpgrade(_)
         | ProposalKind::SccpRouteGovernance(_)
         | ProposalKind::SorafsProviderGovernance(_)
-        | ProposalKind::MusubiRegistryGovernance(_) => false,
+        | ProposalKind::MusubiRegistryGovernance(_)
+        | ProposalKind::ContractLifecycleGovernance(_)
+        | ProposalKind::ContractEmergencyHold(_) => false,
     }
 }
 
@@ -70,7 +74,7 @@ fn terminal_status_matches_attempt(
     )
 }
 
-/// Prove that a terminal fee proposal has no remaining attempt sequence.
+/// Prove that a terminal fee proposal has no remaining proposal-wide redraw.
 ///
 /// This intentionally repeats the restore-time history checks at the rekey boundary. A missing,
 /// sparse, malformed, or proposal-mismatched history must not be mistaken for exhausted history.
@@ -86,7 +90,9 @@ fn terminal_validation_fee_retry_budget_is_exhausted(
         | ProposalKind::RuntimeUpgrade(_)
         | ProposalKind::SccpRouteGovernance(_)
         | ProposalKind::SorafsProviderGovernance(_)
-        | ProposalKind::MusubiRegistryGovernance(_) => None,
+        | ProposalKind::MusubiRegistryGovernance(_)
+        | ProposalKind::ContractLifecycleGovernance(_)
+        | ProposalKind::ContractEmergencyHold(_) => None,
     }) else {
         return false;
     };
@@ -105,8 +111,12 @@ fn terminal_validation_fee_retry_budget_is_exhausted(
     let Some((_, latest)) = attempts.last().copied() else {
         return false;
     };
-    if latest.attempt().sequence != MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1
+    if latest.randomness_redraws_used_v1() != Ok(MAX_PARLIAMENT_RANDOMNESS_REDRAWS_V1)
         || !terminal_status_matches_attempt(proposal.status, latest.attempt().status)
+        || validate_parliament_randomness_redraw_lineage_v1(
+            attempts.iter().map(|(_, attempt)| *attempt),
+        )
+        .is_err()
     {
         return false;
     }

@@ -194,7 +194,7 @@ Public operator guidance and escalation procedures are maintained at
   Parliament reducer transitions and automatic execution outcomes grouped by
   the closed `ParliamentLifecycleTransitionKindV1` vocabulary.
 - `governance_parliament_no_result_total{class}` (counter): only Core-derived
-  terminal no-result outcomes, grouped by the nine closed
+  terminal no-result outcomes, grouped by the ten closed
   `ParliamentNoResultKindV1` classes. Public findings use
   `public_finding_quorum_unreachable` or `public_finding_deadline_expired`;
   private ballots use `ballot_registration_deadline_expired`,

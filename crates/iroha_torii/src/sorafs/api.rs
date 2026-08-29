@@ -24834,7 +24834,6 @@ fn resolve_site_host_from_authoritative_app(
         .sorafs_node
         .manifest_metadata_by_digest(&manifest_digest)
         .map_err(node_storage_error_response)?;
-    enforce_governed_site_compliance(state, &stored)?;
     Ok(Some(ResolvedSiteHost {
         hostname: binding.hostname,
         index_document: binding.index_document,
@@ -24882,7 +24881,6 @@ async fn resolve_site_host(
         Ok(manifest) => manifest,
         Err(err) => return Err(node_storage_error_response(err)),
     };
-    enforce_governed_site_compliance(state, &stored)?;
     let hostname = binding.hostname.clone();
     let index_document = binding.index_document().to_owned();
     let spa_fallback = binding.spa_fallback_enabled();
@@ -24960,26 +24958,85 @@ async fn resolve_site_manifest_by_cid(
     state: &SharedAppState,
     cid: &str,
 ) -> Result<StoredManifest, Response> {
-    let stored = resolve_site_manifest_by_cid_unchecked(state, cid).await?;
-    enforce_governed_site_compliance(state, &stored)?;
-    Ok(stored)
+    resolve_site_manifest_by_cid_unchecked(state, cid).await
+}
+async fn validate_local_gateway_manifest(
+    state: &SharedAppState,
+    stored: &StoredManifest,
+) -> Result<(), Response> {
+    let stored = stored.clone();
+    sorafs_heavy_blocking_task(state, "SoraFS gateway manifest validation", move || {
+        let manifest_bytes = stored
+            .load_manifest_bytes()
+            .map_err(storage_backend_error)?;
+        let manifest = decode_manifest_v1_canonical(&manifest_bytes).map_err(|error| {
+            json_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                format!("stored SoraFS manifest is not canonical: {error}"),
+            )
+        })?;
+        validate_manifest(&manifest, &sorafs_manifest::PinPolicyConstraints::default()).map_err(
+            |error| {
+                json_error(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    format!("stored SoraFS manifest failed validation: {error}"),
+                )
+            },
+        )?;
+        let digest = ManifestDigest::from_manifest(&manifest).map_err(|error| {
+            json_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                format!("stored SoraFS manifest digest failed: {error}"),
+            )
+        })?;
+        if digest.as_bytes() != stored.manifest_digest()
+            || manifest.root_cid.as_slice() != stored.manifest_cid()
+        {
+            return Err(json_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "stored SoraFS manifest identity does not match its local index",
+            ));
+        }
+        Ok(())
+    })
+    .await
+}
+
+fn gateway_request_remote(headers: &HeaderMap) -> Result<SocketAddr, Response> {
+    if let Some(ip) = crate::limits::effective_remote_ip(headers, None) {
+        return Ok(SocketAddr::new(ip, 0));
+    }
+    #[cfg(test)]
+    {
+        return Ok(SocketAddr::from(([127, 0, 0, 1], 0)));
+    }
+    #[cfg(not(test))]
+    Err(json_error(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "SoraFS gateway request identity is unavailable",
+    ))
+}
+
+async fn enforce_local_gateway_pre_read(
+    state: &SharedAppState,
+    headers: &HeaderMap,
+    stored: &StoredManifest,
+    requested_provider_id: Option<[u8; 32]>,
+    remote: SocketAddr,
+) -> Result<(), Response> {
+    validate_local_gateway_manifest(state, stored).await?;
+    let provider_id = authoritative_sorafs_provider_id(state)?;
+    if requested_provider_id.is_some_and(|requested| requested != provider_id) {
+        return Err(json_error(
+            StatusCode::FORBIDDEN,
+            "requested SoraFS provider is not the local admitted provider",
+        ));
+    }
+    enforce_gateway_policy_for_request(state, headers, stored, Some(provider_id), remote, true)
 }
 #[cfg(test)]
 mod remote_hydration_security_tests {
     include!("api/remote_hydration_security_tests.rs");
-}
-fn enforce_governed_site_compliance(
-    state: &SharedAppState,
-    stored: &StoredManifest,
-) -> Result<(), Response> {
-    let provider_id = authoritative_sorafs_provider_id(state)?;
-    enforce_governed_gateway_compliance_for_subjects(
-        state,
-        stored.manifest_digest(),
-        stored.manifest_cid(),
-        provider_id,
-        None,
-    )
 }
 fn file_listing_entry_json(file: &StoredFileRecord) -> Value {
     let mut obj = Map::new();
@@ -25466,6 +25523,15 @@ pub(crate) async fn handle_get_sorafs_site_manifest(
         Ok(value) => value,
         Err(response) => return response,
     };
+    let remote = match gateway_request_remote(&headers) {
+        Ok(remote) => remote,
+        Err(response) => return response,
+    };
+    if let Err(response) =
+        enforce_local_gateway_pre_read(&state, &headers, &resolved.stored, None, remote).await
+    {
+        return response;
+    }
     match sorafs_heavy_blocking_task(&state, "SoraFS site manifest read", move || {
         let manifest_bytes = resolved
             .stored
@@ -25541,6 +25607,15 @@ pub(crate) async fn handle_get_sorafs_site_path(
         Ok(value) => value,
         Err(response) => return response,
     };
+    let remote = match gateway_request_remote(&headers) {
+        Ok(remote) => remote,
+        Err(response) => return response,
+    };
+    if let Err(response) =
+        enforce_local_gateway_pre_read(&state, &headers, &resolved.stored, None, remote).await
+    {
+        return response;
+    }
     let Some(mut path) = path_components_for_request(&raw_path, &resolved.index_document) else {
         return StatusCode::NOT_FOUND.into_response();
     };
@@ -25554,6 +25629,7 @@ pub(crate) async fn handle_get_sorafs_site_path(
 #[cfg(feature = "app_api")]
 pub(crate) async fn handle_get_sorafs_cid_lookup(
     State(state): State<SharedAppState>,
+    headers: HeaderMap,
     Path(cid): Path<String>,
     axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
 ) -> Response {
@@ -25566,6 +25642,15 @@ pub(crate) async fn handle_get_sorafs_cid_lookup(
         Ok(value) => value,
         Err(response) => return response,
     };
+    let remote = match gateway_request_remote(&headers) {
+        Ok(remote) => remote,
+        Err(response) => return response,
+    };
+    if let Err(response) =
+        enforce_local_gateway_pre_read(&state, &headers, &stored, None, remote).await
+    {
+        return response;
+    }
     let (files, file_count, truncated_files) = bounded_file_listing_json(&stored, limit);
     let returned_file_count = files.len();
     let value = json_object(vec![
@@ -25618,14 +25703,6 @@ pub(crate) async fn handle_get_sorafs_cid_path(
     if decode_canonical_content_cid(&cid).is_none() {
         return json_error(StatusCode::BAD_REQUEST, "invalid content CID");
     }
-    if raw_path == crate::soracloud::PUBLIC_SERVICE_DISCOVERY_INDEX_DOCUMENT {
-        if let Some(response) = authoritative_inrou_public_discovery_response(&state, &cid).await {
-            return response;
-        }
-        if !state.sorafs_node.is_enabled() {
-            return storage_disabled_response();
-        }
-    }
     if let Some(response) = maybe_redirect_cid_gateway_request(&state, &headers, &uri, &cid) {
         return response;
     }
@@ -25633,6 +25710,20 @@ pub(crate) async fn handle_get_sorafs_cid_path(
         Ok(value) => value,
         Err(response) => return response,
     };
+    let remote = match gateway_request_remote(&headers) {
+        Ok(remote) => remote,
+        Err(response) => return response,
+    };
+    if let Err(response) =
+        enforce_local_gateway_pre_read(&state, &headers, &stored, None, remote).await
+    {
+        return response;
+    }
+    if raw_path == crate::soracloud::PUBLIC_SERVICE_DISCOVERY_INDEX_DOCUMENT
+        && let Some(response) = authoritative_inrou_public_discovery_response(&state, &cid).await
+    {
+        return response;
+    }
     let Some(path) = path_components_for_request(&raw_path, "index.html") else {
         return StatusCode::NOT_FOUND.into_response();
     };
@@ -25702,7 +25793,7 @@ pub(crate) async fn handle_post_sorafs_storage_fetch(
         Err(response) => return response,
     };
     if let Err(response) =
-        enforce_gateway_policy_for_request(&state, &headers, &manifest, provider_id, remote)
+        enforce_local_gateway_pre_read(&state, &headers, &manifest, provider_id, remote).await
     {
         return response;
     }
@@ -26437,11 +26528,10 @@ fn resolve_manifest_storage_id(
 fn gateway_client_fingerprint(
     remote: SocketAddr,
     headers: &HeaderMap,
-    trusted_proxies: &[crate::limits::IpNet],
+    _trusted_proxies: &[crate::limits::IpNet],
 ) -> ClientFingerprint {
-    let effective_ip =
-        crate::limits::ingress_remote_ip(headers, Some(remote.ip()), trusted_proxies)
-            .unwrap_or_else(|| remote.ip());
+    let effective_ip = crate::limits::effective_remote_ip(headers, Some(remote.ip()))
+        .unwrap_or_else(|| remote.ip());
     ClientFingerprint::from_identifier(&effective_ip.to_string())
 }
 #[allow(clippy::result_large_err)]
@@ -26451,6 +26541,7 @@ fn enforce_gateway_policy_for_request(
     manifest: &StoredManifest,
     provider_id: Option<[u8; 32]>,
     remote: SocketAddr,
+    local_manifest_validated: bool,
 ) -> Result<(), Response> {
     let provider_id = provider_id.ok_or_else(|| {
         record_gateway_compliance_serving_failure(state, "unavailable");
@@ -26469,7 +26560,9 @@ fn enforce_gateway_policy_for_request(
     let mut context = RequestContext::new(&fingerprint, now, monotonic_now)
         .with_manifest_digest(manifest.manifest_digest())
         .with_content_cid(manifest.manifest_cid())
-        .with_manifest_envelope(manifest_envelope_valid(headers, pin_record.as_ref()))
+        .with_manifest_envelope(
+            local_manifest_validated || manifest_envelope_valid(headers, pin_record.as_ref()),
+        )
         .with_remote_addr(remote);
     if let Some(host) = headers
         .get(header::HOST)
@@ -27651,7 +27744,7 @@ pub(crate) async fn handle_get_sorafs_storage_car_range(
     };
     let provider_id = Some(stream_token_body.provider_id);
     if let Err(response) =
-        enforce_gateway_policy_for_request(&state, &headers, &manifest, provider_id, remote)
+        enforce_local_gateway_pre_read(&state, &headers, &manifest, provider_id, remote).await
     {
         return response;
     }
@@ -28171,7 +28264,7 @@ pub(crate) async fn handle_get_sorafs_storage_chunk(
     };
     let provider_id = Some(stream_token_body.provider_id);
     if let Err(response) =
-        enforce_gateway_policy_for_request(&state, &headers, &manifest, provider_id, remote)
+        enforce_local_gateway_pre_read(&state, &headers, &manifest, provider_id, remote).await
     {
         return response;
     }
@@ -34852,8 +34945,9 @@ mod advert_tests {
             registration_deadline_unix_ms: 10,
             acceptance_deadline_unix_ms: 20,
             commit_deadline_unix_ms: 30,
-            challenge_deadline_unix_ms: 40,
-            reveal_deadline_unix_ms: 50,
+            challenge_submission_deadline_unix_ms: 40,
+            challenge_resolution_deadline_unix_ms: 86_400_040,
+            reveal_deadline_unix_ms: 86_400_050,
             policy_digest: [0x15; 32],
         };
         let transaction = signed_moderation_transaction(
@@ -39539,12 +39633,12 @@ mod advert_tests {
         );
         let range_body = api_test_response_body(range_response).await;
         assert_eq!(range_body, &asset_bytes[1..=4]);
-        let cid_lookup = api_test_route!(get_cid_lookup; State(state.clone()); Path(content_cid.clone()); axum::extract::RawQuery(None));
+        let cid_lookup = api_test_route!(get_cid_lookup; State(state.clone()); HeaderMap::new(); Path(content_cid.clone()); axum::extract::RawQuery(None));
         assert_eq!(cid_lookup.status(), StatusCode::OK);
         let cid_lookup_value = api_test_response_json(cid_lookup).await;
         assert_json_fields!(cid_lookup_value; json_str ["content_cid"] => Some(content_cid.as_str()), json_u64 ["file_count"] => Some(2), json_u64 ["returned_file_count"] => Some(2), json_u64 ["limit"] => Some(DEFAULT_LIST_LIMIT as u64), json_bool ["truncated_files"] => Some(false));
         assert!(cid_lookup_value.get("moderation").is_none());
-        let capped_cid_lookup = api_test_route!(get_cid_lookup; State(state.clone()); Path(content_cid.clone()); axum::extract::RawQuery(Some("limit=1".to_owned())));
+        let capped_cid_lookup = api_test_route!(get_cid_lookup; State(state.clone()); HeaderMap::new(); Path(content_cid.clone()); axum::extract::RawQuery(Some("limit=1".to_owned())));
         assert_eq!(capped_cid_lookup.status(), StatusCode::OK);
         let capped_cid_lookup_value = api_test_response_json(capped_cid_lookup).await;
         assert_json_fields!(capped_cid_lookup_value; json_len ["files"] => Some(1), json_u64 ["file_count"] => Some(2), json_u64 ["returned_file_count"] => Some(1), json_bool ["truncated_files"] => Some(true));
@@ -40198,7 +40292,7 @@ mod advert_tests {
         assert_eq!(cid_root.status(), StatusCode::OK);
         let cid_root_body = api_test_response_body(cid_root).await;
         assert_eq!(cid_root_body, &index_bytes[..]);
-        let cid_lookup = api_test_route!(get_cid_lookup; State(state.clone()); Path(content_cid.clone()); axum::extract::RawQuery(None));
+        let cid_lookup = api_test_route!(get_cid_lookup; State(state.clone()); HeaderMap::new(); Path(content_cid.clone()); axum::extract::RawQuery(None));
         assert_eq!(cid_lookup.status(), StatusCode::OK);
         let cid_lookup_value = api_test_response_json(cid_lookup).await;
         assert_json_fields!(cid_lookup_value; json_str ["index_document"] => Some("index.html"), json_len ["files"] => Some(1));

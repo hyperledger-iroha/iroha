@@ -16,12 +16,14 @@ impl crate::seal::Instruction for RegisterSmartContractCode {}
 isi! {
     /// Deactivate a contract instance by removing the `contract_address` binding.
     ///
-    /// The authority must hold `CanRegisterSmartContractCode`. Deactivation acts as a kill-switch
-    /// for compromised deployments. The address becomes unavailable immediately, while provenance
-    /// information (caller and optional reason) is emitted via the data event stream.
+    /// The authority must be the address's current account lifecycle owner. Parliament-owned or
+    /// delegated changes use the certified governance corridor. The address becomes unavailable
+    /// immediately, while provenance information is emitted via the data event stream.
     pub struct DeactivateContractInstance {
         /// Canonical contract address.
         pub contract_address: crate::smart_contract::ContractAddress,
+        /// Exact lifecycle revision required before deactivation.
+        pub expected_revision: u64,
         /// Optional audit reason describing why the instance was deactivated.
         #[norito(default)]
         pub reason: Option<String>,
@@ -32,18 +34,68 @@ isi! {
     /// Activate or perform `kaizen`/`改善` on a contract instance by binding
     /// `contract_address` to a `code_hash`.
     ///
-    /// The authority must hold `CanRegisterSmartContractCode`. A new binding stages its declared
-    /// `hajimari`/`始まり` hook. Rebinding an active address to different code additionally requires
-    /// `CanEnactGovernance`; it is an in-place `kaizen`/`改善` and stages the new artifact's declared
-    /// `kaizen`/`改善` hook. Until that exact hook succeeds, ordinary calls are rejected.
+    /// The authority must be the address's current account lifecycle owner. A first address binding
+    /// is created only by atomic direct deployment or Parliament deployment. Rebinding an active
+    /// address is an in-place `kaizen`/`改善` and stages the new artifact's declared hook. Until that
+    /// exact hook succeeds, ordinary calls are rejected.
     pub struct ActivateContractInstance {
         /// Canonical contract address.
         pub contract_address: crate::smart_contract::ContractAddress,
+        /// Exact lifecycle revision required before activation or replacement.
+        pub expected_revision: u64,
         /// Domain-separated canonical hash of the complete `.to` artifact to bind.
         pub code_hash: iroha_crypto::Hash,
     }
 }
 impl crate::seal::Instruction for ActivateContractInstance {}
+isi! {
+    #[norito(decode_from_slice)]
+    /// Set or revoke the account owner's consensual Parliament lifecycle delegation.
+    pub struct SetContractParliamentDelegation {
+        /// Contract whose delegation changes.
+        pub contract_address: crate::smart_contract::ContractAddress,
+        /// Exact lifecycle revision required before applying the change.
+        pub expected_revision: u64,
+        /// Whether Parliament may activate and deactivate this contract.
+        pub delegated: bool,
+    }
+}
+impl crate::seal::Instruction for SetContractParliamentDelegation {}
+isi! {
+    #[norito(decode_from_slice)]
+    /// Offer contract lifecycle ownership to an account or Parliament.
+    pub struct OfferContractOwnership {
+        /// Contract whose ownership is offered.
+        pub contract_address: crate::smart_contract::ContractAddress,
+        /// Exact lifecycle revision required before recording the offer.
+        pub expected_revision: u64,
+        /// Proposed next owner; acceptance is always a separate transition.
+        pub new_owner: crate::smart_contract::ContractLifecycleOwnerV1,
+    }
+}
+impl crate::seal::Instruction for OfferContractOwnership {}
+isi! {
+    #[norito(decode_from_slice)]
+    /// Accept an account-targeted contract ownership offer.
+    pub struct AcceptContractOwnership {
+        /// Contract whose ownership is accepted.
+        pub contract_address: crate::smart_contract::ContractAddress,
+        /// Exact lifecycle revision required before acceptance.
+        pub expected_revision: u64,
+    }
+}
+impl crate::seal::Instruction for AcceptContractOwnership {}
+isi! {
+    #[norito(decode_from_slice)]
+    /// Cancel an outstanding contract ownership offer.
+    pub struct CancelContractOwnershipOffer {
+        /// Contract whose outstanding offer is cancelled.
+        pub contract_address: crate::smart_contract::ContractAddress,
+        /// Exact lifecycle revision required before cancellation.
+        pub expected_revision: u64,
+    }
+}
+impl crate::seal::Instruction for CancelContractOwnershipOffer {}
 isi! {
     /// Atomically deploy a new contract address and move its stable alias.
     ///
@@ -175,6 +227,10 @@ impl<'a> norito::core::DecodeFromSlice<'a> for DeactivateContractInstance {
         let contract_address = super::decode_aos_canonical_field::<
             crate::smart_contract::ContractAddress,
         >(super::read_aos_field(bytes, &mut offset, flags)?, flags)?;
+        let expected_revision = super::decode_aos_canonical_field::<u64>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
         let reason = if offset < bytes.len() {
             super::decode_aos_canonical_field::<Option<String>>(
                 super::read_aos_field(bytes, &mut offset, flags)?,
@@ -190,6 +246,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for DeactivateContractInstance {
         Ok((
             Self {
                 contract_address,
+                expected_revision,
                 reason,
             },
             offset,
@@ -206,6 +263,10 @@ impl<'a> norito::core::DecodeFromSlice<'a> for ActivateContractInstance {
         let contract_address = super::decode_aos_canonical_field::<
             crate::smart_contract::ContractAddress,
         >(super::read_aos_field(bytes, &mut offset, flags)?, flags)?;
+        let expected_revision = super::decode_aos_canonical_field::<u64>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
         let code_hash = super::decode_aos_canonical_field::<iroha_crypto::Hash>(
             super::read_aos_field(bytes, &mut offset, flags)?,
             flags,
@@ -217,6 +278,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for ActivateContractInstance {
         Ok((
             Self {
                 contract_address,
+                expected_revision,
                 code_hash,
             },
             offset,
@@ -469,10 +531,12 @@ mod tests {
         });
         assert_slice_roundtrip(DeactivateContractInstance {
             contract_address: contract_address(),
+            expected_revision: 7,
             reason: Some("governance pause".to_owned()),
         });
         assert_slice_roundtrip(ActivateContractInstance {
             contract_address: contract_address(),
+            expected_revision: 8,
             code_hash: code_hash(),
         });
         assert_slice_roundtrip(CommitContractDeployment {
@@ -578,6 +642,7 @@ mod tests {
             &registry,
             DeactivateContractInstance {
                 contract_address: contract_address(),
+                expected_revision: 7,
                 reason: Some("governance pause".to_owned()),
             },
         );
@@ -585,6 +650,7 @@ mod tests {
             &registry,
             ActivateContractInstance {
                 contract_address: contract_address(),
+                expected_revision: 8,
                 code_hash: code_hash(),
             },
         );

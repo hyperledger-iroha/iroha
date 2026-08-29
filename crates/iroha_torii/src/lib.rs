@@ -927,6 +927,7 @@ mod iso20022_bridge;
 mod limits;
 mod mcp;
 mod musubi;
+mod panic_recovery;
 #[cfg(feature = "app_api")]
 mod predicates;
 #[cfg(feature = "app_api")]
@@ -2335,6 +2336,9 @@ struct AppState {
     query_preauth_rate_limiter: limits::RateLimiter,
     query_authority_rate_limiter: limits::RateLimiter,
     pipeline_status_rate_limiter: limits::RateLimiter,
+    /// API-token dimension charged before transaction signature verification.
+    tx_preauth_rate_limiter: limits::RateLimiter,
+    /// Verified-authority dimension charged only after signature admission.
     tx_rate_limiter: limits::RateLimiter,
     deploy_rate_limiter: limits::RateLimiter,
     proof_rate_limiter: limits::RateLimiter,
@@ -2438,7 +2442,6 @@ struct AppState {
     sorafs_cache: Option<Arc<RwLock<sorafs::ProviderAdvertCache>>>,
     #[cfg(feature = "app_api")]
     sorafs_routing_authority_cache: Arc<sorafs::delegated_routing::RoutingAuthorityCache>,
-    #[cfg(feature = "app_api")]
     sorafs_node: sorafs_node::NodeHandle,
     #[cfg(feature = "app_api")]
     sorafs_proof_outcome_signer: Option<Arc<dyn SoraFsProofOutcomeTransactionSigner>>,
@@ -2482,20 +2485,16 @@ struct AppState {
     sorafs_admission: Option<Arc<sorafs::AdmissionRegistry>>,
     #[cfg(feature = "app_api")]
     sorafs_publish_discovery: iroha_config::parameters::actual::SorafsPublishDiscovery,
-    #[cfg(feature = "app_api")]
     sorafs_gateway_config: iroha_config::parameters::actual::SorafsGateway,
-    #[cfg(feature = "app_api")]
     sorafs_site_bindings: Option<Arc<sorafs::site::SiteBindingsDocument>>,
-    #[cfg(feature = "app_api")]
     sorafs_gateway_policy: Option<Arc<sorafs::gateway::GatewayPolicy>>,
     #[cfg(feature = "app_api")]
     sorafs_gateway_tls_state: Option<Arc<RwLock<sorafs::gateway::TlsStateSnapshot>>>,
-    #[cfg(feature = "app_api")]
     sorafs_gateway_compliance_controller: Option<Arc<sorafs::gateway::GatewayComplianceController>>,
     #[cfg(feature = "app_api")]
     sorafs_gateway_compliance_feed_transport:
         Option<Arc<dyn sorafs::gateway::GatewayComplianceFeedTransport>>,
-    #[cfg(all(test, feature = "app_api"))]
+    #[cfg(test)]
     sorafs_gateway_test_provider_id: Option<[u8; 32]>,
     #[cfg(feature = "app_api")]
     sorafs_blinded_resolver: Option<Arc<sorafs::BlindedCidResolver>>,
@@ -3490,7 +3489,6 @@ impl AppState {
     pub(crate) fn sorafs_cache(&self) -> Option<Arc<RwLock<sorafs::ProviderAdvertCache>>> {
         self.sorafs_cache.clone()
     }
-    #[cfg(feature = "app_api")]
     pub(crate) fn sorafs_node(&self) -> &sorafs_node::NodeHandle {
         &self.sorafs_node
     }
@@ -4693,6 +4691,77 @@ mod preauth_connection_lifetime_tests {
         assert_eq!(response.status(), StatusCode::OK);
     }
     #[tokio::test]
+    async fn public_sorafs_gateways_bypass_the_deployment_api_token() {
+        let mut app = app_with_scheme_cap("http");
+        let state = Arc::get_mut(&mut app).expect("test app state must be uniquely owned");
+        state.require_api_token = true;
+        state.api_tokens_set = Arc::new(HashSet::from(["valid-token".to_owned()]));
+        let router = Router::new()
+            .fallback(|| async {
+                let mut response = StatusCode::OK.into_response();
+                response.headers_mut().insert(
+                    header::CACHE_CONTROL,
+                    HeaderValue::from_static("public, max-age=60"),
+                );
+                response
+            })
+            .layer(axum::middleware::from_fn_with_state(
+                Arc::clone(&app),
+                enforce_api_token,
+            ))
+            .layer(axum::middleware::from_fn_with_state(
+                Arc::clone(&app),
+                enforce_required_api_token_private_no_store,
+            ));
+        for (descriptor, path) in [
+            (route_catalog::sorafs::CID_LOOKUP, "/v1/sorafs/cid/example"),
+            (
+                route_catalog::sorafs::SITE_MANIFEST,
+                "/.well-known/sorafs/manifest",
+            ),
+            (route_catalog::sorafs::CID_ROOT, "/sorafs/cid/example"),
+            (
+                route_catalog::sorafs::CID_PATH,
+                "/sorafs/cid/example/index.html",
+            ),
+        ] {
+            let mut request = Request::builder()
+                .uri(path)
+                .header(HEADER_API_TOKEN, "invalid-token")
+                .body(Body::empty())
+                .expect("public gateway request");
+            request
+                .extensions_mut()
+                .insert(MatchedRouteMetadata::from_descriptor(descriptor));
+            assert!(is_public_sorafs_gateway_route(&request));
+            let response = router
+                .clone()
+                .oneshot(request)
+                .await
+                .expect("public gateway response");
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(
+                response.headers().get(header::CACHE_CONTROL),
+                Some(&HeaderValue::from_static("public, max-age=60"))
+            );
+        }
+        let mut unrelated = Request::builder()
+            .uri(route_catalog::core::HEALTH.path())
+            .body(Body::empty())
+            .expect("unrelated public request");
+        unrelated
+            .extensions_mut()
+            .insert(MatchedRouteMetadata::from_descriptor(
+                route_catalog::core::HEALTH,
+            ));
+        assert!(!is_public_sorafs_gateway_route(&unrelated));
+        let response = router
+            .oneshot(unrelated)
+            .await
+            .expect("unrelated listener-token response");
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+    #[tokio::test]
     async fn required_api_token_forces_private_no_store_on_every_response() {
         let mut app = app_with_scheme_cap("http");
         let state = Arc::get_mut(&mut app).expect("test app state must be uniquely owned");
@@ -5231,11 +5300,59 @@ async fn enforce_onboarding_api_token(
         .insert(AuthenticatedOnboardingDomain(authenticated_scope));
     Ok(next.run(request).await)
 }
+fn is_public_sorafs_gateway_route(request: &axum::http::Request<Body>) -> bool {
+    request
+        .extensions()
+        .get::<MatchedRouteMetadata>()
+        .is_some_and(|route| {
+            let stable_route_id = route.stable_route_id();
+            [
+                route_catalog::sorafs::CID_LOOKUP,
+                route_catalog::sorafs::SITE_MANIFEST,
+                route_catalog::sorafs::CID_ROOT,
+                route_catalog::sorafs::CID_PATH,
+            ]
+            .iter()
+            .any(|descriptor| descriptor.stable_route_id() == stable_route_id)
+        })
+}
+
+fn is_public_sorafs_gateway_path(request: &axum::http::Request<Body>) -> bool {
+    if is_public_sorafs_gateway_route(request) {
+        return true;
+    }
+    let path = request.uri().path();
+    if path == route_catalog::sorafs::SITE_MANIFEST.path() {
+        return true;
+    }
+    let exact_one_segment = |prefix: &str| {
+        path.strip_prefix(prefix)
+            .is_some_and(|suffix| !suffix.is_empty() && !suffix.contains('/'))
+    };
+    let lookup_prefix = route_catalog::sorafs::CID_LOOKUP
+        .path()
+        .strip_suffix("{cid}")
+        .expect("CID lookup route ends in its CID placeholder");
+    let gateway_prefix = route_catalog::sorafs::CID_ROOT
+        .path()
+        .strip_suffix("{cid}")
+        .expect("CID root route ends in its CID placeholder");
+    exact_one_segment(lookup_prefix)
+        || path.strip_prefix(gateway_prefix).is_some_and(|suffix| {
+            let mut segments = suffix.split('/');
+            segments.next().is_some_and(|cid| !cid.is_empty())
+                && segments.all(|segment| !segment.is_empty())
+        })
+}
+
 async fn enforce_api_token(
     State(app): State<SharedAppState>,
     req: axum::http::Request<Body>,
     next: Next,
 ) -> Result<axum::response::Response, Infallible> {
+    if is_public_sorafs_gateway_route(&req) {
+        return Ok(next.run(req).await);
+    }
     let api_token_required = app.require_api_token;
     if let Some(mut response) = api_token_rejection(&app, req.headers()) {
         if api_token_required {
@@ -5255,15 +5372,17 @@ async fn enforce_api_token(
     }
     Ok(response)
 }
-/// Prevent a shared intermediary from replaying any response produced by a
-/// listener whose entire surface is protected by the deployment API token.
+/// Prevent a shared intermediary from replaying responses protected by the
+/// deployment API token. The exact public SoraFS local-gateway allowlist keeps
+/// its immutable content responses anonymously cacheable.
 async fn enforce_required_api_token_private_no_store(
     State(app): State<SharedAppState>,
     req: axum::http::Request<Body>,
     next: Next,
 ) -> Result<axum::response::Response, Infallible> {
+    let public_sorafs_gateway = is_public_sorafs_gateway_path(&req);
     let mut response = next.run(req).await;
-    if app.require_api_token {
+    if app.require_api_token && !public_sorafs_gateway {
         response.headers_mut().insert(
             axum::http::header::CACHE_CONTROL,
             HeaderValue::from_static("private, no-store"),
@@ -11125,12 +11244,14 @@ async fn handler_gov_parliament_timed_ovn_casting_context_read(
     .await?;
     let replay_admission = acquire_query_admission(app.as_ref(), true).await?;
     let state = app.state.clone();
-    tokio::task::spawn_blocking(move || {
+    crate::panic_recovery::join_recoverable(crate::panic_recovery::spawn_blocking_recoverable(
+        move || {
         // Keep heavy replay capacity reserved even if cancellation detaches the
         // blocking task from its HTTP request future.
         let _replay_admission = replay_admission;
         crate::gov::handle_gov_parliament_timed_ovn_casting_context_read(state, ballot_attempt_id)
-    })
+    },
+    ))
     .await
     .map_err(|error| Error::AppServiceUnavailable {
         code: "parliament_timed_ovn_casting_context_worker_unavailable",
@@ -11161,7 +11282,8 @@ async fn handler_gov_parliament_timed_ovn_casting_proof(
     let replay_admission = acquire_query_admission(app.as_ref(), true).await?;
     let state = app.state.clone();
     let kura = app.kura.clone();
-    tokio::task::spawn_blocking(move || {
+    crate::panic_recovery::join_recoverable(crate::panic_recovery::spawn_blocking_recoverable(
+        move || {
         // Keep proof construction capacity reserved after request cancellation.
         let _replay_admission = replay_admission;
         crate::gov::handle_gov_parliament_timed_ovn_casting_proof(
@@ -11170,7 +11292,8 @@ async fn handler_gov_parliament_timed_ovn_casting_proof(
             ballot_attempt_id,
             request,
         )
-    })
+    },
+    ))
     .await
     .map_err(|error| Error::AppServiceUnavailable {
         code: "parliament_timed_ovn_casting_proof_worker_unavailable",
@@ -11197,12 +11320,14 @@ async fn handler_gov_parliament_tle_release_context_read(
     .await?;
     let replay_admission = acquire_query_admission(app.as_ref(), true).await?;
     let state = app.state.clone();
-    tokio::task::spawn_blocking(move || {
+    crate::panic_recovery::join_recoverable(crate::panic_recovery::spawn_blocking_recoverable(
+        move || {
         // Keep heavy replay capacity reserved even if cancellation detaches the
         // blocking task from its HTTP request future.
         let _replay_admission = replay_admission;
         crate::gov::handle_gov_parliament_tle_release_context_read(state, ballot_attempt_id)
-    })
+    },
+    ))
     .await
     .map_err(|error| Error::AppServiceUnavailable {
         code: "parliament_tle_release_context_worker_unavailable",
@@ -12500,6 +12625,7 @@ macro_rules! contracts_rollup_event_get_handlers {
             #[cfg(feature = "app_api")]
             async fn $handler(
                 State(app): State<SharedAppState>,
+                Extension(authenticated_operator): Extension<operator_signatures::AuthenticatedOperatorPublicKey>,
                 headers: axum::http::HeaderMap,
                 axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
                 AxQuery(params): AxQuery<crate::routing::ContractEventGetParams>,
@@ -13810,9 +13936,10 @@ struct ExplorerDomainsQuery {
 }
 #[cfg(feature = "app_api")]
 #[derive(JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 struct ExplorerPaginationOnly {
     #[norito(flatten)]
-    pagination: explorer::ExplorerPaginationQuery,
+    pagination: explorer::ExplorerCursorQuery,
 }
 #[cfg(feature = "app_api")]
 #[derive(JsonDeserialize)]
@@ -13889,9 +14016,10 @@ struct ExplorerRwasQuery {
 }
 #[cfg(feature = "app_api")]
 #[derive(JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 struct ExplorerTransactionsQuery {
     #[norito(flatten)]
-    pagination: explorer::ExplorerPaginationQuery,
+    pagination: explorer::ExplorerCursorQuery,
     #[norito(default)]
     authority: Option<String>,
     #[norito(default)]
@@ -13903,9 +14031,10 @@ struct ExplorerTransactionsQuery {
 }
 #[cfg(feature = "app_api")]
 #[derive(JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 struct ExplorerInstructionsQuery {
     #[norito(flatten)]
-    pagination: explorer::ExplorerPaginationQuery,
+    pagination: explorer::ExplorerCursorQuery,
     #[norito(default)]
     account: Option<String>,
     #[norito(default)]
@@ -14599,17 +14728,28 @@ async fn handler_explorer_rwas_list(
 async fn handler_explorer_blocks_list(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxQuery(query): AxQuery<ExplorerPaginationOnly>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
+    let visibility =
+        torii_dataspace_context_from_headers(&app, &headers, &method, &uri, "v1/explorer/blocks")?;
     let allowed =
         limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     if !allowed {
         check_access(&app, &headers, Some(remote_ip), "v1/explorer/blocks").await?;
     }
-    routing::handle_v1_explorer_blocks(app.state.clone(), app.telemetry.clone(), query.pagination)
-        .await
+    let admission = acquire_query_admission(app.as_ref(), true).await?;
+    routing::handle_v1_explorer_blocks_admitted(
+        app.state.clone(),
+        app.telemetry.clone(),
+        visibility.current_visibility(),
+        query.pagination,
+        admission,
+    )
+    .await
 }
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
@@ -14632,10 +14772,19 @@ async fn handler_explorer_health(
 async fn handler_explorer_transactions_list(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxQuery(query): AxQuery<ExplorerTransactionsQuery>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
+    let visibility = torii_dataspace_context_from_headers(
+        &app,
+        &headers,
+        &method,
+        &uri,
+        "v1/explorer/transactions",
+    )?;
     let ExplorerTransactionsQuery {
         pagination,
         authority,
@@ -14672,14 +14821,17 @@ async fn handler_explorer_transactions_list(
     if !allowed {
         check_access(&app, &headers, Some(remote_ip), "v1/explorer/transactions").await?;
     }
-    crate::routing::handle_v1_explorer_transactions(
+    let admission = acquire_query_admission(app.as_ref(), true).await?;
+    crate::routing::handle_v1_explorer_transactions_admitted(
         app.state.clone(),
         app.telemetry.clone(),
+        visibility.current_visibility(),
         pagination,
         authority,
         block,
         status,
         asset_id,
+        admission,
     )
     .await
 }
@@ -14688,10 +14840,19 @@ async fn handler_explorer_transactions_list(
 async fn handler_explorer_transactions_latest(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxQuery(query): AxQuery<ExplorerTransactionsQuery>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
+    let visibility = torii_dataspace_context_from_headers(
+        &app,
+        &headers,
+        &method,
+        &uri,
+        "v1/explorer/transactions/latest",
+    )?;
     let ExplorerTransactionsQuery {
         pagination,
         authority,
@@ -14734,14 +14895,17 @@ async fn handler_explorer_transactions_latest(
         )
         .await?;
     }
-    crate::routing::handle_v1_explorer_transactions_latest(
+    let admission = acquire_query_admission(app.as_ref(), true).await?;
+    crate::routing::handle_v1_explorer_transactions_latest_admitted(
         app.state.clone(),
         app.telemetry.clone(),
+        visibility.current_visibility(),
         pagination,
         authority,
         block,
         status,
         asset_id,
+        admission,
     )
     .await
 }
@@ -14750,10 +14914,19 @@ async fn handler_explorer_transactions_latest(
 async fn handler_explorer_instructions_list(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxQuery(query): AxQuery<ExplorerInstructionsQuery>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
+    let visibility = torii_dataspace_context_from_headers(
+        &app,
+        &headers,
+        &method,
+        &uri,
+        "v1/explorer/instructions",
+    )?;
     let ExplorerInstructionsQuery {
         pagination,
         account,
@@ -14815,9 +14988,11 @@ async fn handler_explorer_instructions_list(
     if !allowed {
         check_access(&app, &headers, Some(remote_ip), "v1/explorer/instructions").await?;
     }
-    crate::routing::handle_v1_explorer_instructions(
+    let admission = acquire_query_admission(app.as_ref(), true).await?;
+    crate::routing::handle_v1_explorer_instructions_admitted(
         app.state.clone(),
         app.telemetry.clone(),
+        visibility.current_visibility(),
         pagination,
         crate::routing::ExplorerInstructionQuery {
             account,
@@ -14828,6 +15003,7 @@ async fn handler_explorer_instructions_list(
             kind,
             asset_id,
         },
+        admission,
     )
     .await
 }
@@ -14836,10 +15012,19 @@ async fn handler_explorer_instructions_list(
 async fn handler_explorer_instructions_latest(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxQuery(query): AxQuery<ExplorerInstructionsQuery>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
+    let visibility = torii_dataspace_context_from_headers(
+        &app,
+        &headers,
+        &method,
+        &uri,
+        "v1/explorer/instructions/latest",
+    )?;
     let ExplorerInstructionsQuery {
         pagination,
         account,
@@ -14907,9 +15092,11 @@ async fn handler_explorer_instructions_latest(
         )
         .await?;
     }
-    crate::routing::handle_v1_explorer_instructions_latest(
+    let admission = acquire_query_admission(app.as_ref(), true).await?;
+    crate::routing::handle_v1_explorer_instructions_latest_admitted(
         app.state.clone(),
         app.telemetry.clone(),
+        visibility.current_visibility(),
         pagination,
         crate::routing::ExplorerInstructionQuery {
             account,
@@ -14920,6 +15107,7 @@ async fn handler_explorer_instructions_latest(
             kind,
             asset_id,
         },
+        admission,
     )
     .await
 }
@@ -15325,27 +15513,50 @@ async fn handler_explorer_rwa_detail(
 async fn handler_explorer_block_detail(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(identifier): AxPath<String>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
+    let visibility = torii_dataspace_context_from_headers(
+        &app,
+        &headers,
+        &method,
+        &uri,
+        "v1/explorer/blocks/{id}",
+    )?;
     let allowed =
         limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     if !allowed {
         check_access(&app, &headers, Some(remote_ip), "v1/explorer/blocks/{id}").await?;
     }
-    routing::handle_v1_explorer_block_detail(app.state.clone(), app.telemetry.clone(), identifier)
-        .await
+    routing::handle_v1_explorer_block_detail(
+        app.state.clone(),
+        app.telemetry.clone(),
+        visibility.current_visibility(),
+        identifier,
+    )
+    .await
 }
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
 async fn handler_explorer_transaction_detail(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(hash): AxPath<String>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
+    let visibility = torii_dataspace_context_from_headers(
+        &app,
+        &headers,
+        &method,
+        &uri,
+        "v1/explorer/transactions/{hash}",
+    )?;
     let allowed =
         limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     if !allowed {
@@ -15360,6 +15571,7 @@ async fn handler_explorer_transaction_detail(
     match crate::routing::handle_v1_explorer_transaction_detail(
         app.state.clone(),
         app.telemetry.clone(),
+        visibility.current_visibility(),
         hash,
     )
     .await
@@ -15373,10 +15585,19 @@ async fn handler_explorer_transaction_detail(
 async fn handler_explorer_instruction_detail(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath((hash, index)): AxPath<(String, u64)>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
+    let visibility = torii_dataspace_context_from_headers(
+        &app,
+        &headers,
+        &method,
+        &uri,
+        "v1/explorer/instructions/{hash}/{index}",
+    )?;
     let allowed =
         limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     if !allowed {
@@ -15391,6 +15612,7 @@ async fn handler_explorer_instruction_detail(
     match crate::routing::handle_v1_explorer_instruction_detail(
         app.state.clone(),
         app.telemetry.clone(),
+        visibility.current_visibility(),
         hash,
         index,
     )
@@ -15541,11 +15763,21 @@ async fn handler_asset_definition_get(
 async fn handler_asset_holders(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(def_id): AxPath<String>,
     AxQuery(p): AxQuery<routing::AssetHolderGetParams>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
+    let visibility = torii_visibility_account_from_headers(
+        &app,
+        &headers,
+        &method,
+        &uri,
+        &[],
+        "v1/assets/{definition_id}/holders",
+    )?;
     let limits = crate::routing::app_query_limits();
     let page_limit = limits.clamp_page_limit(p.limit)?;
     let mut p = p;
@@ -15560,8 +15792,9 @@ async fn handler_asset_holders(
             .await?;
     }
     let query_string = encode_torii_proxy_query(&p)?;
-    Ok(execute_torii_fanout_list_read(
+    Ok(execute_torii_visible_fanout_list_read(
         &app,
+        visibility.caller(),
         ToriiReadEndpointV1::AssetHoldersGet,
         vec![def_id],
         query_string,
@@ -15572,6 +15805,7 @@ async fn handler_asset_holders(
 #[cfg(feature = "app_api")]
 async fn handler_asset_holders_query(
     State(app): State<SharedAppState>,
+    Extension(verified): Extension<crate::app_auth::VerifiedCanonicalRequest>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(def_id): AxPath<String>,
@@ -15596,8 +15830,9 @@ async fn handler_asset_holders_query(
             "failed to encode routed asset holders query: {error}"
         )))
     })?;
-    Ok(execute_torii_fanout_list_read(
+    Ok(execute_torii_visible_fanout_list_read(
         &app,
+        Some(&verified.account),
         ToriiReadEndpointV1::AssetHoldersQuery,
         vec![def_id],
         None,
@@ -17719,21 +17954,20 @@ type ZkIvmProveOutcome = Result<
     String,
 >;
 async fn zk_ivm_await_started_prove_job<T>(
-    mut prove_job: tokio::task::JoinHandle<Result<T, String>>,
+    mut prove_job: tokio::task::JoinHandle<std::thread::Result<Result<T, String>>>,
     cancel_rx: &mut tokio::sync::watch::Receiver<bool>,
 ) -> (Result<T, String>, bool) {
+    let flatten = |result| match result {
+        Ok(Ok(outcome)) => outcome,
+        Ok(Err(_)) => Err("prove job panicked".to_owned()),
+        Err(error) => Err(format!("prove job could not be joined: {error}")),
+    };
     tokio::select! {
-        res = &mut prove_job => (match res {
-            Ok(outcome) => outcome,
-            Err(err) => Err(format!("prove job panicked: {err}")),
-        }, false),
+        result = &mut prove_job => (flatten(result), false),
         _ = cancel_rx.changed() => {
             // `spawn_blocking` work cannot be preempted. The caller keeps its
             // compute permits while this await reaches physical completion.
-            let outcome = match prove_job.await {
-                Ok(outcome) => outcome,
-                Err(err) => Err(format!("prove job panicked: {err}")),
-            };
+            let outcome = flatten(prove_job.await);
             (outcome, true)
         }
     }
@@ -18001,7 +18235,7 @@ async fn handler_zk_ivm_derive(
         metadata,
         bytecode,
     } = req;
-    let derive_task = tokio::task::spawn_blocking(move || -> Result<Bytes, String> {
+    let derive_task = panic_recovery::spawn_blocking_recoverable(move || -> Result<Bytes, String> {
         // The owned permit lives inside the physical blocking task, so
         // request cancellation/timeout cannot detach unaccounted VM work.
         let _tooling_permit = tooling_permit;
@@ -18061,7 +18295,10 @@ async fn handler_zk_ivm_derive(
             .map_err(|err| err.to_string())?;
         encode_zk_ivm_derive_response_bounded(&proved)
     });
-    let body = tokio::time::timeout(app.ivm_tooling_timeout, derive_task)
+    let body = tokio::time::timeout(
+        app.ivm_tooling_timeout,
+        panic_recovery::join_recoverable(derive_task),
+    )
         .await
         .map_err(|_| {
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -18074,7 +18311,7 @@ async fn handler_zk_ivm_derive(
         .map_err(|err| {
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(
                 iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
-                    "derive task panicked: {err}"
+                    "derive task failed: {err}"
                 )),
             ))
         })?
@@ -18361,7 +18598,7 @@ async fn handler_zk_ivm_prove(
             inflight_total,
         );
         let job_id_for_worker = job_id_for_task.clone();
-        let prove_job = tokio::task::spawn_blocking(move || {
+        let prove_job = panic_recovery::spawn_blocking_recoverable(move || {
             // The physical-work permit lives in this blocking task across key
             // loading, execution, proving, and terminal serialization.
             let _inflight_permit = inflight_permit;
@@ -19478,14 +19715,19 @@ async fn execute_soracloud_local_read_off_reactor_with_admission(
             "Soracloud local-read blocking capacity is saturated; retry later",
         )
     })?;
-    let worker = tokio::task::spawn_blocking(move || {
+    let worker = panic_recovery::spawn_blocking_recoverable(move || {
         let result = runtime.execute_local_read(request);
         // `spawn_blocking` cannot be preempted. The physical worker owns the
         // permit so cancellation or timeout cannot admit replacement work
         // until the provider/runtime call has actually stopped.
         (result, permit)
     });
-    match tokio::time::timeout(SORACLOUD_LOCAL_READ_EXECUTION_TIMEOUT_V1, worker).await {
+    match tokio::time::timeout(
+        SORACLOUD_LOCAL_READ_EXECUTION_TIMEOUT_V1,
+        panic_recovery::join_recoverable(worker),
+    )
+    .await
+    {
         Ok(Ok((result, _permit))) => result,
         Ok(Err(_)) => Err(SoracloudRuntimeExecutionError::new(
             SoracloudRuntimeExecutionErrorKind::Internal,
@@ -20972,6 +21214,122 @@ impl ToriiAccountReadVisibility {
     fn is_signed(&self) -> bool {
         matches!(self, Self::Signed(_))
     }
+
+    fn into_dataspace_context(self, app: SharedAppState) -> ToriiDataspaceReadContext {
+        ToriiDataspaceReadContext {
+            app,
+            caller: match self {
+                Self::Signed(account_id) => Some(account_id),
+                Self::PublicExact | Self::None => None,
+            },
+            #[cfg(test)]
+            fixed_visibility: None,
+        }
+    }
+}
+
+/// Canonical caller retained by long-lived and routed dataspace reads.
+///
+/// The visible set is deliberately recomputed from current state instead of
+/// being frozen at connection time, so permission revocation takes effect for
+/// the next emitted item.
+#[cfg(feature = "app_api")]
+#[derive(Clone)]
+pub(crate) struct ToriiDataspaceReadContext {
+    app: SharedAppState,
+    caller: Option<AccountId>,
+    #[cfg(test)]
+    fixed_visibility: Option<routing::DataspaceReadVisibility>,
+}
+
+#[cfg(feature = "app_api")]
+impl ToriiDataspaceReadContext {
+    fn caller(&self) -> Option<&AccountId> {
+        self.caller.as_ref()
+    }
+
+    fn current_visibility(&self) -> routing::DataspaceReadVisibility {
+        #[cfg(test)]
+        if let Some(visibility) = &self.fixed_visibility {
+            return visibility.clone();
+        }
+        torii_dataspace_read_visibility(self.app.as_ref(), self.caller())
+    }
+
+    #[cfg(test)]
+    fn all_for_tests() -> Self {
+        Self {
+            app: crate::mk_app_state_for_tests(),
+            caller: None,
+            fixed_visibility: Some(routing::DataspaceReadVisibility::all_for_tests()),
+        }
+    }
+
+    fn filter_event(&self, kura: &Kura, event: EventBox) -> Option<EventBox> {
+        let visibility = self.current_visibility();
+        match event {
+            EventBox::PipelineBatch(events) => {
+                let events = events
+                    .into_iter()
+                    .filter(|event| self.pipeline_event_is_visible(kura, &visibility, event))
+                    .collect::<Vec<_>>();
+                (!events.is_empty()).then_some(EventBox::PipelineBatch(events))
+            }
+            EventBox::Pipeline(event) => self
+                .pipeline_event_is_visible(kura, &visibility, &event)
+                .then_some(EventBox::Pipeline(event)),
+            // Data, trigger, and clock events do not yet carry committed
+            // route provenance. Only the global-reader capability may observe
+            // them until Core emits an explicit dataspace scope.
+            other @ (EventBox::Data(_)
+            | EventBox::Time(_)
+            | EventBox::ExecuteTrigger(_)
+            | EventBox::TriggerCompleted(_)) => visibility.can_read_all().then_some(other),
+        }
+    }
+
+    fn filter_current_event(&self, event: EventBox) -> Option<EventBox> {
+        self.filter_event(self.app.kura.as_ref(), event)
+    }
+
+    fn pipeline_event_is_visible(
+        &self,
+        kura: &Kura,
+        visibility: &routing::DataspaceReadVisibility,
+        event: &PipelineEventBox,
+    ) -> bool {
+        if visibility.can_read_all() {
+            return true;
+        }
+        match event {
+            PipelineEventBox::Block(_) => true,
+            PipelineEventBox::Transaction(transaction) => {
+                let Some(height) = transaction.block_height() else {
+                    return false;
+                };
+                let Ok(height) = usize::try_from(height.get()) else {
+                    return false;
+                };
+                let Some(height) = NonZeroUsize::new(height) else {
+                    return false;
+                };
+                let Some(block) = kura.get_block(height) else {
+                    return false;
+                };
+                (0..block.external_entrypoint_count()).any(|index| {
+                    block
+                        .external_signed_transaction_ref_at(index)
+                        .is_some_and(|candidate| {
+                            candidate.hash() == transaction.hash()
+                                && visibility.allows_external_entrypoint(&block, index)
+                        })
+                })
+            }
+            PipelineEventBox::Warning(_)
+            | PipelineEventBox::Merge(_)
+            | PipelineEventBox::Witness(_) => false,
+        }
+    }
 }
 #[cfg(feature = "app_api")]
 fn torii_signed_visibility_headers_present(headers: &HeaderMap) -> bool {
@@ -20990,7 +21348,7 @@ fn torii_visibility_account_from_headers(
     _endpoint: &'static str,
 ) -> Result<ToriiAccountReadVisibility, Error> {
     if torii_signed_visibility_headers_present(headers) {
-        return crate::app_auth::verify_canonical_network_request(
+        let verified = crate::app_auth::verify_canonical_network_request(
             &app.state,
             app.state.network_id_ref(),
             headers,
@@ -20999,11 +21357,13 @@ fn torii_visibility_account_from_headers(
             body,
             None,
         )
-        .map(|verified| {
-            verified.map_or(ToriiAccountReadVisibility::None, |request| {
-                ToriiAccountReadVisibility::Signed(request.account)
-            })
-        });
+        .map_err(|error| Error::AppUnauthorized {
+            code: "canonical_authentication_invalid",
+            message: error.to_string(),
+        })?;
+        return Ok(verified.map_or(ToriiAccountReadVisibility::None, |request| {
+            ToriiAccountReadVisibility::Signed(request.account)
+        }));
     }
     if headers.get(HEADER_ACCOUNT).is_some() {
         return Err(Error::AppUnauthorized {
@@ -21013,6 +21373,45 @@ fn torii_visibility_account_from_headers(
         });
     }
     Ok(ToriiAccountReadVisibility::None)
+}
+
+#[cfg(feature = "app_api")]
+fn torii_dataspace_context_from_headers(
+    app: &SharedAppState,
+    headers: &HeaderMap,
+    method: &Method,
+    uri: &Uri,
+    endpoint: &'static str,
+) -> Result<ToriiDataspaceReadContext, Error> {
+    torii_visibility_account_from_headers(app, headers, method, uri, &[], endpoint)
+        .map(|visibility| visibility.into_dataspace_context(Arc::clone(app)))
+}
+
+#[cfg(feature = "app_api")]
+fn require_torii_global_reader(
+    app: &SharedAppState,
+    headers: &HeaderMap,
+    method: &Method,
+    uri: &Uri,
+    endpoint: &'static str,
+) -> Result<ToriiDataspaceReadContext, Error> {
+    let context = torii_dataspace_context_from_headers(app, headers, method, uri, endpoint)?;
+    let Some(caller) = context.caller() else {
+        return Err(Error::AppUnauthorized {
+            code: "canonical_authentication_required",
+            message: "canonical account request authentication is required".to_owned(),
+        });
+    };
+    let permission: Permission = CanReadAllLedgerData.into();
+    let state_view = app.state.view();
+    if !torii_account_has_permission(state_view.world(), caller, &permission) {
+        return Err(Error::Query(
+            iroha_data_model::ValidationFail::NotPermitted(
+                "CanReadAllLedgerData permission is required for the full block stream".to_owned(),
+            ),
+        ));
+    }
+    Ok(context)
 }
 fn torii_visible_account_read_routes(
     app: &AppState,
@@ -21029,6 +21428,10 @@ fn torii_visible_account_read_routes(
         visible_dataspaces.extend(bindings.iter().map(|(dataspace_id, _)| *dataspace_id));
     }
     if let Some(caller) = caller {
+        let can_read_all: Permission = CanReadAllLedgerData.into();
+        if torii_account_has_permission(world, caller, &can_read_all) {
+            return torii_all_dataspace_routes(app);
+        }
         visible_dataspaces.extend(
             torii_all_dataspace_routes(app)
                 .into_iter()
@@ -21046,6 +21449,23 @@ fn torii_visible_account_read_routes(
         .into_iter()
         .filter(|route| visible_dataspaces.contains(&route.dataspace_id))
         .collect()
+}
+
+#[cfg(feature = "app_api")]
+fn torii_dataspace_read_visibility(
+    app: &AppState,
+    caller: Option<&AccountId>,
+) -> routing::DataspaceReadVisibility {
+    let can_read_all = caller.is_some_and(|caller| {
+        let permission: Permission = CanReadAllLedgerData.into();
+        let state_view = app.state.view();
+        torii_account_has_permission(state_view.world(), caller, &permission)
+    });
+    let visible_dataspaces = torii_visible_account_read_routes(app, caller)
+        .into_iter()
+        .map(|route| route.dataspace_id)
+        .collect();
+    routing::DataspaceReadVisibility::new(visible_dataspaces, can_read_all)
 }
 fn torii_public_dataspace_ids(app: &AppState) -> BTreeSet<DataSpaceId> {
     let state_view = app.state.view();
@@ -24182,7 +24602,7 @@ async fn execute_bounded_contract_view_work(
             retry_after_secs,
         })?;
     let state = app.state.clone();
-    let task = tokio::task::spawn_blocking(move || {
+    let task = panic_recovery::spawn_blocking_recoverable(move || {
         // Keep the permit in the physical worker so timeout or request
         // cancellation cannot admit overlapping detached VM executions.
         let _tooling_permit = tooling_permit;
@@ -24198,7 +24618,10 @@ async fn execute_bounded_contract_view_work(
             }
         }
     });
-    tokio::time::timeout(app.ivm_tooling_timeout, task)
+    tokio::time::timeout(
+        app.ivm_tooling_timeout,
+        panic_recovery::join_recoverable(task),
+    )
         .await
         .map_err(|_| {
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -24209,7 +24632,7 @@ async fn execute_bounded_contract_view_work(
         })?
         .map_err(|err| {
             Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
-                "{endpoint} worker panicked: {err}"
+                "{endpoint} worker failed: {err}"
             )))
         })?
 }
@@ -33083,25 +33506,45 @@ mod canonical_stream_handshake_tests {
 async fn handler_events_sse(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
     AxQuery(params): AxQuery<routing::EventsSseParams>,
 ) -> Result<Response, Error> {
     if let Some(response) = sse_resume_rejection(&headers) {
         return Ok(response);
     }
-    Ok(routing::handle_v1_events_sse(app.events.clone(), AxQuery(params))?.into_response())
+    let visibility =
+        torii_dataspace_context_from_headers(&app, &headers, &method, &uri, "v1/events/sse")?;
+    Ok(routing::handle_v1_events_sse(
+        app.events.clone(),
+        app.kura.clone(),
+        visibility,
+        AxQuery(params),
+    )?
+    .into_response())
 }
 #[cfg(feature = "app_api")]
 async fn handler_contracts_events_sse(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
     AxQuery(params): AxQuery<routing::ContractEventsSseParams>,
 ) -> Result<Response, Error> {
     if let Some(response) = sse_resume_rejection(&headers) {
         return Ok(response);
     }
+    let visibility = torii_dataspace_context_from_headers(
+        &app,
+        &headers,
+        &method,
+        &uri,
+        "v1/contracts/events/sse",
+    )?;
     Ok(routing::handle_v1_contracts_events_sse(
         app.events.clone(),
         app.state.clone(),
+        visibility,
         AxQuery(params),
     )?
     .into_response())
@@ -33172,13 +33615,23 @@ async fn handler_telemetry_live(
 async fn handler_explorer_transactions_stream(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
+    let visibility = torii_dataspace_context_from_headers(
+        &app,
+        &headers,
+        &method,
+        &uri,
+        "v1/explorer/transactions/stream",
+    )?;
     if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         return Ok(routing::handle_v1_explorer_transactions_stream(
             app.kura.clone(),
             app.events.clone(),
+            visibility,
         )
         .into_response());
     }
@@ -33194,23 +33647,36 @@ async fn handler_explorer_transactions_stream(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
         )));
     }
-    Ok(
-        routing::handle_v1_explorer_transactions_stream(app.kura.clone(), app.events.clone())
-            .into_response(),
+    Ok(routing::handle_v1_explorer_transactions_stream(
+        app.kura.clone(),
+        app.events.clone(),
+        visibility,
     )
+    .into_response())
 }
 #[cfg(feature = "app_api")]
 async fn handler_explorer_blocks_stream(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
+    let visibility = torii_dataspace_context_from_headers(
+        &app,
+        &headers,
+        &method,
+        &uri,
+        "v1/explorer/blocks/stream",
+    )?;
     if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
-        return Ok(
-            routing::handle_v1_explorer_blocks_stream(app.kura.clone(), app.events.clone())
-                .into_response(),
-        );
+        return Ok(routing::handle_v1_explorer_blocks_stream(
+            app.kura.clone(),
+            app.events.clone(),
+            visibility,
+        )
+        .into_response());
     }
     validate_api_token(app.as_ref(), &headers)?;
     let key = rate_limit_key(
@@ -33225,7 +33691,7 @@ async fn handler_explorer_blocks_stream(
         )));
     }
     Ok(
-        routing::handle_v1_explorer_blocks_stream(app.kura.clone(), app.events.clone())
+        routing::handle_v1_explorer_blocks_stream(app.kura.clone(), app.events.clone(), visibility)
             .into_response(),
     )
 }
@@ -33233,13 +33699,23 @@ async fn handler_explorer_blocks_stream(
 async fn handler_explorer_instructions_stream(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
+    let visibility = torii_dataspace_context_from_headers(
+        &app,
+        &headers,
+        &method,
+        &uri,
+        "v1/explorer/instructions/stream",
+    )?;
     if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         return Ok(routing::handle_v1_explorer_instructions_stream(
             app.kura.clone(),
             app.events.clone(),
+            visibility,
         )
         .into_response());
     }
@@ -33255,10 +33731,12 @@ async fn handler_explorer_instructions_stream(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
         )));
     }
-    Ok(
-        routing::handle_v1_explorer_instructions_stream(app.kura.clone(), app.events.clone())
-            .into_response(),
+    Ok(routing::handle_v1_explorer_instructions_stream(
+        app.kura.clone(),
+        app.events.clone(),
+        visibility,
     )
+    .into_response())
 }
 #[cfg(feature = "app_api")]
 fn is_expected_ws_disconnect(error: &eyre::Report) -> bool {
@@ -33292,10 +33770,14 @@ async fn handler_subscription_ws(
     State(app): State<SharedAppState>,
     preauth_guard: Option<Extension<PreAuthGuardHandoff>>,
     headers: axum::http::HeaderMap,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
     axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
     ws: WebSocketUpgrade,
 ) -> Result<impl IntoResponse, Error> {
     validate_norito_websocket_handshake(&headers, raw_query.as_deref())?;
+    let visibility =
+        torii_dataspace_context_from_headers(&app, &headers, &method, &uri, "v1/events/ws")?;
     // Subscribe before upgrade to buffer events emitted during the WS handshake.
     let events_rx = app.events.subscribe();
     let ws = ws
@@ -33305,10 +33787,11 @@ async fn handler_subscription_ws(
     let preauth_guard = take_preauth_upgrade_guard(preauth_guard);
     Ok(core::future::ready(ws.on_upgrade(move |ws| async move {
         let _preauth_guard = preauth_guard;
-        if let Err(error) = routing::event::handle_events_stream_with_receiver(
+        if let Err(error) = routing::event::handle_events_stream_with_receiver_visible(
             events_rx,
             ws,
             app.ws_message_timeout,
+            visibility,
         )
         .await
         {
@@ -33326,10 +33809,14 @@ async fn handler_blocks_stream_ws(
     State(app): State<SharedAppState>,
     preauth_guard: Option<Extension<PreAuthGuardHandoff>>,
     headers: axum::http::HeaderMap,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
     axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
     ws: WebSocketUpgrade,
 ) -> Result<impl IntoResponse, Error> {
     validate_norito_websocket_handshake(&headers, raw_query.as_deref())?;
+    let visibility =
+        require_torii_global_reader(&app, &headers, &method, &uri, "v1/blocks/stream")?;
     let kura = app.kura.clone();
     let ws = ws
         .protocols([NORITO_V1_WEBSOCKET_SUBPROTOCOL])
@@ -33338,8 +33825,13 @@ async fn handler_blocks_stream_ws(
     let preauth_guard = take_preauth_upgrade_guard(preauth_guard);
     Ok(core::future::ready(ws.on_upgrade(move |ws| async move {
         let _preauth_guard = preauth_guard;
-        if let Err(error) =
-            routing::block::handle_blocks_stream(kura, ws, app.ws_message_timeout).await
+        if let Err(error) = routing::block::handle_blocks_stream(
+            kura,
+            ws,
+            app.ws_message_timeout,
+            move || visibility.current_visibility().can_read_all(),
+        )
+        .await
         {
             iroha_logger::error!(%error, "Failure during block streaming");
         }
@@ -34958,13 +35450,18 @@ async fn handler_post_contract_call_simulate(
             retry_after_secs,
         })?;
     let state = app.state.clone();
-    let simulation_task = tokio::task::spawn_blocking(move || {
+    let simulation_task = crate::panic_recovery::spawn_blocking_recoverable(move || {
         // Retain capacity until physical VM completion even if the awaiting
         // request future times out or is cancelled.
         let _tooling_permit = tooling_permit;
         crate::routing::handle_post_contract_call_simulate(state, request)
     });
-    match tokio::time::timeout(app.ivm_tooling_timeout, simulation_task).await {
+    match tokio::time::timeout(
+        app.ivm_tooling_timeout,
+        crate::panic_recovery::join_recoverable(simulation_task),
+    )
+    .await
+    {
         Ok(Ok(Ok(body))) => {
             proof_cached_json_response_with_egress(
                 &app,
@@ -36163,8 +36660,10 @@ async fn handler_post_sorafs_por_vrf(
             .into_response();
     }
     let now = sorafs::unix_now_secs();
-    let result =
-        tokio::task::spawn_blocking(move || runtime.submit_provider_vrf(submission, now)).await;
+    let result = panic_recovery::join_recoverable(panic_recovery::spawn_blocking_recoverable(
+        move || runtime.submit_provider_vrf(submission, now),
+    ))
+    .await;
     match result {
         Ok(Ok(())) => (
             StatusCode::ACCEPTED,
@@ -36234,14 +36733,16 @@ async fn handler_get_sorafs_por_status(
 ) -> Result<AxResponse, Error> {
     let admission = acquire_query_admission(app.as_ref(), true).await?;
     let coordinator = app.por_coordinator.clone();
-    let (result, _admission) = tokio::task::spawn_blocking(move || {
-        let result =
-            crate::routing::handle_get_sorafs_por_status(coordinator, query).and_then(|page| {
-                norito::to_bytes(&page)
-                    .map_err(|err| por_response_encoding_error("status response", err))
-            });
-        (result, admission)
-    })
+    let (result, _admission) = panic_recovery::join_recoverable(
+        panic_recovery::spawn_blocking_recoverable(move || {
+            let result = crate::routing::handle_get_sorafs_por_status(coordinator, query)
+                .and_then(|page| {
+                    norito::to_bytes(&page)
+                        .map_err(|err| por_response_encoding_error("status response", err))
+                });
+            (result, admission)
+        }),
+    )
     .await
     .map_err(|error| Error::AppServiceUnavailable {
         code: "sorafs_por_status_worker_failed",
@@ -36262,14 +36763,16 @@ async fn handler_get_sorafs_por_export(
 ) -> Result<AxResponse, Error> {
     let admission = acquire_query_admission(app.as_ref(), true).await?;
     let coordinator = app.por_coordinator.clone();
-    let (result, _admission) = tokio::task::spawn_blocking(move || {
-        let result =
-            crate::routing::handle_get_sorafs_por_export(coordinator, query).and_then(|page| {
-                norito::to_bytes(&page)
-                    .map_err(|err| por_response_encoding_error("export payload", err))
-            });
-        (result, admission)
-    })
+    let (result, _admission) = panic_recovery::join_recoverable(
+        panic_recovery::spawn_blocking_recoverable(move || {
+            let result = crate::routing::handle_get_sorafs_por_export(coordinator, query)
+                .and_then(|page| {
+                    norito::to_bytes(&page)
+                        .map_err(|err| por_response_encoding_error("export payload", err))
+                });
+            (result, admission)
+        }),
+    )
     .await
     .map_err(|error| Error::AppServiceUnavailable {
         code: "sorafs_por_export_worker_failed",
@@ -36291,14 +36794,16 @@ async fn handler_get_sorafs_por_report(
     let cycle = crate::routing::parse_report_iso_week(&week_label)?;
     let admission = acquire_query_admission(app.as_ref(), true).await?;
     let coordinator = app.por_coordinator.clone();
-    let (result, _admission) = tokio::task::spawn_blocking(move || {
-        let result =
-            crate::routing::handle_get_sorafs_por_report(coordinator, cycle).and_then(|report| {
-                norito::to_bytes(&report)
-                    .map_err(|err| por_response_encoding_error("weekly report", err))
-            });
-        (result, admission)
-    })
+    let (result, _admission) = panic_recovery::join_recoverable(
+        panic_recovery::spawn_blocking_recoverable(move || {
+            let result = crate::routing::handle_get_sorafs_por_report(coordinator, cycle)
+                .and_then(|report| {
+                    norito::to_bytes(&report)
+                        .map_err(|err| por_response_encoding_error("weekly report", err))
+                });
+            (result, admission)
+        }),
+    )
     .await
     .map_err(|error| Error::AppServiceUnavailable {
         code: "sorafs_por_report_worker_failed",
@@ -36320,6 +36825,7 @@ macro_rules! iso_payment_submission_handlers {
         $(
             async fn $handler(
                 State(app): State<SharedAppState>,
+                Extension(authenticated_operator): Extension<operator_signatures::AuthenticatedOperatorPublicKey>,
                 headers: axum::http::HeaderMap,
                 Query(query): Query<HashMap<String, String>>,
                 axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
@@ -36343,16 +36849,17 @@ macro_rules! iso_payment_submission_handlers {
                 let parsed = parse_xml_message($message_type, &body)
                     .map_err(|err| Error::Query(map_iso_error(err)))?;
                 let profile = iso_profile_from_request(&runtime, &headers, &query)?;
+                let parties = runtime
+                    .authorize_initial_submission(&authenticated_operator.0, profile, &parsed)
+                    .map_err(map_iso_admission_error)?;
                 let metadata = runtime
                     .validate_profile_submission(profile, $message_type, &parsed, &body)
                     .map_err(|err| Error::Query(map_iso_error(err)))?;
                 let msg_id = Iso20022BridgeRuntime::payment_message_id($message_type, &parsed)
                     .map_err(|err| Error::Query(map_iso_error(err)))?;
-                if !runtime.check_and_record_inbound(&msg_id, metadata) {
-                    return Err(Error::Query(
-                        iroha_data_model::ValidationFail::NotPermitted("duplicate message identifier".into()),
-                    ));
-                }
+                runtime
+                    .admit_authenticated_inbound(&msg_id, metadata, parties)
+                    .map_err(map_iso_admission_error)?;
                 let now_ms = routing::asset_alias_observation_time_ms(app.state.as_ref());
                 let (mut transaction_payload, context) = {
                     let world = app.state.world_view();
@@ -36386,7 +36893,11 @@ macro_rules! iso_payment_submission_handlers {
                     }
                 };
                 if !runtime.update_message_context(&msg_id, context.clone()) {
-                    runtime.remove_message(&msg_id);
+                    runtime.mark_rejected(
+                        &msg_id,
+                        Some("failed to retain admitted ISO message context".to_owned()),
+                        Some("PRTRY:DURABILITY_FAILURE"),
+                    );
                     return Err(Error::Query(
                         iroha_data_model::ValidationFail::NotPermitted(
                             "failed to retain the admitted ISO message context before queue admission"
@@ -36397,7 +36908,11 @@ macro_rules! iso_payment_submission_handlers {
                 let tx_hash = transaction.hash();
                 let tx_hash_str = format!("{}", tx_hash);
                 if !runtime.bind_transaction_hash(&msg_id, &tx_hash_str) {
-                    runtime.remove_message(&msg_id);
+                    runtime.mark_rejected(
+                        &msg_id,
+                        Some("failed to reserve signed ISO transaction identity".to_owned()),
+                        Some("PRTRY:DURABILITY_FAILURE"),
+                    );
                     return Err(Error::Query(
                         iroha_data_model::ValidationFail::NotPermitted(
                             "failed to reserve the signed ISO transaction identity before queue admission"
@@ -36547,6 +37062,7 @@ iso_payment_submission_handlers!(
 );
 async fn handler_iso_lifecycle_submit(
     app: SharedAppState,
+    authenticated_operator: operator_signatures::AuthenticatedOperatorPublicKey,
     headers: axum::http::HeaderMap,
     query: HashMap<String, String>,
     remote: std::net::SocketAddr,
@@ -36572,18 +37088,33 @@ async fn handler_iso_lifecycle_submit(
     let parsed =
         parse_xml_message(message_type, &body).map_err(|err| Error::Query(map_iso_error(err)))?;
     let profile = iso_profile_from_request(&runtime, &headers, &query)?;
+    let parties = runtime
+        .authorize_lifecycle_submission(&authenticated_operator.0, profile, message_type, &parsed)
+        .map_err(map_iso_admission_error)?;
     let metadata = runtime
         .validate_profile_submission(profile, message_type, &parsed, &body)
         .map_err(|err| Error::Query(map_iso_error(err)))?;
     let msg_id = Iso20022BridgeRuntime::lifecycle_message_id(message_type, &parsed)
         .map_err(|err| Error::Query(map_iso_error(err)))?;
-    if !runtime.check_and_record_inbound(&msg_id, metadata) {
-        return Err(Error::Query(
-            iroha_data_model::ValidationFail::NotPermitted("duplicate message identifier".into()),
-        ));
-    }
+    runtime
+        .admit_authenticated_inbound(&msg_id, metadata, parties)
+        .map_err(map_iso_admission_error)?;
+    let settlement_committed = if message_type == "pacs.002" {
+        runtime
+            .pacs002_settlement_transaction_hash(message_type, &parsed)
+            .map_err(|err| Error::Query(map_iso_error(err)))?
+            .and_then(|hash| hash.parse::<HashOf<SignedTransaction>>().ok())
+            .is_some_and(|hash| app.state.has_committed_entrypoint(entrypoint_hash(hash)))
+    } else {
+        true
+    };
     let (outcome, status_snapshot) =
-        match runtime.apply_inbound_lifecycle_message_with_status(&msg_id, message_type, &parsed) {
+        match runtime.apply_inbound_lifecycle_message_with_evidence(
+            &msg_id,
+            message_type,
+            &parsed,
+            settlement_committed,
+        ) {
             Ok(result) => result,
             Err(err) => {
                 runtime.mark_rejected(&msg_id, Some(err.to_string()), None);
@@ -36642,6 +37173,7 @@ macro_rules! iso_lifecycle_submission_handlers {
         $(
             async fn $handler(
                 State(app): State<SharedAppState>,
+                Extension(authenticated_operator): Extension<operator_signatures::AuthenticatedOperatorPublicKey>,
                 headers: axum::http::HeaderMap,
                 Query(query): Query<HashMap<String, String>>,
                 axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
@@ -36649,6 +37181,7 @@ macro_rules! iso_lifecycle_submission_handlers {
             ) -> Result<(StatusCode, JsonBody<norito::json::native::Value>), Error> {
                 handler_iso_lifecycle_submit(
                     app,
+                    authenticated_operator,
                     headers,
                     query,
                     remote,
@@ -36700,6 +37233,7 @@ iso_lifecycle_submission_handlers!(
 );
 async fn handler_iso_status(
     State(app): State<SharedAppState>,
+    Extension(authenticated_operator): Extension<operator_signatures::AuthenticatedOperatorPublicKey>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     axum::extract::Path(msg_id): axum::extract::Path<String>,
@@ -36713,26 +37247,18 @@ async fn handler_iso_status(
             ));
         }
     };
-    let mut status = runtime.message_status(&msg_id).ok_or_else(|| {
+    if !runtime.can_read_message(&authenticated_operator.0, &msg_id) {
+        return Err(Error::Query(
+            iroha_data_model::ValidationFail::NotPermitted(
+                "unknown ISO 20022 message identifier".into(),
+            ),
+        ));
+    }
+    let status = runtime.message_status(&msg_id).ok_or_else(|| {
         Error::Query(iroha_data_model::ValidationFail::NotPermitted(
             "unknown ISO 20022 message identifier".into(),
         ))
     })?;
-    if status.derived_status() != Pacs002Status::Acsc {
-        // Opportunistically mark the message as settled when the transaction hash
-        // is already committed. This keeps the pacs.002 sequence progressing even
-        // before a dedicated watcher threads `mark_settled` from the pipeline.
-        if let Some(hash_str) = status.transaction_hash() {
-            if let Ok(hash) = hash_str.parse::<HashOf<SignedTransaction>>() {
-                if app.state.has_committed_entrypoint(entrypoint_hash(hash)) {
-                    runtime.mark_settled(&msg_id, SystemTime::now());
-                    if let Some(updated) = runtime.message_status(&msg_id) {
-                        status = updated;
-                    }
-                }
-            }
-        }
-    }
     let updated_ms = status
         .updated_at()
         .duration_since(std::time::UNIX_EPOCH)
@@ -36901,6 +37427,7 @@ async fn handler_iso_status(
 }
 async fn handler_iso_audit_messages(
     State(app): State<SharedAppState>,
+    Extension(authenticated_operator): Extension<operator_signatures::AuthenticatedOperatorPublicKey>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<(StatusCode, JsonBody<norito::json::Value>), Error> {
@@ -36920,16 +37447,25 @@ async fn handler_iso_audit_messages(
             ));
         }
     };
-    Ok((StatusCode::OK, JsonBody(runtime.audit_index())))
+    let audit = runtime
+        .audit_index_for(&authenticated_operator.0)
+        .ok_or_else(|| {
+            Error::Query(iroha_data_model::ValidationFail::NotPermitted(
+                "ISO 20022 audit access is not authorized".into(),
+            ))
+        })?;
+    Ok((StatusCode::OK, JsonBody(audit)))
 }
 async fn handler_iso_pacs002(
     State(app): State<SharedAppState>,
+    Extension(authenticated_operator): Extension<operator_signatures::AuthenticatedOperatorPublicKey>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     axum::extract::Path(msg_id): axum::extract::Path<String>,
 ) -> Result<Response, Error> {
-    let status = iso_status_for_outbox(
+    let (runtime, status) = iso_status_for_outbox(
         &app,
+        &authenticated_operator.0,
         &headers,
         remote.ip(),
         &msg_id,
@@ -36937,79 +37473,88 @@ async fn handler_iso_pacs002(
     )
     .await?;
     let xml = iso_pacs002_xml(&status);
-    Ok(iso_xml_response(xml))
+    signed_iso_xml_response(&runtime, xml)
 }
 async fn handler_iso_pacs004(
     State(app): State<SharedAppState>,
+    Extension(authenticated_operator): Extension<operator_signatures::AuthenticatedOperatorPublicKey>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     axum::extract::Path(msg_id): axum::extract::Path<String>,
 ) -> Result<Response, Error> {
-    let status = iso_status_for_outbox(
+    let (runtime, status) = iso_status_for_outbox(
         &app,
+        &authenticated_operator.0,
         &headers,
         remote.ip(),
         &msg_id,
         "v1/iso20022/messages/pacs004",
     )
     .await?;
-    Ok(iso_xml_response(iso_pacs004_xml(&status)?))
+    signed_iso_xml_response(&runtime, iso_pacs004_xml(&status)?)
 }
 async fn handler_iso_camt029(
     State(app): State<SharedAppState>,
+    Extension(authenticated_operator): Extension<operator_signatures::AuthenticatedOperatorPublicKey>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     axum::extract::Path(msg_id): axum::extract::Path<String>,
 ) -> Result<Response, Error> {
-    let status = iso_status_for_outbox(
+    let (runtime, status) = iso_status_for_outbox(
         &app,
+        &authenticated_operator.0,
         &headers,
         remote.ip(),
         &msg_id,
         "v1/iso20022/messages/camt029",
     )
     .await?;
-    Ok(iso_xml_response(iso_camt029_xml(&status)))
+    signed_iso_xml_response(&runtime, iso_camt029_xml(&status))
 }
 async fn handler_iso_sese024(
     State(app): State<SharedAppState>,
+    Extension(authenticated_operator): Extension<operator_signatures::AuthenticatedOperatorPublicKey>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     axum::extract::Path(msg_id): axum::extract::Path<String>,
 ) -> Result<Response, Error> {
-    let status = iso_status_for_outbox(
+    let (runtime, status) = iso_status_for_outbox(
         &app,
+        &authenticated_operator.0,
         &headers,
         remote.ip(),
         &msg_id,
         "v1/iso20022/messages/sese024",
     )
     .await?;
-    Ok(iso_xml_response(iso_sese024_xml(&status)))
+    signed_iso_xml_response(&runtime, iso_sese024_xml(&status))
 }
 async fn handler_iso_sese025(
     State(app): State<SharedAppState>,
+    Extension(authenticated_operator): Extension<operator_signatures::AuthenticatedOperatorPublicKey>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     axum::extract::Path(msg_id): axum::extract::Path<String>,
 ) -> Result<Response, Error> {
-    let status = iso_status_for_outbox(
+    let (runtime, status) = iso_status_for_outbox(
         &app,
+        &authenticated_operator.0,
         &headers,
         remote.ip(),
         &msg_id,
         "v1/iso20022/messages/sese025",
     )
     .await?;
-    Ok(iso_xml_response(iso_sese025_xml(&status)?))
+    signed_iso_xml_response(&runtime, iso_sese025_xml(&status)?)
 }
 async fn iso_status_for_outbox(
     app: &SharedAppState,
+    authenticated_operator: &iroha_crypto::PublicKey,
     headers: &axum::http::HeaderMap,
     remote_ip: std::net::IpAddr,
     msg_id: &str,
     access_context: &'static str,
-) -> Result<IsoMessageStatus, Error> {
+) -> Result<(Arc<Iso20022BridgeRuntime>, IsoMessageStatus), Error> {
     check_access(app.as_ref(), headers, Some(remote_ip), access_context).await?;
     let runtime = match &app.iso_bridge {
         Some(rt) => rt.clone(),
@@ -37019,32 +37564,53 @@ async fn iso_status_for_outbox(
             ));
         }
     };
-    let mut status = runtime.message_status(msg_id).ok_or_else(|| {
+    if !runtime.can_read_message(authenticated_operator, msg_id) {
+        return Err(Error::Query(
+            iroha_data_model::ValidationFail::NotPermitted(
+                "unknown ISO 20022 message identifier".into(),
+            ),
+        ));
+    }
+    let status = runtime.message_status(msg_id).ok_or_else(|| {
         Error::Query(iroha_data_model::ValidationFail::NotPermitted(
             "unknown ISO 20022 message identifier".into(),
         ))
     })?;
-    if status.derived_status() != Pacs002Status::Acsc {
-        if let Some(hash_str) = status.transaction_hash() {
-            if let Ok(hash) = hash_str.parse::<HashOf<SignedTransaction>>() {
-                if app.state.has_committed_entrypoint(entrypoint_hash(hash)) {
-                    runtime.mark_settled(msg_id, SystemTime::now());
-                    if let Some(updated) = runtime.message_status(msg_id) {
-                        status = updated;
-                    }
-                }
-            }
-        }
-    }
-    Ok(status)
+    Ok((runtime, status))
 }
-fn iso_xml_response(xml: String) -> Response {
-    (
-        StatusCode::OK,
-        [("content-type", "application/xml; charset=utf-8")],
-        xml,
-    )
-        .into_response()
+fn signed_iso_xml_response(
+    runtime: &Iso20022BridgeRuntime,
+    xml: String,
+) -> Result<Response, Error> {
+    let signed = runtime
+        .sign_outbound_document(xml)
+        .map_err(|error| Error::Query(map_iso_error(error)))?;
+    let mut response = (StatusCode::OK, signed.xml).into_response();
+    response.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/xml; charset=utf-8"),
+    );
+    response.headers_mut().insert(
+        axum::http::HeaderName::from_static("x-iroha-iso-signer"),
+        signed.public_key.parse().map_err(|_| {
+            Error::Query(iroha_data_model::ValidationFail::InternalError(
+                "invalid ISO bridge signer response header".into(),
+            ))
+        })?,
+    );
+    response.headers_mut().insert(
+        axum::http::HeaderName::from_static("x-iroha-iso-signature"),
+        signed.signature.parse().map_err(|_| {
+            Error::Query(iroha_data_model::ValidationFail::InternalError(
+                "invalid ISO bridge signature response header".into(),
+            ))
+        })?,
+    );
+    response.headers_mut().insert(
+        axum::http::HeaderName::from_static("x-iroha-iso-signature-domain"),
+        axum::http::HeaderValue::from_static("iroha.iso20022.outbound.v2"),
+    );
+    Ok(response)
 }
 fn iso_pacs002_xml(status: &IsoMessageStatus) -> String {
     let msg_id = xml_escape(status.message_id());
@@ -37576,6 +38142,30 @@ fn insert_iso_metadata_fields(
         "embedded_signature_detected".into(),
         norito::json::native::Value::from(metadata.embedded_signature_detected()),
     );
+    payload.insert(
+        "originator_participant_id".into(),
+        norito::json::native::Value::from(status.originator_participant_id().to_owned()),
+    );
+    payload.insert(
+        "counterparty_participant_id".into(),
+        norito::json::native::Value::from(status.counterparty_participant_id().to_owned()),
+    );
+    payload.insert(
+        "admitting_participant_id".into(),
+        norito::json::native::Value::from(status.admitting_participant_id().to_owned()),
+    );
+    payload.insert(
+        "admitting_operator_key".into(),
+        norito::json::native::Value::from(status.admitting_operator_key().to_owned()),
+    );
+    payload.insert(
+        "pinned_profile_id".into(),
+        norito::json::native::Value::from(status.pinned_profile_id().to_owned()),
+    );
+    payload.insert(
+        "pinned_signature_policy".into(),
+        norito::json::native::Value::from(status.pinned_signature_policy().to_owned()),
+    );
     let status_history = status
         .status_history()
         .iter()
@@ -37644,6 +38234,30 @@ fn map_iso_error(err: MsgError) -> iroha_data_model::ValidationFail {
         MsgError::NoActiveMessage => {
             ValidationFail::InternalError("ISO 20022 parser stack underflow".into())
         }
+    }
+}
+fn map_iso_admission_error(error: crate::iso20022_bridge::IsoAdmissionError) -> Error {
+    use crate::iso20022_bridge::IsoAdmissionError;
+    match error {
+        IsoAdmissionError::Duplicate => Error::Query(
+            iroha_data_model::ValidationFail::NotPermitted(
+                "duplicate ISO 20022 replay identity".into(),
+            ),
+        ),
+        IsoAdmissionError::NotAuthorized => Error::Query(
+            iroha_data_model::ValidationFail::NotPermitted(
+                "ISO 20022 participant authorization failed".into(),
+            ),
+        ),
+        IsoAdmissionError::ProtectedCapacity => Error::AppServiceUnavailable {
+            code: "iso_replay_capacity_protected",
+            message: "ISO replay capacity contains only unexpired protected identities; retry after the deduplication TTL"
+                .to_owned(),
+        },
+        IsoAdmissionError::PersistenceUnavailable => Error::AppServiceUnavailable {
+            code: "iso_admission_persistence_unavailable",
+            message: "ISO admission could not be persisted before processing".to_owned(),
+        },
     }
 }
 #[cfg(feature = "app_api")]
@@ -37726,6 +38340,74 @@ async fn handler_post_transaction(
 ) -> Result<Response, Error> {
     submit_signed_transaction_for_ingress(app, headers, accept, transaction).await
 }
+
+fn transaction_rate_limit_error() -> Error {
+    Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+        iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+    ))
+}
+
+fn transaction_api_token_preauth_key(token: &str) -> String {
+    // Never retain an operator API token as a rate-limiter map key.
+    format!(
+        "v1/transaction:preauth:api-token:{}",
+        Hash::new(token.as_bytes())
+    )
+}
+
+fn transaction_verified_authority_key(authority: &AccountId) -> String {
+    format!("v1/transaction:authority:{authority}")
+}
+
+async fn admit_transaction_api_token_preauth(
+    limiter: &limits::RateLimiter,
+    token: Option<&str>,
+    cost: usize,
+) -> Result<(), Error> {
+    let Some(token) = token else {
+        // The global pre-auth middleware has already charged the accepted
+        // socket/trusted-proxy IP bucket.
+        return Ok(());
+    };
+    let key = transaction_api_token_preauth_key(token);
+    limiter
+        .allow_repeated(&key, cost)
+        .await
+        .then_some(())
+        .ok_or_else(transaction_rate_limit_error)
+}
+
+async fn admit_verified_transaction_authorities(
+    limiter: &limits::RateLimiter,
+    authorities: &[AccountId],
+) -> Result<(), Error> {
+    let mut index = 0;
+    while index < authorities.len() {
+        let authority = &authorities[index];
+        let start = index;
+        index += 1;
+        while index < authorities.len() && &authorities[index] == authority {
+            index += 1;
+        }
+        let key = transaction_verified_authority_key(authority);
+        if !limiter.allow_repeated(&key, index - start).await {
+            return Err(transaction_rate_limit_error());
+        }
+    }
+    Ok(())
+}
+
+async fn admit_verified_transaction_authority(
+    limiter: &limits::RateLimiter,
+    authority: Option<&AccountId>,
+) -> Result<(), Error> {
+    match authority {
+        Some(authority) => {
+            admit_verified_transaction_authorities(limiter, std::slice::from_ref(authority)).await
+        }
+        None => Ok(()),
+    }
+}
 #[cfg(feature = "app_api")]
 async fn handler_post_kagemusha_lifecycle_transaction(
     State(app): State<SharedAppState>,
@@ -37745,15 +38427,10 @@ async fn handler_post_kagemusha_lifecycle_transaction(
         match crate::utils::negotiate_response_format(accept.as_ref().map(|value| &value.0)) {
             Ok(format) => format,
             Err(response) => return Ok(response),
-        };
+    };
     let token = validate_api_token(app.as_ref(), &headers)?.authenticated_token();
+    admit_transaction_api_token_preauth(&app.tx_preauth_rate_limiter, token, 1).await?;
     routing::reject_ingress_if_queue_capacity_saturated(app.queue.as_ref(), app.state.as_ref(), 1)?;
-    let rate_limit_key = token.map_or_else(|| transaction.authority().to_string(), str::to_owned);
-    if !app.tx_rate_limiter.allow(&rate_limit_key).await {
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
     let compute_permit =
         try_acquire_transaction_ingress_compute(&app.transaction_ingress_compute_inflight)?;
     let state = app.state.clone();
@@ -37814,6 +38491,7 @@ async fn handler_post_kagemusha_lifecycle_transaction(
     )
     .await?;
     drop(compute_permit);
+    admit_verified_transaction_authority(&app.tx_rate_limiter, accepted_tx.authority_opt()).await?;
     let routing_plan = app
         .queue
         .route_plan_with_state(&accepted_tx, app.state.as_ref())
@@ -37859,18 +38537,19 @@ where
     T: Send + 'static,
     F: FnOnce() -> Result<T, Error> + Send + 'static,
 {
-    let (result, permit) = tokio::task::spawn_blocking(move || {
+    let worker = crate::panic_recovery::spawn_blocking_recoverable(move || {
         let result = work();
         // The physical worker owns capacity. Dropping or timing out the HTTP
-        // future detaches `spawn_blocking`, but cannot admit replacement work
+        // future detaches the blocking task, but cannot admit replacement work
         // until this closure has actually stopped.
         (result, permit)
-    })
-    .await
-    .map_err(|error| Error::AppServiceUnavailable {
-        code: worker_failure_code,
-        message: error.to_string(),
-    })?;
+    });
+    let (result, permit) = crate::panic_recovery::join_recoverable(worker)
+        .await
+        .map_err(|error| Error::AppServiceUnavailable {
+            code: worker_failure_code,
+            message: error,
+        })?;
     Ok((result?, permit))
 }
 /// Admit one already-decoded caller-signed transaction through the canonical
@@ -37914,21 +38593,8 @@ async fn submit_signed_transaction_for_ingress_queue_plan_certified(
         Err(resp) => return Ok(resp),
     };
     let token_hdr = validate_api_token(app.as_ref(), &headers)?.authenticated_token();
+    admit_transaction_api_token_preauth(&app.tx_preauth_rate_limiter, token_hdr, 1).await?;
     routing::reject_ingress_if_queue_capacity_saturated(app.queue.as_ref(), app.state.as_ref(), 1)?;
-    if let Some(token) = token_hdr {
-        if !app.tx_rate_limiter.allow(token).await {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    } else {
-        let key = transaction.authority().to_string();
-        if !app.tx_rate_limiter.allow(&key).await {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
     let compute_permit =
         try_acquire_transaction_ingress_compute(&app.transaction_ingress_compute_inflight)?;
     let state = app.state.clone();
@@ -37975,6 +38641,7 @@ async fn submit_signed_transaction_for_ingress_queue_plan_certified(
     )
     .await?;
     drop(compute_permit);
+    admit_verified_transaction_authority(&app.tx_rate_limiter, accepted_tx.authority_opt()).await?;
     #[allow(unused_variables)]
     let durable_retry_claim = app
         .queue
@@ -38024,24 +38691,8 @@ async fn handler_post_transaction_entrypoint(
         Err(resp) => return Ok(resp),
     };
     let token_hdr = validate_api_token(app.as_ref(), &headers)?.authenticated_token();
+    admit_transaction_api_token_preauth(&app.tx_preauth_rate_limiter, token_hdr, 1).await?;
     routing::reject_ingress_if_queue_capacity_saturated(app.queue.as_ref(), app.state.as_ref(), 1)?;
-    if let Some(token) = token_hdr {
-        if !app.tx_rate_limiter.allow(token).await {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    } else {
-        let key = transaction
-            .authority_opt()
-            .map(ToString::to_string)
-            .unwrap_or_else(|| transaction.hash().to_string());
-        if !app.tx_rate_limiter.allow(&key).await {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
     let compute_permit =
         try_acquire_transaction_ingress_compute(&app.transaction_ingress_compute_inflight)?;
     let state = app.state.clone();
@@ -38053,6 +38704,7 @@ async fn handler_post_transaction_entrypoint(
     )
     .await?;
     drop(compute_permit);
+    admit_verified_transaction_authority(&app.tx_rate_limiter, accepted_tx.authority_opt()).await?;
     #[allow(unused_variables)]
     let durable_retry_claim = app
         .queue
@@ -38654,8 +39306,12 @@ mod transaction_ingress_decode_tests {
         )
         .expect("same-authority batch decodes");
         let limiter = crate::limits::RateLimiter::new(Some(1), Some(2));
-        let authority_key = authority.to_string();
-        assert!(!allow_transaction_batch_rate_limit(&limiter, None, &decoded).await);
+        let verified_authorities = decoded
+            .iter()
+            .map(|transaction| transaction.authority().clone())
+            .collect::<Vec<_>>();
+        let authority_key = transaction_verified_authority_key(&authority);
+        assert!(!allow_transaction_batch_rate_limit(&limiter, &verified_authorities).await);
         assert!(
             !limiter.allow(&authority_key).await,
             "failed same-authority run should consume the accepted prefix"
@@ -38698,13 +39354,21 @@ mod transaction_ingress_decode_tests {
         ])
         .expect("mixed-authority batch decodes");
         let limiter = crate::limits::RateLimiter::new(Some(1), Some(1));
-        assert!(!allow_transaction_batch_rate_limit(&limiter, None, &decoded).await);
+        let verified_authorities = decoded
+            .iter()
+            .map(|transaction| transaction.authority().clone())
+            .collect::<Vec<_>>();
+        assert!(!allow_transaction_batch_rate_limit(&limiter, &verified_authorities).await);
         assert!(
-            !limiter.allow(&authority_a.to_string()).await,
+            !limiter
+                .allow(&transaction_verified_authority_key(&authority_a))
+                .await,
             "authority A should fail after its first transaction consumed the only token"
         );
         assert!(
-            !limiter.allow(&authority_b.to_string()).await,
+            !limiter
+                .allow(&transaction_verified_authority_key(&authority_b))
+                .await,
             "authority B should have been consumed before the later authority A rejection"
         );
     }
@@ -44898,6 +45562,7 @@ pub struct Torii {
     query_preauth_rate_limiter: limits::RateLimiter,
     query_authority_rate_limiter: limits::RateLimiter,
     pipeline_status_rate_limiter: limits::RateLimiter,
+    tx_preauth_rate_limiter: limits::RateLimiter,
     tx_rate_limiter: limits::RateLimiter,
     deploy_rate_limiter: limits::RateLimiter,
     proof_rate_limiter: limits::RateLimiter,
@@ -44966,7 +45631,6 @@ pub struct Torii {
     da_ingest: iroha_config::parameters::actual::DaIngest,
     #[cfg(feature = "app_api")]
     sorafs_cache: Option<Arc<RwLock<sorafs::ProviderAdvertCache>>>,
-    #[cfg(feature = "app_api")]
     sorafs_node: sorafs_node::NodeHandle,
     #[cfg(feature = "app_api")]
     sorafs_proof_outcome_signer: Option<Arc<dyn SoraFsProofOutcomeTransactionSigner>>,
@@ -45019,11 +45683,8 @@ pub struct Torii {
     sorafs_alias_cache: sorafs::AliasCachePolicy,
     #[cfg(feature = "app_api")]
     sorafs_alias_enforcement: sorafs::AliasCacheEnforcement,
-    #[cfg(feature = "app_api")]
     sorafs_gateway: iroha_config::parameters::actual::SorafsGateway,
-    #[cfg(feature = "app_api")]
     sorafs_site_bindings: Option<Arc<sorafs::site::SiteBindingsDocument>>,
-    #[cfg(feature = "app_api")]
     sorafs_gateway_security: Option<GatewaySecurityComponents>,
     #[cfg(feature = "app_api")]
     sorafs_admission: Option<Arc<sorafs::AdmissionRegistry>>,
@@ -45168,9 +45829,7 @@ pub struct ToriiRuntimeDeps {
     #[cfg(feature = "app_api")]
     sorafs_governance_dag_checkpoint_store:
         Option<Arc<dyn sorafs_node::GovernanceDagSealedCheckpointStore>>,
-    #[cfg(feature = "app_api")]
     sorafs_gateway_acme_client: Option<Arc<dyn sorafs::gateway::AcmeClient>>,
-    #[cfg(feature = "app_api")]
     sorafs_gateway_compliance_feed_transport:
         Option<Arc<dyn sorafs::gateway::GatewayComplianceFeedTransport>>,
     sorafs_cache: Option<Arc<RwLock<sorafs::ProviderAdvertCache>>>,
@@ -45261,9 +45920,7 @@ impl ToriiRuntimeDeps {
             sorafs_governance_dag_signer: None,
             #[cfg(feature = "app_api")]
             sorafs_governance_dag_checkpoint_store: None,
-            #[cfg(feature = "app_api")]
             sorafs_gateway_acme_client: None,
-            #[cfg(feature = "app_api")]
             sorafs_gateway_compliance_feed_transport: None,
             sorafs_cache: None,
             vpn_relay_trust: None,
@@ -45727,7 +46384,6 @@ impl ToriiRuntimeDeps {
     }
     /// Attach the runtime-only audited ACME client used by SoraFS gateway TLS
     /// automation. The client owns no configuration fallback.
-    #[cfg(feature = "app_api")]
     #[must_use]
     pub fn with_sorafs_gateway_acme_client(
         mut self,
@@ -45738,7 +46394,6 @@ impl ToriiRuntimeDeps {
     }
     /// Attach the runtime-only authenticated DNS/HTTPS transport used to fetch
     /// configured SoraFS gateway compliance feeds.
-    #[cfg(feature = "app_api")]
     #[must_use]
     pub fn with_sorafs_gateway_compliance_feed_transport(
         mut self,
@@ -46690,6 +47345,10 @@ macro_rules! catalog_route_policy {
         catalog_get($handler)
             .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature)
     };
+    (optional_canonical_signature_get($handler:path)) => {
+        catalog_get($handler)
+            .authenticated_in_handler(HandlerAuthentication::OptionalCanonicalAccountSignature)
+    };
     (canonical_signature_post($handler:path)) => {
         catalog_post($handler)
             .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature)
@@ -46770,6 +47429,11 @@ macro_rules! catalog_route_policy {
     };
     (limited_public_get($handler:path, $limit:expr)) => {
         catalog_get($handler).layer(DefaultBodyLimit::max($limit))
+    };
+    (limited_unauthenticated_get($handler:path, $limit:expr)) => {
+        catalog_get($handler)
+            .layer(DefaultBodyLimit::max($limit))
+            .unauthenticated()
     };
     (limited_public_post($handler:path, $limit:expr)) => {
         catalog_post($handler).layer(DefaultBodyLimit::max($limit))
@@ -47758,7 +48422,9 @@ impl Torii {
                         },
                         enforce_canonical_stream_admission,
                     ))
-                    .authenticated_in_handler(HandlerAuthentication::ProtocolHandshake),
+                    .authenticated_in_handler(
+                        HandlerAuthentication::OptionalCanonicalAccountSignature,
+                    ),
             );
             builder.route(
                 &route_catalog::streaming::CONTRACT_EVENTS_SSE,
@@ -47770,7 +48436,9 @@ impl Torii {
                         },
                         enforce_canonical_stream_admission,
                     ))
-                    .authenticated_in_handler(HandlerAuthentication::ProtocolHandshake),
+                    .authenticated_in_handler(
+                        HandlerAuthentication::OptionalCanonicalAccountSignature,
+                    ),
             );
             builder.route(
                 &route_catalog::streaming::SUBSCRIPTION_WS,
@@ -47782,7 +48450,9 @@ impl Torii {
                         },
                         enforce_canonical_stream_admission,
                     ))
-                    .authenticated_in_handler(HandlerAuthentication::ProtocolHandshake),
+                    .authenticated_in_handler(
+                        HandlerAuthentication::OptionalCanonicalAccountSignature,
+                    ),
             );
             builder.route(
                 &route_catalog::streaming::BLOCKS_WS,
@@ -47794,7 +48464,7 @@ impl Torii {
                         },
                         enforce_canonical_stream_admission,
                     ))
-                    .authenticated_in_handler(HandlerAuthentication::ProtocolHandshake),
+                    .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
             );
         }
     }
@@ -48248,14 +48918,14 @@ impl Torii {
             EXPLORER_ASSETS_GET => public_get(handler_explorer_assets_list);
             EXPLORER_NFTS_GET => public_get(handler_explorer_nfts_list);
             EXPLORER_RWAS_GET => public_get(handler_explorer_rwas_list);
-            EXPLORER_BLOCKS_GET => public_get(handler_explorer_blocks_list);
+            EXPLORER_BLOCKS_GET => optional_canonical_signature_get(handler_explorer_blocks_list);
             EXPLORER_HEALTH_GET => public_get(handler_explorer_health);
-            EXPLORER_BLOCKS_STREAM_GET => protocol_handshake_get(handler_explorer_blocks_stream);
-            EXPLORER_TRANSACTIONS_GET => public_get(handler_explorer_transactions_list);
-            EXPLORER_TRANSACTIONS_LATEST_GET => public_get(handler_explorer_transactions_latest);
-            EXPLORER_TRANSACTIONS_STREAM_GET => protocol_handshake_get(handler_explorer_transactions_stream);
-            EXPLORER_INSTRUCTIONS_GET => public_get(handler_explorer_instructions_list);
-            EXPLORER_INSTRUCTIONS_LATEST_GET => public_get(handler_explorer_instructions_latest);
+            EXPLORER_BLOCKS_STREAM_GET => optional_canonical_signature_get(handler_explorer_blocks_stream);
+            EXPLORER_TRANSACTIONS_GET => optional_canonical_signature_get(handler_explorer_transactions_list);
+            EXPLORER_TRANSACTIONS_LATEST_GET => optional_canonical_signature_get(handler_explorer_transactions_latest);
+            EXPLORER_TRANSACTIONS_STREAM_GET => optional_canonical_signature_get(handler_explorer_transactions_stream);
+            EXPLORER_INSTRUCTIONS_GET => optional_canonical_signature_get(handler_explorer_instructions_list);
+            EXPLORER_INSTRUCTIONS_LATEST_GET => optional_canonical_signature_get(handler_explorer_instructions_latest);
             SORACLES_DEFI_ATTESTATIONS_LATEST_GET => public_get(handler_defi_oracle_attestation_latest);
             SORACLES_FEEDS_GET => public_get(handler_oracle_feeds);
             SORACLES_FEEDS_BY_FEED_ID_HISTORY_GET => public_get(handler_oracle_feed_history);
@@ -48268,7 +48938,7 @@ impl Torii {
         #[cfg(feature = "telemetry")]
         mount_catalog_route_rows!(
             builder, application_api;
-            EXPLORER_INSTRUCTIONS_STREAM_GET => protocol_handshake_get(handler_explorer_instructions_stream);
+            EXPLORER_INSTRUCTIONS_STREAM_GET => optional_canonical_signature_get(handler_explorer_instructions_stream);
         );
         #[cfg(feature = "telemetry")]
         mount_catalog_route_rows!(
@@ -48296,9 +48966,9 @@ impl Torii {
             EXPLORER_ASSETS_BY_ASSET_ID_GET => public_get(handler_explorer_asset_detail);
             EXPLORER_NFTS_BY_NFT_ID_GET => public_get(handler_explorer_nft_detail);
             EXPLORER_RWAS_BY_RWA_ID_GET => public_get(handler_explorer_rwa_detail);
-            EXPLORER_BLOCKS_BY_IDENTIFIER_GET => public_get(handler_explorer_block_detail);
-            EXPLORER_TRANSACTIONS_BY_HASH_GET => public_get(handler_explorer_transaction_detail);
-            EXPLORER_INSTRUCTIONS_BY_HASH_BY_INDEX_GET => public_get(handler_explorer_instruction_detail);
+            EXPLORER_BLOCKS_BY_IDENTIFIER_GET => optional_canonical_signature_get(handler_explorer_block_detail);
+            EXPLORER_TRANSACTIONS_BY_HASH_GET => optional_canonical_signature_get(handler_explorer_transaction_detail);
+            EXPLORER_INSTRUCTIONS_BY_HASH_BY_INDEX_GET => optional_canonical_signature_get(handler_explorer_instruction_detail);
             EXPLORER_INSTRUCTIONS_BY_HASH_BY_INDEX_CONTRACT_VIEW_GET => public_get(handler_explorer_instruction_contract_view);
             KAIGI_CALLS_BY_CALL_ID_GET => public_get(handler_kaigi_call);
             KAIGI_CALLS_BY_CALL_ID_SIGNALS_GET => canonical_account_get(handler_kaigi_call_signals, app_state, 0);
@@ -48333,12 +49003,27 @@ impl Torii {
             );
         }
     }
+    #[cfg(feature = "app_api")]
     fn add_soracloud_public_runtime_routes(&self, builder: &mut RouterBuilder) {
         let _ = self;
         mount_catalog_route_rows!(
             builder, soracloud_gateway;
             LOCAL_ROOT => unauthenticated_any(handler_soracloud_public_local_read);
             LOCAL_PATH => unauthenticated_any(handler_soracloud_public_local_read);
+        );
+    }
+    fn add_sorafs_public_gateway_routes(&self, builder: &mut RouterBuilder) {
+        let body_limit: usize = self
+            .transaction_max_content_len
+            .get()
+            .try_into()
+            .expect("shouldn't exceed usize");
+        mount_catalog_route_rows!(
+            builder, sorafs;
+            CID_LOOKUP => limited_unauthenticated_get(sorafs::public_gateway::handle_get_sorafs_cid_lookup, body_limit);
+            SITE_MANIFEST => limited_unauthenticated_get(sorafs::public_gateway::handle_get_sorafs_site_manifest, body_limit);
+            CID_ROOT => limited_unauthenticated_get(sorafs::public_gateway::handle_get_sorafs_cid_root, body_limit);
+            CID_PATH => limited_unauthenticated_get(sorafs::public_gateway::handle_get_sorafs_cid_path, body_limit);
         );
     }
     #[cfg(feature = "app_api")]
@@ -48433,7 +49118,6 @@ impl Torii {
             ALIASES => limited_canonical_account_get(sorafs::api::handle_get_sorafs_aliases, sorafs_operator_state, sorafs_body_limit, 0);
             REPLICATION => limited_canonical_account_get(sorafs::api::handle_get_sorafs_replication_orders, sorafs_operator_state, sorafs_body_limit, 0);
             STORAGE_STATE => limited_operator_get(sorafs::api::handle_get_sorafs_storage_state, sorafs_operator_state, sorafs_body_limit);
-            CID_LOOKUP => limited_public_get(sorafs::api::handle_get_sorafs_cid_lookup, sorafs_body_limit);
             STORAGE_MANIFEST => limited_public_get(sorafs::api::handle_get_sorafs_storage_manifest, sorafs_body_limit);
             STORAGE_PLAN => limited_public_get(sorafs::api::handle_get_sorafs_storage_plan, sorafs_body_limit);
             STORAGE_FETCH => limited_operator_post(sorafs::api::handle_post_sorafs_storage_fetch, sorafs_operator_state, sorafs_body_limit);
@@ -48481,9 +49165,6 @@ impl Torii {
             POP_WALLET_SYNCHRONIZE => limited_protocol_handshake_post(sorafs::pop_api::handle_post_pop_wallet_synchronize, sorafs::pop_api::POP_CONTROL_REQUEST_MAX_BYTES_V1);
             POP_WALLET_PROVE => limited_protocol_handshake_post(sorafs::pop_api::handle_post_pop_wallet_prove, sorafs::pop_api::POP_CONTROL_REQUEST_MAX_BYTES_V1);
             POP_VERIFY => limited_protocol_handshake_post(sorafs::pop_api::handle_post_pop_verify, sorafs::pop_api::POP_PROOF_REQUEST_MAX_BYTES_V1);
-            SITE_MANIFEST => limited_protocol_handshake_get(sorafs::api::handle_get_sorafs_site_manifest, sorafs_body_limit);
-            CID_ROOT => limited_protocol_handshake_get(sorafs::api::handle_get_sorafs_cid_root, sorafs_body_limit);
-            CID_PATH => limited_protocol_handshake_get(sorafs::api::handle_get_sorafs_cid_path, sorafs_body_limit);
         );
     }
     #[cfg(feature = "app_api")]
@@ -48859,7 +49540,6 @@ impl Torii {
             PIPELINE_STATUS_CACHE_TTL,
         ));
         let soracloud_runtime = runtime_deps.soracloud_runtime.clone();
-        #[cfg(feature = "app_api")]
         let shared_sorafs_node = runtime_deps.sorafs_node.clone();
         #[cfg(feature = "app_api")]
         let shared_sorafs_stream_token_signer = runtime_deps.sorafs_stream_token_signer.clone();
@@ -48962,17 +49642,13 @@ impl Torii {
         #[cfg(feature = "app_api")]
         let shared_sorafs_governance_dag_checkpoint_store =
             runtime_deps.sorafs_governance_dag_checkpoint_store.clone();
-        #[cfg(feature = "app_api")]
         let shared_sorafs_gateway_acme_client = runtime_deps.sorafs_gateway_acme_client.clone();
-        #[cfg(feature = "app_api")]
         let shared_sorafs_gateway_compliance_feed_transport = runtime_deps
             .sorafs_gateway_compliance_feed_transport
             .clone();
         #[cfg(feature = "app_api")]
         let shared_sorafs_cache = runtime_deps.sorafs_cache.clone();
-        #[cfg(feature = "app_api")]
         let sorafs_gateway = config.sorafs_gateway.clone();
-        #[cfg(feature = "app_api")]
         let sorafs_site_bindings =
             sorafs::site::load_configured_site_bindings(&config.sorafs_gateway.site_bindings)
                 .unwrap_or_else(|err| panic!("invalid SoraFS static-site bindings: {err}"))
@@ -49105,11 +49781,19 @@ impl Torii {
             .or(Some(status_reserved_capacity));
         let pipeline_status_rl =
             limits::RateLimiter::new(pipeline_status_rate, pipeline_status_burst);
+        let tx_rate = config
+            .tx_rate_per_authority_per_sec
+            .map(std::num::NonZeroU32::get);
+        let tx_burst = config
+            .tx_burst_per_authority
+            .map(std::num::NonZeroU32::get);
+        // Keep pre-auth API-token pressure independent from verified authority
+        // pressure. In particular, an invalid signature can never consume or
+        // select a verified-authority bucket.
+        let tx_preauth_rl = limits::RateLimiter::new(tx_rate, tx_burst);
         let tx_rl = limits::RateLimiter::new(
-            config
-                .tx_rate_per_authority_per_sec
-                .map(std::num::NonZeroU32::get),
-            config.tx_burst_per_authority.map(std::num::NonZeroU32::get),
+            tx_rate,
+            tx_burst,
         );
         let deploy_rl = limits::RateLimiter::new(
             config
@@ -49337,7 +50021,6 @@ impl Torii {
                 );
             }
         });
-        #[cfg(feature = "app_api")]
         let sorafs_admission = load_sorafs_admission(&config);
         #[cfg(feature = "app_api")]
         let sorafs_potr_runtime_signers = require_sorafs_potr_finalized_reader_inputs(
@@ -49510,6 +50193,35 @@ impl Torii {
                     });
                     node
                 }
+            }
+        };
+        #[cfg(not(feature = "app_api"))]
+        let sorafs_node = if emergency_fast {
+            let data_dir = sorafs_node::config::StorageConfig::from(&config.sorafs_storage)
+                .data_dir()
+                .clone();
+            sorafs_node::NodeHandle::try_new_emergency_disabled(data_dir).unwrap_or_else(|err| {
+                panic!("failed to initialise emergency-disabled SoraFS facade: {err}")
+            })
+        } else {
+            let storage_config = sorafs_node::config::StorageConfig::from(&config.sorafs_storage);
+            match shared_sorafs_node {
+                Some(node) => {
+                    assert_eq!(
+                        node.is_enabled(),
+                        storage_config.enabled(),
+                        "injected SoraFS node enablement does not match torii.sorafs.storage"
+                    );
+                    node
+                }
+                None => sorafs_node::NodeHandle::try_new_with_policies(
+                    storage_config,
+                    sorafs_node::config::RepairConfig::from(&config.sorafs_repair),
+                    sorafs_node::config::GcConfig::from(&config.sorafs_gc),
+                )
+                .unwrap_or_else(|err| {
+                    panic!("failed to initialise embedded SoraFS runtime: {err}")
+                }),
             }
         };
         #[cfg(feature = "app_api")]
@@ -49913,7 +50625,6 @@ impl Torii {
         let sorafs_alias_enforcement = sorafs::enforcement_from_config(&config.sorafs_alias_cache);
         #[cfg(feature = "app_api")]
         let sorafs_publish_discovery = config.sorafs_discovery.publish.clone();
-        #[cfg(feature = "app_api")]
         if !sorafs_node.is_enabled()
             && (config.sorafs_gateway.acme.enabled
                 || config.sorafs_gateway.compliance.is_some()
@@ -49924,13 +50635,11 @@ impl Torii {
                 "SoraFS gateway ACME/compliance runtime dependencies require torii.sorafs.storage.enabled"
             );
         }
-        #[cfg(feature = "app_api")]
         if sorafs_node.is_enabled() && config.sorafs_gateway.compliance.is_none() {
             panic!(
                 "torii.sorafs.storage.enabled requires the governed torii.sorafs.gateway.compliance controller"
             );
         }
-        #[cfg(feature = "app_api")]
         let sorafs_gateway_security = if sorafs_node.is_enabled() {
             Some(build_sorafs_gateway_security(
                 &config.sorafs_gateway,
@@ -50205,6 +50914,7 @@ impl Torii {
             query_preauth_rate_limiter: query_preauth_rl,
             query_authority_rate_limiter: query_authority_rl,
             pipeline_status_rate_limiter: pipeline_status_rl,
+            tx_preauth_rate_limiter: tx_preauth_rl,
             tx_rate_limiter: tx_rl,
             deploy_rate_limiter: deploy_rl,
             proof_rate_limiter,
@@ -50281,7 +50991,6 @@ impl Torii {
             push_rate_limiter,
             #[cfg(feature = "app_api")]
             sorafs_cache,
-            #[cfg(feature = "app_api")]
             sorafs_node,
             #[cfg(feature = "app_api")]
             sorafs_proof_outcome_signer: shared_sorafs_proof_outcome_signer,
@@ -50330,11 +51039,8 @@ impl Torii {
             sorafs_alias_cache,
             #[cfg(feature = "app_api")]
             sorafs_alias_enforcement,
-            #[cfg(feature = "app_api")]
             sorafs_gateway,
-            #[cfg(feature = "app_api")]
             sorafs_site_bindings,
-            #[cfg(feature = "app_api")]
             sorafs_gateway_security,
             #[cfg(feature = "app_api")]
             sorafs_admission,
@@ -50588,7 +51294,6 @@ impl Torii {
     /// Helper function to create router and shared runtime state.
     #[allow(clippy::too_many_lines)]
     fn create_api_router_with_state(&self) -> (axum::Router, SharedAppState) {
-        #[cfg(feature = "app_api")]
         let gateway_components = self.sorafs_gateway_security.clone();
         let da_runtime = self.prepare_da_runtime_services();
         #[cfg(all(feature = "app_api", feature = "telemetry"))]
@@ -50736,6 +51441,7 @@ impl Torii {
             query_preauth_rate_limiter: self.query_preauth_rate_limiter.clone(),
             query_authority_rate_limiter: self.query_authority_rate_limiter.clone(),
             pipeline_status_rate_limiter: self.pipeline_status_rate_limiter.clone(),
+            tx_preauth_rate_limiter: self.tx_preauth_rate_limiter.clone(),
             tx_rate_limiter: self.tx_rate_limiter.clone(),
             deploy_rate_limiter: self.deploy_rate_limiter.clone(),
             proof_rate_limiter: self.proof_rate_limiter.clone(),
@@ -50844,7 +51550,6 @@ impl Torii {
             sorafs_routing_authority_cache: Arc::new(
                 sorafs::delegated_routing::RoutingAuthorityCache::default(),
             ),
-            #[cfg(feature = "app_api")]
             sorafs_node: self.sorafs_node.clone(),
             #[cfg(feature = "app_api")]
             sorafs_proof_outcome_signer: self.sorafs_proof_outcome_signer.clone(),
@@ -50884,11 +51589,8 @@ impl Torii {
             sorafs_admission: self.sorafs_admission.clone(),
             #[cfg(feature = "app_api")]
             sorafs_publish_discovery: self.sorafs_publish_discovery.clone(),
-            #[cfg(feature = "app_api")]
             sorafs_gateway_config: self.sorafs_gateway.clone(),
-            #[cfg(feature = "app_api")]
             sorafs_site_bindings: self.sorafs_site_bindings.clone(),
-            #[cfg(feature = "app_api")]
             sorafs_gateway_policy: gateway_components
                 .as_ref()
                 .map(|components| Arc::clone(&components.policy)),
@@ -50896,7 +51598,6 @@ impl Torii {
             sorafs_gateway_tls_state: gateway_components
                 .as_ref()
                 .map(|components| Arc::clone(&components.tls_state)),
-            #[cfg(feature = "app_api")]
             sorafs_gateway_compliance_controller: gateway_components
                 .as_ref()
                 .and_then(|components| components.compliance_controller.clone()),
@@ -50904,7 +51605,7 @@ impl Torii {
             sorafs_gateway_compliance_feed_transport: gateway_components
                 .as_ref()
                 .and_then(|components| components.compliance_feed_transport.clone()),
-            #[cfg(all(test, feature = "app_api"))]
+            #[cfg(test)]
             sorafs_gateway_test_provider_id: None,
             #[cfg(feature = "app_api")]
             sorafs_blinded_resolver: gateway_components
@@ -51058,6 +51759,7 @@ impl Torii {
         self.add_network_stream_routes(&mut builder);
         // Policy and pipeline helpers
         self.add_policy_and_pipeline_routes(&mut builder);
+        self.add_sorafs_public_gateway_routes(&mut builder);
         #[cfg(feature = "app_api")]
         self.add_sorafs_routes(&mut builder);
         #[cfg(feature = "app_api")]
@@ -51208,8 +51910,9 @@ impl Torii {
         let router = router.layer(axum::middleware::from_fn(attach_request_id));
         // The deployment-wide API-token policy is runtime configuration rather
         // than catalog metadata, so this outer boundary must overwrite cache
-        // directives on every response, including failures returned before the
-        // authentication middleware runs.
+        // directives on every protected response, including failures returned
+        // before the authentication middleware runs. The exact public SoraFS
+        // local-gateway allowlist remains anonymously cacheable.
         let router = router.layer(axum::middleware::from_fn_with_state(
             app_state.clone(),
             enforce_required_api_token_private_no_store,
@@ -51444,7 +52147,6 @@ impl Torii {
         if !emergency_fast && let Some(runtime) = &self.gc_runtime {
             runtime.clone().spawn(shutdown_signal.clone());
         }
-        #[cfg(feature = "app_api")]
         if !emergency_fast && let Some(components) = &self.sorafs_gateway_security {
             if let Some(automation) = &components.tls_automation {
                 automation.spawn(self.telemetry.clone(), shutdown_signal.clone());
@@ -51765,7 +52467,6 @@ fn require_sorafs_potr_finalized_reader_inputs(
         (true, Some(_), Some(roles), Some(admission)) => Ok(Some((roles, admission))),
     }
 }
-#[cfg(feature = "app_api")]
 fn load_sorafs_admission(
     config: &iroha_config::parameters::actual::Torii,
 ) -> Option<Arc<sorafs::AdmissionRegistry>> {
@@ -51808,7 +52509,6 @@ fn load_sorafs_admission(
         });
     Some(Arc::new(registry))
 }
-#[cfg(feature = "app_api")]
 #[derive(Clone)]
 struct GatewaySecurityComponents {
     policy: Arc<sorafs::gateway::GatewayPolicy>,
@@ -51818,7 +52518,6 @@ struct GatewaySecurityComponents {
     compliance_feed_transport: Option<Arc<dyn sorafs::gateway::GatewayComplianceFeedTransport>>,
     blinded_resolver: Option<Arc<sorafs::BlindedCidResolver>>,
 }
-#[cfg(feature = "app_api")]
 fn gateway_acme_config(
     config: &iroha_config::parameters::actual::SorafsGatewayAcme,
 ) -> sorafs::gateway::AcmeConfig {
@@ -51837,7 +52536,6 @@ fn gateway_acme_config(
         },
     }
 }
-#[cfg(feature = "app_api")]
 fn gateway_runtime_provider_binding(
     config: &iroha_config::parameters::actual::SorafsGatewayRuntimeProviderBinding,
 ) -> sorafs::gateway::GatewayProviderBindingV1 {
@@ -51850,7 +52548,6 @@ fn gateway_runtime_provider_binding(
         panic!("invalid non-secret SoraFS gateway runtime provider binding in iroha_config")
     })
 }
-#[cfg(feature = "app_api")]
 fn gateway_compliance_controller_config(
     config: &iroha_config::parameters::actual::SorafsGatewayCompliance,
 ) -> sorafs::gateway::GatewayComplianceControllerConfig {
@@ -51917,7 +52614,6 @@ fn gateway_compliance_controller_config(
         max_history_entries: config.max_history_entries,
     }
 }
-#[cfg(feature = "app_api")]
 fn build_sorafs_gateway_security(
     config: &iroha_config::parameters::actual::SorafsGateway,
     admission: Option<Arc<sorafs::AdmissionRegistry>>,

@@ -1080,6 +1080,7 @@ def _parse_body_states(
         "BallotOpeningDeadlineExpired",
         "SortitionRetriesExhausted",
         "ConfirmationJuryCapacityUnavailable",
+        "RandomnessRedrawBudgetExhausted",
     }
     parsed = []
     for index, item in enumerate(value):

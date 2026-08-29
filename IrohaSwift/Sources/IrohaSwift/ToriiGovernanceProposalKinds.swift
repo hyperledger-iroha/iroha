@@ -278,6 +278,46 @@ private func governanceFixedBytes(
     return Data(bytes)
 }
 
+private func governanceLowercaseHash32(
+    _ raw: String,
+    codingPath: [CodingKey],
+    field: String
+) throws -> Data {
+    guard raw.utf8.count == 64,
+          raw.utf8.allSatisfy({ byte in
+              (0x30...0x39).contains(byte) || (0x61...0x66).contains(byte)
+          }),
+          let bytes = Data(hexString: raw),
+          bytes.count == 32 else {
+        throw DecodingError.dataCorrupted(
+            .init(
+                codingPath: codingPath,
+                debugDescription: "\(field) must be exactly 64 lowercase hexadecimal characters"
+            )
+        )
+    }
+    return bytes
+}
+
+private func governanceBoundedReason(
+    _ raw: String,
+    codingPath: [CodingKey],
+    field: String
+) throws -> String {
+    guard !raw.isEmpty,
+          raw.utf8.count <= 1_024,
+          raw == raw.trimmingCharacters(in: .whitespacesAndNewlines),
+          !raw.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains) else {
+        throw DecodingError.dataCorrupted(
+            .init(
+                codingPath: codingPath,
+                debugDescription: "\(field) must be bounded canonical public text"
+            )
+        )
+    }
+    return raw
+}
+
 private func governanceCanonicalBase64(
     _ raw: String,
     codingPath: [CodingKey],
@@ -3865,5 +3905,366 @@ public struct ToriiGovernanceSorafsProviderProposal: Decodable, Sendable, Equata
         )
         action = try decoder.container(keyedBy: CodingKeys.self)
             .decode(ToriiGovernanceSorafsProviderAction.self, forKey: .action)
+    }
+}
+
+/// Exact activation payload in a governed contract-lifecycle transition.
+public struct ToriiGovernanceContractActivateActionV1: Decodable, Sendable, Equatable {
+    public let codeHash: Data
+    public let abiHash: Data
+    public let abiVersion: UInt16
+    public let manifestProvenance: ToriiContractManifestProvenance?
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case codeHash = "code_hash"
+        case abiHash = "abi_hash"
+        case abiVersion = "abi_version"
+        case manifestProvenance = "manifest_provenance"
+    }
+
+    public init(from decoder: Decoder) throws {
+        try governanceRejectUnknownFields(
+            decoder,
+            allowed: Set(CodingKeys.allCases.map(\.stringValue)),
+            name: "contract lifecycle activation"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        codeHash = try governanceLowercaseHash32(
+            container.decode(String.self, forKey: .codeHash),
+            codingPath: container.codingPath + [CodingKeys.codeHash],
+            field: "code_hash"
+        )
+        abiHash = try governanceLowercaseHash32(
+            container.decode(String.self, forKey: .abiHash),
+            codingPath: container.codingPath + [CodingKeys.abiHash],
+            field: "abi_hash"
+        )
+        abiVersion = try container.decode(UInt16.self, forKey: .abiVersion)
+        guard abiVersion == 1 else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .abiVersion,
+                in: container,
+                debugDescription: "contract lifecycle activation abi_version must be exactly 1"
+            )
+        }
+        guard container.contains(.manifestProvenance) else {
+            throw DecodingError.keyNotFound(
+                CodingKeys.manifestProvenance,
+                .init(
+                    codingPath: container.codingPath,
+                    debugDescription: "manifest_provenance must be explicit, including null"
+                )
+            )
+        }
+        manifestProvenance = try container.decodeIfPresent(
+            ToriiContractManifestProvenance.self,
+            forKey: .manifestProvenance
+        )
+    }
+}
+
+/// Exact deactivation payload in a governed contract-lifecycle transition.
+public struct ToriiGovernanceContractDeactivateActionV1: Decodable, Sendable, Equatable {
+    public let expectedCodeHash: Data
+    public let reason: String?
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case expectedCodeHash = "expected_code_hash"
+        case reason
+    }
+
+    public init(from decoder: Decoder) throws {
+        try governanceRejectUnknownFields(
+            decoder,
+            allowed: Set(CodingKeys.allCases.map(\.stringValue)),
+            name: "contract lifecycle deactivation"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        expectedCodeHash = try governanceLowercaseHash32(
+            container.decode(String.self, forKey: .expectedCodeHash),
+            codingPath: container.codingPath + [CodingKeys.expectedCodeHash],
+            field: "expected_code_hash"
+        )
+        guard container.contains(.reason) else {
+            throw DecodingError.keyNotFound(
+                CodingKeys.reason,
+                .init(
+                    codingPath: container.codingPath,
+                    debugDescription: "reason must be explicit, including null"
+                )
+            )
+        }
+        if let reason = try container.decodeIfPresent(String.self, forKey: .reason) {
+            self.reason = try governanceBoundedReason(
+                reason,
+                codingPath: container.codingPath + [CodingKeys.reason],
+                field: "reason"
+            )
+        } else {
+            self.reason = nil
+        }
+    }
+}
+
+/// Exact ownership-offer payload in a governed contract-lifecycle transition.
+public struct ToriiGovernanceContractOfferOwnershipActionV1: Decodable, Sendable, Equatable {
+    public let newOwner: String
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case newOwner = "new_owner"
+    }
+
+    public init(from decoder: Decoder) throws {
+        try governanceRejectUnknownFields(
+            decoder,
+            allowed: Set(CodingKeys.allCases.map(\.stringValue)),
+            name: "contract lifecycle ownership offer"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        newOwner = try governanceCanonicalAccount(
+            container.decode(String.self, forKey: .newOwner),
+            codingPath: container.codingPath + [CodingKeys.newOwner],
+            field: "new_owner"
+        )
+    }
+}
+
+/// Exact retained-hold binding and certified finding for an emergency-hold retrospective.
+public struct ToriiGovernanceCompleteContractEmergencyHoldRetrospectiveActionV1:
+    Decodable, Sendable, Equatable
+{
+    public let holdProposalContentId: Data
+    public let holdGovernanceAttemptId: Data
+    public let incidentDigest: Data
+    public let retrospectiveFindingRoot: Data
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case holdProposalContentId = "hold_proposal_content_id"
+        case holdGovernanceAttemptId = "hold_governance_attempt_id"
+        case incidentDigest = "incident_digest"
+        case retrospectiveFindingRoot = "retrospective_finding_root"
+    }
+
+    public init(from decoder: Decoder) throws {
+        try governanceRejectUnknownFields(
+            decoder,
+            allowed: Set(CodingKeys.allCases.map(\.stringValue)),
+            name: "contract emergency-hold retrospective"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        holdProposalContentId = try governanceFixedBytes(
+            container.decode([UInt8].self, forKey: .holdProposalContentId),
+            count: 32,
+            nonzero: true,
+            codingPath: container.codingPath + [CodingKeys.holdProposalContentId],
+            field: "hold_proposal_content_id"
+        )
+        holdGovernanceAttemptId = try governanceFixedBytes(
+            container.decode([UInt8].self, forKey: .holdGovernanceAttemptId),
+            count: 32,
+            nonzero: true,
+            codingPath: container.codingPath + [CodingKeys.holdGovernanceAttemptId],
+            field: "hold_governance_attempt_id"
+        )
+        incidentDigest = try governanceFixedBytes(
+            container.decode([UInt8].self, forKey: .incidentDigest),
+            count: 32,
+            nonzero: true,
+            codingPath: container.codingPath + [CodingKeys.incidentDigest],
+            field: "incident_digest"
+        )
+        retrospectiveFindingRoot = try governanceFixedBytes(
+            container.decode([UInt8].self, forKey: .retrospectiveFindingRoot),
+            count: 32,
+            nonzero: true,
+            codingPath: container.codingPath + [CodingKeys.retrospectiveFindingRoot],
+            field: "retrospective_finding_root"
+        )
+    }
+}
+
+/// Closed owner-consented contract-lifecycle action inventory.
+public enum ToriiGovernanceContractLifecycleActionV1: Decodable, Sendable, Equatable {
+    case activate(ToriiGovernanceContractActivateActionV1)
+    case deactivate(ToriiGovernanceContractDeactivateActionV1)
+    case offerOwnership(ToriiGovernanceContractOfferOwnershipActionV1)
+    case cancelOwnershipOffer
+    case acceptParliamentOwnership
+    case completeEmergencyHoldRetrospective(
+        ToriiGovernanceCompleteContractEmergencyHoldRetrospectiveActionV1
+    )
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case action
+        case payload
+    }
+
+    public init(from decoder: Decoder) throws {
+        try governanceRejectUnknownFields(
+            decoder,
+            allowed: Set(CodingKeys.allCases.map(\.stringValue)),
+            name: "contract lifecycle action"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        switch try container.decode(String.self, forKey: .action) {
+        case "Activate":
+            self = .activate(
+                try container.decode(
+                    ToriiGovernanceContractActivateActionV1.self,
+                    forKey: .payload
+                )
+            )
+        case "Deactivate":
+            self = .deactivate(
+                try container.decode(
+                    ToriiGovernanceContractDeactivateActionV1.self,
+                    forKey: .payload
+                )
+            )
+        case "OfferOwnership":
+            self = .offerOwnership(
+                try container.decode(
+                    ToriiGovernanceContractOfferOwnershipActionV1.self,
+                    forKey: .payload
+                )
+            )
+        case "CancelOwnershipOffer":
+            try Self.requireNullPayload(container, tag: "CancelOwnershipOffer")
+            self = .cancelOwnershipOffer
+        case "AcceptParliamentOwnership":
+            try Self.requireNullPayload(container, tag: "AcceptParliamentOwnership")
+            self = .acceptParliamentOwnership
+        case "CompleteEmergencyHoldRetrospective":
+            self = .completeEmergencyHoldRetrospective(
+                try container.decode(
+                    ToriiGovernanceCompleteContractEmergencyHoldRetrospectiveActionV1.self,
+                    forKey: .payload
+                )
+            )
+        case let tag:
+            throw DecodingError.dataCorruptedError(
+                forKey: .action,
+                in: container,
+                debugDescription: "unsupported contract lifecycle action \(tag)"
+            )
+        }
+    }
+
+    private static func requireNullPayload(
+        _ container: KeyedDecodingContainer<CodingKeys>,
+        tag: String
+    ) throws {
+        guard container.contains(.payload), try container.decodeNil(forKey: .payload) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .payload,
+                in: container,
+                debugDescription: "\(tag) payload must be explicit null"
+            )
+        }
+    }
+}
+
+/// Complete compare-and-swap proposal for one governed contract-lifecycle transition.
+public struct ToriiGovernanceContractLifecycleProposalV1: Decodable, Sendable, Equatable {
+    public let contractAddress: String
+    public let expectedRevision: UInt64
+    public let action: ToriiGovernanceContractLifecycleActionV1
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case contractAddress = "contract_address"
+        case expectedRevision = "expected_revision"
+        case action
+    }
+
+    public init(from decoder: Decoder) throws {
+        try governanceRejectUnknownFields(
+            decoder,
+            allowed: Set(CodingKeys.allCases.map(\.stringValue)),
+            name: "contract lifecycle governance proposal"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        contractAddress = try governanceCanonicalContractAddress(
+            container.decode(String.self, forKey: .contractAddress),
+            codingPath: container.codingPath + [CodingKeys.contractAddress],
+            field: "contract_address"
+        )
+        expectedRevision = try container.decode(UInt64.self, forKey: .expectedRevision)
+        guard (1...9_007_199_254_740_991).contains(expectedRevision) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .expectedRevision,
+                in: container,
+                debugDescription: "expected_revision must be a positive exact first-release JSON integer"
+            )
+        }
+        action = try container.decode(
+            ToriiGovernanceContractLifecycleActionV1.self,
+            forKey: .action
+        )
+    }
+}
+
+/// Complete time-bounded emergency-containment proposal for one active contract.
+public struct ToriiGovernanceContractEmergencyHoldProposalV1: Decodable, Sendable, Equatable {
+    public let contractAddress: String
+    public let expectedRevision: UInt64
+    public let expectedCodeHash: Data
+    public let incidentDigest: Data
+    public let reason: String
+    public let durationBlocks: UInt64
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case contractAddress = "contract_address"
+        case expectedRevision = "expected_revision"
+        case expectedCodeHash = "expected_code_hash"
+        case incidentDigest = "incident_digest"
+        case reason
+        case durationBlocks = "duration_blocks"
+    }
+
+    public init(from decoder: Decoder) throws {
+        try governanceRejectUnknownFields(
+            decoder,
+            allowed: Set(CodingKeys.allCases.map(\.stringValue)),
+            name: "contract emergency-hold proposal"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        contractAddress = try governanceCanonicalContractAddress(
+            container.decode(String.self, forKey: .contractAddress),
+            codingPath: container.codingPath + [CodingKeys.contractAddress],
+            field: "contract_address"
+        )
+        expectedRevision = try container.decode(UInt64.self, forKey: .expectedRevision)
+        guard (1...9_007_199_254_740_991).contains(expectedRevision) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .expectedRevision,
+                in: container,
+                debugDescription: "expected_revision must be a positive exact first-release JSON integer"
+            )
+        }
+        expectedCodeHash = try governanceLowercaseHash32(
+            container.decode(String.self, forKey: .expectedCodeHash),
+            codingPath: container.codingPath + [CodingKeys.expectedCodeHash],
+            field: "expected_code_hash"
+        )
+        incidentDigest = try governanceFixedBytes(
+            container.decode([UInt8].self, forKey: .incidentDigest),
+            count: 32,
+            nonzero: true,
+            codingPath: container.codingPath + [CodingKeys.incidentDigest],
+            field: "incident_digest"
+        )
+        reason = try governanceBoundedReason(
+            container.decode(String.self, forKey: .reason),
+            codingPath: container.codingPath + [CodingKeys.reason],
+            field: "reason"
+        )
+        durationBlocks = try container.decode(UInt64.self, forKey: .durationBlocks)
+        guard (1...3_600).contains(durationBlocks) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .durationBlocks,
+                in: container,
+                debugDescription: "duration_blocks must be between 1 and 3600"
+            )
+        }
     }
 }

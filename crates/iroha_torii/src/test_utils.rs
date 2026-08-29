@@ -950,6 +950,8 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                 audit_export_dir: None,
                 embedded_signature_policy: None,
                 signer: None,
+                participants: Vec::new(),
+                audit_admin_keys: Vec::new(),
                 account_aliases: Vec::new(),
                 currency_assets: Vec::new(),
                 reference_data: Default::default(),
@@ -1344,6 +1346,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             parliament_public_finding_phase_blocks:
                 defaults::governance::PARLIAMENT_PUBLIC_FINDING_PHASE_BLOCKS,
             parliament_timed_ovn: A::ParliamentTimedOvn::default(),
+            parliament_tle_key_lifecycle: A::ParliamentTleKeyLifecycle::default(),
             parliament_tle_partial_release_signer_provider_handle: None,
             parliament_tle_partial_release_signer_provider_revision: None,
             parliament_tle_partial_release_signer_provider_policy_digest: None,

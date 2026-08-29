@@ -525,6 +525,80 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn execution_policy_digest_binds_every_oracle_economics_field() {
+        let baseline = super::sora_profile_tests::minimal_root();
+        let expected = execution_policy_hash(&baseline);
+        let alternate_asset = AssetDefinitionId::derive_from_components(
+            DomainId::parse_fully_qualified("security.audit")
+                .expect("valid alternate asset domain"),
+            Name::from_str("alternate").expect("valid alternate asset name"),
+        );
+        let alternate_account = baseline.oracle.economics.slash_receiver.clone();
+        assert_ne!(
+            alternate_account, baseline.oracle.economics.reward_pool,
+            "the default protocol custody accounts must remain distinct"
+        );
+
+        let assert_changed = |label: &str, changed: Root| {
+            assert_ne!(
+                execution_policy_hash(&changed),
+                expected,
+                "oracle economics field `{label}` must change the execution-policy identity"
+            );
+        };
+        let add_one = |value: &Quantity| {
+            value
+                .try_add(&Quantity::one())
+                .expect("test quantity remains representable")
+        };
+
+        let mut changed = baseline.clone();
+        changed.oracle.economics.reward_asset = alternate_asset.clone();
+        assert_changed("reward_asset", changed);
+        let mut changed = baseline.clone();
+        changed.oracle.economics.reward_pool = alternate_account.clone();
+        assert_changed("reward_pool", changed);
+        let mut changed = baseline.clone();
+        changed.oracle.economics.reward_amount =
+            add_one(&changed.oracle.economics.reward_amount);
+        assert_changed("reward_amount", changed);
+        let mut changed = baseline.clone();
+        changed.oracle.economics.slash_asset = alternate_asset.clone();
+        assert_changed("slash_asset", changed);
+        let mut changed = baseline.clone();
+        changed.oracle.economics.slash_receiver =
+            baseline.oracle.economics.reward_pool.clone();
+        assert_changed("slash_receiver", changed);
+        let mut changed = baseline.clone();
+        changed.oracle.economics.slash_outlier_amount =
+            add_one(&changed.oracle.economics.slash_outlier_amount);
+        assert_changed("slash_outlier_amount", changed);
+        let mut changed = baseline.clone();
+        changed.oracle.economics.slash_error_amount =
+            add_one(&changed.oracle.economics.slash_error_amount);
+        assert_changed("slash_error_amount", changed);
+        let mut changed = baseline.clone();
+        changed.oracle.economics.slash_no_show_amount =
+            add_one(&changed.oracle.economics.slash_no_show_amount);
+        assert_changed("slash_no_show_amount", changed);
+        let mut changed = baseline.clone();
+        changed.oracle.economics.dispute_bond_asset = alternate_asset;
+        assert_changed("dispute_bond_asset", changed);
+        let mut changed = baseline.clone();
+        changed.oracle.economics.dispute_bond_amount =
+            add_one(&changed.oracle.economics.dispute_bond_amount);
+        assert_changed("dispute_bond_amount", changed);
+        let mut changed = baseline.clone();
+        changed.oracle.economics.dispute_reward_amount =
+            add_one(&changed.oracle.economics.dispute_reward_amount);
+        assert_changed("dispute_reward_amount", changed);
+        let mut changed = baseline;
+        changed.oracle.economics.frivolous_slash_amount =
+            add_one(&changed.oracle.economics.frivolous_slash_amount);
+        assert_changed("frivolous_slash_amount", changed);
+    }
     #[test]
     fn execution_policy_digest_excludes_only_result_preserving_operational_drift() {
         let mut baseline = super::sora_profile_tests::minimal_root();

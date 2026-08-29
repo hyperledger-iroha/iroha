@@ -370,7 +370,11 @@ pub struct ParliamentFreezeBallotSurvivorsV1 {
     pub ballot_attempt_id: BallotAttemptId,
 }
 
-/// Payload freezing the exact timed-OVN ciphertext and one-hot-proof corpus.
+/// Payload appending the exact next timed-OVN ciphertext and one-hot-proof chunk.
+///
+/// This is a permissionless progress transition. Core derives the starting
+/// survivor offset from committed state and accepts only proof-valid contiguous
+/// records, so the relayer cannot select or rewrite the corpus.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 #[cfg_attr(
@@ -787,12 +791,13 @@ impl ParliamentAutomaticExecutionOutcomeV1 {
 ///
 /// A member's own invitation response, absence declaration, public-finding
 /// endorsement, timed-OVN registration, or dropout is bound to the signed
-/// authority. Deterministic ballot checkpoint, release, failure, and aggregate
-/// finalization variants are permissionless liveness triggers. Core requires
-/// the exact `CanManageParliament` permission for every remaining management
-/// transition. None of these callers can select a consensus result: the
-/// containing finalized block supplies order and height, and Core derives or
-/// revalidates every state, corpus, pulse, proof, and result binding.
+/// authority. Deterministic ballot checkpoints, exact-next proof-valid corpus
+/// chunks, release, failure, and aggregate finalization variants are
+/// permissionless liveness triggers. Core requires the exact
+/// `CanManageParliament` permission for every remaining management transition.
+/// None of these callers can select a consensus result: the containing finalized
+/// block supplies order and height, and Core derives or revalidates every state,
+/// corpus, pulse, proof, and result binding.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 #[cfg_attr(

@@ -4807,6 +4807,12 @@ class IsoSubmissionRecord:
     status: str
     pacs002_code: Optional[str]
     transaction_hash: Optional[str]
+    originator_participant_id: Optional[str]
+    counterparty_participant_id: Optional[str]
+    admitting_participant_id: Optional[str]
+    admitting_operator_key: Optional[str]
+    pinned_profile_id: Optional[str]
+    pinned_signature_policy: Optional[str]
     hold_reason_code: Optional[str]
     change_reason_codes: Tuple[str, ...]
     rejection_reason_code: Optional[str]
@@ -4838,6 +4844,30 @@ class IsoSubmissionRecord:
         transaction_hash = _normalize_iso_optional_string(
             record.get("transaction_hash"),
             f"{context}.transaction_hash",
+        )
+        originator_participant_id = _normalize_iso_optional_string(
+            record.get("originator_participant_id"),
+            f"{context}.originator_participant_id",
+        )
+        counterparty_participant_id = _normalize_iso_optional_string(
+            record.get("counterparty_participant_id"),
+            f"{context}.counterparty_participant_id",
+        )
+        admitting_participant_id = _normalize_iso_optional_string(
+            record.get("admitting_participant_id"),
+            f"{context}.admitting_participant_id",
+        )
+        admitting_operator_key = _normalize_iso_optional_string(
+            record.get("admitting_operator_key"),
+            f"{context}.admitting_operator_key",
+        )
+        pinned_profile_id = _normalize_iso_optional_string(
+            record.get("pinned_profile_id"),
+            f"{context}.pinned_profile_id",
+        )
+        pinned_signature_policy = _normalize_iso_optional_string(
+            record.get("pinned_signature_policy"),
+            f"{context}.pinned_signature_policy",
         )
         hold_reason_code = _normalize_iso_optional_string(
             record.get("hold_reason_code"),
@@ -4892,6 +4922,12 @@ class IsoSubmissionRecord:
             status=status,
             pacs002_code=pacs002_code,
             transaction_hash=transaction_hash,
+            originator_participant_id=originator_participant_id,
+            counterparty_participant_id=counterparty_participant_id,
+            admitting_participant_id=admitting_participant_id,
+            admitting_operator_key=admitting_operator_key,
+            pinned_profile_id=pinned_profile_id,
+            pinned_signature_policy=pinned_signature_policy,
             hold_reason_code=hold_reason_code,
             change_reason_codes=change_reason_codes,
             rejection_reason_code=rejection_reason_code,

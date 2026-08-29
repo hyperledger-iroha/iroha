@@ -107,6 +107,10 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let nft = self.object().clone().build(authority);
+            crate::smartcontracts::limits::enforce_metadata_value_sizes(
+                state_transaction,
+                nft.content(),
+            )?;
             let (nft_id, nft_value) = nft.clone().into_key_value();
             if state_transaction.world.nft(&nft_id).is_ok() {
                 return Err(RepetitionError {

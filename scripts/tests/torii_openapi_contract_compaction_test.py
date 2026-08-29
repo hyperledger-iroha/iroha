@@ -78,6 +78,7 @@ SECTION_ORDER = (
     "contract.alias.binding.optional",
     "contract.alias.response.required",
     "governed.found.fields",
+    "governed.inactive.fields",
     "governed.missing.fields",
 )
 FINALITY_TESTS = (

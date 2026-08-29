@@ -11,7 +11,10 @@ pub use crate::governance::types::AtWindow;
 use crate::isi::bridge::SccpRouteGovernanceActionV1;
 pub use crate::parliament_types::{CouncilDerivationKind, VotingMode};
 use crate::{
-    governance::types::{AbiVersion, ContractAbiHash, ContractCodeHash},
+    governance::types::{
+        AbiVersion, ContractAbiHash, ContractCodeHash, ContractEmergencyHoldProposalV1,
+        ContractLifecycleGovernanceProposalV1,
+    },
     isi::sorafs::SorafsProviderGovernanceActionV1,
     prelude::*,
     runtime::RuntimeUpgradeManifest,
@@ -59,6 +62,24 @@ pub struct ProposeDeployContract {
     pub manifest_provenance: Option<ManifestProvenance>,
 }
 impl crate::seal::Instruction for ProposeDeployContract {}
+/// Propose one owner-consented contract lifecycle transition through Parliament.
+#[derive(
+    Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, iroha_schema::IntoSchema,
+)]
+pub struct ProposeContractLifecycleGovernance {
+    /// Complete compare-and-swap lifecycle proposal.
+    pub proposal: ContractLifecycleGovernanceProposalV1,
+}
+impl crate::seal::Instruction for ProposeContractLifecycleGovernance {}
+/// Propose one non-consensual, time-bounded emergency contract hold.
+#[derive(
+    Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, iroha_schema::IntoSchema,
+)]
+pub struct ProposeContractEmergencyHold {
+    /// Complete emergency-containment proposal.
+    pub proposal: ContractEmergencyHoldProposalV1,
+}
+impl crate::seal::Instruction for ProposeContractEmergencyHold {}
 /// Propose a runtime upgrade manifest through governance.
 ///
 /// Ledger admission requires an exact `CanProposeRuntimeUpgrade` permission whose ABI version and
@@ -305,6 +326,12 @@ impl_governance_decode_from_slice!(ProposeDeployContract {
     abi_hash: ContractAbiHash,
     abi_version: AbiVersion,
     manifest_provenance: Option<ManifestProvenance>,
+});
+impl_governance_decode_from_slice!(ProposeContractLifecycleGovernance {
+    proposal: ContractLifecycleGovernanceProposalV1,
+});
+impl_governance_decode_from_slice!(ProposeContractEmergencyHold {
+    proposal: ContractEmergencyHoldProposalV1,
 });
 impl_governance_decode_from_slice!(ProposeRuntimeUpgradeProposal {
     manifest: RuntimeUpgradeManifest,

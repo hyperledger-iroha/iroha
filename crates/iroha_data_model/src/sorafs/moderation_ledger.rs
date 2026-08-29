@@ -7,9 +7,11 @@
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
     account::AccountId,
+    asset::AssetDefinitionId,
     events::data::sorafs::{SorafsModerationLedgerEvent, SorafsRepairLedgerEvent},
     sorafs::moderation::{SoraFsModerationBallotContextV1, SoraFsModerationVoteChoice},
 };
+use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use std::collections::BTreeSet;
@@ -32,6 +34,14 @@ pub const MODERATION_LEDGER_MAX_EXCLUSIONS_V1: u16 = 256;
 pub const MODERATION_LEDGER_MAX_CHALLENGES_V1: u16 = 128;
 /// Hard upper bound for one ballot's complete lifetime.
 pub const MODERATION_LEDGER_MAX_TOTAL_WINDOW_MS_V1: u64 = 90 * 24 * 60 * 60 * 1_000;
+/// Exact first-release bond required for one public moderation challenge.
+pub const MODERATION_CHALLENGE_BOND_AMOUNT_V1: u64 = 150;
+/// Portion of an unsuccessful moderation challenge bond sent to the slash receiver.
+///
+/// Execution rounds this ratio toward zero at the voting asset's declared scale.
+pub const MODERATION_CHALLENGE_REJECTED_SLASH_BPS_V1: u16 = 2_500;
+/// Exact governance-resolution grace after public challenge submission closes.
+pub const MODERATION_CHALLENGE_RESOLUTION_GRACE_MS_V1: u64 = 24 * 60 * 60 * 1_000;
 /// Maximum reveal nonce length accepted by the authoritative ledger.
 pub const MODERATION_LEDGER_MAX_NONCE_BYTES_V1: usize = 64;
 /// Maximum case, round, policy, finance-version, or challenge identifier length.
@@ -70,7 +80,7 @@ pub const MODERATION_SORTITION_SCORE_DOMAIN_V1: &[u8] = b"sorafs.moderation.sort
 /// Domain separator for selected roster and waitlist commitments.
 pub const MODERATION_SORTITION_DIGEST_DOMAIN_V1: &[u8] = b"sorafs.moderation.sortition-record.v1";
 /// Governance-controlled limits and no-show penalties for authoritative ballots.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ModerationLedgerPolicyV1 {
     /// Schema version; must equal [`MODERATION_LEDGER_POLICY_VERSION_V1`].
@@ -83,6 +93,18 @@ pub struct ModerationLedgerPolicyV1 {
         norito(json = "crate::json_helpers::fixed_bytes::option")
     )]
     pub predecessor_policy_digest: Option<[u8; 32]>,
+    /// Consensus governance voting asset used for public challenge bonds.
+    pub challenge_voting_asset_id: AssetDefinitionId,
+    /// Exact public challenge bond required at admission.
+    pub challenge_bond_amount: Quantity,
+    /// Consensus governance account that escrows challenge bonds.
+    pub challenge_escrow_account: AccountId,
+    /// Consensus governance account that receives rejected-challenge slashes.
+    pub challenge_slash_receiver_account: AccountId,
+    /// Rejected-challenge slash in basis points.
+    pub challenge_rejected_slash_bps: u16,
+    /// Exact governance resolution grace after challenge submission closes.
+    pub challenge_resolution_grace_ms: u64,
     /// Largest panel governance permits for one case.
     pub max_panel_size: u16,
     /// Largest PoP-verified candidate pool retained for one appeal.
@@ -122,6 +144,14 @@ impl ModerationLedgerPolicyV1 {
             (_, Some(digest)) if digest != [0; 32] => {}
             _ => return Err(ModerationLedgerPolicyError::MissingPredecessor),
         }
+        if self.challenge_bond_amount != Quantity::from(MODERATION_CHALLENGE_BOND_AMOUNT_V1)
+            || self.challenge_rejected_slash_bps
+                != MODERATION_CHALLENGE_REJECTED_SLASH_BPS_V1
+            || self.challenge_resolution_grace_ms
+                != MODERATION_CHALLENGE_RESOLUTION_GRACE_MS_V1
+        {
+            return Err(ModerationLedgerPolicyError::InvalidChallengeEconomics);
+        }
         if !(1..=MODERATION_LEDGER_MAX_PANEL_SIZE_V1).contains(&self.max_panel_size) {
             return Err(ModerationLedgerPolicyError::InvalidPanelSize {
                 found: self.max_panel_size,
@@ -144,7 +174,10 @@ impl ModerationLedgerPolicyV1 {
                 found: self.max_exclusions_per_case,
             });
         }
-        if !(1..=MODERATION_LEDGER_MAX_TOTAL_WINDOW_MS_V1).contains(&self.max_total_window_ms) {
+        if !(MODERATION_CHALLENGE_RESOLUTION_GRACE_MS_V1 + 1
+            ..=MODERATION_LEDGER_MAX_TOTAL_WINDOW_MS_V1)
+            .contains(&self.max_total_window_ms)
+        {
             return Err(ModerationLedgerPolicyError::InvalidTotalWindow {
                 found: self.max_total_window_ms,
             });
@@ -193,6 +226,9 @@ pub enum ModerationLedgerPolicyError {
     /// A later revision lacks a non-zero predecessor.
     #[error("moderation ledger policy revision after one requires a non-zero predecessor")]
     MissingPredecessor,
+    /// Challenge economics differ from the first-release consensus policy.
+    #[error("moderation challenge economics do not match the first-release consensus policy")]
+    InvalidChallengeEconomics,
     /// The configured panel bound is outside hard limits.
     #[error("invalid moderation ledger panel-size limit {found}")]
     InvalidPanelSize {
@@ -377,8 +413,10 @@ pub struct ModerationAppealIntakeV1 {
     pub acceptance_deadline_unix_ms: u64,
     /// Last timestamp at which commitments are accepted.
     pub commit_deadline_unix_ms: u64,
-    /// Last timestamp in the challenge buffer.
-    pub challenge_deadline_unix_ms: u64,
+    /// Last timestamp at which a public challenge may be submitted.
+    pub challenge_submission_deadline_unix_ms: u64,
+    /// Last timestamp at which governance may resolve a submitted challenge.
+    pub challenge_resolution_deadline_unix_ms: u64,
     /// Last timestamp at which reveals are accepted.
     pub reveal_deadline_unix_ms: u64,
     /// Active moderation policy digest expected by the appellant.
@@ -463,8 +501,14 @@ impl ModerationAppealIntakeV1 {
         }
         if !(self.registration_deadline_unix_ms < self.acceptance_deadline_unix_ms
             && self.acceptance_deadline_unix_ms < self.commit_deadline_unix_ms
-            && self.commit_deadline_unix_ms < self.challenge_deadline_unix_ms
-            && self.challenge_deadline_unix_ms < self.reveal_deadline_unix_ms)
+            && self.commit_deadline_unix_ms < self.challenge_submission_deadline_unix_ms
+            && self.challenge_submission_deadline_unix_ms
+                < self.challenge_resolution_deadline_unix_ms
+            && self.challenge_resolution_deadline_unix_ms < self.reveal_deadline_unix_ms)
+            || self
+                .challenge_resolution_deadline_unix_ms
+                .checked_sub(self.challenge_submission_deadline_unix_ms)
+                != Some(MODERATION_CHALLENGE_RESOLUTION_GRACE_MS_V1)
         {
             return Err(ModerationAppealIntakeError::InvalidDeadlines);
         }
@@ -596,9 +640,9 @@ pub enum ModerationAppealIntakeError {
     /// Appellant could otherwise enter their own panel.
     #[error("moderation appeal exclusions must contain the appellant")]
     AppellantNotExcluded,
-    /// Lifecycle deadlines are not strictly ordered.
+    /// Lifecycle deadlines are not strictly ordered or do not carry the exact resolution grace.
     #[error(
-        "moderation appeal deadlines must satisfy registration < acceptance < commit < challenge < reveal"
+        "moderation appeal deadlines must satisfy registration < acceptance < commit < challenge submission < challenge resolution < reveal with the exact V1 resolution grace"
     )]
     InvalidDeadlines,
 }
@@ -941,8 +985,10 @@ pub struct ModerationCaseSpecV1 {
     pub quorum: u16,
     /// Last block timestamp at which commitments are accepted.
     pub commit_deadline_unix_ms: u64,
-    /// Last block timestamp in the challenge buffer.
-    pub challenge_deadline_unix_ms: u64,
+    /// Last block timestamp at which a public challenge may be submitted.
+    pub challenge_submission_deadline_unix_ms: u64,
+    /// Last block timestamp at which governance may resolve a challenge.
+    pub challenge_resolution_deadline_unix_ms: u64,
     /// Last block timestamp at which reveals are accepted.
     pub reveal_deadline_unix_ms: u64,
     /// Active policy digest the opener expects.
@@ -1009,8 +1055,14 @@ impl ModerationCaseSpecV1 {
         {
             return Err(ModerationCaseSpecError::RosterHashMismatch);
         }
-        if self.commit_deadline_unix_ms >= self.challenge_deadline_unix_ms
-            || self.challenge_deadline_unix_ms >= self.reveal_deadline_unix_ms
+        if self.commit_deadline_unix_ms >= self.challenge_submission_deadline_unix_ms
+            || self.challenge_submission_deadline_unix_ms
+                >= self.challenge_resolution_deadline_unix_ms
+            || self.challenge_resolution_deadline_unix_ms >= self.reveal_deadline_unix_ms
+            || self
+                .challenge_resolution_deadline_unix_ms
+                .checked_sub(self.challenge_submission_deadline_unix_ms)
+                != Some(MODERATION_CHALLENGE_RESOLUTION_GRACE_MS_V1)
         {
             return Err(ModerationCaseSpecError::InvalidDeadlines);
         }
@@ -1077,8 +1129,10 @@ pub enum ModerationCaseSpecError {
     /// Context roster hash does not commit to the ordered canonical roster and quorum.
     #[error("moderation case panel roster hash mismatch")]
     RosterHashMismatch,
-    /// Deadlines are not strictly commit, challenge, reveal ordered.
-    #[error("moderation case deadlines must satisfy commit < challenge < reveal")]
+    /// Deadlines are not strictly ordered or do not carry the exact resolution grace.
+    #[error(
+        "moderation case deadlines must satisfy commit < challenge submission < challenge resolution < reveal with the exact V1 resolution grace"
+    )]
     InvalidDeadlines,
     /// Expected policy digest is zero.
     #[error("moderation case policy digest must be non-zero")]
@@ -1142,7 +1196,7 @@ pub struct ModerationCaseRecordV1 {
     pub pending_challenge_count: u32,
     /// Number of accepted challenges.
     pub accepted_challenge_count: u32,
-    /// Number of challenges that expired unresolved and forced fail-safe closure.
+    /// Number of challenges that expired unresolved and failed open after bond refund.
     pub expired_challenge_count: u32,
 }
 /// Immutable accepted juror commitment and ledger provenance.
@@ -1220,11 +1274,30 @@ pub enum ModerationChallengeDecisionV1 {
     Rejected,
     /// Challenge was accepted and the ballot must close as challenged.
     Accepted,
-    /// Challenge was not resolved before the reveal window closed.
+    /// Challenge was not resolved before its resolution grace elapsed.
     ///
-    /// Finalization derives this state and closes fail-safe without penalizing
-    /// jurors who were prevented from revealing.
+    /// Anyone may derive this state, and finalization sweeps any remaining
+    /// pending records. The bond is refunded and the ballot continues.
     Expired,
+}
+/// Custody and settlement accounting for one public moderation challenge bond.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+pub struct ModerationChallengeBondV1 {
+    /// Governance voting asset locked for the challenge.
+    pub asset_definition_id: AssetDefinitionId,
+    /// Exact challenge bond locked at admission.
+    pub amount: Quantity,
+    /// Governance custody account holding the bond.
+    pub escrow_account: AccountId,
+    /// Governance account receiving the rejected-challenge slash.
+    pub slash_receiver_account: AccountId,
+    /// Amount returned to the challenger after settlement.
+    pub refunded_amount: Quantity,
+    /// Amount retained by the slash receiver after settlement.
+    pub slashed_amount: Quantity,
+    /// Block timestamp at which the bond was settled.
+    pub settled_at_unix_ms: Option<u64>,
 }
 /// Durable payload-free challenge and optional resolution.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -1249,6 +1322,8 @@ pub struct ModerationChallengeRecordV1 {
     pub reason: String,
     /// Block timestamp at admission.
     pub raised_at_unix_ms: u64,
+    /// Exact governance-configured custody snapshot and settlement amounts.
+    pub bond: ModerationChallengeBondV1,
     /// Governance decision, absent while pending.
     pub decision: Option<ModerationChallengeDecisionV1>,
     /// Authority that resolved the challenge.
@@ -1967,6 +2042,13 @@ mod tests {
             .expect("nonzero deterministic Ed25519 seed");
         AccountId::new(keypair.public_key().clone())
     }
+    fn challenge_voting_asset() -> AssetDefinitionId {
+        AssetDefinitionId::derive_from_components(
+            crate::domain::DomainId::parse_fully_qualified("sora.universal")
+                .expect("test governance domain"),
+            "xor".parse().expect("test governance asset name"),
+        )
+    }
     fn encode_with_alternate_norito_layout<T: norito::NoritoSerialize>(value: &T) -> Vec<u8> {
         let alternate_flags =
             norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
@@ -2002,11 +2084,17 @@ mod tests {
             version: MODERATION_LEDGER_POLICY_VERSION_V1,
             revision: 1,
             predecessor_policy_digest: None,
+            challenge_voting_asset_id: challenge_voting_asset(),
+            challenge_bond_amount: Quantity::from(MODERATION_CHALLENGE_BOND_AMOUNT_V1),
+            challenge_escrow_account: account(90),
+            challenge_slash_receiver_account: account(91),
+            challenge_rejected_slash_bps: MODERATION_CHALLENGE_REJECTED_SLASH_BPS_V1,
+            challenge_resolution_grace_ms: MODERATION_CHALLENGE_RESOLUTION_GRACE_MS_V1,
             max_panel_size: 5,
             max_candidate_pool_size: 32,
             max_waitlist_size: 5,
             max_exclusions_per_case: 16,
-            max_total_window_ms: 60_000,
+            max_total_window_ms: 90_000_000,
             max_challenges_per_case: 4,
             missing_commit_penalty_points: 10,
             unrevealed_commit_penalty_points: 20,
@@ -2029,8 +2117,10 @@ mod tests {
             jurors,
             quorum: 2,
             commit_deadline_unix_ms: 2_000,
-            challenge_deadline_unix_ms: 3_000,
-            reveal_deadline_unix_ms: 4_000,
+            challenge_submission_deadline_unix_ms: 3_000,
+            challenge_resolution_deadline_unix_ms: 3_000
+                + MODERATION_CHALLENGE_RESOLUTION_GRACE_MS_V1,
+            reveal_deadline_unix_ms: 3_001 + MODERATION_CHALLENGE_RESOLUTION_GRACE_MS_V1,
             policy_digest: policy().digest().unwrap(),
         }
     }
@@ -2055,8 +2145,10 @@ mod tests {
             registration_deadline_unix_ms: 2_000,
             acceptance_deadline_unix_ms: 3_000,
             commit_deadline_unix_ms: 4_000,
-            challenge_deadline_unix_ms: 5_000,
-            reveal_deadline_unix_ms: 6_000,
+            challenge_submission_deadline_unix_ms: 5_000,
+            challenge_resolution_deadline_unix_ms: 5_000
+                + MODERATION_CHALLENGE_RESOLUTION_GRACE_MS_V1,
+            reveal_deadline_unix_ms: 5_001 + MODERATION_CHALLENGE_RESOLUTION_GRACE_MS_V1,
             policy_digest: policy().digest().unwrap(),
         }
     }
@@ -2081,6 +2173,39 @@ mod tests {
         let case = case_spec();
         case.validate().unwrap();
         assert_canonical_norito_round_trip(&case);
+    }
+
+    #[test]
+    fn moderation_challenge_economics_are_consensus_fixed_and_digest_bound() {
+        let baseline = policy();
+        let baseline_digest = baseline.digest().expect("baseline policy digest");
+        let mut mutations = Vec::new();
+        let mut bond = baseline.clone();
+        bond.challenge_bond_amount = Quantity::from(MODERATION_CHALLENGE_BOND_AMOUNT_V1 + 1);
+        mutations.push(bond);
+        let mut slash = baseline.clone();
+        slash.challenge_rejected_slash_bps += 1;
+        mutations.push(slash);
+        let mut grace = baseline.clone();
+        grace.challenge_resolution_grace_ms += 1;
+        mutations.push(grace);
+        for mutation in mutations {
+            assert_eq!(
+                mutation.validate(),
+                Err(ModerationLedgerPolicyError::InvalidChallengeEconomics)
+            );
+            assert_ne!(
+                mutation.digest().expect("mutated policy digest"),
+                baseline_digest
+            );
+        }
+        let mut custody = baseline;
+        custody.challenge_escrow_account = account(92);
+        assert!(custody.validate().is_ok());
+        assert_ne!(
+            custody.digest().expect("custody-bound policy digest"),
+            baseline_digest
+        );
     }
     #[test]
     fn ledger_identity_digests_ignore_ambient_norito_layout() {
@@ -2265,7 +2390,13 @@ mod tests {
             Err(ModerationCaseSpecError::RosterHashMismatch)
         );
         candidate = case_spec();
-        candidate.challenge_deadline_unix_ms = candidate.commit_deadline_unix_ms;
+        candidate.challenge_submission_deadline_unix_ms = candidate.commit_deadline_unix_ms;
+        assert_eq!(
+            candidate.validate(),
+            Err(ModerationCaseSpecError::InvalidDeadlines)
+        );
+        candidate = case_spec();
+        candidate.challenge_resolution_deadline_unix_ms += 1;
         assert_eq!(
             candidate.validate(),
             Err(ModerationCaseSpecError::InvalidDeadlines)

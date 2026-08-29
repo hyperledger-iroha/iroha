@@ -1582,6 +1582,10 @@ fn bind_asset_alias_for_test(
 fn sample_iso_bridge_config(alias: &str, account_id: &AccountId) -> actual::IsoBridge {
     let signer_keypair =
         checked_torii_test_ed25519_keypair(0x80, "derive ISO bridge signer fixture key");
+    let originator_operator =
+        checked_torii_test_ed25519_keypair(0x81, "derive ISO originator operator fixture key");
+    let counterparty_operator =
+        checked_torii_test_ed25519_keypair(0x82, "derive ISO counterparty operator fixture key");
     actual::IsoBridge {
         enabled: true,
         max_body_bytes: iroha_config::parameters::defaults::torii::ISO_BRIDGE_MAX_BODY_BYTES,
@@ -1598,6 +1602,23 @@ fn sample_iso_bridge_config(alias: &str, account_id: &AccountId) -> actual::IsoB
             account_id: account_id.to_string(),
             private_key: signer_keypair.private_key().clone(),
         }),
+        participants: vec![
+            actual::IsoBridgeParticipant {
+                id: "originator-bank".to_owned(),
+                operator_keys: vec![originator_operator.public_key().clone()],
+                financial_identifiers: vec!["DEUTDEFF".to_owned()],
+                allowed_profiles: vec!["generic-iso20022".to_owned()],
+                roles: vec!["originator".to_owned(), "counterparty".to_owned()],
+            },
+            actual::IsoBridgeParticipant {
+                id: "counterparty-bank".to_owned(),
+                operator_keys: vec![counterparty_operator.public_key().clone()],
+                financial_identifiers: vec!["MARKDEFF".to_owned()],
+                allowed_profiles: vec!["generic-iso20022".to_owned()],
+                roles: vec!["originator".to_owned(), "counterparty".to_owned()],
+            },
+        ],
+        audit_admin_keys: Vec::new(),
         account_aliases: vec![actual::IsoAccountAlias {
             iban: alias.to_string(),
             account_id: account_id.to_string(),
@@ -1616,9 +1637,20 @@ async fn iso_audit_messages_endpoint_exports_digest_bound_manifest() {
         &ALICE_ID,
     )));
     let runtime = app.iso_bridge.as_ref().expect("iso bridge enabled");
+    assert!(runtime.check_and_record_message("handler-audit"));
     runtime.mark_accepted("handler-audit", "handler-tx");
+    let operator = operator_signatures::AuthenticatedOperatorPublicKey(
+        checked_torii_test_ed25519_keypair(0x81, "derive ISO audit reader fixture key")
+            .public_key()
+            .clone(),
+    );
     let (status, JsonBody(body)) =
-        handler_iso_audit_messages(State(app), HeaderMap::new(), local_connect_info())
+        handler_iso_audit_messages(
+            State(app),
+            Extension(operator),
+            HeaderMap::new(),
+            local_connect_info(),
+        )
             .await
             .expect("audit endpoint");
     assert_eq!(status, StatusCode::OK);
@@ -1649,6 +1681,11 @@ async fn iso_audit_messages_endpoint_exports_digest_bound_manifest() {
 async fn iso_audit_messages_endpoint_rejects_disabled_bridge() {
     let err = handler_iso_audit_messages(
         State(mk_app_state_for_tests()),
+        Extension(operator_signatures::AuthenticatedOperatorPublicKey(
+            checked_torii_test_ed25519_keypair(0x81, "derive disabled ISO reader fixture key")
+                .public_key()
+                .clone(),
+        )),
         HeaderMap::new(),
         local_connect_info(),
     )

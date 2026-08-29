@@ -123,6 +123,9 @@ use rand::{SeedableRng as _, rngs::StdRng};
 const VALIDATOR_COUNT: usize = 4;
 const CITIZEN_COUNT: usize = 24;
 const BODY_SEATS: u32 = 3;
+// Keep real FastPQ proving enabled, but prevent four local debug daemons from
+// each provisioning a wide Rayon pool on the same host while consensus traffic is live.
+const PARLIAMENT_NETWORK_RAYON_THREADS_PER_PEER: i64 = 2;
 // Six 3-seat bodies can draw eighteen distinct invitees. QueuePlan gives each
 // separately signed response its H + 1 admission and H + 2 execution, so keep
 // enough room for all 36 response heights plus the exact H - 2 roster-seal
@@ -913,6 +916,10 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
         .with_block_cadence(EXACT_HEIGHT_SUBMISSION_CADENCE)
         .with_config_layer(|layer| {
             layer
+                .write(
+                    ["concurrency", "rayon_global_threads"],
+                    PARLIAMENT_NETWORK_RAYON_THREADS_PER_PEER,
+                )
                 // Keep mandatory SoraNet admission enabled while bounding the
                 // localhost-only puzzle cost so this corridor measures
                 // Parliament/consensus liveness rather than Argon2 contention.
@@ -2133,6 +2140,10 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
         .with_config_layer(|layer| {
             layer
                 .write(
+                    ["concurrency", "rayon_global_threads"],
+                    PARLIAMENT_NETWORK_RAYON_THREADS_PER_PEER,
+                )
+                .write(
                     [
                         "network",
                         "soranet_handshake",
@@ -2448,6 +2459,10 @@ async fn four_validator_mandatory_npos_beacon_fails_closed_below_threshold_impl(
         .with_block_cadence(EXACT_HEIGHT_SUBMISSION_CADENCE)
         .with_config_layer(|layer| {
             layer
+                .write(
+                    ["concurrency", "rayon_global_threads"],
+                    PARLIAMENT_NETWORK_RAYON_THREADS_PER_PEER,
+                )
                 .write(
                     [
                         "network",
@@ -2773,6 +2788,11 @@ fn parliament_network_corridor_has_no_legacy_or_consensus_bypass_surface() {
         include_str!("sora_parliament_failure_paths.rs"),
     ]
     .concat();
+    assert_eq!(
+        source.matches("rayon_global_threads").count(),
+        6,
+        "every four-validator builder must bound per-peer proving concurrency without disabling FastPQ",
+    );
     let forbidden = [
         concat!("Cast", "PlainBallot"),
         concat!("Cast", "ParliamentBallot"),

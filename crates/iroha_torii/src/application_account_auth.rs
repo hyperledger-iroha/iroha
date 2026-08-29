@@ -81,7 +81,8 @@ macro_rules! mount_authenticated_asset_holder_routes {
             .expect("transaction content limit should fit usize");
         $builder.route(
             &route_catalog::telemetry::ASSET_HOLDERS,
-            catalog_get(handler_asset_holders),
+            catalog_get(handler_asset_holders)
+                .authenticated_in_handler(HandlerAuthentication::OptionalCanonicalAccountSignature),
         );
         $builder.route(
             &route_catalog::telemetry::ASSET_HOLDERS_QUERY,
@@ -192,9 +193,9 @@ async fn handler_authenticated_identifier_claim_receipt(
 }
 #[cfg(all(test, feature = "app_api"))]
 mod application_account_auth_tests {
+    use super::{Error, require_runtime_governance_account};
     use iroha_data_model::ValidationFail;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
-    use super::{Error, require_runtime_governance_account};
     #[test]
     fn application_authority_binding_rejects_substitution() {
         require_runtime_governance_account(

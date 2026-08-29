@@ -4,7 +4,7 @@ use super::{
     CapacityClass, CausalRoot, LifecycleContext, LifecycleCoordinator, LifecycleDigest,
     LifecycleKey, LifecyclePhase, LifecycleStage, LifecycleStageKind, LifecycleState,
     LifecycleValidateDispatchKeyV1, LifecycleWorkClass, OwnerId, PhysicalSlotId, PredecessorScope,
-    ReadyEvent, ReadyValidateSuccessorV1, WaitSource, WaitToken,
+    ReadyEvent, ReadyValidateSuccessorV1, TerminalOutcome, WaitSource, WaitToken,
     concrete_admission::LifecycleWorkRegistryHolder,
     ledger::{LifecycleLedgerError, LifecycleLedgerStoreV1},
 };
@@ -155,6 +155,11 @@ pub(in crate::sumeragi) enum LifecycleValidateSidecarDriveV1 {
     Waiting(RegisteredLifecycleValidateSidecarWaitV1),
     /// The exact dependency became durable and the same row is Ready.
     Woken(ReadyValidateSuccessorV1),
+    /// A certified newer view cancelled this unprotected losing proposal.
+    Superseded {
+        /// Exact lifecycle ordinal durably terminalized by the cancellation.
+        ordinal: u128,
+    },
     /// The owner failed closed; dropping it arms the existing restart guard.
     RestartRequired(LifecycleValidateSidecarRegistrationErrorV1),
 }
@@ -199,11 +204,21 @@ impl RegisteredLifecycleValidateSidecarWaitV1 {
     /// before the live runner can select any Ready work.
     pub(in crate::sumeragi) fn recover_at_launch(
         coordinator: &mut LifecycleCoordinator,
-        registry: &LifecycleWorkRegistryHolder,
+        registry: &mut LifecycleWorkRegistryHolder,
     ) -> Result<Option<Self>, LifecycleValidateSidecarRegistrationErrorV1> {
         let Some(identity) = coordinator.load_validate_sidecar_registration()? else {
             return Ok(None);
         };
+        if coordinator.cancelled_validate_sidecar_registration_matches(&identity, registry) {
+            let store = coordinator.ledger_store.as_ref().ok_or_else(|| {
+                LifecycleValidateSidecarRegistrationErrorV1::Persistence(
+                    "cancelled lifecycle Validate sidecar has no attached LedgerV1 store"
+                        .to_owned(),
+                )
+            })?;
+            clear_registration(store, &identity)?;
+            return Ok(None);
+        }
         coordinator.restore_validate_sidecar_wait(&identity, registry)?;
         Ok(Some(Self {
             identity,
@@ -216,13 +231,30 @@ impl RegisteredLifecycleValidateSidecarWaitV1 {
     pub(in crate::sumeragi) fn drive(
         self,
         coordinator: &mut LifecycleCoordinator,
-        registry: &LifecycleWorkRegistryHolder,
+        registry: &mut LifecycleWorkRegistryHolder,
         lane_work: &mut V2LaneWorkAdapter,
     ) -> LifecycleValidateSidecarDriveV1 {
         if !coordinator.validate_sidecar_wait_matches(&self.identity, registry) {
             return LifecycleValidateSidecarDriveV1::RestartRequired(
                 LifecycleValidateSidecarRegistrationErrorV1::InvalidIdentity,
             );
+        }
+        if lane_work
+            .lifecycle_validate_sidecar_is_superseded(self.identity.round, self.identity.subject)
+        {
+            let ordinal = self.identity.dispatch_key().lifecycle_ordinal();
+            if let Err(error) =
+                coordinator.cancel_validate_sidecar_registration(&self.identity, registry)
+            {
+                return LifecycleValidateSidecarDriveV1::RestartRequired(error);
+            }
+            if let LifecycleValidateSidecarCustodyV1::Live(completion) = self.custody {
+                let (dispatch, ack) = completion.into_sidecar_wake_parts();
+                debug_assert!(dispatch.matches_dispatch_key(self.identity.dispatch_key()));
+                drop(dispatch);
+                ack.acknowledge_after_publication();
+            }
+            return LifecycleValidateSidecarDriveV1::Superseded { ordinal };
         }
         let disposition = lane_work.defer_missing_lifecycle_validate_sidecar(
             self.identity.round,
@@ -282,6 +314,34 @@ impl RegisteredLifecycleValidateSidecarWaitV1 {
 }
 
 impl LifecycleCoordinator {
+    fn cancelled_validate_sidecar_registration_matches(
+        &self,
+        identity: &LifecycleValidateSidecarRegistrationIdentityV1,
+        registry: &LifecycleWorkRegistryHolder,
+    ) -> bool {
+        let key = identity.dispatch_key;
+        let Some(record) = self.records.get(&key.lifecycle_ordinal()) else {
+            return false;
+        };
+        identity.matches_context(self.active_context)
+            && self.fault.is_none()
+            && self.active_lease.is_none()
+            && record.ordinal == key.lifecycle_ordinal()
+            && record.owner == key.owner()
+            && record.key == identity.lifecycle_key
+            && record.stage == identity.lifecycle_stage
+            && record.work_class == LifecycleWorkClass::Validate
+            && record.state == LifecycleState::Terminal(TerminalOutcome::Cancelled)
+            && record.physical_slots.len() == 1
+            && record.physical_slots.get(&key.slot()) == Some(&key.digest())
+            && self.key_index.get(&record.key) == Some(&record.ordinal)
+            && self.owner_index.get(&record.owner.causal_root()) == Some(&record.owner)
+            && !self.ready_index.contains(&record.ordinal)
+            && registry
+                .registry()
+                .lacks_validate_sidecar_registration(identity)
+    }
+
     fn validate_sidecar_wait_matches(
         &self,
         identity: &LifecycleValidateSidecarRegistrationIdentityV1,
@@ -436,6 +496,42 @@ impl LifecycleCoordinator {
         clear_registration(store, identity)?;
         *self = next;
         Ok(())
+    }
+
+    fn cancel_validate_sidecar_registration(
+        &mut self,
+        identity: &LifecycleValidateSidecarRegistrationIdentityV1,
+        registry: &mut LifecycleWorkRegistryHolder,
+    ) -> Result<(), LifecycleValidateSidecarRegistrationErrorV1> {
+        if !self.validate_sidecar_wait_matches(identity, registry) {
+            return Err(LifecycleValidateSidecarRegistrationErrorV1::InvalidIdentity);
+        }
+        let store = self.ledger_store.clone().ok_or_else(|| {
+            LifecycleValidateSidecarRegistrationErrorV1::Persistence(
+                "live lifecycle owner has no attached LedgerV1 store".to_owned(),
+            )
+        })?;
+        let mut next = self.stage_durable_transaction();
+        next.finish_terminal(
+            identity.dispatch_key().lifecycle_ordinal(),
+            TerminalOutcome::Cancelled,
+        )
+        .map_err(|_| LifecycleValidateSidecarRegistrationErrorV1::InvalidIdentity)?;
+        self.persist_exact_staged_successor(&next)
+            .map_err(map_ledger_error)?;
+        let retired = registry
+            .registry_mut()
+            .retire_validate_sidecar_registration(identity);
+        debug_assert!(
+            retired,
+            "preflighted Validate sidecar carrier remains exact"
+        );
+        *self = next;
+        if !retired {
+            self.fault = Some(super::CoordinatorFault::DurabilityFailure);
+            return Err(LifecycleValidateSidecarRegistrationErrorV1::InvalidIdentity);
+        }
+        clear_registration(&store, identity)
     }
 }
 
@@ -821,6 +917,15 @@ pub(super) fn wake_registration_for_test(
     registry: &LifecycleWorkRegistryHolder,
 ) -> Result<(), LifecycleValidateSidecarRegistrationErrorV1> {
     coordinator.wake_validate_sidecar_registration(identity, registry)
+}
+
+#[cfg(test)]
+pub(super) fn cancel_registration_for_test(
+    coordinator: &mut LifecycleCoordinator,
+    identity: &LifecycleValidateSidecarRegistrationIdentityV1,
+    registry: &mut LifecycleWorkRegistryHolder,
+) -> Result<(), LifecycleValidateSidecarRegistrationErrorV1> {
+    coordinator.cancel_validate_sidecar_registration(identity, registry)
 }
 
 #[cfg(test)]

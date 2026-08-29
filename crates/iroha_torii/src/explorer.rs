@@ -3,7 +3,8 @@
 //! The six world-backed collection routes use canonical, filter-bound seek cursors. A request
 //! returns at most 100 matches and inspects at most 512 candidate keys, so sparse secondary
 //! filters cannot turn one read-admission token into a ledger-scale scan. Block, transaction, and
-//! instruction history retain their separate page-number contract.
+//! instruction history use a separate cursor that pins the committed chain snapshot and the
+//! caller's visible dataspace set.
 use crate::{
     account_literal,
     json_macros::{JsonDeserialize, JsonSerialize},
@@ -12,7 +13,6 @@ use base64::{
     Engine as _,
     engine::general_purpose::{STANDARD as BASE64_STANDARD, URL_SAFE_NO_PAD},
 };
-use hex;
 use iroha_core::state::WorldReadOnly;
 use iroha_crypto::HashOf;
 use iroha_data_model::{
@@ -63,12 +63,14 @@ pub(crate) const EXPLORER_CURSOR_DEFAULT_LIMIT: u32 = 25;
 pub(crate) const EXPLORER_CURSOR_MAX_LIMIT: u32 = 100;
 /// Hard ceiling for candidate keys inspected by one Explorer cursor page.
 pub(crate) const EXPLORER_CURSOR_MAX_SCAN: usize = 512;
-/// Hard ceiling for records materialized by one history page.
-pub(crate) const EXPLORER_HISTORY_MAX_PER_PAGE: u64 = 100;
 const EXPLORER_CURSOR_MAGIC: [u8; 4] = *b"IXC1";
 const EXPLORER_CURSOR_FILTER_DOMAIN: &[u8] = b"iroha-explorer-filter-v1";
 const EXPLORER_CURSOR_MAX_KEY_BYTES: usize = 1_024;
 const EXPLORER_CURSOR_MAX_ENCODED_BYTES: usize = 1_424;
+const EXPLORER_HISTORY_CURSOR_MAGIC: [u8; 4] = *b"IHC1";
+const EXPLORER_HISTORY_FILTER_DOMAIN: &[u8] = b"iroha-explorer-history-filter-v1";
+const EXPLORER_HISTORY_CURSOR_FRAME_BYTES: usize = 4 + 1 + 8 + 32 + 32 + 32 + 8 + 4 + 4;
+const EXPLORER_HISTORY_CURSOR_MAX_ENCODED_BYTES: usize = 192;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 enum ExplorerCursorCollection {
@@ -97,6 +99,8 @@ pub(crate) enum ExplorerCursorError {
     ScopeMismatch,
     /// The cursor contains a non-canonical collection key.
     InvalidKey,
+    /// The cursor names a committed snapshot that this node cannot validate.
+    InvalidSnapshot,
 }
 impl fmt::Display for ExplorerCursorError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -106,6 +110,7 @@ impl fmt::Display for ExplorerCursorError {
             Self::InvalidFrame => "cursor frame is malformed or too large",
             Self::ScopeMismatch => "cursor does not belong to these filters",
             Self::InvalidKey => "cursor contains a non-canonical collection key",
+            Self::InvalidSnapshot => "cursor snapshot is not available on this node",
         })
     }
 }
@@ -122,13 +127,6 @@ pub(crate) struct DomainCounters {
     assets: u32,
     nfts: u32,
 }
-#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
-pub(crate) struct ExplorerPaginationQuery {
-    #[norito(default = "default_page")]
-    pub page: u64,
-    #[norito(default = "default_per_page")]
-    pub per_page: u64,
-}
 /// Cursor controls shared by the six world-backed Explorer collections.
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
@@ -141,19 +139,12 @@ pub(crate) struct ExplorerCursorQuery {
     pub limit: u32,
 }
 impl ExplorerCursorQuery {
-    fn validated_limit(&self) -> Result<usize, ExplorerCursorError> {
+    pub(crate) fn validated_limit(&self) -> Result<usize, ExplorerCursorError> {
         if self.limit == 0 || self.limit > EXPLORER_CURSOR_MAX_LIMIT {
             return Err(ExplorerCursorError::InvalidLimit);
         }
         Ok(usize::try_from(self.limit).expect("bounded u32 Explorer limit fits usize"))
     }
-}
-#[derive(Clone, Debug, JsonSerialize)]
-pub(crate) struct ExplorerPaginationMeta {
-    pub page: u64,
-    pub per_page: u64,
-    pub total_pages: u64,
-    pub total_items: u64,
 }
 /// Seek-pagination metadata for a bounded world-backed Explorer collection.
 #[derive(Clone, Debug, JsonSerialize)]
@@ -164,6 +155,265 @@ pub(crate) struct ExplorerCursorMeta {
     pub next_cursor: Option<String>,
     /// Whether the maintained candidate range has more keys to inspect.
     pub has_more: bool,
+}
+
+/// Chain-history collections with independent cursor domains.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub(crate) enum ExplorerHistoryCollection {
+    /// Committed blocks, newest first.
+    Blocks = 1,
+    /// Committed transactions, newest block first.
+    Transactions = 2,
+    /// The latest-transactions route.
+    LatestTransactions = 3,
+    /// Committed instructions, newest block first.
+    Instructions = 4,
+    /// The latest-instructions route.
+    LatestInstructions = 5,
+}
+
+impl ExplorerHistoryCollection {
+    const fn tag(self) -> u8 {
+        self as u8
+    }
+
+    const fn position_is_canonical(self, position: ExplorerHistoryPosition) -> bool {
+        if position.height == 0 {
+            return false;
+        }
+        match self {
+            Self::Blocks => position.entrypoint_index == 0 && position.instruction_index == 0,
+            Self::Transactions | Self::LatestTransactions => position.instruction_index == 0,
+            Self::Instructions | Self::LatestInstructions => true,
+        }
+    }
+}
+
+/// Next chain-history candidate encoded by an Explorer seek cursor.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ExplorerHistoryPosition {
+    /// One-based committed block height.
+    pub height: u64,
+    /// Zero-based external entrypoint index within the block.
+    pub entrypoint_index: u32,
+    /// Zero-based explicit instruction index within the entrypoint.
+    pub instruction_index: u32,
+}
+
+impl ExplorerHistoryPosition {
+    /// Construct a block position.
+    pub(crate) const fn block(height: u64) -> Self {
+        Self {
+            height,
+            entrypoint_index: 0,
+            instruction_index: 0,
+        }
+    }
+
+    /// Construct a transaction position.
+    pub(crate) const fn transaction(height: u64, entrypoint_index: u32) -> Self {
+        Self {
+            height,
+            entrypoint_index,
+            instruction_index: 0,
+        }
+    }
+
+    /// Construct an instruction position.
+    pub(crate) const fn instruction(
+        height: u64,
+        entrypoint_index: u32,
+        instruction_index: u32,
+    ) -> Self {
+        Self {
+            height,
+            entrypoint_index,
+            instruction_index,
+        }
+    }
+}
+
+/// Validated state carried by a chain-history cursor.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ExplorerHistoryCursor {
+    /// Height of the immutable committed snapshot selected by the first page.
+    pub snapshot_height: u64,
+    /// Hash of the committed block at `snapshot_height`.
+    pub snapshot_hash: [u8; 32],
+    /// Next candidate to inspect.
+    pub position: ExplorerHistoryPosition,
+}
+
+/// Seek-pagination metadata for a snapshot-bound Explorer history page.
+#[derive(Clone, Debug, JsonSerialize)]
+pub(crate) struct ExplorerHistoryCursorMeta {
+    /// Maximum matching records requested for this page.
+    pub limit: u32,
+    /// Height of the committed snapshot retained across pages.
+    pub snapshot_height: u64,
+    /// Hash of the committed block at `snapshot_height`, or `None` for an empty chain.
+    pub snapshot_hash: Option<String>,
+    /// Opaque resume token, or `None` after the snapshot range is exhausted.
+    pub next_cursor: Option<String>,
+    /// Whether the snapshot range has more candidates to inspect.
+    pub has_more: bool,
+}
+
+/// Compute the canonical digest of all filters accepted by one history route.
+pub(crate) fn explorer_history_filter_digest(
+    collection: ExplorerHistoryCollection,
+    filters: &[Option<String>],
+) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(EXPLORER_HISTORY_FILTER_DOMAIN);
+    hasher.update([collection.tag()]);
+    hasher.update(
+        u32::try_from(filters.len())
+            .expect("fixed Explorer history filter list fits u32")
+            .to_be_bytes(),
+    );
+    for filter in filters {
+        match filter {
+            Some(value) => {
+                hasher.update([1]);
+                hasher.update(
+                    u32::try_from(value.len())
+                        .expect("bounded Explorer filter length fits u32")
+                        .to_be_bytes(),
+                );
+                hasher.update(value.as_bytes());
+            }
+            None => hasher.update([0]),
+        }
+    }
+    hasher.finalize().into()
+}
+
+fn encode_explorer_history_cursor(
+    collection: ExplorerHistoryCollection,
+    filter_digest: [u8; 32],
+    visibility_digest: [u8; 32],
+    cursor: ExplorerHistoryCursor,
+) -> Result<String, ExplorerCursorError> {
+    if cursor.position.height > cursor.snapshot_height
+        || !collection.position_is_canonical(cursor.position)
+    {
+        return Err(ExplorerCursorError::InvalidKey);
+    }
+    let mut frame = Vec::with_capacity(EXPLORER_HISTORY_CURSOR_FRAME_BYTES);
+    frame.extend_from_slice(&EXPLORER_HISTORY_CURSOR_MAGIC);
+    frame.push(collection.tag());
+    frame.extend_from_slice(&cursor.snapshot_height.to_be_bytes());
+    frame.extend_from_slice(&cursor.snapshot_hash);
+    frame.extend_from_slice(&filter_digest);
+    frame.extend_from_slice(&visibility_digest);
+    frame.extend_from_slice(&cursor.position.height.to_be_bytes());
+    frame.extend_from_slice(&cursor.position.entrypoint_index.to_be_bytes());
+    frame.extend_from_slice(&cursor.position.instruction_index.to_be_bytes());
+    debug_assert_eq!(frame.len(), EXPLORER_HISTORY_CURSOR_FRAME_BYTES);
+    Ok(URL_SAFE_NO_PAD.encode(frame))
+}
+
+/// Decode and scope-check a snapshot-bound history cursor.
+pub(crate) fn decode_explorer_history_cursor(
+    encoded: &str,
+    collection: ExplorerHistoryCollection,
+    filter_digest: [u8; 32],
+    visibility_digest: [u8; 32],
+) -> Result<ExplorerHistoryCursor, ExplorerCursorError> {
+    if encoded.is_empty() || encoded.len() > EXPLORER_HISTORY_CURSOR_MAX_ENCODED_BYTES {
+        return Err(ExplorerCursorError::InvalidFrame);
+    }
+    let frame = URL_SAFE_NO_PAD
+        .decode(encoded.as_bytes())
+        .map_err(|_| ExplorerCursorError::InvalidEncoding)?;
+    if URL_SAFE_NO_PAD.encode(&frame) != encoded {
+        return Err(ExplorerCursorError::InvalidEncoding);
+    }
+    if frame.len() != EXPLORER_HISTORY_CURSOR_FRAME_BYTES
+        || frame[..4] != EXPLORER_HISTORY_CURSOR_MAGIC
+        || frame[4] != collection.tag()
+        || frame[45..77] != filter_digest
+        || frame[77..109] != visibility_digest
+    {
+        return Err(if frame.len() == EXPLORER_HISTORY_CURSOR_FRAME_BYTES
+            && frame[..4] == EXPLORER_HISTORY_CURSOR_MAGIC
+        {
+            ExplorerCursorError::ScopeMismatch
+        } else {
+            ExplorerCursorError::InvalidFrame
+        });
+    }
+    let snapshot_height = u64::from_be_bytes(
+        frame[5..13]
+            .try_into()
+            .expect("fixed Explorer cursor snapshot-height slice"),
+    );
+    let snapshot_hash = frame[13..45]
+        .try_into()
+        .expect("fixed Explorer cursor snapshot-hash slice");
+    let position = ExplorerHistoryPosition {
+        height: u64::from_be_bytes(
+            frame[109..117]
+                .try_into()
+                .expect("fixed Explorer cursor position-height slice"),
+        ),
+        entrypoint_index: u32::from_be_bytes(
+            frame[117..121]
+                .try_into()
+                .expect("fixed Explorer cursor entrypoint-index slice"),
+        ),
+        instruction_index: u32::from_be_bytes(
+            frame[121..125]
+                .try_into()
+                .expect("fixed Explorer cursor instruction-index slice"),
+        ),
+    };
+    if snapshot_height == 0
+        || position.height > snapshot_height
+        || !collection.position_is_canonical(position)
+    {
+        return Err(ExplorerCursorError::InvalidKey);
+    }
+    Ok(ExplorerHistoryCursor {
+        snapshot_height,
+        snapshot_hash,
+        position,
+    })
+}
+
+/// Build response metadata and, when needed, an opaque cursor for the next candidate.
+pub(crate) fn explorer_history_cursor_meta(
+    collection: ExplorerHistoryCollection,
+    filter_digest: [u8; 32],
+    visibility_digest: [u8; 32],
+    limit: u32,
+    snapshot_height: u64,
+    snapshot_hash: Option<[u8; 32]>,
+    next_position: Option<ExplorerHistoryPosition>,
+) -> Result<ExplorerHistoryCursorMeta, ExplorerCursorError> {
+    let next_cursor = match (snapshot_hash, next_position) {
+        (Some(snapshot_hash), Some(position)) => Some(encode_explorer_history_cursor(
+            collection,
+            filter_digest,
+            visibility_digest,
+            ExplorerHistoryCursor {
+                snapshot_height,
+                snapshot_hash,
+                position,
+            },
+        )?),
+        (None, None) | (Some(_), None) => None,
+        (None, Some(_)) => return Err(ExplorerCursorError::InvalidSnapshot),
+    };
+    Ok(ExplorerHistoryCursorMeta {
+        limit,
+        snapshot_height,
+        snapshot_hash: snapshot_hash.map(hex::encode),
+        has_more: next_cursor.is_some(),
+        next_cursor,
+    })
 }
 #[derive(Clone, Debug, JsonSerialize)]
 pub(crate) struct ExplorerAccountDto {
@@ -223,53 +473,8 @@ fn render_account_qr_svg(input: &str) -> Result<(String, u8), QrError> {
     let svg = code.to_svg(ACCOUNT_QR_DIMENSION_PX, "#000000", "#FFFFFF");
     Ok((svg, version))
 }
-pub(crate) fn paginate<T>(
-    mut items: Vec<T>,
-    page: u64,
-    per_page: u64,
-) -> (Vec<T>, ExplorerPaginationMeta) {
-    let per_page = normalize_history_per_page(per_page);
-    let total_items = items.len() as u64;
-    let total_pages = total_items.div_ceil(per_page);
-    let start = (page.saturating_sub(1))
-        .saturating_mul(per_page)
-        .min(total_items) as usize;
-    if start > 0 {
-        items.drain(0..start);
-    }
-    if items.len() > per_page as usize {
-        items.truncate(per_page as usize);
-    }
-    (
-        items,
-        ExplorerPaginationMeta {
-            page,
-            per_page,
-            total_pages,
-            total_items,
-        },
-    )
-}
-/// Clamp legacy page-number history reads to the first-release response bound.
-#[inline]
-#[must_use]
-pub(crate) const fn normalize_history_per_page(per_page: u64) -> u64 {
-    if per_page == 0 {
-        1
-    } else if per_page > EXPLORER_HISTORY_MAX_PER_PAGE {
-        EXPLORER_HISTORY_MAX_PER_PAGE
-    } else {
-        per_page
-    }
-}
 pub(crate) fn metadata_to_json(metadata: &Metadata) -> Value {
     norito::json::to_value(metadata).unwrap_or_else(|_| Value::Object(Map::new()))
-}
-const fn default_page() -> u64 {
-    1
-}
-const fn default_per_page() -> u64 {
-    10
 }
 const fn default_cursor_limit() -> u32 {
     EXPLORER_CURSOR_DEFAULT_LIMIT
@@ -525,16 +730,38 @@ pub(crate) struct ExplorerBlockDto {
 }
 impl ExplorerBlockDto {
     pub(crate) fn from_block(block: &SignedBlock) -> Self {
+        Self::from_block_with_visibility(block, |_| true)
+    }
+
+    pub(crate) fn from_block_with_visibility(
+        block: &SignedBlock,
+        mut is_visible: impl FnMut(usize) -> bool,
+    ) -> Self {
         let header = block.header();
-        let external_total = block.external_entrypoint_count();
+        let visible_indices = (0..block.external_entrypoint_count())
+            .filter(|index| is_visible(*index))
+            .collect::<Vec<_>>();
+        let transactions_rejected = if block.has_results() {
+            visible_indices
+                .iter()
+                .filter(|index| {
+                    block
+                        .results()
+                        .nth(**index)
+                        .is_some_and(|result| result.as_ref().is_err())
+                })
+                .count()
+        } else {
+            0
+        };
         Self {
             hash: block.hash().to_string(),
             height: header.height().get(),
             created_at: block_created_at(header.creation_time()),
             prev_block_hash: header.prev_block_hash().map(|hash| hash.to_string()),
             transactions_hash: header.merkle_root().map(|hash| hash.to_string()),
-            transactions_rejected: count_rejected_transactions(block, external_total),
-            transactions_total: saturating_usize_to_u32(external_total),
+            transactions_rejected: saturating_usize_to_u32(transactions_rejected),
+            transactions_total: saturating_usize_to_u32(visible_indices.len()),
         }
     }
     pub(crate) fn from_hash_only(
@@ -555,7 +782,7 @@ impl ExplorerBlockDto {
 }
 #[derive(Clone, Debug, JsonSerialize)]
 pub(crate) struct ExplorerBlocksPage {
-    pub pagination: ExplorerPaginationMeta,
+    pub pagination: ExplorerHistoryCursorMeta,
     pub items: Vec<ExplorerBlockDto>,
 }
 #[derive(Clone, Debug, JsonSerialize)]
@@ -608,12 +835,13 @@ pub(crate) struct ExplorerDurationDto {
 }
 #[derive(Clone, Debug, JsonSerialize)]
 pub(crate) struct ExplorerTransactionsPage {
-    pub pagination: ExplorerPaginationMeta,
+    pub pagination: ExplorerHistoryCursorMeta,
     pub items: Vec<ExplorerTransactionDto>,
 }
 #[derive(Clone, Debug, JsonSerialize)]
 pub(crate) struct ExplorerLatestTransactionsResponse {
     pub sampled_at: String,
+    pub pagination: ExplorerHistoryCursorMeta,
     pub items: Vec<ExplorerTransactionDto>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -701,12 +929,13 @@ pub(crate) struct ExplorerInstructionDto {
 }
 #[derive(Clone, Debug, JsonSerialize)]
 pub(crate) struct ExplorerInstructionsPage {
-    pub pagination: ExplorerPaginationMeta,
+    pub pagination: ExplorerHistoryCursorMeta,
     pub items: Vec<ExplorerInstructionDto>,
 }
 #[derive(Clone, Debug, JsonSerialize)]
 pub(crate) struct ExplorerLatestInstructionsResponse {
     pub sampled_at: String,
+    pub pagination: ExplorerHistoryCursorMeta,
     pub items: Vec<ExplorerInstructionDto>,
 }
 #[derive(Clone, Debug, JsonSerialize)]
@@ -2169,17 +2398,6 @@ pub(crate) fn rwas_page_for_filters<'world>(
 pub(crate) fn block_created_at(duration: Duration) -> String {
     duration_to_rfc3339(duration)
 }
-fn count_rejected_transactions(block: &SignedBlock, external_total: usize) -> u32 {
-    if external_total == 0 || !block.has_results() {
-        return 0;
-    }
-    let rejected = block
-        .results()
-        .take(external_total)
-        .filter(|result| result.as_ref().is_err())
-        .count();
-    saturating_usize_to_u32(rejected)
-}
 fn saturating_usize_to_u32(value: usize) -> u32 {
     u32::try_from(value).unwrap_or(u32::MAX)
 }
@@ -2315,23 +2533,72 @@ mod tests {
         );
     }
     #[test]
-    fn paginate_truncates_correctly() {
-        let items = vec![1, 2, 3, 4, 5];
-        let (page, meta) = paginate(items, 2, 2);
-        assert_eq!(page, vec![3, 4]);
-        assert_eq!(meta.page, 2);
-        assert_eq!(meta.per_page, 2);
-        assert_eq!(meta.total_items, 5);
-        assert_eq!(meta.total_pages, 3);
-    }
-    #[test]
-    fn paginate_caps_untrusted_page_size() {
-        let items = (0..150).collect::<Vec<_>>();
-        let (page, meta) = paginate(items, 1, u64::MAX);
-        assert_eq!(page.len(), EXPLORER_HISTORY_MAX_PER_PAGE as usize);
-        assert_eq!(meta.per_page, EXPLORER_HISTORY_MAX_PER_PAGE);
-        assert_eq!(meta.total_items, 150);
-        assert_eq!(meta.total_pages, 2);
+    fn history_cursor_is_snapshot_filter_visibility_and_route_bound() {
+        let collection = ExplorerHistoryCollection::Transactions;
+        let filter_digest = explorer_history_filter_digest(
+            collection,
+            &[Some("authority".to_owned()), None],
+        );
+        let visibility_digest = [0x22; 32];
+        let snapshot_hash = [0x33; 32];
+        let position = ExplorerHistoryPosition::transaction(41, 7);
+        let meta = explorer_history_cursor_meta(
+            collection,
+            filter_digest,
+            visibility_digest,
+            17,
+            42,
+            Some(snapshot_hash),
+            Some(position),
+        )
+        .expect("history cursor metadata");
+        assert_eq!(meta.limit, 17);
+        assert_eq!(meta.snapshot_height, 42);
+        assert_eq!(meta.snapshot_hash.as_deref(), Some(hex::encode(snapshot_hash).as_str()));
+        assert!(meta.has_more);
+        let encoded = meta.next_cursor.expect("continuation cursor");
+        let decoded = decode_explorer_history_cursor(
+            &encoded,
+            collection,
+            filter_digest,
+            visibility_digest,
+        )
+        .expect("valid scoped history cursor");
+        assert_eq!(decoded.snapshot_height, 42);
+        assert_eq!(decoded.snapshot_hash, snapshot_hash);
+        assert_eq!(decoded.position, position);
+
+        let different_filter = explorer_history_filter_digest(
+            collection,
+            &[Some("another-authority".to_owned()), None],
+        );
+        assert_eq!(
+            decode_explorer_history_cursor(
+                &encoded,
+                collection,
+                different_filter,
+                visibility_digest,
+            ),
+            Err(ExplorerCursorError::ScopeMismatch),
+        );
+        assert_eq!(
+            decode_explorer_history_cursor(
+                &encoded,
+                collection,
+                filter_digest,
+                [0x44; 32],
+            ),
+            Err(ExplorerCursorError::ScopeMismatch),
+        );
+        assert_eq!(
+            decode_explorer_history_cursor(
+                &encoded,
+                ExplorerHistoryCollection::LatestTransactions,
+                filter_digest,
+                visibility_digest,
+            ),
+            Err(ExplorerCursorError::ScopeMismatch),
+        );
     }
     #[test]
     fn explorer_cursor_is_canonical_collection_and_filter_bound() {

@@ -1606,7 +1606,6 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
     };
     #[cfg(feature = "app_api")]
     let sorafs_cache: Option<Arc<RwLock<sorafs::ProviderAdvertCache>>> = None;
-    #[cfg(feature = "app_api")]
     // Test fixtures opt into an isolated storage directory explicitly. Never
     // let a unit-test helper inherit the production data path.
     let sorafs_node = {
@@ -1636,9 +1635,7 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
     #[cfg(feature = "app_api")]
     let sorafs_publish_discovery =
         iroha_config::parameters::actual::SorafsPublishDiscovery::default();
-    #[cfg(feature = "app_api")]
     let sorafs_gateway_config = iroha_config::parameters::actual::SorafsGateway::default();
-    #[cfg(feature = "app_api")]
     let sorafs_site_bindings = None;
     let telemetry = routing::MaybeTelemetry::for_tests().with_profile(TelemetryProfile::Full);
     let telemetry_profile = telemetry.profile();
@@ -1836,6 +1833,7 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
         query_preauth_rate_limiter: limits::RateLimiter::new(None, None),
         query_authority_rate_limiter: limits::RateLimiter::new(None, None),
         pipeline_status_rate_limiter: limits::RateLimiter::new(None, None),
+        tx_preauth_rate_limiter: limits::RateLimiter::new(None, None),
         tx_rate_limiter: limits::RateLimiter::new(None, None),
         deploy_rate_limiter,
         proof_rate_limiter: limits::RateLimiter::new(None, None),
@@ -1948,7 +1946,6 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
         sorafs_routing_authority_cache: Arc::new(
             sorafs::delegated_routing::RoutingAuthorityCache::default(),
         ),
-        #[cfg(feature = "app_api")]
         sorafs_node,
         #[cfg(feature = "app_api")]
         sorafs_proof_outcome_signer: None,
@@ -1990,21 +1987,17 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
         sorafs_pop_credentials: None,
         #[cfg(feature = "app_api")]
         sorafs_publish_discovery,
-        #[cfg(feature = "app_api")]
         sorafs_gateway_config,
-        #[cfg(feature = "app_api")]
         sorafs_site_bindings,
-        #[cfg(feature = "app_api")]
         sorafs_gateway_policy: None,
         #[cfg(feature = "app_api")]
         sorafs_gateway_tls_state: None,
-        #[cfg(feature = "app_api")]
         sorafs_gateway_compliance_controller: Some(
             sorafs::gateway::allow_all_gateway_compliance_controller_for_tests(),
         ),
         #[cfg(feature = "app_api")]
         sorafs_gateway_compliance_feed_transport: None,
-        #[cfg(all(test, feature = "app_api"))]
+        #[cfg(test)]
         sorafs_gateway_test_provider_id: Some([0x45; 32]),
         #[cfg(feature = "app_api")]
         sorafs_blinded_resolver: None,
@@ -2171,6 +2164,35 @@ async fn debug_witness_returns_json_body() {
         .expect("content type header");
     assert_eq!(content_type, "application/json");
     let _parsed = decode_torii_json(resp, "response body", "valid json").await;
+}
+
+#[cfg(feature = "telemetry")]
+#[tokio::test]
+async fn debug_witness_requires_a_developer_telemetry_profile() {
+    for (profile, expected_status) in [
+        (TelemetryProfile::Disabled, StatusCode::SERVICE_UNAVAILABLE),
+        (TelemetryProfile::Operator, StatusCode::SERVICE_UNAVAILABLE),
+        (TelemetryProfile::Extended, StatusCode::SERVICE_UNAVAILABLE),
+        (TelemetryProfile::Developer, StatusCode::OK),
+        (TelemetryProfile::Full, StatusCode::OK),
+    ] {
+        let app = mk_app_state_for_tests();
+        let mut inner = Arc::try_unwrap(app)
+            .unwrap_or_else(|_| panic!("debug-witness fixture must have one app-state owner"));
+        inner.telemetry = inner.telemetry.with_profile(profile);
+        let app = Arc::new(inner);
+        let response = super::handler_debug_witness(
+            State(app),
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+            Some(crate::utils::extractors::ExtractAccept(
+                HeaderValue::from_static("application/json"),
+            )),
+        )
+        .await
+        .expect("profile gate returns an HTTP response");
+        assert_eq!(response.status(), expected_status, "profile {profile:?}");
+    }
 }
 #[tokio::test]
 async fn torii_tx_rate_uses_config_and_queue_default() {
@@ -2488,6 +2510,42 @@ async fn handler_post_transaction_uses_tx_rate_limiter() {
     };
     assert_eq!(err.into_response().status(), StatusCode::TOO_MANY_REQUESTS);
 }
+
+#[tokio::test]
+async fn invalid_transaction_signature_does_not_charge_claimed_authority_bucket() {
+    let mut app = mk_app_state_for_tests();
+    {
+        let app_mut = Arc::get_mut(&mut app).expect("unique app state");
+        app_mut.high_load_tx_threshold = usize::MAX;
+        app_mut.tx_rate_limiter = limits::RateLimiter::new(Some(1), Some(1));
+        app_mut.fee_policy = FeePolicy::Disabled;
+    }
+    let keypair = checked_torii_test_ed25519_keypair(
+        0xc0,
+        "derive invalid-signature authority-limiter fixture key",
+    );
+    let authority = AccountId::new(keypair.public_key().clone());
+    let signed = signed_log_transaction_for_test(
+        *app.state.network_id_ref(),
+        authority.clone(),
+        "invalid-signature-must-not-charge-authority",
+        &keypair,
+    );
+    let invalid = transaction_with_invalid_signature_for_test(signed);
+    let error = post_signed_transaction_for_test(app.clone(), HeaderMap::new(), &invalid)
+        .await
+        .expect_err("invalid signature must be rejected");
+    assert_eq!(
+        torii_response_header(&error.into_response(), "x-iroha-reject-code"),
+        Some(SignatureRejectionCode::InvalidSignature.as_str())
+    );
+    assert!(
+        app.tx_rate_limiter
+            .allow(&transaction_verified_authority_key(&authority))
+            .await,
+        "an unverified claimed authority must not select or consume the authority limiter"
+    );
+}
 #[tokio::test]
 async fn handler_post_transaction_reports_full_queue_before_rate_limit() {
     let mut app = mk_app_state_for_tests();
@@ -2532,7 +2590,7 @@ async fn handler_post_transaction_uses_authenticated_api_token_rate_limit_key() 
     {
         let app_mut = Arc::get_mut(&mut app).expect("unique app state");
         app_mut.high_load_tx_threshold = usize::MAX;
-        app_mut.tx_rate_limiter = limits::RateLimiter::new(Some(1), Some(1));
+        app_mut.tx_preauth_rate_limiter = limits::RateLimiter::new(Some(1), Some(1));
         app_mut.fee_policy = FeePolicy::Disabled;
         app_mut.require_api_token = true;
         app_mut.api_tokens_set = Arc::new(HashSet::from(["shared-token".to_owned()]));

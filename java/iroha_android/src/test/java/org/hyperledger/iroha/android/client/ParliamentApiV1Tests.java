@@ -226,7 +226,7 @@ public final class ParliamentApiV1Tests {
   }
 
   @Test
-  public void attemptBuilderAdmitsExactlyTheSevenFirstReleaseProposalKinds() {
+  public void attemptBuilderAdmitsExactlyTheNineFirstReleaseProposalKinds() {
     for (final String kind : ParliamentApiV1.PROPOSAL_KINDS) {
       final Map<String, Object> request =
           objectValue(
@@ -234,7 +234,7 @@ public final class ParliamentApiV1Tests {
                   proposal(kind), 0));
       assertEquals(kind, objectValue(request.get("proposal")).get("kind"));
     }
-    assertEquals(7, ParliamentApiV1.PROPOSAL_KINDS.size());
+    assertEquals(9, ParliamentApiV1.PROPOSAL_KINDS.size());
 
     final Map<String, Object> fullU64Policy = validProposal("ValidationFeePolicy");
     final Map<String, Object> fullU64PolicyValue =
@@ -265,6 +265,22 @@ public final class ParliamentApiV1Tests {
         () ->
             ParliamentApiV1.Proposal.fromJson(
                 bytes("{\"proposal_kind\":\"RuntimeUpgrade\",\"payload\":{}}")));
+  }
+
+  @Test
+  public void contractLifecycleUnitActionsRequireExplicitNullPayload() {
+    for (final String action :
+        List.of("CancelOwnershipOffer", "AcceptParliamentOwnership")) {
+      final Map<String, Object> proposal = validProposal("ContractLifecycleGovernance");
+      final Map<String, Object> payload = objectValue(proposal.get("payload"));
+      payload.put("action", map("action", action, "payload", null));
+      ParliamentApiV1.Proposal.fromJson(encode(proposal));
+
+      objectValue(payload.get("action")).remove("payload");
+      assertThrows(
+          IllegalArgumentException.class,
+          () -> ParliamentApiV1.Proposal.fromJson(encode(proposal)));
+    }
   }
 
   @Test
@@ -317,6 +333,22 @@ public final class ParliamentApiV1Tests {
     assertThrows(
         IllegalArgumentException.class,
         () -> ParliamentApiV1.Proposal.fromJson(encode(malformedAccount)));
+
+    final Map<String, Object> zeroRetrospective =
+        validProposal("ContractLifecycleGovernance");
+    objectValue(
+            objectValue(objectValue(zeroRetrospective.get("payload")).get("action"))
+                .get("payload"))
+        .put("retrospective_finding_root", repeatedNumbers(32, 0));
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> ParliamentApiV1.Proposal.fromJson(encode(zeroRetrospective)));
+
+    final Map<String, Object> excessiveHold = validProposal("ContractEmergencyHold");
+    objectValue(excessiveHold.get("payload")).put("duration_blocks", 3_601);
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> ParliamentApiV1.Proposal.fromJson(encode(excessiveHold)));
 
     final Map<String, Object> impreciseHeight = validProposal("RuntimeUpgrade");
     objectValue(objectValue(impreciseHeight.get("payload")).get("manifest"))
@@ -1377,6 +1409,29 @@ public final class ParliamentApiV1Tests {
                       map(
                           "provider_id", Arrays.asList(repeatedNumbers(32, 0x45)),
                           "owner", account(3))));
+      case "ContractLifecycleGovernance" ->
+          payload =
+              map(
+                  "contract_address", CONTRACT_ADDRESS,
+                  "expected_revision", 3,
+                  "action",
+                  map(
+                      "action", "CompleteEmergencyHoldRetrospective",
+                      "payload",
+                      map(
+                          "hold_proposal_content_id", repeatedNumbers(32, 0x51),
+                          "hold_governance_attempt_id", repeatedNumbers(32, 0x52),
+                          "incident_digest", repeatedNumbers(32, 0x53),
+                          "retrospective_finding_root", repeatedNumbers(32, 0x54))));
+      case "ContractEmergencyHold" ->
+          payload =
+              map(
+                  "contract_address", CONTRACT_ADDRESS,
+                  "expected_revision", 2,
+                  "expected_code_hash", "33".repeat(32),
+                  "incident_digest", repeatedNumbers(32, 0x55),
+                  "reason", "contain active exploit",
+                  "duration_blocks", 3_600);
       default -> throw new AssertionError("unsupported fixture kind " + kind);
     }
     return map("kind", kind, "payload", payload);

@@ -1063,6 +1063,10 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let account: Account = self.object().clone().build(authority);
+            crate::smartcontracts::limits::enforce_metadata_value_sizes(
+                state_transaction,
+                account.metadata(),
+            )?;
             ensure_controller_capabilities(
                 account.controller(),
                 &state_transaction.crypto.allowed_signing,
@@ -1247,6 +1251,20 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let account_id = self.object().clone();
+            if let Some(contract) =
+                crate::smartcontracts::code::contract_owned_or_pending_for_account(
+                    &state_transaction.world,
+                    &account_id,
+                )
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "cannot unregister account {account_id}: transfer or cancel its lifecycle ownership of contract `{contract}` first"
+                    )
+                    .into(),
+                )
+                .into());
+            }
             crate::smartcontracts::isi::kaigi::ensure_kaigi_account_can_unregister(
                 state_transaction,
                 &account_id,
@@ -2231,6 +2249,10 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let asset_definition = self.object().clone().build(authority);
+            crate::smartcontracts::limits::enforce_metadata_value_sizes(
+                state_transaction,
+                asset_definition.metadata(),
+            )?;
             ensure_asset_definition_human_fields(&asset_definition)?;
             validate_asset_definition_alias_route(
                 state_transaction,

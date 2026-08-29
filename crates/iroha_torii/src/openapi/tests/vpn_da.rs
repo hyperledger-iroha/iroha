@@ -2030,7 +2030,7 @@ fn parliament_attempt_openapi_is_closed_authenticated_and_bounded() {
         .expect("no-result audit variants");
     assert_eq!(
         no_result_variants.len(),
-        9,
+        10,
         "no-result audit class must remain closed"
     );
     assert_eq!(
@@ -2056,6 +2056,7 @@ fn parliament_attempt_openapi_is_closed_authenticated_and_bounded() {
             "BallotOpeningDeadlineExpired",
             "SortitionRetriesExhausted",
             "ConfirmationJuryCapacityUnavailable",
+            "RandomnessRedrawBudgetExhausted",
         ],
         "no-result OpenAPI tags must match the closed codec inventory"
     );

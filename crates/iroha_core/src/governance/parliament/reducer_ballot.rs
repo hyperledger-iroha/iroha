@@ -57,6 +57,7 @@ impl ParliamentAttemptStateV1 {
         if sequence > timed_ovn_policy.max_ballot_retries {
             return Err(ParliamentReducerErrorV1::BallotRetryLimitExceeded);
         }
+        self.ensure_ballot_redraw_available_v1(sequence)?;
         if self
             .ballots
             .values()
@@ -569,6 +570,8 @@ impl ParliamentAttemptStateV1 {
         current_height: u64,
     ) -> Result<(), ParliamentReducerErrorV1> {
         self.ensure_active(governance_attempt_id)?;
+        let proposal_redraw_budget_exhausted =
+            self.randomness_redraws_used_v1()? == MAX_PARLIAMENT_RANDOMNESS_REDRAWS_V1;
         let ballot =
             self.ballots
                 .get(&ballot_attempt_id)
@@ -619,7 +622,7 @@ impl ParliamentAttemptStateV1 {
             .expect("body checked above")
             .instance
             .status = BodyInstanceStatusV1::NoResult;
-        if retry_budget_exhausted {
+        if retry_budget_exhausted || proposal_redraw_budget_exhausted {
             self.attempt.status = GovernanceAttemptStatusV1::Rejected;
         }
         Ok(())
@@ -634,8 +637,9 @@ impl ParliamentAttemptStateV1 {
     /// Policy Jury with a strictly sub-five-percent decisive margin dynamically
     /// requires a fresh, disjoint Confirmation Jury. Exactly five percent does
     /// not trigger confirmation. A narrow result is not committed when fewer
-    /// than two eligible fresh Confirmation candidates remain; the verified
-    /// opening instead becomes an objective terminal `NoResult`.
+    /// than two eligible fresh Confirmation candidates remain or when its
+    /// required fresh draw would exceed the proposal-wide redraw budget; the
+    /// verified opening instead becomes an objective terminal `NoResult`.
     ///
     /// # Errors
     /// Returns an error for replay, wrong bindings, a mutated corpus, incomplete
@@ -742,22 +746,7 @@ impl ParliamentAttemptStateV1 {
         tally
             .validate()
             .map_err(|_| ParliamentReducerErrorV1::InvalidTally)?;
-        let outcome = tally
-            .decision()
-            .map_err(|_| ParliamentReducerErrorV1::InvalidTally)?;
         let body_instance_id = ballot.attempt.body_instance_id;
-        let result_root = parliament_ballot_result_root_v1(
-            governance_attempt_id,
-            body_instance_id,
-            ballot_attempt_id,
-            opening_root,
-            tally,
-            outcome,
-            result_height,
-        );
-        if root_is_zero(&result_root) {
-            return Err(ParliamentReducerErrorV1::ZeroCommitmentRoot);
-        }
         let body =
             self.bodies
                 .get(&body_instance_id)
@@ -773,6 +762,28 @@ impl ParliamentAttemptStateV1 {
         {
             return Err(ParliamentReducerErrorV1::ImmutableBindingMismatch);
         }
+        let mut outcome = tally
+            .decision()
+            .map_err(|_| ParliamentReducerErrorV1::InvalidTally)?;
+        if self.attempt.risk_tier == RiskTierV1::Emergency
+            && body_role == ParliamentBody::PolicyJury
+            && outcome == ParliamentAggregateOutcomeV1::Approved
+            && tally.aye < parliament_quorum_seats_v1(tally.original_seats)
+        {
+            outcome = ParliamentAggregateOutcomeV1::Rejected;
+        }
+        let result_root = parliament_ballot_result_root_v1(
+            governance_attempt_id,
+            body_instance_id,
+            ballot_attempt_id,
+            opening_root,
+            tally,
+            outcome,
+            result_height,
+        );
+        if root_is_zero(&result_root) {
+            return Err(ParliamentReducerErrorV1::ZeroCommitmentRoot);
+        }
         let election = self
             .elections
             .get(&body.instance.election_attempt_id)
@@ -782,7 +793,8 @@ impl ParliamentAttemptStateV1 {
         if result_height <= election.attempt.request.pulse_height {
             return Err(ParliamentReducerErrorV1::InvalidCertificateHeight);
         }
-        let requires_confirmation = body_role == ParliamentBody::PolicyJury
+        let requires_confirmation = outcome == ParliamentAggregateOutcomeV1::Approved
+            && body_role == ParliamentBody::PolicyJury
             && tally
                 .requires_confirmation()
                 .map_err(|_| ParliamentReducerErrorV1::InvalidTally)?;
@@ -794,8 +806,17 @@ impl ParliamentAttemptStateV1 {
         {
             return Err(ParliamentReducerErrorV1::InvalidRequiredBodyPipeline);
         }
-        if requires_confirmation && eligible_confirmation_candidates < 2 {
-            let failure_kind = ParliamentBallotFailureKindV1::ConfirmationJuryCapacityUnavailable;
+        let confirmation_failure_kind =
+            if requires_confirmation && eligible_confirmation_candidates < 2 {
+                Some(ParliamentBallotFailureKindV1::ConfirmationJuryCapacityUnavailable)
+            } else if requires_confirmation
+                && self.randomness_redraws_used_v1()? == MAX_PARLIAMENT_RANDOMNESS_REDRAWS_V1
+            {
+                Some(ParliamentBallotFailureKindV1::RandomnessRedrawBudgetExhausted)
+            } else {
+                None
+            };
+        if let Some(failure_kind) = confirmation_failure_kind {
             let failure_root = parliament_ballot_failure_root_v1(
                 governance_attempt_id,
                 ballot_attempt_id,

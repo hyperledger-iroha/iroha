@@ -1702,6 +1702,30 @@ fn durable_context_recovery_rejects_local_autoscale_policy_drift() {
         Err(V2RecoveryError::ExecutionPolicyMismatch { .. })
     ));
 }
+
+#[test]
+fn durable_context_recovery_rejects_local_oracle_economics_drift() {
+    let (verified, keys) = verified_context();
+    let context = verified.context().clone();
+    let kura = Kura::blank_kura_for_testing();
+    let mut state = state_for(&kura, context.network_id);
+    state.oracle.economics.reward_amount = state
+        .oracle
+        .economics
+        .reward_amount
+        .try_add(&iroha_primitives::numeric::Quantity::one())
+        .expect("fixture oracle reward remains representable");
+    let block = dummy_block(&keys[0], 1, None);
+    kura.store_block(block).expect("persist canonical block");
+    V2ContextStore::open(kura.sumeragi_v2_storage_root())
+        .expect("open context store")
+        .persist(&PersistedHeightContext::from_verified(&verified))
+        .expect("persist active context");
+    assert!(matches!(
+        recover_active_height(kura.as_ref(), &state, None, keys[0].public_key().clone()),
+        Err(V2RecoveryError::ExecutionPolicyMismatch { .. })
+    ));
+}
 #[test]
 fn checkpoint_before_finality_reopens_same_height_without_reapplying() {
     let (verified, keys) = verified_context();

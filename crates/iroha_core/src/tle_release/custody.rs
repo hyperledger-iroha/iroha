@@ -161,14 +161,14 @@ impl RuntimeTleReleaseShareCustodyV1 {
             .get(&key_session_id)
             .cloned()
             .ok_or(TleReleaseShareCustodyErrorV1::SessionNotCommitted)?;
-        if world.tle_key_session_eligible_for_new_ballots(key_session_id) {
+        let committed_height = u64::try_from(state.height())
+            .map_err(|_| TleReleaseShareCustodyErrorV1::InvalidCommittedState)?;
+        let next_height = committed_height.checked_add(1).unwrap_or(committed_height);
+        if world.tle_key_session_eligible_for_new_ballots(key_session_id, next_height) {
             return Err(TleReleaseShareCustodyErrorV1::SessionStillRequired);
         }
         committed_public_state
             .validate()
-            .map_err(|_| TleReleaseShareCustodyErrorV1::InvalidCommittedState)?;
-
-        let committed_height = u64::try_from(state.height())
             .map_err(|_| TleReleaseShareCustodyErrorV1::InvalidCommittedState)?;
         let mut retain_through = None;
         for (_, attempt) in world.parliament_attempts().iter() {

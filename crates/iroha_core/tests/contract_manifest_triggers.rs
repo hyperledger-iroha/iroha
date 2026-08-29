@@ -226,6 +226,7 @@ fn activate_registers_manifest_triggers_and_deactivate_removes() {
         .expect("register manifest");
     let missing_subject_error = ActivateContractInstance {
         contract_address: contract_address.clone(),
+        expected_revision: 1,
         code_hash,
     }
     .execute(&authority, &mut stx)
@@ -247,6 +248,7 @@ fn activate_registers_manifest_triggers_and_deactivate_removes() {
     );
     ActivateContractInstance {
         contract_address: contract_address.clone(),
+        expected_revision: 1,
         code_hash,
     }
     .execute(&authority, &mut stx)
@@ -294,6 +296,7 @@ fn activate_registers_manifest_triggers_and_deactivate_removes() {
     assert_eq!(metadata.get(&tag_key), Some(&Json::from("alpha")));
     DeactivateContractInstance {
         contract_address: contract_address.clone(),
+        expected_revision: 1,
         reason: None,
     }
     .execute(&authority, &mut stx)
@@ -363,6 +366,7 @@ fn activate_rejects_manifest_trigger_with_unauthorized_foreign_authority() {
     .expect("register manifest");
     let error = ActivateContractInstance {
         contract_address: contract_address.clone(),
+        expected_revision: 1,
         code_hash,
     }
     .execute(&authority, &mut stx)
@@ -476,6 +480,7 @@ fn activate_registers_manifest_data_and_pipeline_triggers_and_deactivate_removes
         .expect("register the non-signable contract-subject account");
     ActivateContractInstance {
         contract_address: contract_address.clone(),
+        expected_revision: 1,
         code_hash,
     }
     .execute(&authority, &mut stx)
@@ -524,6 +529,7 @@ fn activate_registers_manifest_data_and_pipeline_triggers_and_deactivate_removes
     );
     DeactivateContractInstance {
         contract_address: contract_address.clone(),
+        expected_revision: 1,
         reason: None,
     }
     .execute(&authority, &mut stx)
@@ -606,6 +612,7 @@ fn activate_registers_cross_contract_manifest_trigger_callback() {
     .expect("register target manifest");
     ActivateContractInstance {
         contract_address: target_address.clone(),
+        expected_revision: 1,
         code_hash: target_code_hash,
     }
     .execute(&authority, &mut stx)
@@ -664,6 +671,7 @@ fn activate_registers_cross_contract_manifest_trigger_callback() {
         .expect("register the non-signable source contract-subject account");
     ActivateContractInstance {
         contract_address: source_address.clone(),
+        expected_revision: 1,
         code_hash: source_code_hash,
     }
     .execute(&authority, &mut stx)
@@ -762,6 +770,7 @@ fn activate_rejects_unresolved_cross_contract_manifest_trigger_callback() {
     .expect("register source manifest");
     let err = ActivateContractInstance {
         contract_address: source_address,
+        expected_revision: 1,
         code_hash: source_code_hash,
     }
     .execute(&authority, &mut stx)
@@ -832,6 +841,7 @@ seiyaku Test {{
     .expect("register manifest");
     ActivateContractInstance {
         contract_address: contract_address.clone(),
+        expected_revision: 1,
         code_hash,
     }
     .execute(&authority, &mut stx)

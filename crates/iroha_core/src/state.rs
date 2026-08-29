@@ -474,7 +474,7 @@ use crate::{
     state::storage_transactions::{
         TransactionsBlock, TransactionsBlockError, TransactionsStorage, TransactionsView,
     },
-    tle_release::{TleKeySessionPublicStateV1, TleReleaseAdapterError},
+    tle_release::{TleKeySessionLifecycleV1, TleKeySessionPublicStateV1, TleReleaseAdapterError},
 };
 pub(crate) mod storage_transactions;
 // Covers the inclusive 1 MiB canonical Kotodama argument-record boundary,
@@ -482,6 +482,9 @@ pub(crate) mod storage_transactions;
 // while retaining headroom for the entrypoint wrapper and contract body.
 const DEFAULT_GAS_LIMIT_PER_BLOCK: u64 = 4_000_000;
 const DEFAULT_TRIGGER_GAS_LIMIT: u64 = 50_000_000;
+const MAX_DATA_TRIGGER_FIRINGS_PER_TRANSACTION: usize = 256;
+const TRIGGER_FILTER_CHECK_GAS: u64 = 1;
+const TRIGGER_FIRING_GAS: u64 = 1;
 pub(crate) const GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY: u64 = 0;
 pub(crate) const TLE_KEY_SESSION_SINGLETON_KEY: u64 = 0;
 
@@ -511,6 +514,15 @@ pub enum TleKeySessionLifecycleErrorV1 {
     /// A retirement request did not name the currently active key session.
     #[error("TLE key session is not the active session")]
     ActiveSessionMismatch,
+    /// A successor was scheduled before its predecessor reached activation.
+    #[error("TLE key session already has a pending next-height activation")]
+    ActivationPending,
+    /// The mandatory next-height activation or configured lifetime overflowed.
+    #[error("TLE key-session activation or expiry height overflows")]
+    HeightOverflow,
+    /// The session is not active, is expired, or exhausted its fresh-ballot budget.
+    #[error("TLE key session is unavailable for a fresh ballot")]
+    FreshBallotUnavailable,
 }
 
 /// Fixed threshold-key lifecycle certificate version.
@@ -1128,6 +1140,7 @@ macro_rules! with_world_overlay_fields {
             parliament_attempts,
             tle_key_sessions,
             tle_key_session_rosters,
+            tle_key_session_lifecycles,
             tle_active_key_session,
             timed_ovn_evidence,
             global_beacon_dkg,
@@ -4374,6 +4387,8 @@ pub struct World {
     pub(crate) tle_key_sessions: Storage<TleKeySessionId, TleKeySessionPublicStateV1>,
     /// Frozen ordered validator roster bound to each finalized TLE key session.
     pub(crate) tle_key_session_rosters: Storage<TleKeySessionId, Vec<PeerId>>,
+    /// Versioned activation, expiry, rotation, and fresh-use metadata by TLE key session.
+    pub(crate) tle_key_session_lifecycles: Storage<TleKeySessionId, TleKeySessionLifecycleV1>,
     /// Singleton pointer to the TLE key session eligible for new ballots.
     pub(crate) tle_active_key_session: Storage<u64, TleKeySessionId>,
     /// Single authoritative public timed-OVN lifecycle keyed by ballot attempt.
@@ -5134,6 +5149,9 @@ pub struct WorldBlock<'world> {
     pub(crate) tle_key_sessions: StorageBlock<'world, TleKeySessionId, TleKeySessionPublicStateV1>,
     /// Frozen ordered validator roster bound to each finalized TLE key session.
     pub(crate) tle_key_session_rosters: StorageBlock<'world, TleKeySessionId, Vec<PeerId>>,
+    /// Versioned TLE key-session lifecycle metadata.
+    pub(crate) tle_key_session_lifecycles:
+        StorageBlock<'world, TleKeySessionId, TleKeySessionLifecycleV1>,
     /// Singleton TLE key session eligible for new ballots.
     pub(crate) tle_active_key_session: StorageBlock<'world, u64, TleKeySessionId>,
     /// Single authoritative public timed-OVN lifecycle keyed by ballot attempt.
@@ -5329,6 +5347,7 @@ impl WorldBlock<'_> {
         collect_reverts!(self.parliament_attempts, ParliamentAttempt);
         collect_reverts!(self.tle_key_sessions, TleKeySession);
         collect_reverts!(self.tle_key_session_rosters, TleKeySessionRoster);
+        collect_reverts!(self.tle_key_session_lifecycles, TleKeySessionLifecycle);
         collect_reverts!(self.tle_active_key_session, TleActiveKeySession);
         collect_reverts!(self.timed_ovn_evidence, TimedOvnEvidence);
         collect_reverts!(self.global_beacon_dkg, GlobalBeaconDkg);
@@ -5433,6 +5452,7 @@ impl WorldBlock<'_> {
         collect_payload!(self.parliament_attempts, ParliamentAttempt);
         collect_payload!(self.tle_key_sessions, TleKeySession);
         collect_payload!(self.tle_key_session_rosters, TleKeySessionRoster);
+        collect_payload!(self.tle_key_session_lifecycles, TleKeySessionLifecycle);
         collect_payload!(self.tle_active_key_session, TleActiveKeySession);
         collect_payload!(self.timed_ovn_evidence, TimedOvnEvidence);
         collect_payload!(self.global_beacon_dkg, GlobalBeaconDkg);
@@ -5709,6 +5729,7 @@ impl WorldBlock<'_> {
             parliament_attempts,
             tle_key_sessions,
             tle_key_session_rosters,
+            tle_key_session_lifecycles,
             tle_active_key_session,
             timed_ovn_evidence,
             global_beacon_dkg,
@@ -6543,6 +6564,9 @@ pub struct WorldTransaction<'block, 'world> {
     /// Frozen ordered validator roster bound to each finalized TLE key session.
     pub(crate) tle_key_session_rosters:
         StorageTransaction<'block, 'world, TleKeySessionId, Vec<PeerId>>,
+    /// Versioned TLE key-session lifecycle metadata.
+    pub(crate) tle_key_session_lifecycles:
+        StorageTransaction<'block, 'world, TleKeySessionId, TleKeySessionLifecycleV1>,
     /// Singleton TLE key session eligible for new ballots.
     pub(crate) tle_active_key_session: StorageTransaction<'block, 'world, u64, TleKeySessionId>,
     /// Single authoritative public timed-OVN lifecycle keyed by ballot attempt.
@@ -6778,10 +6802,31 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         contract_address: iroha_data_model::smart_contract::ContractAddress,
         code_hash: iroha_crypto::Hash,
     ) {
-        let binding = crate::smartcontracts::code::ContractSubjectBinding::new(&contract_address);
+        let mut binding = crate::smartcontracts::code::ContractSubjectBinding::new_direct(
+            &contract_address,
+            contract_address.subject_id(),
+        );
+        binding.lifecycle.active_code_hash = Some(code_hash);
         let subject = binding.subject.clone();
         self.contract_instances
             .insert(contract_address.clone(), code_hash);
+        self.contract_subject_bindings
+            .insert(contract_address.clone(), binding);
+        self.contract_subject_addresses
+            .insert(subject, contract_address);
+    }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    /// Install a retained inactive lifecycle record for API and state-roundtrip tests.
+    pub fn bind_inactive_contract_subject_for_testing(
+        &mut self,
+        contract_address: iroha_data_model::smart_contract::ContractAddress,
+        owner: AccountId,
+    ) {
+        let binding = crate::smartcontracts::code::ContractSubjectBinding::new_direct(
+            &contract_address,
+            owner,
+        );
+        let subject = binding.subject.clone();
         self.contract_subject_bindings
             .insert(contract_address.clone(), binding);
         self.contract_subject_addresses
@@ -8496,6 +8541,9 @@ pub struct WorldView<'world> {
     pub(crate) tle_key_sessions: StorageView<'world, TleKeySessionId, TleKeySessionPublicStateV1>,
     /// Frozen ordered validator roster bound to each finalized TLE key session.
     pub(crate) tle_key_session_rosters: StorageView<'world, TleKeySessionId, Vec<PeerId>>,
+    /// Versioned TLE key-session lifecycle metadata.
+    pub(crate) tle_key_session_lifecycles:
+        StorageView<'world, TleKeySessionId, TleKeySessionLifecycleV1>,
     /// Singleton TLE key session eligible for new ballots.
     pub(crate) tle_active_key_session: StorageView<'world, u64, TleKeySessionId>,
     /// Single authoritative public timed-OVN lifecycle keyed by ballot attempt.
@@ -8829,9 +8877,9 @@ impl GovernanceProposalRecord {
             | iroha_data_model::governance::types::ProposalKind::SorafsProviderGovernance(_)
             | iroha_data_model::governance::types::ProposalKind::ValidationFeePolicy(_)
             | iroha_data_model::governance::types::ProposalKind::ValidationFeePayoutLifecycle(_)
-            | iroha_data_model::governance::types::ProposalKind::MusubiRegistryGovernance(_) => {
-                None
-            }
+            | iroha_data_model::governance::types::ProposalKind::MusubiRegistryGovernance(_)
+            | iroha_data_model::governance::types::ProposalKind::ContractLifecycleGovernance(_)
+            | iroha_data_model::governance::types::ProposalKind::ContractEmergencyHold(_) => None,
         }
     }
     /// Access the runtime-upgrade payload when the proposal represents a runtime upgrade.
@@ -8847,9 +8895,9 @@ impl GovernanceProposalRecord {
             | iroha_data_model::governance::types::ProposalKind::SorafsProviderGovernance(_)
             | iroha_data_model::governance::types::ProposalKind::ValidationFeePolicy(_)
             | iroha_data_model::governance::types::ProposalKind::ValidationFeePayoutLifecycle(_)
-            | iroha_data_model::governance::types::ProposalKind::MusubiRegistryGovernance(_) => {
-                None
-            }
+            | iroha_data_model::governance::types::ProposalKind::MusubiRegistryGovernance(_)
+            | iroha_data_model::governance::types::ProposalKind::ContractLifecycleGovernance(_)
+            | iroha_data_model::governance::types::ProposalKind::ContractEmergencyHold(_) => None,
         }
     }
     /// Access the SCCP registry action when the proposal represents SCCP governance.
@@ -8865,9 +8913,9 @@ impl GovernanceProposalRecord {
             | iroha_data_model::governance::types::ProposalKind::SorafsProviderGovernance(_)
             | iroha_data_model::governance::types::ProposalKind::ValidationFeePolicy(_)
             | iroha_data_model::governance::types::ProposalKind::ValidationFeePayoutLifecycle(_)
-            | iroha_data_model::governance::types::ProposalKind::MusubiRegistryGovernance(_) => {
-                None
-            }
+            | iroha_data_model::governance::types::ProposalKind::MusubiRegistryGovernance(_)
+            | iroha_data_model::governance::types::ProposalKind::ContractLifecycleGovernance(_)
+            | iroha_data_model::governance::types::ProposalKind::ContractEmergencyHold(_) => None,
         }
     }
     /// Access the SoraFS provider-owner action when the proposal represents SoraFS governance.
@@ -8883,9 +8931,9 @@ impl GovernanceProposalRecord {
             | iroha_data_model::governance::types::ProposalKind::SccpRouteGovernance(_)
             | iroha_data_model::governance::types::ProposalKind::ValidationFeePolicy(_)
             | iroha_data_model::governance::types::ProposalKind::ValidationFeePayoutLifecycle(_)
-            | iroha_data_model::governance::types::ProposalKind::MusubiRegistryGovernance(_) => {
-                None
-            }
+            | iroha_data_model::governance::types::ProposalKind::MusubiRegistryGovernance(_)
+            | iroha_data_model::governance::types::ProposalKind::ContractLifecycleGovernance(_)
+            | iroha_data_model::governance::types::ProposalKind::ContractEmergencyHold(_) => None,
         }
     }
     /// Access the validation-fee policy payload when present.
@@ -8901,9 +8949,9 @@ impl GovernanceProposalRecord {
             | iroha_data_model::governance::types::ProposalKind::SccpRouteGovernance(_)
             | iroha_data_model::governance::types::ProposalKind::SorafsProviderGovernance(_)
             | iroha_data_model::governance::types::ProposalKind::ValidationFeePayoutLifecycle(_)
-            | iroha_data_model::governance::types::ProposalKind::MusubiRegistryGovernance(_) => {
-                None
-            }
+            | iroha_data_model::governance::types::ProposalKind::MusubiRegistryGovernance(_)
+            | iroha_data_model::governance::types::ProposalKind::ContractLifecycleGovernance(_)
+            | iroha_data_model::governance::types::ProposalKind::ContractEmergencyHold(_) => None,
         }
     }
     /// Access the validation-fee payout lifecycle payload when present.
@@ -8919,9 +8967,9 @@ impl GovernanceProposalRecord {
             | iroha_data_model::governance::types::ProposalKind::SccpRouteGovernance(_)
             | iroha_data_model::governance::types::ProposalKind::SorafsProviderGovernance(_)
             | iroha_data_model::governance::types::ProposalKind::ValidationFeePolicy(_)
-            | iroha_data_model::governance::types::ProposalKind::MusubiRegistryGovernance(_) => {
-                None
-            }
+            | iroha_data_model::governance::types::ProposalKind::MusubiRegistryGovernance(_)
+            | iroha_data_model::governance::types::ProposalKind::ContractLifecycleGovernance(_)
+            | iroha_data_model::governance::types::ProposalKind::ContractEmergencyHold(_) => None,
         }
     }
     /// Access the exact Musubi Parliament action retained by this proposal.
@@ -8937,9 +8985,9 @@ impl GovernanceProposalRecord {
             | iroha_data_model::governance::types::ProposalKind::SccpRouteGovernance(_)
             | iroha_data_model::governance::types::ProposalKind::SorafsProviderGovernance(_)
             | iroha_data_model::governance::types::ProposalKind::ValidationFeePolicy(_)
-            | iroha_data_model::governance::types::ProposalKind::ValidationFeePayoutLifecycle(_) => {
-                None
-            }
+            | iroha_data_model::governance::types::ProposalKind::ValidationFeePayoutLifecycle(_)
+            | iroha_data_model::governance::types::ProposalKind::ContractLifecycleGovernance(_)
+            | iroha_data_model::governance::types::ProposalKind::ContractEmergencyHold(_) => None,
         }
     }
 }
@@ -18819,6 +18867,9 @@ macro_rules! world_ro_accessors {
             /// Frozen ordered validator roster bound to each finalized TLE key session.
             storage tle_key_session_rosters:
                 TleKeySessionId => Vec<PeerId>;
+            /// Versioned activation, expiry, rotation, and fresh-use metadata by TLE key session.
+            storage tle_key_session_lifecycles:
+                TleKeySessionId => TleKeySessionLifecycleV1;
             /// Singleton TLE key session eligible for new Parliament ballots.
             storage tle_active_key_session: u64 => TleKeySessionId;
             /// Single authoritative public timed-OVN lifecycle keyed by ballot attempt.
@@ -19058,15 +19109,40 @@ pub trait WorldReadOnly {
         (pulse.pulse_id == *pulse_id && pulse.network_id == *network_id && pulse.height == height)
             .then_some(pulse)
     }
-    /// Return the exact TLE key session currently eligible for new ballots.
+    /// Return the latest certified TLE key-session lifecycle head.
+    ///
+    /// A newly installed head has a mandatory next-height activation. During
+    /// that one-block cutover its predecessor remains the selectable session.
     fn active_tle_key_session(&self) -> Option<TleKeySessionId> {
         self.tle_active_key_session()
             .get(&TLE_KEY_SESSION_SINGLETON_KEY)
             .copied()
     }
-    /// Return whether `key_session_id` is currently eligible for new ballots.
-    fn tle_key_session_eligible_for_new_ballots(&self, key_session_id: TleKeySessionId) -> bool {
-        self.active_tle_key_session() == Some(key_session_id)
+    /// Resolve the unique lifecycle record eligible for one fresh ballot.
+    fn selectable_tle_key_session_for_fresh_ballot_at(
+        &self,
+        height: u64,
+    ) -> Option<TleKeySessionId> {
+        let mut selected = None;
+        for (key_session_id, lifecycle) in self.tle_key_session_lifecycles().iter() {
+            if lifecycle.validate().is_err() {
+                return None;
+            }
+            if lifecycle.permits_fresh_ballot_at(height) {
+                if selected.replace(*key_session_id).is_some() {
+                    return None;
+                }
+            }
+        }
+        selected
+    }
+    /// Return whether `key_session_id` is eligible for a fresh ballot at `height`.
+    fn tle_key_session_eligible_for_new_ballots(
+        &self,
+        key_session_id: TleKeySessionId,
+        height: u64,
+    ) -> bool {
+        self.selectable_tle_key_session_for_fresh_ballot_at(height) == Some(key_session_id)
     }
     /// Return the greatest committed opening deadline retaining one TLE key session.
     ///
@@ -19090,9 +19166,10 @@ pub trait WorldReadOnly {
     }
     /// Return every TLE key session whose runtime custody is still required.
     ///
-    /// The active session is included unconditionally. Historical ballot
-    /// bindings are retained through their greatest committed opening
-    /// deadline, inclusively; `u64::MAX` therefore remains unretirable.
+    /// The unique session eligible for a fresh ballot at the next height is
+    /// included so custody is ready before the next block executes. Historical ballot bindings are retained through their
+    /// greatest committed opening deadline, inclusively; `u64::MAX` therefore
+    /// remains unretirable.
     ///
     /// # Errors
     ///
@@ -19106,7 +19183,10 @@ pub trait WorldReadOnly {
         crate::governance::parliament::ParliamentReducerErrorV1,
     > {
         let mut required = BTreeSet::new();
-        if let Some(active_key_session_id) = self.active_tle_key_session() {
+        let next_height = committed_height.checked_add(1).unwrap_or(committed_height);
+        if let Some(active_key_session_id) =
+            self.selectable_tle_key_session_for_fresh_ballot_at(next_height)
+        {
             required.insert(active_key_session_id);
         }
 
@@ -20340,6 +20420,7 @@ impl<'world> WorldBlock<'world> {
             parliament_timed_ovn_resource_reservations,
             tle_key_sessions,
             tle_key_session_rosters,
+            tle_key_session_lifecycles,
             tle_active_key_session,
             timed_ovn_evidence,
             global_beacon_dkg,
@@ -20507,6 +20588,7 @@ impl<'world> WorldBlock<'world> {
         parliament_timed_ovn_resource_reservations.commit();
         tle_key_sessions.commit();
         tle_key_session_rosters.commit();
+        tle_key_session_lifecycles.commit();
         tle_active_key_session.commit();
         timed_ovn_evidence.commit();
         global_beacon_dkg.commit();
@@ -21675,6 +21757,16 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     ) -> Result<(), crate::governance::parliament::ParliamentReducerErrorV1> {
         attempt.validate()?;
         let id = attempt.attempt().id;
+        crate::governance::parliament::validate_parliament_randomness_redraw_lineage_v1(
+            self.parliament_attempts
+                .iter()
+                .filter_map(|(persisted_id, persisted)| {
+                    (*persisted_id != id
+                        && persisted.proposal_content_id() == attempt.proposal_content_id())
+                    .then_some(persisted)
+                })
+                .chain(std::iter::once(&attempt)),
+        )?;
         let stale_reservations = self
             .parliament_timed_ovn_resource_reservations
             .iter()
@@ -21750,14 +21842,16 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             _ => Err(TleReleaseAdapterError::TranscriptMismatch),
         }
     }
-    /// Make one committed public TLE key session eligible for new ballots.
+    /// Schedule one committed public TLE key session for next-height activation.
     ///
-    /// Replacing the pointer is the deterministic rotation cutover: the old
-    /// session remains persisted for ballots already bound to it, but no new
-    /// ballot may select it after this transaction commits.
+    /// A rotation committed at `H` keeps its predecessor selectable through
+    /// `H` and makes the successor selectable at `H + 1`. Public state and the
+    /// frozen roster remain persisted for already-bound ballots.
     pub(crate) fn activate_tle_key_session(
         &mut self,
         key_session_id: TleKeySessionId,
+        current_height: u64,
+        policy: iroha_config::parameters::actual::ParliamentTleKeyLifecycle,
     ) -> Result<(), TleKeySessionLifecycleErrorV1> {
         let public_state = self
             .tle_key_sessions
@@ -21774,14 +21868,58 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             .ok_or(TleKeySessionLifecycleErrorV1::UnknownSession)?;
         validate_tle_key_session_roster_binding_v1(&public_state, ordered_roster)
             .map_err(|_| TleKeySessionLifecycleErrorV1::UnknownSession)?;
+        if self
+            .tle_key_session_lifecycles
+            .get(&key_session_id)
+            .is_some()
+        {
+            return Err(TleKeySessionLifecycleErrorV1::UnknownSession);
+        }
+        if let Some(previous_key_session_id) = self
+            .tle_active_key_session
+            .get(&TLE_KEY_SESSION_SINGLETON_KEY)
+            .copied()
+        {
+            let mut previous = self
+                .tle_key_session_lifecycles
+                .get(&previous_key_session_id)
+                .copied()
+                .ok_or(TleKeySessionLifecycleErrorV1::UnknownSession)?
+                .validate()
+                .map_err(|_| TleKeySessionLifecycleErrorV1::UnknownSession)?;
+            if previous.key_session_id != previous_key_session_id {
+                return Err(TleKeySessionLifecycleErrorV1::UnknownSession);
+            }
+            if previous.activation_height > current_height {
+                return Err(TleKeySessionLifecycleErrorV1::ActivationPending);
+            }
+            previous
+                .cut_over_after(current_height)
+                .map_err(|_| TleKeySessionLifecycleErrorV1::UnknownSession)?;
+            self.tle_key_session_lifecycles
+                .insert(previous_key_session_id, previous);
+        }
+        let activation_height = current_height
+            .checked_add(1)
+            .ok_or(TleKeySessionLifecycleErrorV1::HeightOverflow)?;
+        let lifecycle = TleKeySessionLifecycleV1::new(
+            key_session_id,
+            activation_height,
+            policy.session_lifetime_blocks,
+            policy.max_fresh_ballots_per_session,
+        )
+        .map_err(|_| TleKeySessionLifecycleErrorV1::HeightOverflow)?;
+        self.tle_key_session_lifecycles
+            .insert(key_session_id, lifecycle);
         self.tle_active_key_session
             .insert(TLE_KEY_SESSION_SINGLETON_KEY, key_session_id);
         Ok(())
     }
-    /// Make the active TLE key session ineligible for future ballots.
+    /// Schedule the active TLE key session to stop admitting ballots after this height.
     pub(crate) fn retire_tle_key_session(
         &mut self,
         key_session_id: TleKeySessionId,
+        current_height: u64,
     ) -> Result<(), TleKeySessionLifecycleErrorV1> {
         if self
             .tle_active_key_session
@@ -21791,6 +21929,21 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         {
             return Err(TleKeySessionLifecycleErrorV1::ActiveSessionMismatch);
         }
+        let mut lifecycle = self
+            .tle_key_session_lifecycles
+            .get(&key_session_id)
+            .copied()
+            .ok_or(TleKeySessionLifecycleErrorV1::UnknownSession)?
+            .validate()
+            .map_err(|_| TleKeySessionLifecycleErrorV1::UnknownSession)?;
+        if lifecycle.activation_height > current_height {
+            return Err(TleKeySessionLifecycleErrorV1::ActivationPending);
+        }
+        lifecycle
+            .cut_over_after(current_height)
+            .map_err(|_| TleKeySessionLifecycleErrorV1::UnknownSession)?;
+        self.tle_key_session_lifecycles
+            .insert(key_session_id, lifecycle);
         self.tle_active_key_session
             .remove(TLE_KEY_SESSION_SINGLETON_KEY);
         Ok(())
@@ -21799,11 +21952,12 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     pub(crate) fn put_timed_ovn_lifecycle(
         &mut self,
         state: TimedOvnLifecycleStateV1,
+        current_height: u64,
     ) -> Result<(), TimedOvnEvidenceError> {
         let ballot_attempt_id = BallotAttemptId::new(state.ballot_attempt_id());
-        if self.timed_ovn_evidence.get(&ballot_attempt_id).is_none()
-            && matches!(&state, TimedOvnLifecycleStateV1::Registered(_))
-        {
+        let is_fresh_registration = self.timed_ovn_evidence.get(&ballot_attempt_id).is_none()
+            && matches!(&state, TimedOvnLifecycleStateV1::Registered(_));
+        if is_fresh_registration {
             let governance_attempt_id =
                 iroha_data_model::governance::types::GovernanceAttemptId::new(
                     state.session().governance_attempt_id,
@@ -21881,6 +22035,21 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             Some(_) => return Err(TimedOvnEvidenceError::InvalidLifecycleTransition),
             None if matches!(&state, TimedOvnLifecycleStateV1::Registered(_)) => {}
             None => return Err(TimedOvnEvidenceError::InvalidLifecycleTransition),
+        }
+        if is_fresh_registration {
+            if !self.tle_key_session_eligible_for_new_ballots(key_session_id, current_height) {
+                return Err(TimedOvnEvidenceError::TleKeySessionMismatch);
+            }
+            let mut lifecycle = self
+                .tle_key_session_lifecycles
+                .get(&key_session_id)
+                .copied()
+                .ok_or(TimedOvnEvidenceError::TleKeySessionMismatch)?;
+            lifecycle
+                .consume_fresh_ballot(current_height)
+                .map_err(|_| TimedOvnEvidenceError::TleKeySessionMismatch)?;
+            self.tle_key_session_lifecycles
+                .insert(key_session_id, lifecycle);
         }
         self.timed_ovn_evidence.insert(ballot_attempt_id, state);
         Ok(())
@@ -22433,6 +22602,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             parliament_timed_ovn_resource_reservations,
             tle_key_sessions,
             tle_key_session_rosters,
+            tle_key_session_lifecycles,
             tle_active_key_session,
             timed_ovn_evidence,
             global_beacon_dkg,
@@ -22650,6 +22820,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         parliament_timed_ovn_resource_reservations.apply();
         tle_key_sessions.apply();
         tle_key_session_rosters.apply();
+        tle_key_session_lifecycles.apply();
         tle_active_key_session.apply();
         timed_ovn_evidence.apply();
         global_beacon_dkg.apply();
@@ -25651,6 +25822,8 @@ impl State {
                     iroha_config::parameters::defaults::governance::PARLIAMENT_PUBLIC_FINDING_PHASE_BLOCKS,
                 parliament_timed_ovn:
                     iroha_config::parameters::actual::ParliamentTimedOvn::default(),
+                parliament_tle_key_lifecycle:
+                    iroha_config::parameters::actual::ParliamentTleKeyLifecycle::default(),
                 parliament_tle_partial_release_signer_provider_handle: None,
                 parliament_tle_partial_release_signer_provider_revision: None,
                 parliament_tle_partial_release_signer_provider_policy_digest: None,
@@ -57322,7 +57495,7 @@ impl StateTransaction<'_, '_> {
         // deterministic in debug and release builds instead of relying on
         // wrapping or saturating arithmetic.
         let mut stack: Vec<(EventBox, TriggerId, u64, u16)> = self
-            .capture_data_events()
+            .capture_data_events()?
             .into_iter()
             // Preserve the order of the matched triggers
             .rev()
@@ -57343,6 +57516,7 @@ impl StateTransaction<'_, '_> {
                 });
                 continue;
             }
+            self.charge_trigger_work_gas(TRIGGER_FILTER_CHECK_GAS, "data trigger recheck")?;
             let (executable, trigger_authority) = {
                 let Some(action) = self.world.triggers.data_triggers().get(&trg_id) else {
                     warn!(
@@ -57386,6 +57560,13 @@ impl StateTransaction<'_, '_> {
                 }
                 (action.executable().clone(), action.authority().clone())
             };
+            if steps.len() >= MAX_DATA_TRIGGER_FIRINGS_PER_TRANSACTION {
+                return Err(ValidationFail::NotPermitted(format!(
+                    "data trigger cascade exceeds {MAX_DATA_TRIGGER_FIRINGS_PER_TRANSACTION} firings per transaction"
+                ))
+                .into());
+            }
+            self.charge_trigger_work_gas(TRIGGER_FIRING_GAS, "data trigger firing")?;
             let step_index =
                 first_step_index.saturating_add(u32::try_from(steps.len()).unwrap_or(u32::MAX));
             let step = self.execute_trigger(
@@ -57413,7 +57594,7 @@ impl StateTransaction<'_, '_> {
             // can represent `depth + 1` even at the maximum configured limit.
             let next_depth = depth + 1;
             let next_items = self
-                .capture_data_events()
+                .capture_data_events()?
                 .into_iter()
                 .rev()
                 .map(|(e, t, generation)| (e, t, generation, next_depth));
@@ -57425,8 +57606,19 @@ impl StateTransaction<'_, '_> {
     ///
     /// Events are returned as [`EventBox`] values so downstream consumers observe the full
     /// trigger union (not just data-event representatives).
-    fn capture_data_events(&mut self) -> Vec<(EventBox, TriggerId, u64)> {
+    fn capture_data_events(
+        &mut self,
+    ) -> Result<Vec<(EventBox, TriggerId, u64)>, TransactionRejectionReason> {
         let drained = core::mem::take(&mut self.world.internal_event_buf);
+        let check_count = u64::try_from(drained.len())
+            .unwrap_or(u64::MAX)
+            .saturating_mul(
+                u64::try_from(self.world.triggers.data_triggers().len()).unwrap_or(u64::MAX),
+            );
+        self.charge_trigger_work_gas(
+            check_count.saturating_mul(TRIGGER_FILTER_CHECK_GAS),
+            "data trigger filter checks",
+        )?;
         let mut matches = Vec::new();
         for event in &drained {
             for (trg_id, action) in self.world.triggers.data_triggers().iter() {
@@ -57439,7 +57631,33 @@ impl StateTransaction<'_, '_> {
                 }
             }
         }
-        matches
+        Ok(matches)
+    }
+    fn charge_trigger_work_gas(
+        &mut self,
+        gas: u64,
+        operation: &str,
+    ) -> Result<(), TransactionRejectionReason> {
+        if gas == 0 {
+            return Ok(());
+        }
+        let limit = if self.gas_limit_per_block == 0 {
+            DEFAULT_TRIGGER_GAS_LIMIT
+        } else {
+            self.gas_limit_per_block
+        };
+        let total = self
+            .gas_used_in_block_so_far
+            .saturating_add(self.last_tx_gas_used)
+            .saturating_add(gas);
+        if total > limit {
+            return Err(ValidationFail::NotPermitted(format!(
+                "{operation} exceed the shared block gas budget: {total} > {limit}"
+            ))
+            .into());
+        }
+        self.last_tx_gas_used = self.last_tx_gas_used.saturating_add(gas);
+        Ok(())
     }
     /// Build or fetch the cached snapshot of accounts available for trigger execution.
     fn trigger_accounts_snapshot(&mut self) -> Arc<Vec<AccountId>> {
@@ -57853,6 +58071,8 @@ impl StateTransaction<'_, '_> {
                     self,
                     None,
                 )?;
+                let instruction_gas = crate::gas::meter_instructions(instructions);
+                self.charge_trigger_work_gas(instruction_gas, "native trigger instructions")?;
                 let step = ExecutionStep(instructions.clone());
                 self.seed_time_trigger_call_hash(id, authority, &event, &step);
                 (

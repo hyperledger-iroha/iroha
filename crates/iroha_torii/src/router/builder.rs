@@ -396,6 +396,12 @@ pub(crate) enum HandlerAuthentication {
     /// enforce freshness and replay protection, and then apply account-scoped
     /// permissions before returning protected data.
     CanonicalAccountSignature,
+    /// Optional canonical account authentication performed by the handler.
+    ///
+    /// Absence of authentication selects the public-dataspace view. Any
+    /// supplied canonical authentication material must verify before the
+    /// handler may expand visibility.
+    OptionalCanonicalAccountSignature,
     /// Canonical signed body authentication performed by the handler.
     ///
     /// The decoded envelope exposes a canonical [`AccountId`](iroha_data_model::account::AccountId)
@@ -420,6 +426,9 @@ impl HandlerAuthentication {
     const fn catalog_policy(self) -> AuthenticationPolicy {
         match self {
             Self::CanonicalAccountSignature => AuthenticationPolicy::CanonicalAccountSignature,
+            Self::OptionalCanonicalAccountSignature => {
+                AuthenticationPolicy::OptionalCanonicalAccountSignature
+            }
             Self::CanonicalSignedBody => AuthenticationPolicy::CanonicalSignedBody,
             Self::ManifestConditionalContent => AuthenticationPolicy::ManifestConditionalContent,
             Self::OperatorCredentialExchange => AuthenticationPolicy::OperatorCredentialExchange,

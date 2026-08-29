@@ -100,6 +100,11 @@ pub(in crate::sumeragi) enum ProductionLifecycleCompletionSelectionV1 {
         /// Exact lifecycle ordinal of the same sidecar-backed Ready row.
         ordinal: u128,
     },
+    /// A certified newer view retired an unprotected missing-sidecar Validate row.
+    LifecycleValidateSidecarSuperseded {
+        /// Exact lifecycle ordinal terminalized by the durable cancellation.
+        ordinal: u128,
+    },
     /// The exact retained Validate successor could not reserve worker/output capacity.
     LifecycleValidateSuccessorCapacityPending {
         /// Exact unchanged successor ordinal.
@@ -186,6 +191,7 @@ impl ProductionLifecycleCompletionSelectionV1 {
             | Self::LifecycleValidateDeferred
             | Self::LifecycleValidateSidecarWaiting
             | Self::LifecycleValidateSidecarWoken { .. }
+            | Self::LifecycleValidateSidecarSuperseded { .. }
             | Self::LifecycleValidateSuccessorCapacityPending { .. }
             | Self::LifecycleValidateSuccessorFencePending { .. }
             | Self::CertifiedFetchBodyPersisted
@@ -460,6 +466,20 @@ fn selected_ingress_is_certified_body_response(inbound: &InboundBlockMessage) ->
                 ..
             },
         )
+    )
+}
+
+fn selected_ingress_is_validate_sidecar_pacemaker_progress(inbound: &InboundBlockMessage) -> bool {
+    let crate::sumeragi::message::BlockMessage::V2(message) = inbound.message() else {
+        return false;
+    };
+    matches!(
+        &message.payload,
+        iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload::QuorumCertificate(_)
+            | iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload::TimeoutVote(_)
+            | iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload::TimeoutCertificate(
+                _
+            )
     )
 }
 
@@ -1018,7 +1038,11 @@ impl LaunchedProductionLifecycleV1 {
         registration: RegisteredLifecycleValidateSidecarWaitV1,
         lane_work: &mut V2LaneWorkAdapter,
     ) -> ProductionLifecycleCompletionSelectionV1 {
-        match registration.drive(&mut self.owner.coordinator, &self.owner.registry, lane_work) {
+        match registration.drive(
+            &mut self.owner.coordinator,
+            &mut self.owner.registry,
+            lane_work,
+        ) {
             LifecycleValidateSidecarDriveV1::Waiting(registration) => {
                 assert!(self.pending_lifecycle_completion.is_none());
                 self.pending_lifecycle_completion = Some(
@@ -1033,6 +1057,23 @@ impl LaunchedProductionLifecycleV1 {
                     PendingLifecycleCompletionV1::ReadyValidateSuccessor(successor),
                 );
                 ProductionLifecycleCompletionSelectionV1::LifecycleValidateSidecarWoken { ordinal }
+            }
+            LifecycleValidateSidecarDriveV1::Superseded { ordinal } => {
+                if let Err(error) = self.executor.release_live_lifecycle_validate_successor(
+                    ordinal,
+                    crate::sumeragi::v2_effects::LifecycleValidateRetryResolutionV1::Cancelled,
+                ) {
+                    iroha_logger::error!(
+                        %error,
+                        ordinal,
+                        "superseded lifecycle Validate sidecar lost its executor owner"
+                    );
+                    self.close_output_for_restart();
+                    return ProductionLifecycleCompletionSelectionV1::RestartRequired;
+                }
+                ProductionLifecycleCompletionSelectionV1::LifecycleValidateSidecarSuperseded {
+                    ordinal,
+                }
             }
             LifecycleValidateSidecarDriveV1::RestartRequired(error) => {
                 iroha_logger::error!(
@@ -1812,6 +1853,69 @@ impl LaunchedProductionLifecycleV1 {
             }
             PreparedOrdinaryIngressDequeueV1::RestartRequired => {
                 ProductionPreTimeoutLockedPrepareQcIngressTurnV1::RestartRequired
+            }
+        }
+    }
+
+    /// Move at most one authenticated pacemaker Progress carrier while an
+    /// unprotected Validate sidecar retains the ordinary lifecycle barrier.
+    ///
+    /// Selection preserves the ordinary fair queue gates and freezes the
+    /// current physical prefix. The sealed permit narrows the predicate to
+    /// QC, TimeoutVote, or TC; proposal, vote, payload, Serve, and lane traffic
+    /// remain unavailable through this path.
+    pub(in crate::sumeragi) fn prepare_validate_sidecar_pacemaker_ingress_turn(
+        &mut self,
+        _permit: crate::sumeragi::v2_runner::LifecycleValidateSidecarPacemakerEscapePermitV1,
+    ) -> Result<
+        Option<ProductionPreparedOrdinaryIngressTurnV1>,
+        crate::sumeragi::v2_runner::V2RunnerError,
+    > {
+        let terminal_subject = self
+            .executor
+            .lifecycle_terminal_subject()
+            .map_err(|error| {
+                iroha_logger::error!(
+                    %error,
+                    "Validate-sidecar pacemaker terminal-subject projection failed closed"
+                );
+                self.close_output_for_restart();
+                crate::sumeragi::v2_runner::V2RunnerError::RestartRequired
+            })?;
+        let ingress = std::sync::Arc::clone(&self.leader_wire_ingress_binding.ingress);
+        let physical_cut = ingress.next_physical_admission_ordinal();
+        let cut = {
+            let executor = &self.executor;
+            ingress.capture_next_ingress_turn_cut_before(physical_cut, |occurrence| {
+                selected_ingress_is_validate_sidecar_pacemaker_progress(occurrence.inbound())
+                    && crate::sumeragi::v2_effects::v2_ingress_head_can_drain(
+                        occurrence.inbound(),
+                        executor,
+                        terminal_subject,
+                    )
+            })
+        }
+        .map_err(|error| {
+            iroha_logger::error!(
+                ?error,
+                "Validate-sidecar pacemaker fair-ingress cut failed closed"
+            );
+            self.close_output_for_restart();
+            crate::sumeragi::v2_runner::V2RunnerError::RestartRequired
+        })?;
+        let Some(cut) = cut else {
+            return Ok(None);
+        };
+        match prepare_ordinary_ingress_dequeue(
+            &ingress,
+            cut,
+            None,
+            terminal_subject,
+            &self.services,
+        ) {
+            PreparedOrdinaryIngressDequeueV1::Prepared(turn) => Ok(Some(turn)),
+            PreparedOrdinaryIngressDequeueV1::RestartRequired => {
+                Err(crate::sumeragi::v2_runner::V2RunnerError::RestartRequired)
             }
         }
     }
@@ -2657,6 +2761,19 @@ impl ActivatedProductionLifecycleV1 {
     ) -> ProductionPreTimeoutLockedPrepareQcIngressTurnV1 {
         self.launched
             .prepare_pre_timeout_locked_prepare_qc_ingress_turn(cut)
+    }
+
+    /// Forward one sealed Validate-sidecar pacemaker ingress turn without
+    /// exposing the launched executor or fair-ingress owner.
+    pub(in crate::sumeragi) fn prepare_validate_sidecar_pacemaker_ingress_turn(
+        &mut self,
+        permit: crate::sumeragi::v2_runner::LifecycleValidateSidecarPacemakerEscapePermitV1,
+    ) -> Result<
+        Option<ProductionPreparedOrdinaryIngressTurnV1>,
+        crate::sumeragi::v2_runner::V2RunnerError,
+    > {
+        self.launched
+            .prepare_validate_sidecar_pacemaker_ingress_turn(permit)
     }
 
     /// Emit a read-only, rate-limited ownership census when a non-empty fair

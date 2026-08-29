@@ -99,13 +99,19 @@ pub mod isi {
             },
             prelude::{AccountEvent, AccountPermissionChanged, TriggerEvent},
             smart_contract::{
-                ContractCodeRegistered, ContractCodeRemoved, ContractInstanceActivated,
-                ContractInstanceDeactivated, SmartContractEvent,
+                ContractCodeRegistered, ContractCodeRemoved, ContractEmergencyHoldPlaced,
+                ContractEmergencyHoldRetrospectiveCompleted, ContractInstanceActivated,
+                ContractInstanceDeactivated, ContractOwnershipTransferCancelled,
+                ContractOwnershipTransferOffered, ContractOwnershipTransferred,
+                ContractParliamentDelegationChanged, SmartContractEvent,
             },
         },
         governance::types::{
-            AbiVersion, BodyElectionAttemptId, DeployContractProposal, GovernanceAttemptStatusV1,
-            GovernanceCertificateV1, GovernanceExpectedHeadAbsentV1,
+            AbiVersion, BodyElectionAttemptId,
+            CompleteContractEmergencyHoldRetrospectiveGovernanceActionV1,
+            ContractEmergencyHoldProposalV1, ContractLifecycleGovernanceActionV1,
+            ContractLifecycleGovernanceProposalV1, DeployContractProposal,
+            GovernanceAttemptStatusV1, GovernanceCertificateV1, GovernanceExpectedHeadAbsentV1,
             GovernanceExpectedHeadPresentV1, GovernanceExpectedHeadV1, GovernanceStageV1,
             MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1, ParliamentAggregateOutcomeV1,
             ParliamentAggregateTallyV1, ParliamentBody, ProposalKind, RuntimeUpgradeProposal,
@@ -1229,36 +1235,6 @@ pub mod isi {
         if !has_exact_permission(&state_transaction.world, authority, &required) {
             return Err(InstructionExecutionError::InvariantViolation(
                 format!("not permitted: {}", required.name()).into(),
-            ));
-        }
-        Ok(())
-    }
-    fn ensure_contract_binding_governance(
-        authority: &AccountId,
-        contract_address: &iroha_data_model::smart_contract::ContractAddress,
-        state_transaction: &StateTransaction<'_, '_>,
-    ) -> Result<(), Error> {
-        ensure_contract_lifecycle_authority(authority, state_transaction)?;
-        let protected = protected_contract_namespaces(state_transaction);
-        let address_dataspace = contract_address.dataspace_id().ok();
-        let protected_address = protected.contains("*")
-            || protected.contains(contract_address.as_str())
-            || address_dataspace.is_some_and(|dataspace_id| {
-                protected.contains(&format!("dataspace:{}", dataspace_id.as_u64()))
-                    || protected.iter().any(|namespace| {
-                        state_transaction
-                            .nexus
-                            .dataspace_catalog
-                            .by_alias(namespace)
-                            .is_some_and(|entry| entry.id == dataspace_id)
-                    })
-            });
-        let governance_permission: Permission = CanEnactGovernance.into();
-        if protected_address
-            && !has_exact_permission(&state_transaction.world, authority, &governance_permission)
-        {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "not permitted: CanEnactGovernance".into(),
             ));
         }
         Ok(())
@@ -3012,6 +2988,239 @@ pub mod isi {
             Ok(())
         }
     }
+    fn is_bonded_citizen(
+        authority: &AccountId,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> bool {
+        let required = &state_transaction.gov.citizenship_bond_amount;
+        state_transaction
+            .world
+            .citizens
+            .get(authority)
+            .is_some_and(|record| &record.amount >= required)
+    }
+    fn submit_contract_governance_proposal(
+        authority: &AccountId,
+        kind: ProposalKind,
+        contract_address: iroha_data_model::smart_contract::ContractAddress,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        let id = kind.fingerprint();
+        if let Some(existing) = state_transaction.world.governance_proposals.get(&id) {
+            if existing.kind != kind {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "governance proposal id collision".into(),
+                ));
+            }
+            ensure_certificate_only_proposal_v1(id, existing, state_transaction)?;
+            return Ok(());
+        }
+        let record = crate::state::GovernanceProposalRecord {
+            proposer: authority.clone(),
+            kind,
+            created_height: state_transaction.block_height(),
+            status: crate::state::GovernanceProposalStatus::Proposed,
+        };
+        ensure_certificate_only_proposal_v1(id, &record, state_transaction)?;
+        state_transaction
+            .world
+            .put_governance_proposal(id, record)
+            .map_err(governance_proposal_storage_error)?;
+        state_transaction.world.emit_events(Some(
+            iroha_data_model::events::data::governance::GovernanceEvent::ProposalSubmitted(
+                iroha_data_model::events::data::governance::GovernanceProposalSubmitted {
+                    id,
+                    proposer: authority.clone(),
+                    contract_address: Some(contract_address),
+                },
+            ),
+        ));
+        Ok(())
+    }
+    impl Execute for gov::ProposeContractLifecycleGovernance {
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            let payload = self.proposal;
+            if payload.expected_revision == 0 {
+                return Err(invalid_governance_parameter(
+                    "contract lifecycle expected_revision must be non-zero",
+                ));
+            }
+            let lifecycle = checked_contract_lifecycle(
+                state_transaction,
+                &payload.contract_address,
+                payload.expected_revision,
+            )?;
+            let bonded = is_bonded_citizen(authority, state_transaction);
+            let owner_is_authority = lifecycle.owner
+                == iroha_data_model::smart_contract::ContractLifecycleOwnerV1::Account(
+                    authority.clone(),
+                );
+            let parliament_authorized = lifecycle.owner
+                == iroha_data_model::smart_contract::ContractLifecycleOwnerV1::Parliament
+                || lifecycle.parliament_delegation
+                    == iroha_data_model::smart_contract::ContractParliamentDelegationV1::Lifecycle;
+            match &payload.action {
+                ContractLifecycleGovernanceActionV1::Activate(action) => {
+                    if action.abi_version != AbiVersion::new(1) {
+                        return Err(invalid_governance_parameter(
+                            "abi_version must be exactly 1",
+                        ));
+                    }
+                    if action.abi_hash.into_bytes()
+                        != ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1)
+                    {
+                        return Err(invalid_governance_parameter(
+                            "abi_hash does not match canonical ABI V1 hash",
+                        ));
+                    }
+                    if !owner_is_authority && !(parliament_authorized && bonded) {
+                        return Err(InstructionExecutionError::InvariantViolation(
+                            "contract lifecycle proposal requires the account owner or a bonded citizen with Parliament authority"
+                                .into(),
+                        ));
+                    }
+                }
+                ContractLifecycleGovernanceActionV1::Deactivate(action) => {
+                    let active = state_transaction
+                        .world
+                        .contract_instances
+                        .get(&payload.contract_address)
+                        .copied();
+                    if active.map(<[u8; 32]>::from) != Some(action.expected_code_hash.into_bytes())
+                    {
+                        return Err(invalid_governance_parameter(
+                            "expected_code_hash does not match the active contract",
+                        ));
+                    }
+                    if !owner_is_authority && !(parliament_authorized && bonded) {
+                        return Err(InstructionExecutionError::InvariantViolation(
+                            "contract lifecycle proposal requires the account owner or a bonded citizen with Parliament authority"
+                                .into(),
+                        ));
+                    }
+                }
+                ContractLifecycleGovernanceActionV1::OfferOwnership(action) => {
+                    if lifecycle.owner
+                        != iroha_data_model::smart_contract::ContractLifecycleOwnerV1::Parliament
+                        || !bonded
+                    {
+                        return Err(InstructionExecutionError::InvariantViolation(
+                            "only a bonded citizen may propose ownership from a Parliament-owned contract"
+                                .into(),
+                        ));
+                    }
+                    state_transaction
+                        .world
+                        .account(&action.new_owner)
+                        .map_err(Error::from)?;
+                }
+                ContractLifecycleGovernanceActionV1::CancelOwnershipOffer => {
+                    if lifecycle.owner
+                        != iroha_data_model::smart_contract::ContractLifecycleOwnerV1::Parliament
+                        || !bonded
+                    {
+                        return Err(InstructionExecutionError::InvariantViolation(
+                            "only a bonded citizen may cancel a Parliament-owned contract offer"
+                                .into(),
+                        ));
+                    }
+                }
+                ContractLifecycleGovernanceActionV1::AcceptParliamentOwnership => {
+                    if lifecycle.pending_owner
+                        != Some(
+                            iroha_data_model::smart_contract::ContractLifecycleOwnerV1::Parliament,
+                        )
+                        || !bonded
+                    {
+                        return Err(InstructionExecutionError::InvariantViolation(
+                            "Parliament ownership acceptance requires a pending Parliament offer and a bonded citizen"
+                                .into(),
+                        ));
+                    }
+                }
+                ContractLifecycleGovernanceActionV1::CompleteEmergencyHoldRetrospective(action) => {
+                    if !bonded {
+                        return Err(InstructionExecutionError::InvariantViolation(
+                            "only a bonded citizen may propose an emergency-hold retrospective"
+                                .into(),
+                        ));
+                    }
+                    checked_expired_contract_emergency_hold_retrospective(
+                        &lifecycle,
+                        action,
+                        state_transaction.block_height(),
+                    )?;
+                }
+            }
+            let address = payload.contract_address.clone();
+            submit_contract_governance_proposal(
+                authority,
+                ProposalKind::ContractLifecycleGovernance(payload),
+                address,
+                state_transaction,
+            )
+        }
+    }
+    impl Execute for gov::ProposeContractEmergencyHold {
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            let mut payload = self.proposal;
+            if !is_bonded_citizen(authority, state_transaction) {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "only a bonded citizen may propose emergency contract containment".into(),
+                ));
+            }
+            if payload.incident_digest == [0; 32]
+                || !(1..=iroha_data_model::smart_contract::MAX_CONTRACT_EMERGENCY_HOLD_BLOCKS_V1)
+                    .contains(&payload.duration_blocks)
+            {
+                return Err(invalid_governance_parameter(
+                    "emergency hold requires non-zero evidence and a duration of 1..=3600 blocks",
+                ));
+            }
+            payload.reason = payload.reason.trim().to_owned();
+            if payload.reason.is_empty() {
+                return Err(invalid_governance_parameter(
+                    "emergency hold reason must not be empty",
+                ));
+            }
+            let lifecycle = checked_contract_lifecycle(
+                state_transaction,
+                &payload.contract_address,
+                payload.expected_revision,
+            )?;
+            if lifecycle.emergency_hold.is_some() {
+                return Err(invalid_governance_parameter(
+                    "a subsequent emergency hold requires a completed Parliament retrospective",
+                ));
+            }
+            let active = state_transaction
+                .world
+                .contract_instances
+                .get(&payload.contract_address)
+                .copied()
+                .ok_or_else(|| invalid_governance_parameter("contract is not active"))?;
+            if <[u8; 32]>::from(active) != payload.expected_code_hash.into_bytes() {
+                return Err(invalid_governance_parameter(
+                    "expected_code_hash does not match the active contract",
+                ));
+            }
+            let address = payload.contract_address.clone();
+            submit_contract_governance_proposal(
+                authority,
+                ProposalKind::ContractEmergencyHold(payload),
+                address,
+                state_transaction,
+            )
+        }
+    }
     fn ensure_sccp_route_governance_proposer(
         authority: &AccountId,
         state_transaction: &StateTransaction<'_, '_>,
@@ -3372,6 +3581,8 @@ pub mod isi {
             ProposalKind::ValidationFeePolicy(payload) => Some(&payload.proposal_operator),
             ProposalKind::ValidationFeePayoutLifecycle(payload) => Some(&payload.proposal_operator),
             ProposalKind::DeployContract(_)
+            | ProposalKind::ContractLifecycleGovernance(_)
+            | ProposalKind::ContractEmergencyHold(_)
             | ProposalKind::RuntimeUpgrade(_)
             | ProposalKind::SccpRouteGovernance(_)
             | ProposalKind::SorafsProviderGovernance(_)
@@ -5312,6 +5523,7 @@ pub mod isi {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
         contract_address: &iroha_data_model::smart_contract::ContractAddress,
+        new_binding: Option<crate::smartcontracts::code::ContractSubjectBinding>,
     ) -> Result<AccountId, Error> {
         let contract_subject = match state_transaction
             .world
@@ -5325,8 +5537,17 @@ pub mod isi {
                 binding.subject.clone()
             }
             None => {
-                let binding =
-                    crate::smartcontracts::code::ContractSubjectBinding::new(contract_address);
+                let binding = new_binding.ok_or_else(|| {
+                    InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "contract `{contract_address}` has no lifecycle binding; activate it through an atomic direct or Parliament deployment"
+                        )
+                        .into(),
+                    )
+                })?;
+                binding.validate_for(contract_address).map_err(|message| {
+                    InstructionExecutionError::InvariantViolation(message.into())
+                })?;
                 let subject = binding.subject.clone();
                 state_transaction
                     .world
@@ -5367,10 +5588,10 @@ pub mod isi {
         state_transaction: &mut StateTransaction<'_, '_>,
         payload: &DeployContractProposal,
         key: iroha_crypto::Hash,
+        proposal_content_id: [u8; 32],
+        governance_attempt_id: [u8; 32],
     ) -> Result<bool, Error> {
         let contract_address = payload.contract_address.clone();
-        let contract_subject =
-            ensure_contract_subject_binding(authority, state_transaction, &contract_address)?;
         let manifest = state_transaction
             .world
             .contract_manifests
@@ -5386,24 +5607,40 @@ pub mod isi {
             &key,
             &manifest,
         )?;
+        if state_transaction
+            .world
+            .contract_subject_bindings
+            .get(&contract_address)
+            .is_some()
+            || state_transaction
+                .world
+                .contract_instances
+                .get(&contract_address)
+                .is_some()
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "governance deployment requires a never-bound contract address".into(),
+            ));
+        }
+        let contract_subject = ensure_contract_subject_binding(
+            authority,
+            state_transaction,
+            &contract_address,
+            Some(
+                crate::smartcontracts::code::ContractSubjectBinding::new_parliament(
+                    &contract_address,
+                    authority.clone(),
+                    proposal_content_id,
+                    governance_attempt_id,
+                ),
+            ),
+        )?;
         let declares_hajimari = manifest.entrypoints.as_ref().is_some_and(|entrypoints| {
             entrypoints.iter().any(|entrypoint| {
                 entrypoint.kind
                     == iroha_data_model::smart_contract::manifest::EntryPointKind::Hajimari
             })
         });
-        if let Some(existing) = state_transaction
-            .world
-            .contract_instances
-            .get(&contract_address)
-        {
-            if *existing != key {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "contract instance already bound to a different code hash".into(),
-                ));
-            }
-            return Ok(false);
-        }
         let pending_lifecycle = declares_hajimari
             .then(|| {
                 crate::smartcontracts::code::new_pending_contract_lifecycle(
@@ -5430,11 +5667,30 @@ pub mod isi {
             .world
             .contract_instances
             .insert(contract_address.clone(), key);
+        let lifecycle = {
+            let binding = state_transaction
+                .world
+                .contract_subject_bindings
+                .get_mut(&contract_address)
+                .expect("Parliament deployment installed lifecycle binding");
+            binding.lifecycle.active_code_hash = Some(key);
+            binding.lifecycle.clone()
+        };
         crate::smartcontracts::code::set_pending_contract_lifecycle(
             state_transaction,
             &contract_address,
             pending_lifecycle,
         );
+        state_transaction
+            .world
+            .emit_events(Some(SmartContractEvent::InstanceActivated(
+                ContractInstanceActivated {
+                    contract_address,
+                    code_hash: key,
+                    activated_by: authority.clone(),
+                    lifecycle,
+                },
+            )));
         Ok(true)
     }
     #[cfg(feature = "telemetry")]
@@ -5469,6 +5725,7 @@ pub mod isi {
     fn apply_deploy_contract_governance_effect(
         payload: &DeployContractProposal,
         proposer: &AccountId,
+        certificate: &GovernanceCertificateV1,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
         let (code_hash, abi_hash) = extract_hashes(payload)?;
@@ -5481,7 +5738,14 @@ pub mod isi {
         )?;
         #[cfg(not(feature = "telemetry"))]
         let _ = manifest_inserted;
-        let instance_bound_new = bind_contract_instance(proposer, state_transaction, payload, key)?;
+        let instance_bound_new = bind_contract_instance(
+            proposer,
+            state_transaction,
+            payload,
+            key,
+            *certificate.proposal_content_id.as_bytes(),
+            *certificate.governance_attempt_id.as_bytes(),
+        )?;
         #[cfg(not(feature = "telemetry"))]
         let _ = instance_bound_new;
         #[cfg(feature = "telemetry")]
@@ -5493,6 +5757,330 @@ pub mod isi {
             manifest_inserted,
             instance_bound_new,
         );
+        Ok(())
+    }
+    fn apply_contract_lifecycle_governance_effect(
+        payload: &ContractLifecycleGovernanceProposalV1,
+        proposer: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        let lifecycle = checked_contract_lifecycle(
+            state_transaction,
+            &payload.contract_address,
+            payload.expected_revision,
+        )?;
+        let parliament_controls_lifecycle = lifecycle.owner
+            == iroha_data_model::smart_contract::ContractLifecycleOwnerV1::Parliament
+            || lifecycle.parliament_delegation
+                == iroha_data_model::smart_contract::ContractParliamentDelegationV1::Lifecycle;
+        let proposer_is_owner = lifecycle.owner
+            == iroha_data_model::smart_contract::ContractLifecycleOwnerV1::Account(
+                proposer.clone(),
+            );
+        match &payload.action {
+            ContractLifecycleGovernanceActionV1::Activate(action) => {
+                if !parliament_controls_lifecycle && !proposer_is_owner {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "certified activation no longer has owner or delegated Parliament authority"
+                            .into(),
+                    ));
+                }
+                if action.abi_version != AbiVersion::new(1)
+                    || action.abi_hash.into_bytes()
+                        != ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1)
+                {
+                    return Err(invalid_governance_parameter(
+                        "certified activation must retain the canonical ABI V1 hash",
+                    ));
+                }
+                let key = iroha_crypto::Hash::prehashed(action.code_hash.into_bytes());
+                upsert_manifest(
+                    state_transaction,
+                    key,
+                    action.abi_hash.into_bytes(),
+                    action.manifest_provenance.as_ref(),
+                )?;
+                activate_contract_instance_authorized(
+                    proposer,
+                    state_transaction,
+                    payload.contract_address.clone(),
+                    key,
+                    true,
+                )
+            }
+            ContractLifecycleGovernanceActionV1::Deactivate(action) => {
+                if !parliament_controls_lifecycle && !proposer_is_owner {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "certified deactivation no longer has owner or delegated Parliament authority"
+                            .into(),
+                    ));
+                }
+                if lifecycle.active_code_hash.map(<[u8; 32]>::from)
+                    != Some(action.expected_code_hash.into_bytes())
+                {
+                    return Err(invalid_governance_parameter(
+                        "certified deactivation expected_code_hash no longer matches",
+                    ));
+                }
+                deactivate_contract_instance_authorized(
+                    proposer,
+                    state_transaction,
+                    payload.contract_address.clone(),
+                    action.reason.clone(),
+                )
+            }
+            ContractLifecycleGovernanceActionV1::OfferOwnership(action) => {
+                if lifecycle.owner
+                    != iroha_data_model::smart_contract::ContractLifecycleOwnerV1::Parliament
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "delegated Parliament cannot transfer contract ownership".into(),
+                    ));
+                }
+                state_transaction
+                    .world
+                    .account(&action.new_owner)
+                    .map_err(Error::from)?;
+                let pending_owner =
+                    iroha_data_model::smart_contract::ContractLifecycleOwnerV1::Account(
+                        action.new_owner.clone(),
+                    );
+                let revision = next_contract_lifecycle_revision(lifecycle.revision)?;
+                let updated_lifecycle = {
+                    let binding = state_transaction
+                        .world
+                        .contract_subject_bindings
+                        .get_mut(&payload.contract_address)
+                        .expect("lifecycle binding checked before governance ownership offer");
+                    binding.lifecycle.pending_owner = Some(pending_owner.clone());
+                    binding.lifecycle.revision = revision;
+                    binding.lifecycle.clone()
+                };
+                state_transaction.world.emit_events(Some(
+                    SmartContractEvent::OwnershipTransferOffered(
+                        ContractOwnershipTransferOffered {
+                            contract_address: payload.contract_address.clone(),
+                            current_owner: lifecycle.owner,
+                            pending_owner,
+                            revision,
+                            lifecycle: updated_lifecycle,
+                        },
+                    ),
+                ));
+                Ok(())
+            }
+            ContractLifecycleGovernanceActionV1::CancelOwnershipOffer => {
+                if lifecycle.owner
+                    != iroha_data_model::smart_contract::ContractLifecycleOwnerV1::Parliament
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "delegated Parliament cannot change a contract ownership offer".into(),
+                    ));
+                }
+                if lifecycle.pending_owner.is_none() {
+                    return Ok(());
+                }
+                let revision = next_contract_lifecycle_revision(lifecycle.revision)?;
+                let updated_lifecycle = {
+                    let binding = state_transaction
+                        .world
+                        .contract_subject_bindings
+                        .get_mut(&payload.contract_address)
+                        .expect("lifecycle binding checked before governance offer cancellation");
+                    binding.lifecycle.pending_owner = None;
+                    binding.lifecycle.revision = revision;
+                    binding.lifecycle.clone()
+                };
+                state_transaction.world.emit_events(Some(
+                    SmartContractEvent::OwnershipTransferCancelled(
+                        ContractOwnershipTransferCancelled {
+                            contract_address: payload.contract_address.clone(),
+                            owner: lifecycle.owner,
+                            revision,
+                            lifecycle: updated_lifecycle,
+                        },
+                    ),
+                ));
+                Ok(())
+            }
+            ContractLifecycleGovernanceActionV1::AcceptParliamentOwnership => {
+                let parliament =
+                    iroha_data_model::smart_contract::ContractLifecycleOwnerV1::Parliament;
+                if lifecycle.pending_owner.as_ref() != Some(&parliament) {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "Parliament ownership is no longer pending".into(),
+                    ));
+                }
+                let revision = next_contract_lifecycle_revision(lifecycle.revision)?;
+                let updated_lifecycle = {
+                    let binding = state_transaction
+                        .world
+                        .contract_subject_bindings
+                        .get_mut(&payload.contract_address)
+                        .expect("lifecycle binding checked before Parliament acceptance");
+                    binding.lifecycle.owner = parliament.clone();
+                    binding.lifecycle.pending_owner = None;
+                    binding.lifecycle.parliament_delegation =
+                        iroha_data_model::smart_contract::ContractParliamentDelegationV1::None;
+                    binding.lifecycle.revision = revision;
+                    binding.lifecycle.clone()
+                };
+                state_transaction.world.emit_events(Some(
+                    SmartContractEvent::OwnershipTransferred(ContractOwnershipTransferred {
+                        contract_address: payload.contract_address.clone(),
+                        previous_owner: lifecycle.owner,
+                        new_owner: parliament,
+                        revision,
+                        lifecycle: updated_lifecycle,
+                    }),
+                ));
+                Ok(())
+            }
+            ContractLifecycleGovernanceActionV1::CompleteEmergencyHoldRetrospective(action) => {
+                let prior_hold = checked_expired_contract_emergency_hold_retrospective(
+                    &lifecycle,
+                    action,
+                    state_transaction.block_height(),
+                )?;
+                let revision = next_contract_lifecycle_revision(lifecycle.revision)?;
+                let mut updated_lifecycle = lifecycle;
+                updated_lifecycle.emergency_hold = None;
+                updated_lifecycle.revision = revision;
+                updated_lifecycle.validate().map_err(|message| {
+                    InstructionExecutionError::InvariantViolation(message.into())
+                })?;
+                state_transaction
+                    .world
+                    .contract_subject_bindings
+                    .get_mut(&payload.contract_address)
+                    .expect("lifecycle binding checked before emergency-hold retrospective")
+                    .lifecycle = updated_lifecycle.clone();
+                state_transaction.world.emit_events(Some(
+                    SmartContractEvent::EmergencyHoldRetrospectiveCompleted(
+                        ContractEmergencyHoldRetrospectiveCompleted {
+                            contract_address: payload.contract_address.clone(),
+                            prior_hold,
+                            retrospective_finding_root: action.retrospective_finding_root,
+                            revision,
+                            lifecycle: updated_lifecycle,
+                        },
+                    ),
+                ));
+                Ok(())
+            }
+        }
+    }
+    fn checked_expired_contract_emergency_hold_retrospective(
+        lifecycle: &iroha_data_model::smart_contract::ContractLifecycleControlV1,
+        action: &iroha_data_model::governance::types::CompleteContractEmergencyHoldRetrospectiveGovernanceActionV1,
+        current_height: u64,
+    ) -> Result<iroha_data_model::smart_contract::ContractEmergencyHoldV1, Error> {
+        if action.retrospective_finding_root == [0; 32] {
+            return Err(invalid_governance_parameter(
+                "emergency-hold retrospective finding root must be non-zero",
+            ));
+        }
+        let hold = lifecycle.emergency_hold.as_ref().ok_or_else(|| {
+            invalid_governance_parameter(
+                "emergency-hold retrospective requires the exact retained hold",
+            )
+        })?;
+        if hold.proposal_content_id != action.hold_proposal_content_id
+            || hold.governance_attempt_id != action.hold_governance_attempt_id
+            || hold.incident_digest != action.incident_digest
+        {
+            return Err(invalid_governance_parameter(
+                "emergency-hold retrospective binding differs from the retained hold",
+            ));
+        }
+        if current_height < hold.expires_at_height {
+            return Err(invalid_governance_parameter(
+                "emergency-hold retrospective cannot complete before the hold's exclusive expiry",
+            ));
+        }
+        Ok(hold.clone())
+    }
+    fn apply_contract_emergency_hold_effect(
+        payload: &ContractEmergencyHoldProposalV1,
+        certificate: &GovernanceCertificateV1,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        certificate.validate().map_err(|error| {
+            InstructionExecutionError::InvariantViolation(
+                format!("contract emergency-hold certificate is invalid: {error}").into(),
+            )
+        })?;
+        if certificate.risk_tier != iroha_data_model::governance::types::RiskTierV1::Emergency {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "contract emergency hold requires an Emergency-tier certificate".into(),
+            ));
+        }
+        let lifecycle = checked_contract_lifecycle(
+            state_transaction,
+            &payload.contract_address,
+            payload.expected_revision,
+        )?;
+        if lifecycle.active_code_hash.map(<[u8; 32]>::from)
+            != Some(payload.expected_code_hash.into_bytes())
+        {
+            return Err(invalid_governance_parameter(
+                "emergency-hold expected_code_hash no longer matches",
+            ));
+        }
+        if lifecycle.emergency_hold.is_some() {
+            return Err(invalid_governance_parameter(
+                "a subsequent emergency hold requires a completed Parliament retrospective",
+            ));
+        }
+        if payload.incident_digest == [0; 32]
+            || !(1..=iroha_data_model::smart_contract::MAX_CONTRACT_EMERGENCY_HOLD_BLOCKS_V1)
+                .contains(&payload.duration_blocks)
+        {
+            return Err(invalid_governance_parameter(
+                "invalid emergency-hold evidence or duration",
+            ));
+        }
+        let reason = payload.reason.trim().to_owned();
+        if reason.is_empty() {
+            return Err(invalid_governance_parameter(
+                "emergency-hold reason must not be empty",
+            ));
+        }
+        let imposed_at_height = state_transaction.block_height();
+        let expires_at_height = imposed_at_height
+            .checked_add(payload.duration_blocks)
+            .ok_or_else(|| invalid_governance_parameter("emergency-hold expiry overflows"))?;
+        let hold = iroha_data_model::smart_contract::ContractEmergencyHoldV1 {
+            incident_digest: payload.incident_digest,
+            proposal_content_id: *certificate.proposal_content_id.as_bytes(),
+            governance_attempt_id: *certificate.governance_attempt_id.as_bytes(),
+            reason,
+            imposed_at_height,
+            expires_at_height,
+        };
+        let revision = next_contract_lifecycle_revision(lifecycle.revision)?;
+        let mut updated_lifecycle = lifecycle;
+        updated_lifecycle.emergency_hold = Some(hold.clone());
+        updated_lifecycle.revision = revision;
+        updated_lifecycle
+            .validate()
+            .map_err(|message| InstructionExecutionError::InvariantViolation(message.into()))?;
+        state_transaction
+            .world
+            .contract_subject_bindings
+            .get_mut(&payload.contract_address)
+            .expect("lifecycle binding checked before emergency hold")
+            .lifecycle = updated_lifecycle.clone();
+        state_transaction
+            .world
+            .emit_events(Some(SmartContractEvent::EmergencyHoldPlaced(
+                ContractEmergencyHoldPlaced {
+                    contract_address: payload.contract_address.clone(),
+                    hold,
+                    revision,
+                    lifecycle: updated_lifecycle,
+                },
+            )));
         Ok(())
     }
     fn enact_runtime_upgrade_proposal(
@@ -6079,179 +6667,453 @@ pub mod isi {
         }
         Ok(())
     }
+    fn activate_contract_instance_authorized(
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+        contract_address: iroha_data_model::smart_contract::ContractAddress,
+        key: iroha_crypto::Hash,
+        advance_revision: bool,
+    ) -> Result<(), Error> {
+        let Some(manifest) = state_transaction
+            .world
+            .contract_manifests
+            .get(&key)
+            .cloned()
+        else {
+            return Err(InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract("manifest for code_hash not found".into()),
+            ));
+        };
+        let code_bytes = verify_registered_contract_artifact_for_manifest(
+            &state_transaction.world,
+            &key,
+            &manifest,
+        )?;
+        let contract_subject =
+            ensure_contract_subject_binding(authority, state_transaction, &contract_address, None)?;
+        let existing = state_transaction
+            .world
+            .contract_instances
+            .get(&contract_address)
+            .copied();
+        if existing == Some(key) {
+            // idempotent when same
+            return Ok(());
+        }
+        if existing.is_some()
+            && crate::validation_fee::is_enacted_validation_fee_payout_contract(
+                state_transaction,
+                &contract_address,
+            )
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "an enacted validation-fee payout lifecycle pins this contract code".into(),
+            ));
+        }
+        if existing.is_some()
+            && crate::smartcontracts::code::pending_contract_lifecycle(
+                &state_transaction.world,
+                &contract_address,
+            )
+            .map_err(|error| {
+                InstructionExecutionError::InvariantViolation(error.to_string().into())
+            })?
+            .is_some()
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                    "contract instance cannot perform kaizen/改善 while hajimari/始まり or kaizen/改善 is pending"
+                        .into(),
+                ));
+        }
+        let pending_lifecycle_kind = match existing {
+            None if manifest.entrypoints.as_ref().is_some_and(|entrypoints| {
+                entrypoints.iter().any(|entrypoint| {
+                    entrypoint.kind
+                        == iroha_data_model::smart_contract::manifest::EntryPointKind::Hajimari
+                })
+            }) =>
+            {
+                Some((
+                    iroha_data_model::smart_contract::manifest::EntryPointKind::Hajimari,
+                    None,
+                ))
+            }
+            Some(previous_code_hash)
+                if manifest.entrypoints.as_ref().is_some_and(|entrypoints| {
+                    entrypoints.iter().any(|entrypoint| {
+                        entrypoint.kind
+                            == iroha_data_model::smart_contract::manifest::EntryPointKind::Kaizen
+                    })
+                }) =>
+            {
+                Some((
+                    iroha_data_model::smart_contract::manifest::EntryPointKind::Kaizen,
+                    Some(previous_code_hash),
+                ))
+            }
+            None | Some(_) => None,
+        };
+        let pending_lifecycle = pending_lifecycle_kind
+            .map(|(kind, previous_code_hash)| {
+                crate::smartcontracts::code::new_pending_contract_lifecycle(
+                    state_transaction,
+                    &contract_address,
+                    previous_code_hash,
+                    key,
+                    kind,
+                )
+            })
+            .transpose()
+            .map_err(|error| {
+                InstructionExecutionError::InvariantViolation(error.to_owned().into())
+            })?;
+        if let Some(previous_code_hash) = existing {
+            let previous_trigger_ids: Vec<TriggerId> = state_transaction
+                .world
+                .contract_manifests
+                .get(&previous_code_hash)
+                .and_then(|previous_manifest| previous_manifest.entrypoints.as_ref())
+                .map(|entrypoints| {
+                    entrypoints
+                        .iter()
+                        .flat_map(|entrypoint| {
+                            entrypoint
+                                .triggers
+                                .iter()
+                                .map(|descriptor| descriptor.id.clone())
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            for trigger_id in previous_trigger_ids {
+                if state_transaction.world.triggers.remove(&trigger_id) {
+                    crate::smartcontracts::isi::triggers::isi::remove_trigger_associated_permissions(
+                            state_transaction,
+                            &trigger_id,
+                        );
+                    state_transaction
+                        .world
+                        .emit_events(Some(TriggerEvent::Deleted(trigger_id)));
+                }
+            }
+        }
+        let needs_trigger_registration = manifest.entrypoints.as_ref().is_some_and(|entrypoints| {
+            entrypoints
+                .iter()
+                .any(|entrypoint| !entrypoint.triggers.is_empty())
+        });
+        if needs_trigger_registration {
+            register_manifest_triggers(
+                authority,
+                state_transaction,
+                &contract_address,
+                &contract_subject,
+                &code_bytes,
+                &manifest,
+            )?;
+        }
+        state_transaction
+            .world
+            .contract_instances
+            .insert(contract_address.clone(), key);
+        {
+            let binding = state_transaction
+                .world
+                .contract_subject_bindings
+                .get_mut(&contract_address)
+                .expect("binding checked before activation");
+            binding.lifecycle.active_code_hash = Some(key);
+            if advance_revision {
+                binding.lifecycle.revision =
+                    binding.lifecycle.revision.checked_add(1).ok_or_else(|| {
+                        InstructionExecutionError::InvariantViolation(
+                            "contract lifecycle revision overflow".into(),
+                        )
+                    })?;
+            }
+        }
+        crate::smartcontracts::code::set_pending_contract_lifecycle(
+            state_transaction,
+            &contract_address,
+            pending_lifecycle,
+        );
+        let lifecycle = state_transaction
+            .world
+            .contract_subject_bindings
+            .get(&contract_address)
+            .expect("binding updated before activation event")
+            .lifecycle
+            .clone();
+        state_transaction
+            .world
+            .emit_events(Some(SmartContractEvent::InstanceActivated(
+                ContractInstanceActivated {
+                    contract_address,
+                    code_hash: key,
+                    activated_by: authority.clone(),
+                    lifecycle,
+                },
+            )));
+        Ok(())
+    }
     impl Execute for scode::ActivateContractInstance {
         fn execute(
             self,
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            ensure_contract_binding_governance(
-                authority,
-                self.contract_address(),
-                state_transaction,
-            )?;
-            let key = *self.code_hash();
             let contract_address = self.contract_address().clone();
-            let Some(manifest) = state_transaction
-                .world
-                .contract_manifests
-                .get(&key)
-                .cloned()
-            else {
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract("manifest for code_hash not found".into()),
-                ));
-            };
-            let code_bytes = verify_registered_contract_artifact_for_manifest(
-                &state_transaction.world,
-                &key,
-                &manifest,
-            )?;
-            let contract_subject =
-                ensure_contract_subject_binding(authority, state_transaction, &contract_address)?;
-            let existing = state_transaction
-                .world
-                .contract_instances
-                .get(&contract_address)
-                .copied();
-            if existing == Some(key) {
-                // idempotent when same
-                return Ok(());
-            }
-            if existing.is_some()
-                && crate::validation_fee::is_enacted_validation_fee_payout_contract(
-                    state_transaction,
-                    &contract_address,
-                )
-            {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "an enacted validation-fee payout lifecycle pins this contract code".into(),
-                ));
-            }
-            let can_enact: Permission = CanEnactGovernance.into();
-            if existing.is_some()
-                && !has_exact_permission(&state_transaction.world, authority, &can_enact)
-            {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "not permitted: CanEnactGovernance is required for in-place contract kaizen/改善"
-                        .into(),
-                ));
-            }
-            if existing.is_some()
-                && crate::smartcontracts::code::pending_contract_lifecycle(
-                    &state_transaction.world,
-                    &contract_address,
-                )
-                .map_err(|error| {
-                    InstructionExecutionError::InvariantViolation(error.to_string().into())
-                })?
-                .is_some()
-            {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "contract instance cannot perform kaizen/改善 while hajimari/始まり or kaizen/改善 is pending"
-                        .into(),
-                ));
-            }
-            let pending_lifecycle_kind = match existing {
-                None if manifest.entrypoints.as_ref().is_some_and(|entrypoints| {
-                    entrypoints.iter().any(|entrypoint| {
-                        entrypoint.kind
-                            == iroha_data_model::smart_contract::manifest::EntryPointKind::Hajimari
-                    })
-                }) => Some((
-                    iroha_data_model::smart_contract::manifest::EntryPointKind::Hajimari,
-                    None,
-                )),
-                Some(previous_code_hash)
-                    if manifest.entrypoints.as_ref().is_some_and(|entrypoints| {
-                        entrypoints.iter().any(|entrypoint| {
-                            entrypoint.kind
-                                == iroha_data_model::smart_contract::manifest::EntryPointKind::Kaizen
-                        })
-                    }) => Some((
-                        iroha_data_model::smart_contract::manifest::EntryPointKind::Kaizen,
-                        Some(previous_code_hash),
-                    )),
-                None | Some(_) => None,
-            };
-            let pending_lifecycle = pending_lifecycle_kind
-                .map(|(kind, previous_code_hash)| {
-                    crate::smartcontracts::code::new_pending_contract_lifecycle(
-                        state_transaction,
-                        &contract_address,
-                        previous_code_hash,
-                        key,
-                        kind,
-                    )
-                })
-                .transpose()
-                .map_err(|error| {
-                    InstructionExecutionError::InvariantViolation(error.to_owned().into())
-                })?;
-            if let Some(previous_code_hash) = existing {
-                let previous_trigger_ids: Vec<TriggerId> = state_transaction
-                    .world
-                    .contract_manifests
-                    .get(&previous_code_hash)
-                    .and_then(|previous_manifest| previous_manifest.entrypoints.as_ref())
-                    .map(|entrypoints| {
-                        entrypoints
-                            .iter()
-                            .flat_map(|entrypoint| {
-                                entrypoint
-                                    .triggers
-                                    .iter()
-                                    .map(|descriptor| descriptor.id.clone())
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                for trigger_id in previous_trigger_ids {
-                    if state_transaction.world.triggers.remove(&trigger_id) {
-                        crate::smartcontracts::isi::triggers::isi::remove_trigger_associated_permissions(
-                            state_transaction,
-                            &trigger_id,
-                        );
-                        state_transaction
-                            .world
-                            .emit_events(Some(TriggerEvent::Deleted(trigger_id)));
-                    }
-                }
-            }
-            let needs_trigger_registration =
-                manifest.entrypoints.as_ref().is_some_and(|entrypoints| {
-                    entrypoints
-                        .iter()
-                        .any(|entrypoint| !entrypoint.triggers.is_empty())
-                });
-            if needs_trigger_registration {
-                register_manifest_triggers(
-                    authority,
-                    state_transaction,
-                    self.contract_address(),
-                    &contract_subject,
-                    &code_bytes,
-                    &manifest,
-                )?;
-            }
-            state_transaction
-                .world
-                .contract_instances
-                .insert(contract_address.clone(), key);
-            crate::smartcontracts::code::set_pending_contract_lifecycle(
+            let lifecycle = checked_contract_lifecycle(
                 state_transaction,
                 &contract_address,
-                pending_lifecycle,
+                *self.expected_revision(),
+            )?;
+            if lifecycle.owner
+                != iroha_data_model::smart_contract::ContractLifecycleOwnerV1::Account(
+                    authority.clone(),
+                )
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "not permitted: only the current account owner may activate contract code directly"
+                        .into(),
+                ));
+            }
+            activate_contract_instance_authorized(
+                authority,
+                state_transaction,
+                contract_address,
+                *self.code_hash(),
+                true,
+            )
+        }
+    }
+    fn next_contract_lifecycle_revision(revision: u64) -> Result<u64, Error> {
+        revision.checked_add(1).ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                "contract lifecycle revision overflow".into(),
+            )
+        })
+    }
+    fn checked_contract_lifecycle(
+        state_transaction: &StateTransaction<'_, '_>,
+        contract_address: &iroha_data_model::smart_contract::ContractAddress,
+        expected_revision: u64,
+    ) -> Result<iroha_data_model::smart_contract::ContractLifecycleControlV1, Error> {
+        let binding = state_transaction
+            .world
+            .contract_subject_bindings
+            .get(contract_address)
+            .ok_or_else(|| {
+                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                    "contract lifecycle binding not found".into(),
+                ))
+            })?;
+        binding
+            .validate_for(contract_address)
+            .map_err(|message| InstructionExecutionError::InvariantViolation(message.into()))?;
+        let indexed_active_code_hash = state_transaction
+            .world
+            .contract_instances
+            .get(contract_address)
+            .copied();
+        if binding.lifecycle.active_code_hash != indexed_active_code_hash {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "contract lifecycle active code hash does not match the active-instance index"
+                    .into(),
+            ));
+        }
+        if binding.lifecycle.revision != expected_revision {
+            return Err(InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(
+                    format!(
+                        "stale contract lifecycle revision: expected {expected_revision}, current {}",
+                        binding.lifecycle.revision
+                    )
+                    .into(),
+                ),
+            ));
+        }
+        Ok(binding.lifecycle.clone())
+    }
+    fn ensure_direct_contract_owner(
+        authority: &AccountId,
+        lifecycle: &iroha_data_model::smart_contract::ContractLifecycleControlV1,
+    ) -> Result<(), Error> {
+        if lifecycle.owner
+            != iroha_data_model::smart_contract::ContractLifecycleOwnerV1::Account(
+                authority.clone(),
+            )
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "not permitted: only the current account owner may change lifecycle authority"
+                    .into(),
+            ));
+        }
+        Ok(())
+    }
+    impl Execute for scode::SetContractParliamentDelegation {
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            let address = self.contract_address().clone();
+            let lifecycle =
+                checked_contract_lifecycle(state_transaction, &address, *self.expected_revision())?;
+            ensure_direct_contract_owner(authority, &lifecycle)?;
+            let delegation = if *self.delegated() {
+                iroha_data_model::smart_contract::ContractParliamentDelegationV1::Lifecycle
+            } else {
+                iroha_data_model::smart_contract::ContractParliamentDelegationV1::None
+            };
+            if lifecycle.parliament_delegation == delegation {
+                return Ok(());
+            }
+            let revision = next_contract_lifecycle_revision(lifecycle.revision)?;
+            let binding = state_transaction
+                .world
+                .contract_subject_bindings
+                .get_mut(&address)
+                .expect("lifecycle binding checked above");
+            binding.lifecycle.parliament_delegation = delegation;
+            binding.lifecycle.revision = revision;
+            let lifecycle = binding.lifecycle.clone();
+            state_transaction.world.emit_events(Some(
+                SmartContractEvent::ParliamentDelegationChanged(
+                    ContractParliamentDelegationChanged {
+                        contract_address: address,
+                        delegation,
+                        changed_by: authority.clone(),
+                        revision,
+                        lifecycle,
+                    },
+                ),
+            ));
+            Ok(())
+        }
+    }
+    impl Execute for scode::OfferContractOwnership {
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            let address = self.contract_address().clone();
+            let lifecycle =
+                checked_contract_lifecycle(state_transaction, &address, *self.expected_revision())?;
+            ensure_direct_contract_owner(authority, &lifecycle)?;
+            let new_owner = self.new_owner().clone();
+            if new_owner == lifecycle.owner {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "new contract owner must differ from current owner".into(),
+                    ),
+                ));
+            }
+            if let iroha_data_model::smart_contract::ContractLifecycleOwnerV1::Account(account) =
+                &new_owner
+            {
+                state_transaction
+                    .world
+                    .account(account)
+                    .map_err(Error::from)?;
+            }
+            let revision = next_contract_lifecycle_revision(lifecycle.revision)?;
+            let binding = state_transaction
+                .world
+                .contract_subject_bindings
+                .get_mut(&address)
+                .expect("lifecycle binding checked above");
+            binding.lifecycle.pending_owner = Some(new_owner.clone());
+            binding.lifecycle.revision = revision;
+            let updated_lifecycle = binding.lifecycle.clone();
+            state_transaction.world.emit_events(Some(
+                SmartContractEvent::OwnershipTransferOffered(ContractOwnershipTransferOffered {
+                    contract_address: address,
+                    current_owner: lifecycle.owner,
+                    pending_owner: new_owner,
+                    revision,
+                    lifecycle: updated_lifecycle,
+                }),
+            ));
+            Ok(())
+        }
+    }
+    impl Execute for scode::AcceptContractOwnership {
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            let address = self.contract_address().clone();
+            let lifecycle =
+                checked_contract_lifecycle(state_transaction, &address, *self.expected_revision())?;
+            let accepted = iroha_data_model::smart_contract::ContractLifecycleOwnerV1::Account(
+                authority.clone(),
             );
+            if lifecycle.pending_owner.as_ref() != Some(&accepted) {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "not permitted: authority is not the pending account owner".into(),
+                ));
+            }
+            let revision = next_contract_lifecycle_revision(lifecycle.revision)?;
+            let binding = state_transaction
+                .world
+                .contract_subject_bindings
+                .get_mut(&address)
+                .expect("lifecycle binding checked above");
+            binding.lifecycle.owner = accepted.clone();
+            binding.lifecycle.pending_owner = None;
+            binding.lifecycle.parliament_delegation =
+                iroha_data_model::smart_contract::ContractParliamentDelegationV1::None;
+            binding.lifecycle.revision = revision;
+            let updated_lifecycle = binding.lifecycle.clone();
             state_transaction
                 .world
-                .emit_events(Some(SmartContractEvent::InstanceActivated(
-                    ContractInstanceActivated {
-                        contract_address,
-                        code_hash: *self.code_hash(),
-                        activated_by: authority.clone(),
+                .emit_events(Some(SmartContractEvent::OwnershipTransferred(
+                    ContractOwnershipTransferred {
+                        contract_address: address,
+                        previous_owner: lifecycle.owner,
+                        new_owner: accepted,
+                        revision,
+                        lifecycle: updated_lifecycle,
                     },
                 )));
+            Ok(())
+        }
+    }
+    impl Execute for scode::CancelContractOwnershipOffer {
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            let address = self.contract_address().clone();
+            let lifecycle =
+                checked_contract_lifecycle(state_transaction, &address, *self.expected_revision())?;
+            ensure_direct_contract_owner(authority, &lifecycle)?;
+            if lifecycle.pending_owner.is_none() {
+                return Ok(());
+            }
+            let revision = next_contract_lifecycle_revision(lifecycle.revision)?;
+            let binding = state_transaction
+                .world
+                .contract_subject_bindings
+                .get_mut(&address)
+                .expect("lifecycle binding checked above");
+            binding.lifecycle.pending_owner = None;
+            binding.lifecycle.revision = revision;
+            let updated_lifecycle = binding.lifecycle.clone();
+            state_transaction.world.emit_events(Some(
+                SmartContractEvent::OwnershipTransferCancelled(
+                    ContractOwnershipTransferCancelled {
+                        contract_address: address,
+                        owner: lifecycle.owner,
+                        revision,
+                        lifecycle: updated_lifecycle,
+                    },
+                ),
+            ));
             Ok(())
         }
     }
@@ -6274,7 +7136,28 @@ pub mod isi {
                 .world
                 .account(authority)
                 .map_err(Error::from)?;
-            ensure_contract_binding_governance(authority, &contract_address, state_transaction)?;
+            ensure_contract_lifecycle_authority(authority, state_transaction)?;
+            let protected = protected_contract_namespaces(state_transaction);
+            if protected.contains("*")
+                || protected.contains(contract_address.as_str())
+                || contract_address
+                    .dataspace_id()
+                    .ok()
+                    .is_some_and(|dataspace_id| {
+                        protected.contains(&format!("dataspace:{}", dataspace_id.as_u64()))
+                            || protected.iter().any(|namespace| {
+                                state_transaction
+                                    .nexus
+                                    .dataspace_catalog
+                                    .by_alias(namespace)
+                                    .is_some_and(|entry| entry.id == dataspace_id)
+                            })
+                    })
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "protected contract namespaces require Parliament deployment".into(),
+                ));
+            }
             let nonce_key = Name::from_str(
                 iroha_data_model::smart_contract::CONTRACT_DEPLOY_NONCE_METADATA_KEY,
             )
@@ -6442,7 +7325,6 @@ pub mod isi {
                         .into(),
                     ));
                 }
-                ensure_contract_binding_governance(authority, previous, state_transaction)?;
             }
             crate::smartcontracts::isi::domain::isi::ensure_authority_can_manage_contract_alias(
                 state_transaction,
@@ -6470,6 +7352,17 @@ pub mod isi {
                 &code_hash,
                 &manifest,
             )?;
+            ensure_contract_subject_binding(
+                authority,
+                state_transaction,
+                &contract_address,
+                Some(
+                    crate::smartcontracts::code::ContractSubjectBinding::new_direct(
+                        &contract_address,
+                        authority.clone(),
+                    ),
+                ),
+            )?;
             // Clear a canonical but expired raw binding before rebinding. It is not a live prior
             // target for CAS purposes and therefore is not deactivated here.
             if let Some(raw_previous) = raw_previous_contract_address.as_ref() {
@@ -6481,15 +7374,18 @@ pub mod isi {
             if let Some(previous) = current_previous_contract_address {
                 scode::DeactivateContractInstance {
                     contract_address: previous,
+                    expected_revision: 1,
                     reason: Some("atomic contract deployment rotation".to_owned()),
                 }
                 .execute(authority, state_transaction)?;
             }
-            scode::ActivateContractInstance {
-                contract_address: contract_address.clone(),
+            activate_contract_instance_authorized(
+                authority,
+                state_transaction,
+                contract_address.clone(),
                 code_hash,
-            }
-            .execute(authority, state_transaction)?;
+                false,
+            )?;
             iroha_data_model::isi::contract_alias::SetContractAlias::bind(
                 contract_address,
                 contract_alias,
@@ -6512,87 +7408,123 @@ pub mod isi {
             Ok(())
         }
     }
+    fn deactivate_contract_instance_authorized(
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+        key: iroha_data_model::smart_contract::ContractAddress,
+        requested_reason: Option<String>,
+    ) -> Result<(), Error> {
+        if crate::validation_fee::is_enacted_validation_fee_payout_contract(state_transaction, &key)
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "an enacted validation-fee payout lifecycle pins this contract instance".into(),
+            ));
+        }
+        let Some(prev_hash) = state_transaction
+            .world
+            .contract_instances
+            .remove(key.clone())
+        else {
+            return Err(InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract("contract instance is not active".into()),
+            ));
+        };
+        crate::smartcontracts::code::set_pending_contract_lifecycle(state_transaction, &key, None);
+        {
+            let binding = state_transaction
+                .world
+                .contract_subject_bindings
+                .get_mut(&key)
+                .expect("binding checked before deactivation");
+            binding.lifecycle.active_code_hash = None;
+            binding.lifecycle.revision =
+                binding.lifecycle.revision.checked_add(1).ok_or_else(|| {
+                    InstructionExecutionError::InvariantViolation(
+                        "contract lifecycle revision overflow".into(),
+                    )
+                })?;
+        }
+        let reason = requested_reason.and_then(|r| {
+            let trimmed = r.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_owned())
+            }
+        });
+        let trigger_ids: Vec<TriggerId> = state_transaction
+            .world
+            .contract_manifests
+            .get(&prev_hash)
+            .and_then(|manifest| manifest.entrypoints.as_ref())
+            .map(|entrypoints| {
+                entrypoints
+                    .iter()
+                    .flat_map(|entrypoint| {
+                        entrypoint
+                            .triggers
+                            .iter()
+                            .map(|descriptor| descriptor.id.clone())
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        for trigger_id in trigger_ids {
+            if state_transaction.world.triggers.remove(&trigger_id) {
+                crate::smartcontracts::isi::triggers::isi::remove_trigger_associated_permissions(
+                    state_transaction,
+                    &trigger_id,
+                );
+                state_transaction
+                    .world
+                    .emit_events(Some(TriggerEvent::Deleted(trigger_id)));
+            }
+        }
+        let lifecycle = state_transaction
+            .world
+            .contract_subject_bindings
+            .get(&key)
+            .expect("binding updated before deactivation event")
+            .lifecycle
+            .clone();
+        state_transaction
+            .world
+            .emit_events(Some(SmartContractEvent::InstanceDeactivated(
+                ContractInstanceDeactivated {
+                    contract_address: key,
+                    previous_code_hash: prev_hash,
+                    deactivated_by: authority.clone(),
+                    reason,
+                    lifecycle,
+                },
+            )));
+        Ok(())
+    }
     impl Execute for scode::DeactivateContractInstance {
         fn execute(
             self,
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            if crate::validation_fee::is_enacted_validation_fee_payout_contract(
-                state_transaction,
-                self.contract_address(),
-            ) {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "an enacted validation-fee payout lifecycle pins this contract instance".into(),
-                ));
-            }
-            ensure_contract_binding_governance(
-                authority,
-                self.contract_address(),
-                state_transaction,
-            )?;
             let key = self.contract_address().clone();
-            let Some(prev_hash) = state_transaction
-                .world
-                .contract_instances
-                .remove(key.clone())
-            else {
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract("contract instance is not active".into()),
+            let lifecycle =
+                checked_contract_lifecycle(state_transaction, &key, *self.expected_revision())?;
+            if lifecycle.owner
+                != iroha_data_model::smart_contract::ContractLifecycleOwnerV1::Account(
+                    authority.clone(),
+                )
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "not permitted: only the current account owner may deactivate a contract directly"
+                        .into(),
                 ));
-            };
-            crate::smartcontracts::code::set_pending_contract_lifecycle(
-                state_transaction,
-                &key,
-                None,
-            );
-            let reason = self.reason().clone().and_then(|r| {
-                let trimmed = r.trim();
-                if trimmed.is_empty() {
-                    None
-                } else {
-                    Some(trimmed.to_owned())
-                }
-            });
-            let trigger_ids: Vec<TriggerId> = state_transaction
-                .world
-                .contract_manifests
-                .get(&prev_hash)
-                .and_then(|manifest| manifest.entrypoints.as_ref())
-                .map(|entrypoints| {
-                    entrypoints
-                        .iter()
-                        .flat_map(|entrypoint| {
-                            entrypoint
-                                .triggers
-                                .iter()
-                                .map(|descriptor| descriptor.id.clone())
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
-            for trigger_id in trigger_ids {
-                if state_transaction.world.triggers.remove(&trigger_id) {
-                    crate::smartcontracts::isi::triggers::isi::remove_trigger_associated_permissions(
-                        state_transaction,
-                        &trigger_id,
-                    );
-                    state_transaction
-                        .world
-                        .emit_events(Some(TriggerEvent::Deleted(trigger_id)));
-                }
             }
-            state_transaction
-                .world
-                .emit_events(Some(SmartContractEvent::InstanceDeactivated(
-                    ContractInstanceDeactivated {
-                        contract_address: key,
-                        previous_code_hash: prev_hash,
-                        deactivated_by: authority.clone(),
-                        reason,
-                    },
-                )));
-            Ok(())
+            deactivate_contract_instance_authorized(
+                authority,
+                state_transaction,
+                key,
+                self.reason().clone(),
+            )
         }
     }
     const DEFAULT_MAX_CONTRACT_CODE_BYTES: u64 = 16 * 1024 * 1024;
@@ -7153,6 +8085,39 @@ pub mod isi {
     const PARLIAMENT_PAYOUT_LIFECYCLE_BLOCKED_HEAD_V1: &[u8] =
         b"iroha.governance.parliament.validation_fee_payout.blocked_head.v1";
 
+    fn parliament_contract_lifecycle_head_v1(
+        subject_id: [u8; 32],
+        contract_address: &iroha_data_model::smart_contract::ContractAddress,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<GovernanceExpectedHeadV1, Error> {
+        let binding = state_transaction
+            .world
+            .contract_subject_bindings
+            .get(contract_address);
+        let active_code_hash = state_transaction
+            .world
+            .contract_instances
+            .get(contract_address)
+            .copied();
+        match binding {
+            Some(binding) if binding.lifecycle.active_code_hash == active_code_hash => {
+                parliament_present_head_v1(
+                    subject_id,
+                    binding.lifecycle.revision,
+                    &binding.lifecycle,
+                )
+            }
+            Some(_) => Err(InstructionExecutionError::InvariantViolation(
+                "contract lifecycle active code hash does not match the active-instance index"
+                    .into(),
+            )),
+            None if active_code_hash.is_none() => Ok(parliament_absent_head_v1(subject_id)),
+            None => Err(InstructionExecutionError::InvariantViolation(
+                "active contract has no lifecycle binding".into(),
+            )),
+        }
+    }
+
     fn parliament_governance_head_root_v1(value: &impl norito::codec::Encode) -> [u8; 32] {
         let encoded = norito::codec::Encode::encode(value);
         let domain_len = u64::try_from(PARLIAMENT_GOVERNANCE_HEAD_ROOT_V1.len())
@@ -7242,14 +8207,23 @@ pub mod isi {
             )
         })?;
         match proposal {
-            ProposalKind::DeployContract(payload) => state_transaction
-                .world
-                .contract_instances
-                .get(&payload.contract_address)
-                .map_or_else(
-                    || Ok(parliament_absent_head_v1(subject_id)),
-                    |code_hash| parliament_present_head_root_v1(subject_id, 1, (*code_hash).into()),
-                ),
+            ProposalKind::DeployContract(payload) => parliament_contract_lifecycle_head_v1(
+                subject_id,
+                &payload.contract_address,
+                state_transaction,
+            ),
+            ProposalKind::ContractLifecycleGovernance(payload) => {
+                parliament_contract_lifecycle_head_v1(
+                    subject_id,
+                    &payload.contract_address,
+                    state_transaction,
+                )
+            }
+            ProposalKind::ContractEmergencyHold(payload) => parliament_contract_lifecycle_head_v1(
+                subject_id,
+                &payload.contract_address,
+                state_transaction,
+            ),
             ProposalKind::RuntimeUpgrade(payload) => {
                 let runtime_upgrade_id = payload.manifest.id();
                 state_transaction
@@ -7364,8 +8338,19 @@ pub mod isi {
             ProposalKind::DeployContract(payload) => apply_deploy_contract_governance_effect(
                 payload,
                 &proposal.proposer,
+                certificate,
                 state_transaction,
             ),
+            ProposalKind::ContractLifecycleGovernance(payload) => {
+                apply_contract_lifecycle_governance_effect(
+                    payload,
+                    &proposal.proposer,
+                    state_transaction,
+                )
+            }
+            ProposalKind::ContractEmergencyHold(payload) => {
+                apply_contract_emergency_hold_effect(payload, certificate, state_transaction)
+            }
             ProposalKind::RuntimeUpgrade(payload) => {
                 enact_runtime_upgrade_proposal(state_transaction, payload, &proposal.proposer)
             }
@@ -7739,6 +8724,7 @@ pub mod isi {
                 | gov::ParliamentLifecycleTransitionKindV1::RecordBallotDropout
                 | gov::ParliamentLifecycleTransitionKindV1::CloseBallotRegistration
                 | gov::ParliamentLifecycleTransitionKindV1::FreezeBallotSurvivors
+                | gov::ParliamentLifecycleTransitionKindV1::FreezeTimedOvnCorpus
                 | gov::ParliamentLifecycleTransitionKindV1::BeginBallotOpeningBatch
                 | gov::ParliamentLifecycleTransitionKindV1::FailBallotNoResult
                 | gov::ParliamentLifecycleTransitionKindV1::FailPublicFindingNoResult
@@ -7839,6 +8825,19 @@ pub mod isi {
                     "a new Parliament retry requires a terminal non-enacted predecessor".into(),
                 ));
             }
+            let randomness_redraws_before_attempt = previous
+                .map(crate::governance::parliament::ParliamentAttemptStateV1::randomness_redraws_used_v1)
+                .transpose()
+                .map_err(parliament_reducer_error)?
+                .unwrap_or(0);
+            if previous.is_some()
+                && randomness_redraws_before_attempt
+                    >= crate::governance::parliament::MAX_PARLIAMENT_RANDOMNESS_REDRAWS_V1
+            {
+                return Err(parliament_reducer_error(
+                    crate::governance::parliament::ParliamentReducerErrorV1::RandomnessRedrawLimitExceeded,
+                ));
+            }
             let expected_proposal_status = previous
                 .map_or(crate::state::GovernanceProposalStatus::Proposed, |state| {
                     governance_proposal_status_for_attempt_v1(state.attempt().status)
@@ -7870,8 +8869,9 @@ pub mod isi {
             let (risk_tier, required_bodies) = parliament_attempt_policy_v1(&self.proposal);
             let effect_preimage_hash = self.proposal.effect_preimage_hash_v1();
             let expected_head = parliament_expected_head_v1(&self.proposal, state_transaction)?;
-            let attempt = crate::governance::parliament::ParliamentAttemptStateV1::try_new(
+            let attempt = crate::governance::parliament::ParliamentAttemptStateV1::try_new_with_randomness_redraws_before_attempt(
                 self.canonical_attempt(risk_tier),
+                randomness_redraws_before_attempt,
                 PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1,
                 state_transaction
                     .gov
@@ -8165,7 +9165,10 @@ pub mod isi {
     ) -> Result<crate::tle_release::ValidatedTleKeySessionV1, Error> {
         if !state_transaction
             .world
-            .tle_key_session_eligible_for_new_ballots(key_session_id)
+            .tle_key_session_eligible_for_new_ballots(
+                key_session_id,
+                state_transaction.block_height(),
+            )
         {
             return Err(InstructionExecutionError::InvariantViolation(
                 "Parliament ballot must use the exact active TLE key session".into(),
@@ -8272,9 +9275,11 @@ pub mod isi {
             let transition_kind = self.transition.kind();
             // Intent-setting transitions require a manager; member actions remain bound to the
             // signed transaction authority, and state-derived progress transitions are
-            // permissionless. The containing finalized block supplies consensus height/order,
-            // while Core independently replays every pulse, deadline, roster, corpus, release,
-            // certificate, and compare-and-set binding below.
+            // permissionless. This includes exact-next timed-OVN corpus chunks: Core derives the
+            // starting survivor offset and verifies every record, so the relayer cannot select
+            // the corpus or its result. The containing finalized block supplies consensus
+            // height/order, while Core independently replays every pulse, deadline, roster,
+            // corpus, release, certificate, and compare-and-set binding below.
             if parliament_transition_requires_manager_v1(transition_kind) {
                 require_parliament_manager(authority, state_transaction)?;
             }
@@ -8984,7 +9989,7 @@ pub mod isi {
             if let Some(lifecycle) = timed_ovn_lifecycle {
                 state_transaction
                     .world
-                    .put_timed_ovn_lifecycle(lifecycle)
+                    .put_timed_ovn_lifecycle(lifecycle, current_height)
                     .map_err(parliament_timed_ovn_error_v1)?;
             }
             state_transaction.world.emit_events(Some(
@@ -10153,18 +11158,11 @@ pub mod isi {
                 )
                 .into());
             }
-            let next_height = if matches!(
-                certificate.action,
-                Action::InstallGlobalBeaconKey | Action::RetireGlobalBeaconKey
-            ) {
-                current_height.checked_add(1).ok_or_else(|| {
-                    threshold_key_lifecycle_error_v1(
-                        "threshold-key lifecycle activation height overflows",
-                    )
-                })?
-            } else {
-                current_height
-            };
+            let next_height = current_height.checked_add(1).ok_or_else(|| {
+                threshold_key_lifecycle_error_v1(
+                    "threshold-key lifecycle activation height overflows",
+                )
+            })?;
 
             match certificate.action {
                 Action::InstallGlobalBeaconKey => {
@@ -10307,9 +11305,10 @@ pub mod isi {
                                 "Parliament TLE public key session cannot be persisted",
                             )
                         })?;
+                    let lifecycle_policy = state_transaction.gov.parliament_tle_key_lifecycle;
                     state_transaction
                         .world
-                        .activate_tle_key_session(key_session_id)
+                        .activate_tle_key_session(key_session_id, current_height, lifecycle_policy)
                         .map_err(|_| {
                             threshold_key_lifecycle_error_v1(
                                 "Parliament TLE public key session cannot be activated",
@@ -10344,7 +11343,7 @@ pub mod isi {
                             )
                         })?;
                     if retain_through
-                        .is_some_and(|deadline| deadline == u64::MAX || current_height <= deadline)
+                        .is_some_and(|deadline| deadline == u64::MAX || current_height < deadline)
                     {
                         return Err(threshold_key_lifecycle_error_v1(
                             "Parliament TLE key session is retained by a committed ballot deadline",
@@ -10353,7 +11352,7 @@ pub mod isi {
                     }
                     state_transaction
                         .world
-                        .retire_tle_key_session(key_session_id)
+                        .retire_tle_key_session(key_session_id, current_height)
                         .map_err(|_| {
                             threshold_key_lifecycle_error_v1(
                                 "Parliament TLE key session is not exactly active",
@@ -10361,10 +11360,7 @@ pub mod isi {
                         })?;
                 }
             }
-            let effective_height = match certificate.action {
-                Action::InstallGlobalBeaconKey | Action::RetireGlobalBeaconKey => next_height,
-                Action::InstallParliamentTleKey | Action::RetireParliamentTleKey => current_height,
-            };
+            let effective_height = next_height;
             state_transaction.world.emit_events(Some(
                 GovernanceEvent::ThresholdKeyLifecycleApplied(
                     iroha_data_model::events::data::governance::GovernanceThresholdKeyLifecycleAppliedV1 {
@@ -16015,6 +17011,10 @@ pub mod isi {
             };
             let mut domain = new_domain.build(authority);
             domain.id = canonical_id.clone();
+            crate::smartcontracts::limits::enforce_metadata_value_sizes(
+                state_transaction,
+                domain.metadata(),
+            )?;
             if let Some((key, _)) = domain.metadata.iter().find(|(key, _)| {
                 crate::smartcontracts::isi::kaigi::is_reserved_kaigi_metadata_key(key)
             }) {
@@ -19641,7 +20641,12 @@ pub mod isi {
             ton_breaker_disabled_latch_transition_v1, ton_breaker_observation_allows_outbound_v1,
         };
         use crate::{
-            governance::parliament::{ParliamentDecisionModeV1, RequiredParliamentBodyV1},
+            governance::{
+                parliament::{ParliamentDecisionModeV1, RequiredParliamentBodyV1},
+                timed_ovn::{
+                    TimedOvnLifecycleStateV1, TimedOvnSessionPublicV1, timed_ovn_parameter_hash_v1,
+                },
+            },
             smartcontracts::triggers::set::SetReadOnly,
             state::StateBlock,
         };
@@ -19649,7 +20654,14 @@ pub mod isi {
         use iroha_config::parameters::actual::{
             LaneConfig as RuntimeLaneConfig, ParliamentTimedOvn,
         };
-        use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
+        use iroha_crypto::{
+            Algorithm, Hash, KeyPair, Signature,
+            threshold_bls::{
+                AdaptiveThresholdBlsParameters, DasRenDealerSecret, ThresholdBlsSession,
+                TleReleasePurpose,
+            },
+            timed_ovn::{TimedOvnChoiceV1, TimedOvnRegistrationSecretV1},
+        };
         #[allow(unused_imports)]
         use iroha_data_model::{
             IntoKeyValue,
@@ -19720,6 +20732,7 @@ pub mod isi {
             prelude::Parameter,
             zk::OpenVerifyEnvelope,
         };
+        use rand::{SeedableRng as _, rngs::StdRng};
         use std::{
             collections::{BTreeMap, BTreeSet},
             str::FromStr,
@@ -20122,10 +21135,11 @@ pub mod isi {
                 Kind::BeginInvitationAcceptance,
                 Kind::FailBodyElectionNoRoster,
                 Kind::SealBodyRoster,
+                Kind::FreezeTimedOvnCorpus,
             ] {
                 assert!(
                     !parliament_transition_requires_manager_v1(kind),
-                    "objective election progress must not depend on manager liveness: {kind:?}"
+                    "objective Parliament progress must not depend on manager liveness: {kind:?}"
                 );
             }
             for kind in [
@@ -20134,7 +21148,6 @@ pub mod isi {
                 Kind::RegisterSortitionRequest,
                 Kind::AdvanceBodyPhase,
                 Kind::RegisterBallotAttempt,
-                Kind::FreezeTimedOvnCorpus,
             ] {
                 assert!(
                     parliament_transition_requires_manager_v1(kind),
@@ -20239,7 +21252,7 @@ pub mod isi {
         }
 
         #[test]
-        fn parliament_proof_heavy_ballot_corpus_requires_manager_before_validation() {
+        fn parliament_proof_heavy_ballot_corpus_is_permissionless_but_shape_checked() {
             let state = blank_test_state();
             let header = first_test_block_header();
             let mut block = state.block(header);
@@ -20256,23 +21269,14 @@ pub mod isi {
                 ),
             };
 
-            let unauthorized = instruction
-                .clone()
-                .execute(&ALICE_ID, &mut state_transaction)
-                .expect_err("an ordinary account must not submit the proof-heavy corpus");
-            assert!(format!("{unauthorized:?}").contains("CanManageParliament"));
-
-            state_transaction.world.account_permissions.insert(
-                ALICE_ID.clone(),
-                BTreeSet::from([Permission::from(CanManageParliament)]),
-            );
             let validation_error = instruction
                 .execute(&ALICE_ID, &mut state_transaction)
                 .expect_err("the fixture intentionally names an unknown attempt");
             assert!(
                 format!("{validation_error:?}").contains("unknown Parliament governance attempt"),
-                "an authorized manager must reach deterministic corpus validation: {validation_error:?}"
+                "a non-manager relayer must reach deterministic corpus validation: {validation_error:?}"
             );
+            assert!(!format!("{validation_error:?}").contains("CanManageParliament"));
 
             let oversized = gov::SubmitParliamentLifecycleTransitionV1 {
                 governance_attempt_id:
@@ -20296,6 +21300,166 @@ pub mod isi {
                 format!("{oversized_error:?}").contains("chunk is oversized"),
                 "unexpected oversized-chunk rejection: {oversized_error:?}"
             );
+        }
+
+        #[test]
+        fn parliament_non_manager_can_append_the_exact_next_timed_ovn_chunks() {
+            use iroha_data_model::governance::types::BallotAttemptStatusV1;
+
+            let state = blank_test_state();
+            let block = new_dummy_block_at_height(NonZeroU64::new(38).expect("nonzero height"));
+            let mut state_block = state.block(block.as_ref().header());
+            let mut state_transaction = state_block.transaction();
+            let fixture = seed_parliament_permissionless_corpus_fixture(&mut state_transaction);
+
+            gov::SubmitParliamentLifecycleTransitionV1 {
+                governance_attempt_id: fixture.governance_attempt_id,
+                transition: gov::ParliamentLifecycleTransitionV1::FreezeTimedOvnCorpus(
+                    gov::ParliamentFreezeTimedOvnCorpusV1 {
+                        ballot_attempt_id: fixture.ballot_attempt_id,
+                        ballot_records: vec![fixture.ballot_records[0].clone()],
+                    },
+                ),
+            }
+            .execute(&ALICE_ID, &mut state_transaction)
+            .expect("a non-manager may append the exact first proof-valid corpus chunk");
+            let corpus_open = state_transaction
+                .world
+                .timed_ovn_evidence
+                .get(&fixture.ballot_attempt_id)
+                .expect("permissionless first chunk persists");
+            assert!(matches!(
+                corpus_open,
+                TimedOvnLifecycleStateV1::CorpusOpen(_)
+            ));
+            assert_eq!(corpus_open.accepted_ballot_prefix_count(), Some(1));
+            assert_eq!(
+                state_transaction
+                    .world
+                    .parliament_attempts
+                    .get(&fixture.governance_attempt_id)
+                    .expect("permissionless corpus attempt remains")
+                    .ballot(&fixture.ballot_attempt_id)
+                    .expect("permissionless corpus ballot remains")
+                    .attempt()
+                    .status,
+                BallotAttemptStatusV1::TimedCommitment,
+                "a nonterminal chunk cannot prematurely seal the reducer corpus"
+            );
+
+            gov::SubmitParliamentLifecycleTransitionV1 {
+                governance_attempt_id: fixture.governance_attempt_id,
+                transition: gov::ParliamentLifecycleTransitionV1::FreezeTimedOvnCorpus(
+                    gov::ParliamentFreezeTimedOvnCorpusV1 {
+                        ballot_attempt_id: fixture.ballot_attempt_id,
+                        ballot_records: fixture.ballot_records[1..].to_vec(),
+                    },
+                ),
+            }
+            .execute(&ALICE_ID, &mut state_transaction)
+            .expect("a non-manager may append the exact remaining proof-valid corpus chunk");
+            let sealed = state_transaction
+                .world
+                .timed_ovn_evidence
+                .get(&fixture.ballot_attempt_id)
+                .expect("permissionless terminal chunk persists");
+            assert!(matches!(sealed, TimedOvnLifecycleStateV1::Sealed(_)));
+            assert_eq!(sealed.accepted_ballot_prefix_count(), Some(3));
+            let ballot = state_transaction
+                .world
+                .parliament_attempts
+                .get(&fixture.governance_attempt_id)
+                .expect("sealed permissionless corpus attempt")
+                .ballot(&fixture.ballot_attempt_id)
+                .expect("sealed permissionless corpus ballot");
+            assert_eq!(
+                ballot.attempt().status,
+                BallotAttemptStatusV1::AwaitingRelease
+            );
+            assert_eq!(ballot.accepted_ballots(), Some(3));
+            assert!(ballot.corpus_root().is_some());
+        }
+
+        #[test]
+        fn parliament_permissionless_timed_ovn_chunk_rejects_shape_order_and_proof_tampering() {
+            let state = blank_test_state();
+            let block = new_dummy_block_at_height(NonZeroU64::new(38).expect("nonzero height"));
+            let mut state_block = state.block(block.as_ref().header());
+            let mut state_transaction = state_block.transaction();
+            let fixture = seed_parliament_permissionless_corpus_fixture(&mut state_transaction);
+            let original_lifecycle = state_transaction
+                .world
+                .timed_ovn_evidence
+                .get(&fixture.ballot_attempt_id)
+                .cloned()
+                .expect("original survivor-frozen lifecycle");
+            let original_attempt = state_transaction
+                .world
+                .parliament_attempts
+                .get(&fixture.governance_attempt_id)
+                .cloned()
+                .expect("original permissionless corpus attempt");
+
+            let mut malformed = fixture.ballot_records[0].clone();
+            malformed.pop();
+            let mut invalid_proof = fixture.ballot_records[0].clone();
+            *invalid_proof
+                .last_mut()
+                .expect("fixed-width ballot has a final proof byte") ^= 1;
+            for (description, ballot_records, expected_error) in [
+                (
+                    "wrong-width record",
+                    vec![malformed],
+                    "noncanonical wire width",
+                ),
+                (
+                    "out-of-order proof-valid record",
+                    vec![fixture.ballot_records[1].clone()],
+                    "timed-OVN transcript binding mismatch",
+                ),
+                (
+                    "tampered one-hot proof",
+                    vec![invalid_proof],
+                    "timed-OVN ballot one-hot proof failed",
+                ),
+            ] {
+                let error = gov::SubmitParliamentLifecycleTransitionV1 {
+                    governance_attempt_id: fixture.governance_attempt_id,
+                    transition: gov::ParliamentLifecycleTransitionV1::FreezeTimedOvnCorpus(
+                        gov::ParliamentFreezeTimedOvnCorpusV1 {
+                            ballot_attempt_id: fixture.ballot_attempt_id,
+                            ballot_records,
+                        },
+                    ),
+                }
+                .execute(&ALICE_ID, &mut state_transaction)
+                .expect_err(description);
+                let rendered = format!("{error:?}");
+                assert!(
+                    rendered.contains(expected_error),
+                    "unexpected {description} rejection: {rendered}"
+                );
+                assert!(
+                    !rendered.contains("CanManageParliament"),
+                    "cryptographic corpus rejection must not be an authority failure: {rendered}"
+                );
+                assert_eq!(
+                    state_transaction
+                        .world
+                        .timed_ovn_evidence
+                        .get(&fixture.ballot_attempt_id),
+                    Some(&original_lifecycle),
+                    "rejected {description} must not advance the authoritative corpus"
+                );
+                assert_eq!(
+                    state_transaction
+                        .world
+                        .parliament_attempts
+                        .get(&fixture.governance_attempt_id),
+                    Some(&original_attempt),
+                    "rejected {description} must not mutate the Parliament reducer"
+                );
+            }
         }
 
         #[test]
@@ -20964,6 +22128,276 @@ pub mod isi {
                 beacon_session_id,
                 pulse_height: PULSE_HEIGHT,
                 pulse_id,
+            }
+        }
+
+        struct ParliamentPermissionlessCorpusFixture {
+            governance_attempt_id: GovernanceAttemptId,
+            ballot_attempt_id: BallotAttemptId,
+            ballot_records: Vec<Vec<u8>>,
+        }
+
+        fn seed_parliament_permissionless_corpus_fixture(
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> ParliamentPermissionlessCorpusFixture {
+            use iroha_data_model::governance::types::DeliberationPhaseV1;
+
+            let progress = seed_parliament_permissionless_progress_fixture(
+                state_transaction,
+                ParliamentPermissionlessProgressPhase::Drawing,
+            );
+            let governance_attempt_id = progress.governance_attempt_id;
+            let mut attempt = state_transaction
+                .world
+                .parliament_attempts
+                .get(&governance_attempt_id)
+                .cloned()
+                .expect("permissionless corpus fixture attempt");
+            let requirements = attempt.required_bodies().to_vec();
+            let (policy_requirement, public_requirements) = requirements
+                .split_last()
+                .expect("canonical Parliament pipeline is nonempty");
+            assert_eq!(policy_requirement.body, ParliamentBody::PolicyJury);
+            assert_eq!(
+                policy_requirement.decision_mode,
+                ParliamentDecisionModeV1::HiddenBindingBallot
+            );
+            for (index, requirement) in public_requirements.iter().copied().enumerate() {
+                let election_attempt_id =
+                    BodyElectionAttemptId::derive_v1(governance_attempt_id, requirement.body, 0);
+                complete_parliament_body_for_due_certificate(
+                    &mut attempt,
+                    requirement,
+                    election_attempt_id,
+                    0x40_u8.wrapping_add(u8::try_from(index).expect("small body index")),
+                );
+            }
+
+            let policy_election_id =
+                BodyElectionAttemptId::derive_v1(governance_attempt_id, policy_requirement.body, 0);
+            attempt
+                .begin_invitation_acceptance(governance_attempt_id, policy_election_id, 20, 1)
+                .expect("open Policy Jury invitation window");
+            let policy_members = attempt
+                .election(&policy_election_id)
+                .expect("drawn Policy Jury election")
+                .primary_assignments()
+                .iter()
+                .map(|assignment| assignment.member.clone())
+                .collect::<Vec<_>>();
+            for member in &policy_members {
+                attempt
+                    .record_invitation_response(
+                        governance_attempt_id,
+                        policy_election_id,
+                        member,
+                        true,
+                        20,
+                    )
+                    .expect("accept Policy Jury invitation");
+            }
+            let body_instance_id = attempt
+                .seal_body_roster(governance_attempt_id, policy_election_id, 21)
+                .expect("seal Policy Jury roster");
+            for phase in [
+                DeliberationPhaseV1::Orientation,
+                DeliberationPhaseV1::Evidence,
+                DeliberationPhaseV1::Questions,
+                DeliberationPhaseV1::Responses,
+                DeliberationPhaseV1::Deliberation,
+                DeliberationPhaseV1::Reflection,
+                DeliberationPhaseV1::Vote,
+            ] {
+                attempt
+                    .advance_body_phase(governance_attempt_id, body_instance_id, phase, 22, 10)
+                    .expect("advance Policy Jury to its private ballot");
+            }
+
+            let ordered_tle_roster = (0_u8..4)
+                .map(|index| {
+                    let keypair = KeyPair::from_seed(
+                        vec![0xD8_u8.wrapping_add(index); 32],
+                        Algorithm::Ed25519,
+                    );
+                    iroha_data_model::peer::PeerId::new(keypair.public_key().clone())
+                })
+                .collect::<Vec<_>>();
+            let threshold_session = ThresholdBlsSession::<TleReleasePurpose>::new(
+                *state_transaction.network_id.as_bytes(),
+                parliament_test_root(0xD1),
+                crate::beacon::global_threshold_beacon_roster_hash_v1(&ordered_tle_roster),
+                4,
+                2,
+            )
+            .expect("permissionless corpus threshold session");
+            let parameters = AdaptiveThresholdBlsParameters::derive(&threshold_session)
+                .expect("permissionless corpus threshold parameters");
+            let mut rng = StdRng::from_seed([0xDB; 32]);
+            let dealers = (1_u16..=3)
+                .map(|index| {
+                    DasRenDealerSecret::generate_with_rng(&parameters, index, &mut rng)
+                        .expect("permissionless corpus TLE dealer")
+                        .1
+                })
+                .collect::<Vec<_>>();
+            let tle_key = crate::tle_release::ValidatedTleKeySessionV1::from_qualified_dealers(
+                threshold_session,
+                &dealers,
+                &[1, 2, 3],
+                parliament_test_root(0xDC),
+            )
+            .expect("permissionless corpus TLE key");
+            let tle_key_session_id = tle_key.public_state().key_session_id;
+            state_transaction
+                .world
+                .put_tle_key_session(tle_key.public_state().clone(), ordered_tle_roster)
+                .expect("persist permissionless corpus TLE key");
+
+            let ballot_attempt_id = BallotAttemptId::derive_v1(body_instance_id, 0);
+            let release_beacon_session_id = BeaconSessionId::new(parliament_test_root(0xD0));
+            let release_height = 42;
+            let tle_session_id = TleSessionId::derive_v1(
+                ballot_attempt_id,
+                tle_key_session_id,
+                release_beacon_session_id,
+                release_height,
+            );
+            attempt
+                .register_ballot_attempt(
+                    governance_attempt_id,
+                    body_instance_id,
+                    ballot_attempt_id,
+                    0,
+                    tle_session_id,
+                    tle_key_session_id,
+                    release_beacon_session_id,
+                    30,
+                    ParliamentTimedOvn {
+                        registration_phase_blocks: 4,
+                        survivor_freeze_phase_blocks: 3,
+                        commitment_phase_blocks: 1,
+                        release_delay_blocks: 4,
+                        opening_phase_blocks: 2,
+                        max_ballot_retries: 2,
+                        max_corpus_entries: 3,
+                    },
+                    release_height,
+                )
+                .expect("register permissionless corpus ballot");
+            let session = TimedOvnSessionPublicV1 {
+                network_id: *state_transaction.network_id.as_bytes(),
+                proposal_content_id: *attempt.proposal_content_id().as_bytes(),
+                governance_attempt_id: *governance_attempt_id.as_bytes(),
+                body_instance_id: *body_instance_id.as_bytes(),
+                ballot_attempt_id: *ballot_attempt_id.as_bytes(),
+                parameter_hash: timed_ovn_parameter_hash_v1(),
+                tle_key_session_id,
+                tle_key_transcript_hash: tle_key.public_state().transcript_hash,
+                tle_master_public_key: *tle_key.master_public_key().as_bytes(),
+            };
+            let crypto_session = session
+                .rebuild(&tle_key)
+                .expect("rebuild permissionless corpus timed-OVN session");
+            let mut registrations = policy_members
+                .iter()
+                .map(|member| {
+                    let participant_hash =
+                        parliament_ballot_participant_hash_v1(ballot_attempt_id, member);
+                    let (secret, registration) = TimedOvnRegistrationSecretV1::generate_with_rng(
+                        &crypto_session,
+                        participant_hash,
+                        &mut rng,
+                    )
+                    .expect("generate permissionless corpus registration");
+                    (participant_hash, secret, registration.to_bytes())
+                })
+                .collect::<Vec<_>>();
+            registrations.sort_unstable_by_key(|(participant_hash, _, _)| *participant_hash);
+            let mut lifecycle =
+                TimedOvnLifecycleStateV1::open_registration(session, 30, release_height, &tle_key)
+                    .expect("open permissionless corpus registration");
+            for (participant_hash, _, registration) in &registrations {
+                lifecycle = lifecycle
+                    .register_participant(*participant_hash, registration.clone(), &tle_key)
+                    .expect("register permissionless corpus participant");
+            }
+            lifecycle = lifecycle
+                .close_registration(&tle_key)
+                .expect("close permissionless corpus registration");
+            let (registration_binding, _) = lifecycle
+                .validated_parliament_reducer_binding(&tle_key)
+                .expect("derive permissionless corpus registration binding");
+            attempt
+                .close_ballot_registration(
+                    governance_attempt_id,
+                    ballot_attempt_id,
+                    registration_binding
+                        .registration_root
+                        .expect("registration root"),
+                    registration_binding
+                        .registered_voters
+                        .expect("registered voter count"),
+                    34,
+                )
+                .expect("close permissionless corpus reducer registration");
+            lifecycle = lifecycle
+                .freeze_survivors(&tle_key)
+                .expect("freeze permissionless corpus survivors");
+            let (survivor_binding, _) = lifecycle
+                .validated_parliament_reducer_binding(&tle_key)
+                .expect("derive permissionless corpus survivor binding");
+            attempt
+                .freeze_ballot_survivors(
+                    governance_attempt_id,
+                    ballot_attempt_id,
+                    survivor_binding.dropout_root.expect("dropout root"),
+                    survivor_binding.survivor_root.expect("survivor root"),
+                    survivor_binding.survivors.expect("survivor count"),
+                    survivor_binding.no_recovery_root.expect("no-recovery root"),
+                    37,
+                )
+                .expect("freeze permissionless corpus reducer survivors");
+            let TimedOvnLifecycleStateV1::SurvivorsFrozen(frozen) = &lifecycle else {
+                unreachable!("survivor freeze returns the frozen phase")
+            };
+            let prepared = frozen
+                .validate(&tle_key)
+                .expect("validate permissionless corpus survivor roster");
+            let choices = [
+                TimedOvnChoiceV1::Aye,
+                TimedOvnChoiceV1::Nay,
+                TimedOvnChoiceV1::Abstain,
+            ];
+            let ballot_records = registrations
+                .iter()
+                .zip(choices)
+                .map(|((_, secret, _), choice)| {
+                    secret
+                        .cast_ballot_with_rng(prepared.survivor_roster(), choice, &mut rng)
+                        .expect("cast permissionless corpus ballot")
+                        .to_bytes()
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(ballot_records.len(), policy_members.len());
+
+            state_transaction
+                .world
+                .put_parliament_attempt(attempt)
+                .expect("persist permissionless corpus attempt");
+            state_transaction
+                .world
+                .timed_ovn_evidence
+                .insert(ballot_attempt_id, lifecycle);
+            let manager_permission: Permission = CanManageParliament.into();
+            assert!(
+                !has_exact_permission(&state_transaction.world, &ALICE_ID, &manager_permission,),
+                "permissionless corpus fixture must not grant manager authority"
+            );
+
+            ParliamentPermissionlessCorpusFixture {
+                governance_attempt_id,
+                ballot_attempt_id,
+                ballot_records,
             }
         }
 
@@ -21745,6 +23179,435 @@ pub mod isi {
         }
 
         #[test]
+        fn parliament_due_certificate_applies_contract_ownership_offer() {
+            let state = blank_test_state();
+            let block = new_dummy_block_at_height(
+                NonZeroU64::new(PARLIAMENT_DUE_CERTIFICATE_HEIGHT).expect("due height is nonzero"),
+            );
+            let mut state_block = state.block(block.as_ref().header());
+            let (fixture, contract_address) = {
+                let mut seed = state_block.transaction();
+                Register::account(Account::new(ALICE_ID.clone()))
+                    .execute(&ALICE_ID, &mut seed)
+                    .expect("seed proposer");
+                Register::account(Account::new(BOB_ID.clone()))
+                    .execute(&ALICE_ID, &mut seed)
+                    .expect("seed proposed owner");
+                let contract_address = ContractAddress::derive(
+                    seed.network_id(),
+                    &ALICE_ID,
+                    81,
+                    DataSpaceId::UNIVERSAL,
+                )
+                .expect("derive governed contract address");
+                let contract_subject = contract_address.subject_id();
+                Register::account(Account::new(contract_subject.clone()))
+                    .execute(&ALICE_ID, &mut seed)
+                    .expect("seed contract subject");
+                seed.world.contract_subject_bindings.insert(
+                    contract_address.clone(),
+                    crate::smartcontracts::code::ContractSubjectBinding::new_parliament(
+                        &contract_address,
+                        ALICE_ID.clone(),
+                        [0x81; 32],
+                        [0x82; 32],
+                    ),
+                );
+                seed.world
+                    .contract_subject_addresses
+                    .insert(contract_subject, contract_address.clone());
+                let fixture = seed_due_parliament_certificate(
+                    &mut seed,
+                    ProposalKind::ContractLifecycleGovernance(
+                        ContractLifecycleGovernanceProposalV1 {
+                            contract_address: contract_address.clone(),
+                            expected_revision: 1,
+                            action: ContractLifecycleGovernanceActionV1::OfferOwnership(
+                                iroha_data_model::governance::types::OfferContractOwnershipGovernanceActionV1 {
+                                    new_owner: BOB_ID.clone(),
+                                },
+                            ),
+                        },
+                    ),
+                );
+                seed.apply();
+                (fixture, contract_address)
+            };
+
+            let mut execution = state_block.transaction();
+            assert_eq!(
+                execute_due_parliament_certificate_v1(
+                    fixture.governance_attempt_id,
+                    &mut execution,
+                )
+                .expect("execute certified ownership offer"),
+                DueParliamentCertificateExecutionV1::Applied
+            );
+            let lifecycle = &execution
+                .world
+                .contract_subject_bindings
+                .get(&contract_address)
+                .expect("governed lifecycle binding")
+                .lifecycle;
+            assert_eq!(lifecycle.revision, 2);
+            assert_eq!(
+                lifecycle.pending_owner,
+                Some(
+                    iroha_data_model::smart_contract::ContractLifecycleOwnerV1::Account(
+                        BOB_ID.clone()
+                    )
+                )
+            );
+            assert_eq!(
+                execution
+                    .world
+                    .governance_proposals
+                    .get(&fixture.proposal_id)
+                    .expect("governed proposal")
+                    .status,
+                crate::state::GovernanceProposalStatus::Enacted
+            );
+            let event = execution
+                .world
+                .internal_event_buf
+                .iter()
+                .find_map(|event| match event.as_ref() {
+                    DataEvent::SmartContract(SmartContractEvent::OwnershipTransferOffered(
+                        event,
+                    )) if event.contract_address == contract_address => Some(event),
+                    _ => None,
+                })
+                .expect("certified ownership event");
+            assert_eq!(event.revision, 2);
+            assert_eq!(&event.lifecycle, lifecycle);
+        }
+
+        #[test]
+        fn parliament_due_certificate_applies_bounded_contract_emergency_hold() {
+            let state = blank_test_state();
+            let block = new_dummy_block_at_height(
+                NonZeroU64::new(PARLIAMENT_DUE_CERTIFICATE_HEIGHT).expect("due height is nonzero"),
+            );
+            let mut state_block = state.block(block.as_ref().header());
+            let active_code_hash = Hash::new(b"contract-emergency-hold-test");
+            let (fixture, contract_address) = {
+                let mut seed = state_block.transaction();
+                Register::account(Account::new(ALICE_ID.clone()))
+                    .execute(&ALICE_ID, &mut seed)
+                    .expect("seed proposer and owner");
+                let contract_address = ContractAddress::derive(
+                    seed.network_id(),
+                    &ALICE_ID,
+                    82,
+                    DataSpaceId::UNIVERSAL,
+                )
+                .expect("derive contained contract address");
+                let contract_subject = contract_address.subject_id();
+                Register::account(Account::new(contract_subject.clone()))
+                    .execute(&ALICE_ID, &mut seed)
+                    .expect("seed contained contract subject");
+                let mut binding = crate::smartcontracts::code::ContractSubjectBinding::new_direct(
+                    &contract_address,
+                    ALICE_ID.clone(),
+                );
+                binding.lifecycle.active_code_hash = Some(active_code_hash);
+                seed.world
+                    .contract_subject_bindings
+                    .insert(contract_address.clone(), binding);
+                seed.world
+                    .contract_subject_addresses
+                    .insert(contract_subject, contract_address.clone());
+                seed.world
+                    .contract_instances
+                    .insert(contract_address.clone(), active_code_hash);
+                let fixture = seed_due_parliament_certificate(
+                    &mut seed,
+                    ProposalKind::ContractEmergencyHold(ContractEmergencyHoldProposalV1 {
+                        contract_address: contract_address.clone(),
+                        expected_revision: 1,
+                        expected_code_hash:
+                            iroha_data_model::governance::types::ContractCodeHash::new(
+                                active_code_hash.into(),
+                            ),
+                        incident_digest: [0x83; 32],
+                        reason: "bounded incident containment".to_owned(),
+                        duration_blocks: 9,
+                    }),
+                );
+                seed.apply();
+                (fixture, contract_address)
+            };
+
+            let mut execution = state_block.transaction();
+            assert_eq!(
+                execute_due_parliament_certificate_v1(
+                    fixture.governance_attempt_id,
+                    &mut execution,
+                )
+                .expect("execute certified emergency hold"),
+                DueParliamentCertificateExecutionV1::Applied
+            );
+            let lifecycle = &execution
+                .world
+                .contract_subject_bindings
+                .get(&contract_address)
+                .expect("contained lifecycle binding")
+                .lifecycle;
+            let hold = lifecycle.emergency_hold.as_ref().expect("bounded hold");
+            assert_eq!(lifecycle.revision, 2);
+            assert_eq!(
+                hold.proposal_content_id,
+                *fixture.certificate.proposal_content_id.as_bytes()
+            );
+            assert_eq!(
+                hold.governance_attempt_id,
+                *fixture.certificate.governance_attempt_id.as_bytes()
+            );
+            assert_eq!(
+                hold.expires_at_height,
+                PARLIAMENT_DUE_CERTIFICATE_HEIGHT + 9
+            );
+            assert!(lifecycle.is_held_at(PARLIAMENT_DUE_CERTIFICATE_HEIGHT));
+            assert!(!lifecycle.is_held_at(PARLIAMENT_DUE_CERTIFICATE_HEIGHT + 9));
+            let event =
+                execution
+                    .world
+                    .internal_event_buf
+                    .iter()
+                    .find_map(|event| match event.as_ref() {
+                        DataEvent::SmartContract(SmartContractEvent::EmergencyHoldPlaced(
+                            event,
+                        )) if event.contract_address == contract_address => Some(event),
+                        _ => None,
+                    })
+                    .expect("certified emergency-hold event");
+            assert_eq!(event.revision, 2);
+            assert_eq!(&event.lifecycle, lifecycle);
+            assert_eq!(&event.hold, hold);
+        }
+
+        #[test]
+        fn emergency_hold_retrospective_requires_exact_expired_hold_and_nonzero_finding() {
+            let mut lifecycle =
+                iroha_data_model::smart_contract::ContractLifecycleControlV1::direct(
+                    ALICE_ID.clone(),
+                );
+            lifecycle.emergency_hold =
+                Some(iroha_data_model::smart_contract::ContractEmergencyHoldV1 {
+                    incident_digest: [0x91; 32],
+                    proposal_content_id: [0x92; 32],
+                    governance_attempt_id: [0x93; 32],
+                    reason: "review this incident".to_owned(),
+                    imposed_at_height: 50,
+                    expires_at_height: 60,
+                });
+            let action = CompleteContractEmergencyHoldRetrospectiveGovernanceActionV1 {
+                hold_proposal_content_id: [0x92; 32],
+                hold_governance_attempt_id: [0x93; 32],
+                incident_digest: [0x91; 32],
+                retrospective_finding_root: [0x94; 32],
+            };
+
+            assert!(
+                checked_expired_contract_emergency_hold_retrospective(&lifecycle, &action, 59)
+                    .is_err(),
+                "the exclusive expiry must be reached before completion"
+            );
+            assert_eq!(
+                checked_expired_contract_emergency_hold_retrospective(&lifecycle, &action, 60)
+                    .expect("the exact exclusive expiry height is eligible"),
+                lifecycle.emergency_hold.clone().expect("fixture hold")
+            );
+
+            for invalid in [
+                CompleteContractEmergencyHoldRetrospectiveGovernanceActionV1 {
+                    hold_proposal_content_id: [0x95; 32],
+                    ..action
+                },
+                CompleteContractEmergencyHoldRetrospectiveGovernanceActionV1 {
+                    hold_governance_attempt_id: [0x95; 32],
+                    ..action
+                },
+                CompleteContractEmergencyHoldRetrospectiveGovernanceActionV1 {
+                    incident_digest: [0x95; 32],
+                    ..action
+                },
+                CompleteContractEmergencyHoldRetrospectiveGovernanceActionV1 {
+                    retrospective_finding_root: [0; 32],
+                    ..action
+                },
+            ] {
+                assert!(
+                    checked_expired_contract_emergency_hold_retrospective(
+                        &lifecycle, &invalid, 60,
+                    )
+                    .is_err(),
+                    "a substituted hold binding or zero finding root must fail closed"
+                );
+            }
+            lifecycle.emergency_hold = None;
+            assert!(
+                checked_expired_contract_emergency_hold_retrospective(&lifecycle, &action, 60)
+                    .is_err(),
+                "a retrospective cannot replay after its hold was cleared"
+            );
+        }
+
+        #[test]
+        fn certified_retrospective_clears_exact_hold_and_allows_independent_successor_hold() {
+            let state = blank_test_state();
+            let block = new_dummy_block_at_height(
+                NonZeroU64::new(PARLIAMENT_DUE_CERTIFICATE_HEIGHT).expect("due height is nonzero"),
+            );
+            let mut state_block = state.block(block.as_ref().header());
+            let active_code_hash = Hash::new(b"contract-emergency-retrospective-test");
+            let prior_hold = iroha_data_model::smart_contract::ContractEmergencyHoldV1 {
+                incident_digest: [0x91; 32],
+                proposal_content_id: [0x92; 32],
+                governance_attempt_id: [0x93; 32],
+                reason: "expired incident containment".to_owned(),
+                imposed_at_height: PARLIAMENT_DUE_CERTIFICATE_HEIGHT - 10,
+                expires_at_height: PARLIAMENT_DUE_CERTIFICATE_HEIGHT,
+            };
+            let finding_root = [0x94; 32];
+            let (retrospective, contract_address) = {
+                let mut seed = state_block.transaction();
+                Register::account(Account::new(ALICE_ID.clone()))
+                    .execute(&ALICE_ID, &mut seed)
+                    .expect("seed proposer and owner");
+                let contract_address = ContractAddress::derive(
+                    seed.network_id(),
+                    &ALICE_ID,
+                    83,
+                    DataSpaceId::UNIVERSAL,
+                )
+                .expect("derive reviewed contract address");
+                let contract_subject = contract_address.subject_id();
+                Register::account(Account::new(contract_subject.clone()))
+                    .execute(&ALICE_ID, &mut seed)
+                    .expect("seed reviewed contract subject");
+                let mut binding = crate::smartcontracts::code::ContractSubjectBinding::new_direct(
+                    &contract_address,
+                    ALICE_ID.clone(),
+                );
+                binding.lifecycle.active_code_hash = Some(active_code_hash);
+                binding.lifecycle.revision = 2;
+                binding.lifecycle.emergency_hold = Some(prior_hold.clone());
+                seed.world
+                    .contract_subject_bindings
+                    .insert(contract_address.clone(), binding);
+                seed.world
+                    .contract_subject_addresses
+                    .insert(contract_subject, contract_address.clone());
+                seed.world
+                    .contract_instances
+                    .insert(contract_address.clone(), active_code_hash);
+                let fixture = seed_due_parliament_certificate(
+                    &mut seed,
+                    ProposalKind::ContractLifecycleGovernance(
+                        ContractLifecycleGovernanceProposalV1 {
+                            contract_address: contract_address.clone(),
+                            expected_revision: 2,
+                            action: ContractLifecycleGovernanceActionV1::CompleteEmergencyHoldRetrospective(
+                                CompleteContractEmergencyHoldRetrospectiveGovernanceActionV1 {
+                                    hold_proposal_content_id: prior_hold.proposal_content_id,
+                                    hold_governance_attempt_id: prior_hold.governance_attempt_id,
+                                    incident_digest: prior_hold.incident_digest,
+                                    retrospective_finding_root: finding_root,
+                                },
+                            ),
+                        },
+                    ),
+                );
+                seed.apply();
+                (fixture, contract_address)
+            };
+
+            {
+                let mut execution = state_block.transaction();
+                assert_eq!(
+                    execute_due_parliament_certificate_v1(
+                        retrospective.governance_attempt_id,
+                        &mut execution,
+                    )
+                    .expect("execute certified retrospective"),
+                    DueParliamentCertificateExecutionV1::Applied
+                );
+                let lifecycle = &execution
+                    .world
+                    .contract_subject_bindings
+                    .get(&contract_address)
+                    .expect("reviewed lifecycle binding")
+                    .lifecycle;
+                assert_eq!(lifecycle.revision, 3);
+                assert_eq!(lifecycle.emergency_hold, None);
+                let event = execution
+                    .world
+                    .internal_event_buf
+                    .iter()
+                    .find_map(|event| match event.as_ref() {
+                        DataEvent::SmartContract(
+                            SmartContractEvent::EmergencyHoldRetrospectiveCompleted(event),
+                        ) if event.contract_address == contract_address => Some(event),
+                        _ => None,
+                    })
+                    .expect("complete retrospective audit event");
+                assert_eq!(event.prior_hold, prior_hold);
+                assert_eq!(event.retrospective_finding_root, finding_root);
+                assert_eq!(event.revision, 3);
+                assert_eq!(&event.lifecycle, lifecycle);
+                execution.apply();
+            }
+
+            let successor = {
+                let mut seed = state_block.transaction();
+                let fixture = seed_due_parliament_certificate(
+                    &mut seed,
+                    ProposalKind::ContractEmergencyHold(ContractEmergencyHoldProposalV1 {
+                        contract_address: contract_address.clone(),
+                        expected_revision: 3,
+                        expected_code_hash:
+                            iroha_data_model::governance::types::ContractCodeHash::new(
+                                active_code_hash.into(),
+                            ),
+                        incident_digest: [0x95; 32],
+                        reason: "independent successor incident".to_owned(),
+                        duration_blocks: 2,
+                    }),
+                );
+                seed.apply();
+                fixture
+            };
+            let mut execution = state_block.transaction();
+            assert_eq!(
+                execute_due_parliament_certificate_v1(
+                    successor.governance_attempt_id,
+                    &mut execution,
+                )
+                .expect("execute independent successor hold"),
+                DueParliamentCertificateExecutionV1::Applied
+            );
+            let successor_hold = execution
+                .world
+                .contract_subject_bindings
+                .get(&contract_address)
+                .expect("successor lifecycle binding")
+                .lifecycle
+                .emergency_hold
+                .as_ref()
+                .expect("independent successor hold");
+            assert_eq!(successor_hold.incident_digest, [0x95; 32]);
+            assert_ne!(
+                successor_hold.proposal_content_id,
+                prior_hold.proposal_content_id
+            );
+            assert_ne!(
+                successor_hold.governance_attempt_id,
+                prior_hold.governance_attempt_id
+            );
+        }
+
+        #[test]
         fn parliament_due_certificate_head_drift_records_superseded_without_effect() {
             let state = blank_test_state();
             let block = new_dummy_block_at_height(
@@ -22312,7 +24175,17 @@ pub mod isi {
         }
 
         world_test!(threshold_key_lifecycle_qc_rotates_tle_atomically_rejects_replay_and_blocks_premature_retirement {
-            blank_state_transaction!(state, block, state_block, state_transaction);
+            let state = blank_test_state();
+            let header = BlockHeader::new(
+                NonZeroU64::new(40).expect("nonzero lifecycle height"),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut state_block = state.block(header);
+            let mut state_transaction = state_block.transaction();
             let validator_keys = (0..4).map(|_| checked_keypair()).collect::<Vec<_>>();
             let ordered_roster = validator_keys
                 .iter()
@@ -22328,18 +24201,20 @@ pub mod isi {
                 roster_hash,
             );
             let key_a_id = key_a.key_session_id;
-            let install_a = certified_threshold_key_lifecycle_instruction_v1(
-                &state_transaction,
-                &validator_keys,
-                consensus_keys::ThresholdKeyLifecycleActionV1::InstallParliamentTleKey,
-                *key_a_id.as_bytes(),
-                key_a.transcript_hash,
-                norito::encode_canonical(&key_a).expect("encode canonical TLE key A"),
-            );
-            install_a
-                .clone()
-                .execute(&ALICE_ID, &mut state_transaction)
-                .expect("current-roster QC installs TLE key A without manager authority");
+            state_transaction
+                .world
+                .put_tle_key_session(key_a.clone(), ordered_roster.clone())
+                .expect("persist proof-valid predecessor TLE key A");
+            let predecessor_install_height = state_transaction.block_height() - 1;
+            let tle_lifecycle_policy = state_transaction.gov.parliament_tle_key_lifecycle;
+            state_transaction
+                .world
+                .activate_tle_key_session(
+                    key_a_id,
+                    predecessor_install_height,
+                    tle_lifecycle_policy,
+                )
+                .expect("predecessor TLE key A is active at the test height");
             assert_eq!(state_transaction.world.active_tle_key_session(), Some(key_a_id));
             assert_eq!(
                 state_transaction
@@ -22348,11 +24223,6 @@ pub mod isi {
                     .get(&key_a_id),
                 Some(&ordered_roster)
             );
-            let replay = install_a
-                .execute(&ALICE_ID, &mut state_transaction)
-                .expect_err("an installed threshold-key certificate must not replay");
-            assert!(format!("{replay:?}").contains("compare-and-set predecessor changed"));
-
             let key_b = crate::tle_release::tests::public_key_session_fixture_for_context_v1(
                 *state_transaction.network_id.as_bytes(),
                 0xB2,
@@ -22373,16 +24243,18 @@ pub mod isi {
                 key_c.transcript_hash,
                 norito::encode_canonical(&key_c).expect("encode canonical TLE key C"),
             );
-            certified_threshold_key_lifecycle_instruction_v1(
+            let install_b = certified_threshold_key_lifecycle_instruction_v1(
                 &state_transaction,
                 &validator_keys,
                 consensus_keys::ThresholdKeyLifecycleActionV1::InstallParliamentTleKey,
                 *key_b_id.as_bytes(),
                 key_b.transcript_hash,
                 norito::encode_canonical(&key_b).expect("encode canonical TLE key B"),
-            )
-            .execute(&ALICE_ID, &mut state_transaction)
-            .expect("current-roster QC atomically rotates new ballots to TLE key B");
+            );
+            install_b
+                .clone()
+                .execute(&ALICE_ID, &mut state_transaction)
+                .expect("current-roster QC atomically rotates new ballots to TLE key B");
             assert_eq!(state_transaction.world.active_tle_key_session(), Some(key_b_id));
             assert!(state_transaction.world.tle_key_sessions.get(&key_a_id).is_some());
             assert_eq!(
@@ -22400,6 +24272,10 @@ pub mod isi {
                     .get(&key_b_id),
                 Some(&ordered_roster)
             );
+            let replay = install_b
+                .execute(&ALICE_ID, &mut state_transaction)
+                .expect_err("an installed threshold-key certificate must not replay");
+            assert!(format!("{replay:?}").contains("compare-and-set predecessor changed"));
             let stale_replacement = stale_install_c
                 .execute(&ALICE_ID, &mut state_transaction)
                 .expect_err("a certificate signed against predecessor A must not replace B");
@@ -22513,7 +24389,7 @@ pub mod isi {
             );
         });
 
-        world_test!(parliament_tle_rotation_rejects_old_key_for_new_ballots_but_retains_it_for_bound_openings {
+        world_test!(parliament_tle_rotation_cuts_over_at_next_height_and_retains_bound_openings {
             blank_state_transaction!(state, block, state_block, state_transaction);
             let validator_keys = (0..4).map(|_| checked_keypair()).collect::<Vec<_>>();
             let ordered_roster = validator_keys
@@ -22535,6 +24411,11 @@ pub mod isi {
             );
             let key_a_id = key_a.key_session_id;
             let key_b_id = key_b.key_session_id;
+            let current_height = state_transaction.block_height();
+            let predecessor_install_height = current_height
+                .checked_sub(1)
+                .expect("test block height leaves room for an active predecessor");
+            let policy = state_transaction.gov.parliament_tle_key_lifecycle;
 
             state_transaction
                 .world
@@ -22542,7 +24423,7 @@ pub mod isi {
                 .expect("persist proof-valid TLE key A");
             state_transaction
                 .world
-                .activate_tle_key_session(key_a_id)
+                .activate_tle_key_session(key_a_id, predecessor_install_height, policy)
                 .expect("activate TLE key A");
             super::validated_active_parliament_tle_key_session_for_new_ballot_v1(
                 key_a_id,
@@ -22556,24 +24437,22 @@ pub mod isi {
                 .expect("persist proof-valid TLE key B");
             state_transaction
                 .world
-                .activate_tle_key_session(key_b_id)
-                .expect("atomically cut new ballots over to TLE key B");
+                .activate_tle_key_session(key_b_id, current_height, policy)
+                .expect("schedule an atomic next-height cutover to TLE key B");
 
-            let old_key_error =
-                super::validated_active_parliament_tle_key_session_for_new_ballot_v1(
-                    key_a_id,
-                    &state_transaction,
-                )
-                .expect_err("retained key A must not be selectable after the B cutover");
-            assert!(
-                format!("{old_key_error:?}").contains("exact active TLE key session"),
-                "unexpected inactive-key rejection: {old_key_error:?}"
-            );
             super::validated_active_parliament_tle_key_session_for_new_ballot_v1(
-                key_b_id,
+                key_a_id,
                 &state_transaction,
             )
-            .expect("active key B must be selectable by a new ballot");
+            .expect("predecessor A remains selectable through the cutover height");
+            let next_height = current_height.checked_add(1).expect("test height advances");
+            assert_eq!(
+                state_transaction
+                    .world
+                    .selectable_tle_key_session_for_fresh_ballot_at(next_height),
+                Some(key_b_id),
+                "successor B becomes selectable exactly at H + 1"
+            );
 
             let successor_roster = (0..4)
                 .map(|_| crate::PeerId::new(checked_keypair().public_key().clone()))
@@ -22581,10 +24460,10 @@ pub mod isi {
             *state_transaction.commit_topology.get_mut() = successor_roster;
             let stale_roster_error =
                 super::validated_active_parliament_tle_key_session_for_new_ballot_v1(
-                    key_b_id,
+                    key_a_id,
                     &state_transaction,
                 )
-                .expect_err("a topology change must make active key B ineligible for new ballots");
+                .expect_err("a topology change must make active key A ineligible for new ballots");
             assert!(
                 format!("{stale_roster_error:?}")
                     .contains("not bound to the current commit topology"),
@@ -26491,7 +28370,14 @@ seiyaku GovernanceLifecycle {
             Register::account(Account::new(payload.contract_address.subject_id()))
                 .expect_execute(&ALICE_ID, &mut transaction, "register derived governance contract subject");
             assert!(
-                super::bind_contract_instance(&ALICE_ID, &mut transaction, &payload, code_hash)
+                super::bind_contract_instance(
+                    &ALICE_ID,
+                    &mut transaction,
+                    &payload,
+                    code_hash,
+                    [1; 32],
+                    [2; 32],
+                )
                     .expect("bind verified governance contract")
             );
             assert!(matches!(
@@ -26543,7 +28429,14 @@ seiyaku GovernanceLifecycle {
                 .contract_manifests
                 .insert(code_hash, manifest);
             let error =
-                super::bind_contract_instance(&ALICE_ID, &mut transaction, &payload, code_hash)
+                super::bind_contract_instance(
+                    &ALICE_ID,
+                    &mut transaction,
+                    &payload,
+                    code_hash,
+                    [1; 32],
+                    [2; 32],
+                )
                     .expect_err("binding before verified bytes must fail closed");
             let message = format!("{error:?}");
             assert!(
@@ -26560,7 +28453,14 @@ seiyaku GovernanceLifecycle {
             );
             transaction.world.contract_code.insert(code_hash, artifact);
             assert!(
-                super::bind_contract_instance(&ALICE_ID, &mut transaction, &payload, code_hash)
+                super::bind_contract_instance(
+                    &ALICE_ID,
+                    &mut transaction,
+                    &payload,
+                    code_hash,
+                    [1; 32],
+                    [2; 32],
+                )
                     .expect("bind after bytes and exact manifest are present")
             );
             assert!(matches!(
@@ -26607,6 +28507,8 @@ seiyaku GovernanceLifecycle {
                 &mut transaction,
                 &malformed,
                 malformed_hash,
+                [1; 32],
+                [2; 32],
             )
             .expect_err("malformed stored bytes must reject governance binding");
             assert_err!(format!("{error:?}"), "invalid");
@@ -26635,6 +28537,8 @@ seiyaku GovernanceLifecycle {
                 &mut transaction,
                 &mismatched,
                 mismatched_hash,
+                [1; 32],
+                [2; 32],
             )
             .expect_err("stored bytes under the wrong hash must reject governance binding");
             assert_err!(format!("{error:?}"), "hash does not match");
@@ -26672,6 +28576,8 @@ seiyaku GovernanceLifecycle {
                 &mut transaction,
                 &stub_payload,
                 valid_hash,
+                [1; 32],
+                [2; 32],
             )
             .expect_err("a hash-only manifest must not activate verified bytecode");
             assert_err!(format!("{error:?}"), "manifest payload does not match");
@@ -36863,18 +38769,27 @@ seiyaku GovernanceLifecycle {
             )
             .expect("contract address");
             let contract_subject = contract_address.subject_id();
-            assert!(
-                stx.world.account(&contract_subject).is_err(),
-                "the activation fixture must begin without a subject account",
+            Register::account(Account::new(contract_subject.clone()))
+                .expect_execute(&ALICE_ID, &mut stx, "seed contract subject");
+            stx.world.contract_subject_bindings.insert(
+                contract_address.clone(),
+                crate::smartcontracts::code::ContractSubjectBinding::new_direct(
+                    &contract_address,
+                    ALICE_ID.clone(),
+                ),
             );
+            stx.world
+                .contract_subject_addresses
+                .insert(contract_subject.clone(), contract_address.clone());
             let activate = scode::ActivateContractInstance {
                 contract_address: contract_address.clone(),
+                expected_revision: 1,
                 code_hash,
             };
             let error = activate
                 .clone()
                 .expect_execute_err(&attacker, &mut stx, "an unprivileged account must not pre-bind another account's address");
-            assert_contains!(error.to_string(), "CanRegisterSmartContractCode");
+            assert_contains!(error.to_string(), "current account owner");
             assert!(
                 stx.world
                     .contract_instances
@@ -36889,18 +38804,28 @@ seiyaku GovernanceLifecycle {
                 stx.world.contract_instances.get(&contract_address),
                 Some(&code_hash)
             );
+            assert_eq!(
+                stx.world
+                    .contract_subject_bindings
+                    .get(&contract_address)
+                    .expect("active lifecycle")
+                    .lifecycle
+                    .active_code_hash,
+                Some(code_hash)
+            );
             assert!(
                 stx.world.account(&contract_subject).is_ok(),
-                "activation must atomically materialize its deterministic subject account",
+                "contract subject account remains available",
             );
             let deactivate = scode::DeactivateContractInstance {
                 contract_address: contract_address.clone(),
+                expected_revision: 1,
                 reason: Some("adversarial ABA attempt".to_owned()),
             };
             let error = deactivate
                 .clone()
                 .expect_execute_err(&attacker, &mut stx, "an unprivileged account must not begin an ABA rebind");
-            assert_contains!(error.to_string(), "CanRegisterSmartContractCode");
+            assert_contains!(error.to_string(), "current account owner");
             assert_eq!(
                 stx.world.contract_instances.get(&contract_address),
                 Some(&code_hash),
@@ -36909,7 +38834,7 @@ seiyaku GovernanceLifecycle {
             let error = activate
                 .clone()
                 .expect_execute_err(&attacker, &mut stx, "even an idempotent binding request requires lifecycle authority");
-            assert_contains!(error.to_string(), "CanRegisterSmartContractCode");
+            assert_contains!(error.to_string(), "current account owner");
             deactivate
                 .expect_execute(&ALICE_ID, &mut stx, "runtime lifecycle authority may deactivate an instance");
             assert!(
@@ -36918,10 +38843,18 @@ seiyaku GovernanceLifecycle {
                     .get(&contract_address)
                     .is_none()
             );
+            let deactivated_lifecycle = &stx
+                .world
+                .contract_subject_bindings
+                .get(&contract_address)
+                .expect("retained inactive lifecycle")
+                .lifecycle;
+            assert!(deactivated_lifecycle.active_code_hash.is_none());
+            assert_eq!(deactivated_lifecycle.revision, 3);
             let error = activate
                 .clone()
                 .expect_execute_err(&attacker, &mut stx, "an unprivileged account must not complete an ABA rebind");
-            assert_contains!(error.to_string(), "CanRegisterSmartContractCode");
+            assert_contains!(error.to_string(), "current account owner");
             assert!(
                 stx.world
                     .contract_instances
@@ -36934,6 +38867,14 @@ seiyaku GovernanceLifecycle {
                 stx.world.contract_instances.get(&contract_address),
                 Some(&code_hash)
             );
+            let reactivated_lifecycle = &stx
+                .world
+                .contract_subject_bindings
+                .get(&contract_address)
+                .expect("reactivated lifecycle")
+                .lifecycle;
+            assert_eq!(reactivated_lifecycle.active_code_hash, Some(code_hash));
+            assert_eq!(reactivated_lifecycle.revision, 4);
         });
         world_test!(native_upload_finalization_enforces_live_cycle_ceiling_and_retains_staging {
             blank_test_state_transaction!(state, block, stx);
@@ -37263,15 +39204,101 @@ seiyaku GovernanceLifecycle {
                 DataSpaceId::UNIVERSAL,
             )
             .expect("contract address");
+            stx.world.contract_subject_bindings.insert(
+                contract_address.clone(),
+                crate::smartcontracts::code::ContractSubjectBinding::new_parliament(
+                    &contract_address,
+                    ALICE_ID.clone(),
+                    [1; 32],
+                    [2; 32],
+                ),
+            );
             let err = scode::ActivateContractInstance {
                 contract_address,
+                expected_revision: 1,
                 code_hash,
             }
             .expect_execute_err(&ALICE_ID, &mut stx, "protected namespace must remain governance-gated");
             let msg = smart_contract_error_message(
                 iroha_data_model::ValidationFail::InstructionFailed(err),
             );
-            assert_contains!(msg, "CanEnactGovernance", "unexpected protected-namespace error: {msg}");
+            assert_contains!(msg, "current account owner", "unexpected protected-namespace error: {msg}");
+        });
+        world_test!(contract_lifecycle_ownership_is_two_step_revocable_and_revision_guarded {
+            blank_test_state_transaction!(state, block, stx);
+            Register::account(Account::new(ALICE_ID.clone()))
+                .expect_execute(&ALICE_ID, &mut stx, "seed owner");
+            Register::account(Account::new(BOB_ID.clone()))
+                .expect_execute(&ALICE_ID, &mut stx, "seed nominee");
+            let address = ContractAddress::derive(
+                &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                    .parse()
+                    .expect("canonical test network id"),
+                &ALICE_ID,
+                44,
+                DataSpaceId::UNIVERSAL,
+            )
+            .expect("contract address");
+            let subject = address.subject_id();
+            Register::account(Account::new(subject.clone()))
+                .expect_execute(&ALICE_ID, &mut stx, "seed contract subject");
+            stx.world.contract_subject_bindings.insert(
+                address.clone(),
+                crate::smartcontracts::code::ContractSubjectBinding::new_direct(
+                    &address,
+                    ALICE_ID.clone(),
+                ),
+            );
+            stx.world
+                .contract_subject_addresses
+                .insert(subject, address.clone());
+
+            scode::SetContractParliamentDelegation {
+                contract_address: address.clone(),
+                expected_revision: 1,
+                delegated: true,
+            }
+            .expect_execute(&ALICE_ID, &mut stx, "owner delegates lifecycle authority");
+            let stale = scode::OfferContractOwnership {
+                contract_address: address.clone(),
+                expected_revision: 1,
+                new_owner: iroha_data_model::smart_contract::ContractLifecycleOwnerV1::Account(
+                    BOB_ID.clone(),
+                ),
+            }
+            .expect_execute_err(&ALICE_ID, &mut stx, "stale ownership offer must fail");
+            assert_contains!(stale.to_string(), "stale contract lifecycle revision");
+            scode::OfferContractOwnership {
+                contract_address: address.clone(),
+                expected_revision: 2,
+                new_owner: iroha_data_model::smart_contract::ContractLifecycleOwnerV1::Account(
+                    BOB_ID.clone(),
+                ),
+            }
+            .expect_execute(&ALICE_ID, &mut stx, "owner offers ownership");
+            scode::AcceptContractOwnership {
+                contract_address: address.clone(),
+                expected_revision: 3,
+            }
+            .expect_execute(&BOB_ID, &mut stx, "nominee accepts ownership");
+            let lifecycle = &stx
+                .world
+                .contract_subject_bindings
+                .get(&address)
+                .expect("binding retained")
+                .lifecycle;
+            assert_eq!(
+                lifecycle.owner,
+                iroha_data_model::smart_contract::ContractLifecycleOwnerV1::Account(
+                    BOB_ID.clone()
+                )
+            );
+            assert_eq!(lifecycle.revision, 4);
+            assert_eq!(
+                lifecycle.parliament_delegation,
+                iroha_data_model::smart_contract::ContractParliamentDelegationV1::None
+            );
+            assert!(lifecycle.pending_owner.is_none());
         });
         world_test!(register_domain_rejects_missing_endorsement_when_required {
             let mut state = blank_test_state();

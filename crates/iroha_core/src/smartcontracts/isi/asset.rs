@@ -1578,6 +1578,8 @@ pub mod isi {
         },
         /// Reserve an Oracle dispute bond.
         OracleDisputeBond(Vec<u8>),
+        /// Reserve a public moderation challenge bond.
+        ModerationChallengeBond(Vec<u8>),
         /// Send value through the social incentive flow.
         SocialSend(Vec<u8>),
         /// Bond stake for a public-lane validator or delegator.
@@ -1629,6 +1631,10 @@ pub mod isi {
         OraclePenalty(Vec<u8>),
         /// Resolve the exact retained Oracle dispute.
         OracleDisputeResolution(Vec<u8>),
+        /// Refund an exact retained moderation challenge bond.
+        ModerationChallengeRefund(Vec<u8>),
+        /// Slash an exact retained moderation challenge bond.
+        ModerationChallengeSlash(Vec<u8>),
         /// Pay a social reward from the configured pool.
         SocialReward(Vec<u8>),
         /// Release or refund a retained social escrow.
@@ -1712,6 +1718,11 @@ pub mod isi {
                 EmbeddedNumericAssetMovementPurpose::OracleDisputeBond(binding) => (
                     NumericMovementDebitAuthorization::ExactUser(submitting_authority.clone()),
                     "oracle-dispute-bond",
+                    binding,
+                ),
+                EmbeddedNumericAssetMovementPurpose::ModerationChallengeBond(binding) => (
+                    NumericMovementDebitAuthorization::ExactUser(submitting_authority.clone()),
+                    "moderation-challenge-bond",
                     binding,
                 ),
                 EmbeddedNumericAssetMovementPurpose::SocialSend(binding) => (
@@ -1831,6 +1842,18 @@ pub mod isi {
                     binding,
                     NumericAssetTransferSourcePolicy::OracleDisputeResolution,
                     NumericAssetTransferControlPolicy::OracleDisputeResolution,
+                ),
+                RetainedNumericAssetMovementPurpose::ModerationChallengeRefund(binding) => (
+                    "moderation-challenge-refund",
+                    binding,
+                    NumericAssetTransferSourcePolicy::GovernanceUnlock,
+                    NumericAssetTransferControlPolicy::GovernanceUnlock,
+                ),
+                RetainedNumericAssetMovementPurpose::ModerationChallengeSlash(binding) => (
+                    "moderation-challenge-slash",
+                    binding,
+                    NumericAssetTransferSourcePolicy::GovernanceSlash,
+                    NumericAssetTransferControlPolicy::GovernanceSlash,
                 ),
                 RetainedNumericAssetMovementPurpose::SocialReward(binding) => (
                     "social-reward",
@@ -2446,6 +2469,209 @@ pub mod isi {
                 authority,
                 EmbeddedNumericAssetMovementPurpose::OracleDisputeBond(binding),
             ),
+        )
+    }
+    /// Consume one exact moderation challenge bond funding or settlement capability.
+    pub(in crate::smartcontracts::isi) fn execute_verified_moderation_challenge_bond_movement(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authorization: crate::smartcontracts::isi::sorafs_moderation::VerifiedModerationChallengeBondMovement,
+    ) -> Result<(), Error> {
+        use crate::smartcontracts::isi::sorafs_moderation::{
+            ModerationChallengeBondSettlementLeg, VerifiedModerationChallengeBondPurpose,
+            moderation_challenge_rejected_slash_amount, read_challenge,
+        };
+        use iroha_data_model::sorafs::moderation_ledger::MODERATION_CHALLENGE_BOND_AMOUNT_V1;
+
+        let (purpose, source_id, destination_id, amount) = authorization.into_parts();
+        let movement_authorization = match purpose {
+            VerifiedModerationChallengeBondPurpose::Funding {
+                authority,
+                case_id,
+                round_id,
+                challenge_id,
+            } => {
+                let expected_source = AssetId::new(
+                    state_transaction.gov.voting_asset_id.clone(),
+                    authority.clone(),
+                );
+                let expected_destination = AssetId::new(
+                    state_transaction.gov.voting_asset_id.clone(),
+                    state_transaction.gov.bond_escrow_account.clone(),
+                );
+                if source_id != expected_source
+                    || destination_id != expected_destination
+                    || amount != Quantity::from(MODERATION_CHALLENGE_BOND_AMOUNT_V1)
+                    || authority == state_transaction.gov.bond_escrow_account
+                    || authority == state_transaction.gov.slash_receiver_account
+                    || read_challenge(
+                        state_transaction.world(),
+                        &case_id,
+                        &round_id,
+                        &challenge_id,
+                    )?
+                    .is_some()
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "moderation challenge bond funding does not match configured governance custody"
+                            .into(),
+                    )
+                    .into());
+                }
+                let binding = canonical_numeric_movement_binding(&(
+                    case_id,
+                    round_id,
+                    challenge_id,
+                    authority.clone(),
+                    source_id.clone(),
+                    destination_id.clone(),
+                    amount.clone(),
+                ))?;
+                NumericAssetMovementAuthorization::embedded_user(
+                    &authority,
+                    EmbeddedNumericAssetMovementPurpose::ModerationChallengeBond(binding),
+                )
+            }
+            VerifiedModerationChallengeBondPurpose::Settlement {
+                case_id,
+                round_id,
+                challenge_id,
+                decision,
+                leg,
+            } => {
+                let record = read_challenge(
+                    state_transaction.world(),
+                    &case_id,
+                    &round_id,
+                    &challenge_id,
+                )?
+                .ok_or_else(|| {
+                    InstructionExecutionError::InvariantViolation(
+                        "moderation challenge bond settlement has no retained challenge".into(),
+                    )
+                })?;
+                if record.decision.is_some() || record.bond.settled_at_unix_ms.is_some() {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "moderation challenge bond is already settled".into(),
+                    )
+                    .into());
+                }
+                let numeric_spec = state_transaction
+                    .numeric_spec_for(&record.bond.asset_definition_id)
+                    .map_err(InstructionExecutionError::Find)?;
+                let slash_amount =
+                    moderation_challenge_rejected_slash_amount(&record.bond.amount, numeric_spec)?;
+                let refund_amount = record
+                    .bond
+                    .amount
+                    .checked_sub(&slash_amount)
+                    .map_err(|_| MathError::Overflow)?;
+                let expected_source = AssetId::new(
+                    record.bond.asset_definition_id.clone(),
+                    record.bond.escrow_account.clone(),
+                );
+                let (expected_destination, expected_amount, retained_purpose) = match (decision, leg)
+                {
+                    (
+                        iroha_data_model::sorafs::moderation_ledger::ModerationChallengeDecisionV1::Accepted
+                        | iroha_data_model::sorafs::moderation_ledger::ModerationChallengeDecisionV1::Expired,
+                        ModerationChallengeBondSettlementLeg::Refund,
+                    ) => (
+                        AssetId::new(
+                            record.bond.asset_definition_id.clone(),
+                            record.challenger.clone(),
+                        ),
+                        record.bond.amount.clone(),
+                        RetainedNumericAssetMovementPurpose::ModerationChallengeRefund(Vec::new()),
+                    ),
+                    (
+                        iroha_data_model::sorafs::moderation_ledger::ModerationChallengeDecisionV1::Rejected,
+                        ModerationChallengeBondSettlementLeg::Refund,
+                    ) => (
+                        AssetId::new(
+                            record.bond.asset_definition_id.clone(),
+                            record.challenger.clone(),
+                        ),
+                        refund_amount,
+                        RetainedNumericAssetMovementPurpose::ModerationChallengeRefund(Vec::new()),
+                    ),
+                    (
+                        iroha_data_model::sorafs::moderation_ledger::ModerationChallengeDecisionV1::Rejected,
+                        ModerationChallengeBondSettlementLeg::Slash,
+                    ) => (
+                        AssetId::new(
+                            record.bond.asset_definition_id.clone(),
+                            record.bond.slash_receiver_account.clone(),
+                        ),
+                        slash_amount,
+                        RetainedNumericAssetMovementPurpose::ModerationChallengeSlash(Vec::new()),
+                    ),
+                    _ => {
+                        return Err(InstructionExecutionError::InvariantViolation(
+                            "moderation challenge bond settlement leg does not match its decision"
+                                .into(),
+                        )
+                        .into());
+                    }
+                };
+                if source_id != expected_source
+                    || destination_id != expected_destination
+                    || amount != expected_amount
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "moderation challenge bond settlement does not match retained custody"
+                            .into(),
+                    )
+                    .into());
+                }
+                let binding = canonical_numeric_movement_binding(&(
+                    case_id,
+                    round_id,
+                    challenge_id,
+                    decision,
+                    leg as u8,
+                    source_id.clone(),
+                    destination_id.clone(),
+                    amount.clone(),
+                    record.bond.amount,
+                ))?;
+                match retained_purpose {
+                    RetainedNumericAssetMovementPurpose::ModerationChallengeRefund(_) => {
+                        NumericAssetMovementAuthorization::retained(
+                            &record.challenger,
+                            RetainedNumericAssetMovementPurpose::ModerationChallengeRefund(binding),
+                        )
+                    }
+                    RetainedNumericAssetMovementPurpose::ModerationChallengeSlash(_) => {
+                        NumericAssetMovementAuthorization::retained(
+                            &record.challenger,
+                            RetainedNumericAssetMovementPurpose::ModerationChallengeSlash(binding),
+                        )
+                    }
+                    _ => unreachable!("moderation settlement selects a moderation purpose"),
+                }
+            }
+        };
+        if source_id == destination_id {
+            let retained_balance = state_transaction
+                .world
+                .assets
+                .get(&source_id)
+                .map(|value| value.as_ref().clone())
+                .unwrap_or_else(Quantity::zero);
+            if retained_balance < amount {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "moderation challenge slash custody is undercollateralized".into(),
+                )
+                .into());
+            }
+            return Ok(());
+        }
+        execute_numeric_asset_movement(
+            state_transaction,
+            source_id,
+            destination_id,
+            amount,
+            movement_authorization,
         )
     }
     /// Move an exact user's social send into its verified recipient or configured escrow.

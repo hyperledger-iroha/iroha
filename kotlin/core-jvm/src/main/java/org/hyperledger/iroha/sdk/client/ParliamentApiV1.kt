@@ -396,6 +396,8 @@ object ParliamentApiV1 {
         "ValidationFeePayoutLifecycle",
         "MusubiRegistryGovernance",
         "SorafsProviderGovernance",
+        "ContractLifecycleGovernance",
+        "ContractEmergencyHold",
     )
 
     /** One recursively validated closed first-release proposal wire value. */
@@ -460,6 +462,7 @@ object ParliamentApiV1 {
         ParliamentNoResultKindLayoutV1(6, "BallotOpeningDeadlineExpired"),
         ParliamentNoResultKindLayoutV1(7, "SortitionRetriesExhausted"),
         ParliamentNoResultKindLayoutV1(8, "ConfirmationJuryCapacityUnavailable"),
+        ParliamentNoResultKindLayoutV1(9, "RandomnessRedrawBudgetExhausted"),
     )
 
     @JvmField

@@ -2098,6 +2098,11 @@ impl TieredStateBackend {
             world.tle_key_session_rosters
         );
         collect_map!(
+            TieredSegment::TleKeySessionLifecycles,
+            TleKeySessionLifecycle,
+            world.tle_key_session_lifecycles
+        );
+        collect_map!(
             TieredSegment::TleActiveKeySession,
             TleActiveKeySession,
             world.tle_active_key_session
@@ -2652,7 +2657,7 @@ mod measured_bytes_impls {
             GovernanceReferendumMode, GovernanceReferendumRecord, GovernanceReferendumStatus,
             GovernanceSlashEntry, GovernanceSlashLedger, ZkAssetState, ZkAssetVerifierBinding,
         },
-        tle_release::TleKeySessionPublicStateV1,
+        tle_release::{TleKeySessionLifecycleV1, TleKeySessionPublicStateV1},
     };
     use iroha_crypto::{
         Hash, HashOf, LaneCommitmentId, MerkleProof, MerkleTree, PublicKey, Signature, SignatureOf,
@@ -2800,6 +2805,7 @@ mod measured_bytes_impls {
         RuntimeUpgradeId,
         RuntimeUpgradeStatus,
         TleKeySessionId,
+        TleKeySessionLifecycleV1,
         PrivacyProtocolActivationRecordV1,
         PrivacyPgcAccountProvenanceV1,
         PrivacyPgcAccountStateV1,
@@ -2934,7 +2940,33 @@ mod measured_bytes_impls {
     }
     impl MeasuredBytes for ContractSubjectBinding {
         fn measured_bytes(&self) -> usize {
-            size_of::<ContractSubjectBinding>().saturating_add(self.subject.measured_bytes_extra())
+            use iroha_data_model::smart_contract::{
+                ContractDeploymentOriginV1, ContractLifecycleOwnerV1,
+            };
+            let mut total = size_of::<ContractSubjectBinding>()
+                .saturating_add(self.subject.measured_bytes_extra());
+            let mut add_owner = |owner: &ContractLifecycleOwnerV1| {
+                if let ContractLifecycleOwnerV1::Account(account) = owner {
+                    total = total.saturating_add(account.measured_bytes_extra());
+                }
+            };
+            add_owner(&self.lifecycle.owner);
+            if let Some(owner) = self.lifecycle.pending_owner.as_ref() {
+                add_owner(owner);
+            }
+            match &self.lifecycle.origin {
+                ContractDeploymentOriginV1::Direct(origin) => {
+                    total = total.saturating_add(origin.deployer.measured_bytes_extra());
+                }
+                ContractDeploymentOriginV1::Parliament(origin) => {
+                    let deployer = &origin.proposer;
+                    total = total.saturating_add(deployer.measured_bytes_extra());
+                }
+            }
+            if let Some(hold) = self.lifecycle.emergency_hold.as_ref() {
+                total = total.saturating_add(hold.reason.capacity());
+            }
+            total
         }
     }
     impl MeasuredBytes for AssetDefinitionAliasBindingRecord {
@@ -3767,6 +3799,12 @@ mod measured_bytes_impls {
                 ProposalKind::MusubiRegistryGovernance(action) => {
                     total = total.saturating_add(norito::codec::Encode::encode(action).len());
                 }
+                ProposalKind::ContractLifecycleGovernance(payload) => {
+                    total = total.saturating_add(norito::codec::Encode::encode(payload).len());
+                }
+                ProposalKind::ContractEmergencyHold(payload) => {
+                    total = total.saturating_add(norito::codec::Encode::encode(payload).len());
+                }
             }
             total
         }
@@ -4189,6 +4227,7 @@ enum TieredSegment {
     ParliamentAttempts,
     TleKeySessions,
     TleKeySessionRosters,
+    TleKeySessionLifecycles,
     TleActiveKeySession,
     TimedOvnEvidence,
     GlobalBeaconDkg,
@@ -4267,6 +4306,7 @@ impl TieredSegment {
             TieredSegment::ParliamentAttempts => "parliament_attempts",
             TieredSegment::TleKeySessions => "tle_key_sessions",
             TieredSegment::TleKeySessionRosters => "tle_key_session_rosters",
+            TieredSegment::TleKeySessionLifecycles => "tle_key_session_lifecycles",
             TieredSegment::TleActiveKeySession => "tle_active_key_session",
             TieredSegment::TimedOvnEvidence => "timed_ovn_evidence",
             TieredSegment::GlobalBeaconDkg => "global_beacon_dkg",
@@ -4355,6 +4395,7 @@ impl norito::json::JsonDeserialize for TieredSegment {
             "parliament_attempts" => TieredSegment::ParliamentAttempts,
             "tle_key_sessions" => TieredSegment::TleKeySessions,
             "tle_key_session_rosters" => TieredSegment::TleKeySessionRosters,
+            "tle_key_session_lifecycles" => TieredSegment::TleKeySessionLifecycles,
             "tle_active_key_session" => TieredSegment::TleActiveKeySession,
             "timed_ovn_evidence" => TieredSegment::TimedOvnEvidence,
             "global_beacon_dkg" => TieredSegment::GlobalBeaconDkg,
@@ -4576,6 +4617,7 @@ pub(crate) enum TieredKeyHandle {
     ParliamentAttempt(iroha_data_model::governance::types::GovernanceAttemptId),
     TleKeySession(iroha_data_model::governance::types::TleKeySessionId),
     TleKeySessionRoster(iroha_data_model::governance::types::TleKeySessionId),
+    TleKeySessionLifecycle(iroha_data_model::governance::types::TleKeySessionId),
     TleActiveKeySession(u64),
     TimedOvnEvidence(iroha_data_model::governance::types::BallotAttemptId),
     GlobalBeaconDkg([u8; 32]),
@@ -4668,6 +4710,7 @@ impl TieredKeyHandle {
             TieredKeyHandle::ParliamentAttempt(_) => TieredSegment::ParliamentAttempts,
             TieredKeyHandle::TleKeySession(_) => TieredSegment::TleKeySessions,
             TieredKeyHandle::TleKeySessionRoster(_) => TieredSegment::TleKeySessionRosters,
+            TieredKeyHandle::TleKeySessionLifecycle(_) => TieredSegment::TleKeySessionLifecycles,
             TieredKeyHandle::TleActiveKeySession(_) => TieredSegment::TleActiveKeySession,
             TieredKeyHandle::TimedOvnEvidence(_) => TieredSegment::TimedOvnEvidence,
             TieredKeyHandle::GlobalBeaconDkg(_) => TieredSegment::GlobalBeaconDkg,
@@ -4762,6 +4805,7 @@ impl TieredKeyHandle {
             TieredKeyHandle::ParliamentAttempt(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::TleKeySession(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::TleKeySessionRoster(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::TleKeySessionLifecycle(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::TleActiveKeySession(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::TimedOvnEvidence(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::GlobalBeaconDkg(key) => Ok(norito::codec::Encode::encode(key)),
@@ -4907,6 +4951,9 @@ impl TieredKeyHandle {
             TieredKeyHandle::TleKeySession(id) => fetch!(world.tle_key_sessions, id),
             TieredKeyHandle::TleKeySessionRoster(id) => {
                 fetch!(world.tle_key_session_rosters, id)
+            }
+            TieredKeyHandle::TleKeySessionLifecycle(id) => {
+                fetch!(world.tle_key_session_lifecycles, id)
             }
             TieredKeyHandle::TleActiveKeySession(id) => {
                 fetch!(world.tle_active_key_session, id)
@@ -5055,6 +5102,9 @@ impl TieredKeyHandle {
             TieredKeyHandle::TleKeySession(id) => fetch!(world.tle_key_sessions, id),
             TieredKeyHandle::TleKeySessionRoster(id) => {
                 fetch!(world.tle_key_session_rosters, id)
+            }
+            TieredKeyHandle::TleKeySessionLifecycle(id) => {
+                fetch!(world.tle_key_session_lifecycles, id)
             }
             TieredKeyHandle::TleActiveKeySession(id) => {
                 fetch!(world.tle_active_key_session, id)
@@ -5255,6 +5305,9 @@ impl fmt::Display for TieredKeyHandle {
             TieredKeyHandle::TleKeySession(id) => write!(f, "tle_key_session:{id}"),
             TieredKeyHandle::TleKeySessionRoster(id) => {
                 write!(f, "tle_key_session_roster:{id}")
+            }
+            TieredKeyHandle::TleKeySessionLifecycle(id) => {
+                write!(f, "tle_key_session_lifecycle:{id}")
             }
             TieredKeyHandle::TleActiveKeySession(id) => {
                 write!(f, "tle_active_key_session:{id}")

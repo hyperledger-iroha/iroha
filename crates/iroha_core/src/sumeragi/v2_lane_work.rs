@@ -5208,6 +5208,27 @@ impl V2LaneWorkAdapter {
         }
         result
     }
+
+    /// Return whether a registered Validate-sidecar wait belongs only to a
+    /// proposal superseded by the certified global view.
+    ///
+    /// The exact safety lock or Decision remains protected across views. An
+    /// unlocked losing proposal must release its lifecycle barrier so an
+    /// unavailable sidecar holder cannot prevent the next leader from
+    /// producing or the pacemaker from advancing again.
+    pub(in crate::sumeragi) fn lifecycle_validate_sidecar_is_superseded(
+        &self,
+        round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+    ) -> bool {
+        self.retained_merge_carrier_state
+            .is_some_and(|(view, locked_subject, decided_subject)| {
+                round.view < view
+                    && locked_subject != Some(subject)
+                    && decided_subject != Some(subject)
+            })
+    }
+
     fn retain_merge_sidecars_for_global_view_guarded(
         &mut self,
         view: wire::View,
@@ -21758,6 +21779,44 @@ pub(super) mod tests {
             .retain_merge_sidecars_for_global_view(1, None, None)
             .expect("install next certified view");
         assert_eq!(adapter.merge_retention_scans, 2);
+    }
+    #[test]
+    fn certified_view_supersedes_only_unprotected_validate_sidecar_waits() {
+        let (mut adapter, _) = fixture(wire::ConsensusMode::Permissioned);
+        let subject = wire::BlockSubject {
+            parent_block_hash: Some(HashOf::from_untyped_unchecked(Hash::new(
+                b"superseded Validate sidecar parent",
+            ))),
+            block_hash: HashOf::from_untyped_unchecked(Hash::new(
+                b"superseded Validate sidecar block",
+            )),
+            payload_hash: Hash::new(b"superseded Validate sidecar payload"),
+        };
+        let round = wire::ConsensusRound {
+            context_id: adapter.context.id(),
+            height: adapter.context.height,
+            view: 0,
+        };
+
+        adapter
+            .retain_merge_sidecars_for_global_view(0, None, None)
+            .expect("install the Validate carrier view");
+        assert!(!adapter.lifecycle_validate_sidecar_is_superseded(round, subject));
+
+        adapter
+            .retain_merge_sidecars_for_global_view(1, None, None)
+            .expect("install an unprotected certified successor view");
+        assert!(adapter.lifecycle_validate_sidecar_is_superseded(round, subject));
+
+        adapter
+            .retain_merge_sidecars_for_global_view(2, Some(subject), None)
+            .expect("protect the earlier body with the global lock");
+        assert!(!adapter.lifecycle_validate_sidecar_is_superseded(round, subject));
+
+        adapter
+            .retain_merge_sidecars_for_global_view(3, None, Some(subject))
+            .expect("protect the earlier body with the durable Decision");
+        assert!(!adapter.lifecycle_validate_sidecar_is_superseded(round, subject));
     }
     #[test]
     fn certified_view_change_releases_stale_native_amx_owners_and_vote_buckets() {

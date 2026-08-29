@@ -1,10 +1,10 @@
 //! Async DA spool batching for Torii ingest persistence.
 use super::ReceiptInsertOutcome;
-use crate::routing::MaybeTelemetry;
+use crate::{panic_recovery, routing::MaybeTelemetry};
+use iroha_core::panic_hook::catch_unwind_suppressed;
 use iroha_logger::warn;
 use std::{
     any::Any,
-    panic::{AssertUnwindSafe, catch_unwind},
     sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -43,7 +43,7 @@ impl DaSpoolAction {
     fn execute(self) -> DaSpoolActionReport {
         let kind = self.kind;
         let run = self.run;
-        match catch_unwind(AssertUnwindSafe(move || (run)())) {
+        match catch_unwind_suppressed(move || (run)()) {
             Ok(Ok(output)) => DaSpoolActionReport {
                 kind,
                 outcome: DaSpoolActionOutcome::Ok,
@@ -304,11 +304,13 @@ impl DaSpooler {
             let drained = jobs.len();
             let depth_after = Self::decrement_depth(&depth, drained);
             Self::record_queue_depth_for(&telemetry, depth_after);
-            let reports = tokio::task::spawn_blocking(move || {
-                jobs.into_iter()
-                    .map(|job| (job.ack, job.batch.execute_sync()))
-                    .collect::<Vec<_>>()
-            })
+            let reports = panic_recovery::join_recoverable(
+                panic_recovery::spawn_blocking_recoverable(move || {
+                    jobs.into_iter()
+                        .map(|job| (job.ack, job.batch.execute_sync()))
+                        .collect::<Vec<_>>()
+                }),
+            )
             .await;
             match reports {
                 Ok(reports) => {

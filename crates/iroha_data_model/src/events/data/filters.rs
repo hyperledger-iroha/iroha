@@ -192,6 +192,7 @@ mod model {
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     pub struct DomainEventFilter {
         /// If specified matches only events originating from this domain
+        #[getset(get = "pub")]
         pub(super) id_matcher: Option<super::DomainId>,
         /// Matches only event from this set
         pub(super) event_set: DomainEventSet,
@@ -201,6 +202,7 @@ mod model {
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     pub struct AccountEventFilter {
         /// If specified matches only events originating from this account
+        #[getset(get = "pub")]
         pub(super) id_matcher: Option<super::AccountId>,
         /// Matches only event from this set
         pub(super) event_set: AccountEventSet,
@@ -210,12 +212,16 @@ mod model {
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     pub struct AssetEventFilter {
         /// If specified matches only events originating from this asset
+        #[getset(get = "pub")]
         pub(super) id_matcher: Option<super::AssetId>,
         /// If specified matches only events for assets belonging to this asset definition
+        #[getset(get = "pub")]
         pub(super) asset_definition_matcher: Option<super::AssetDefinitionId>,
         /// If specified matches only transfer events debiting this account.
+        #[getset(get = "pub")]
         pub(super) transfer_source_account_matcher: Option<super::AccountId>,
         /// If specified matches only transfer events crediting this account.
+        #[getset(get = "pub")]
         pub(super) transfer_destination_account_matcher: Option<super::AccountId>,
         /// Matches only event from this set
         pub(super) event_set: AssetEventSet,
@@ -225,6 +231,7 @@ mod model {
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     pub struct AssetDefinitionEventFilter {
         /// If specified matches only events originating from this asset definition
+        #[getset(get = "pub")]
         pub(super) id_matcher: Option<super::AssetDefinitionId>,
         /// Matches only event from this set
         pub(super) event_set: AssetDefinitionEventSet,
@@ -234,6 +241,7 @@ mod model {
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     pub struct NftEventFilter {
         /// If specified matches only events originating from this NFT
+        #[getset(get = "pub")]
         pub(super) id_matcher: Option<NftId>,
         /// Matches only event from this set
         pub(super) event_set: NftEventSet,
@@ -243,6 +251,7 @@ mod model {
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     pub struct RwaEventFilter {
         /// If specified matches only events originating from this RWA lot.
+        #[getset(get = "pub")]
         pub(super) id_matcher: Option<RwaId>,
         /// Matches only events from this set.
         pub(super) event_set: RwaEventSet,
@@ -252,6 +261,7 @@ mod model {
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     pub struct TriggerEventFilter {
         /// If specified matches only events originating from this trigger
+        #[getset(get = "pub")]
         pub(super) id_matcher: Option<super::TriggerId>,
         /// Matches only event from this set
         pub(super) event_set: TriggerEventSet,

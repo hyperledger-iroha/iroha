@@ -191,8 +191,10 @@ locally signed transaction pipeline using two closed Norito instructions:
   cannot select their consensus result: Core accepts them only when the exact
   persisted height, corpus, pulse, proof, and state bindings match. Attempt
   creation, risk/qualification intent, sortition-request registration, body
-  phase intent, ballot creation, and the proof-heavy ballot-corpus upload retain
-  the exact unit `CanManageParliament` permission.
+  phase intent, and ballot creation retain the exact unit
+  `CanManageParliament` permission. Proof-heavy ballot-corpus chunks are
+  permissionless progress triggers because Core derives their exact next
+  survivor offset and accepts them only after verifying every record.
 
 Sortition requests must carry `request_height` equal to the containing block,
 the complete Core-derived eligible-citizen snapshot, and a strictly later pulse
@@ -272,14 +274,13 @@ one maximum-cost registration per block), at least `max_corpus_entries`
 survivor-freeze blocks, and at least `ceil(max_corpus_entries / 32)` commitment
 blocks. A standard default-genesis block can therefore carry the worst-case
 bounded transition traffic and still complete every policy-valid corpus.
-Because every chunk contains
-attacker-controlled proofs, each append requires exact `CanManageParliament`
-authorization before parsing or cryptographic validation. The manager still
-cannot forge, omit, reorder, overlap, or alter a survivor's ballot. Core enforces
-fixed record widths, the 32-record chunk cap, the frozen 1,000-survivor total,
-exact coverage, and immutable roots. Snapshot restoration discards trust in
-the cache: it replays the raw registration and ballot evidence and rejects any
-cached mask, prefix aggregate, or duplicate set that differs. Before
+Every chunk is permissionless, but the relayer cannot forge, omit, reorder,
+overlap, or alter a survivor's ballot: Core derives the exact next offset and
+enforces fixed record widths, every one-hot proof, the 32-record chunk cap, the
+frozen 1,000-survivor total, exact coverage, and immutable roots. Snapshot
+restoration discards trust in the cache: it replays the raw registration and
+ballot evidence and rejects any cached mask, prefix aggregate, or duplicate set
+that differs. Before
 registration close, survivor freeze, or a corpus append, Core checks the
 reducer-owned active ballot, lifecycle phase, body binding, predecessor
 checkpoint, and containing-height window using bounded scalar state.
@@ -358,17 +359,20 @@ this count-only projection.
 
 `GovernanceParliamentLifecycleTransitionApplied` carries the closed transition
 kind, an optional `no_result_kind`, and an optional typed
-`automatic_outcome`. The nine-variant `ParliamentNoResultKindV1` distinguishes
+`automatic_outcome`. The ten-variant `ParliamentNoResultKindV1` distinguishes
 final sortition retry exhaustion, public-finding quorum impossibility/deadline
 expiry, the five phase/release private-ballot failures, and
-`ConfirmationJuryCapacityUnavailable`. Before committing a narrow Policy Jury
+`ConfirmationJuryCapacityUnavailable`, and proposal-wide randomness-redraw
+exhaustion before a required Confirmation draw. Before committing a narrow Policy Jury
 approval, Core derives the current eligible citizen snapshot, removes every
 sealed Policy Jury member, and requires at least two remaining candidates. A
 count of zero or one persists with the verified narrow opening and terminally
-rejects the attempt as typed `NoResult`; it does not commit the Policy body
-binding or append an unfillable Confirmation stage. With at least two, the same
-atomic transition freezes and registers the disjoint Confirmation snapshot and
-future pulse request. Its sequence-zero request height must equal the Policy
+rejects the attempt as typed `ConfirmationJuryCapacityUnavailable`; it does not
+commit the Policy body binding or append an unfillable Confirmation stage. At
+the proposal-wide redraw ceiling, a count of at least two instead persists the
+same opening as typed `RandomnessRedrawBudgetExhausted` before the fresh draw is
+attempted. Otherwise, the same atomic transition freezes and registers the
+disjoint Confirmation snapshot and future pulse request. Its sequence-zero request height must equal the Policy
 result height; restore rejects a missing, backdated, or delayed initial request.
 Ordinary initial-body and retry request intent remains manager-gated. Core sets
 the classification only when the accepted transition
@@ -427,15 +431,19 @@ committed public transcript, selects only the context's key session, and drops
 retired shares only after the session is no longer consensus-selectable and the
 committed height is strictly past the maximum opening deadline across every
 referencing ballot and retry. Consensus stores every admitted public session
-with its exact ordered `PeerId` roster and one active TLE key-session pointer.
-Admission and restore require a bijection between sessions and rosters, reject
-empty or duplicate-seat rosters, and rederive both committee size and roster
-hash. Installing a validated public session atomically selects it for new
-ballots, while replacement or explicit retirement makes the predecessor
-ineligible but retains its public transcript and frozen roster for already
-committed ballots. Validator startup scans the active session plus every
-historical session whose greatest committed opening deadline has not passed,
-using an inclusive deadline boundary. It derives the local one-based seat from
+with its exact ordered `PeerId` roster, a certified-head pointer, and separate
+V1 lifecycle metadata containing activation, expiry, inclusive cutover, and
+fresh-ballot use bounds. Admission and restore require a bijection among all
+three per-session records, reject empty or duplicate-seat rosters, rederive both
+committee size and roster hash, and recount use counters from committed ballot
+history. An install or rotation committed at `H` retains the predecessor for
+new ballots through `H` and activates the successor at `H + 1`; registration
+fails closed outside the selected interval or at the use ceiling. Replacement
+or explicit retirement retains the public transcript, frozen roster, and
+historical lifecycle record for already committed ballots. Validator startup
+scans the session selectable at the committed height plus every historical
+session whose greatest committed opening deadline has not passed, using an
+inclusive deadline boundary. It derives the local one-based seat from
 each session's frozen roster rather than the current topology. A seated local
 validator must obtain a live, non-signing capability attestation from the same
 runtime signer later used for release; the returned key-session id, transcript
@@ -605,6 +613,21 @@ Code Size Cap
   certificate, and executes the bound proposal at the exact due block height;
   no client-supplied finalization or enactment instruction exists.
 
+- `ContractLifecycleGovernance` action tag
+  `CompleteEmergencyHoldRetrospective` is the only transition that removes a
+  retained emergency hold. Its strict payload is
+  `hold_proposal_content_id`, `hold_governance_attempt_id`,
+  `incident_digest`, and `retrospective_finding_root`, each exactly 32 bytes;
+  the finding root must be non-zero. This action is append-only Norito variant
+  index `5`. Admission and exact-due certificate execution both require the
+  first three fields to equal the stored hold and require the containing height
+  to have reached the hold's exclusive `expires_at_height`. Enactment clears
+  only that hold, increments the lifecycle revision, and emits
+  `EmergencyHoldRetrospectiveCompleted` with the complete prior hold, finding
+  root, revision, and post-state. There is no direct clear instruction or
+  expired-hold garbage-collection path; a later independent emergency hold is
+  admissible only after this certified retrospective completes.
+
 - GET `/v1/gov/proposals/{id}`
   - Path `{id}`: exact lowercase proposal id hex (64 chars); `0x`, uppercase,
     whitespace, and control-character aliases are rejected before lookup.
@@ -616,8 +639,9 @@ Code Size Cap
     and `ExecutionFailed`; `Approved` is not a status. `ProposalKind` is closed
     over `DeployContract`, `RuntimeUpgrade`, `SccpRouteGovernance`,
     `ValidationFeePolicy`, `ValidationFeePayoutLifecycle`,
-    `MusubiRegistryGovernance`, and `SorafsProviderGovernance`. Unknown fields,
-    unknown tags, externally tagged legacy kinds, and retired proposal
+    `MusubiRegistryGovernance`, `SorafsProviderGovernance`,
+    `ContractLifecycleGovernance`, and `ContractEmergencyHold`. Unknown
+    fields, unknown tags, externally tagged legacy kinds, and retired proposal
     pipeline/snapshot/finalization fields are rejected rather than projected.
     Every proposal-owned `u64` emitted as a JSON number, plus
     `created_height`, is bounded by `9,007,199,254,740,991` at draft,
@@ -691,6 +715,10 @@ make the current-council read endpoint derive an implicit roster:
   opening_phase_blocks = 600
   max_ballot_retries = 3
   max_corpus_entries = 1000
+
+[gov.parliament_tle_key_lifecycle]
+  session_lifetime_blocks = 37600
+  max_fresh_ballots_per_session = 1
 ```
 
 `registration_phase_blocks` must be at least `max_corpus_entries + 1`,
@@ -704,6 +732,13 @@ commitment and release-through-opening windows globally. A new or restored
 ballot whose reservation intersects another nonterminal ballot is rejected, so
 nominally valid per-ballot schedules cannot oversubscribe consensus transition
 capacity.
+
+`parliament_tle_key_lifecycle` is also consensus-critical and has no
+environment-variable overrides. Both values must be non-zero. The lifetime is
+an inclusive finalized-height span beginning at mandatory next-height
+activation; the use limit counts first-time committed ballot registrations,
+not later transitions or idempotent replay. The conservative V1 default
+requires a fresh certified DKG session for each fresh ballot.
 
 Governance monetary parameters are canonical non-negative `Quantity` values. TOML
 uses their exact decimal string form (for example `"150"` or `"0.5"`), so the
@@ -849,8 +884,10 @@ CLI Helpers
   - Summary output mirrors `vote --mode zk` by including the encoded instruction fingerprint and human-readable ballot fields (`owner`, `amount`, `duration_blocks`, `direction`), providing quick confirmation before signing the skeleton.
 
 Governed Contract Lookup
-- GET `/v1/gov/contracts/{contract_address}` — returns the active governance binding for a canonical contract address.
-  - Response: { "found": bool, "contract_address": "irohac1...", "dataspace": "universal", "code_hash_hex": "…" ? }
+- GET `/v1/gov/contracts/{contract_address}` — returns the retained revisioned lifecycle for a canonical contract address, including inactive addresses.
+  - `found` reports whether the address has ever been deployed; `active` reports whether `lifecycle.active_code_hash_hex` is present.
+  - Found responses expose immutable deployment origin, current and pending owner, revocable Parliament delegation, lifecycle revision, active-code hash, retained emergency-hold evidence, and whether that hold is active at the queried height. Expiry makes the hold inactive but does not erase it; the record remains visible until its exact certified retrospective clears it.
+  - Artifact-only `code_hash_hex`, `abi_hash_hex`, and `public_entrypoints` are present only while the address is active and the authenticated artifact cross-check succeeds.
 
 Unlock Sweep (Operator/Audit)
 - GET `/v1/gov/unlocks/stats`
@@ -1006,7 +1043,7 @@ Any script that rotates <i105-account-id>s or applies slashing **must not** atte
 - Prometheus metrics export governance activity:
   - `governance_parliament_transitions_total{transition}` counts accepted
     Parliament transitions using the closed transition-kind vocabulary.
-  - `governance_parliament_no_result_total{class}` counts the nine bounded
+  - `governance_parliament_no_result_total{class}` counts the ten bounded
     sortition/public-finding/private-ballot `ParliamentNoResultKindV1` classes
     only.
   - `governance_parliament_attempts_by_status{status}` and

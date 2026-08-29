@@ -93,6 +93,116 @@ fn narrow_policy_requires_two_fresh_confirmation_candidates_before_commit() {
 }
 
 #[test]
+fn narrow_policy_at_randomness_redraw_ceiling_persists_terminal_no_result() {
+    let mut fixture = opened_policy_ballot(100, 100);
+    fixture.state.randomness_redraws_before_attempt = MAX_PARLIAMENT_RANDOMNESS_REDRAWS_V1;
+    let governance_attempt_id = fixture.state.attempt.id;
+    let result_height = fixture
+        .state
+        .ballot(&fixture.ballot_id)
+        .and_then(|ballot| ballot.opening_height)
+        .expect("fixture opening height");
+
+    assert_eq!(
+        finalize_policy_with_confirmation_capacity(&mut fixture, 51, 49, 0, 2),
+        ParliamentAggregateOutcomeV1::NoResult
+    );
+    assert_eq!(
+        fixture.state.attempt.status,
+        GovernanceAttemptStatusV1::Rejected
+    );
+    assert_eq!(fixture.state.attempt.stage, GovernanceStageV1::PolicyJury);
+    assert_eq!(
+        fixture.state.required_bodies.last().map(|entry| entry.body),
+        Some(ParliamentBody::PolicyJury),
+        "the unaffordable Confirmation draw must never enter the pipeline"
+    );
+    assert!(
+        !fixture
+            .state
+            .body_bindings
+            .contains_key(&ParliamentBody::PolicyJury),
+        "the narrow Policy result must remain uncommitted"
+    );
+    let body = fixture
+        .state
+        .body(&fixture.body_id)
+        .expect("failed Policy Jury body");
+    assert_eq!(body.instance.status, BodyInstanceStatusV1::NoResult);
+    assert!(body.ballot_binding.is_none());
+    assert!(body.result_root.is_none());
+    let ballot = fixture
+        .state
+        .ballot(&fixture.ballot_id)
+        .expect("failed Policy Jury ballot");
+    assert_eq!(ballot.attempt.status, BallotAttemptStatusV1::NoResult);
+    assert_eq!(
+        ballot.failure_kind,
+        Some(ParliamentBallotFailureKindV1::RandomnessRedrawBudgetExhausted)
+    );
+    assert_eq!(ballot.eligible_confirmation_candidates, Some(2));
+    assert_eq!(ballot.failure_height, Some(result_height));
+    assert_eq!(
+        ballot.failure_root,
+        Some(parliament_ballot_failure_root_v1(
+            governance_attempt_id,
+            fixture.ballot_id,
+            ParliamentBallotFailureKindV1::RandomnessRedrawBudgetExhausted,
+            result_height,
+        ))
+    );
+    assert_eq!(ballot.outcome, Some(ParliamentAggregateOutcomeV1::Approved));
+    assert_eq!(
+        ParliamentNoResultKindV1::from(
+            ParliamentBallotFailureKindV1::RandomnessRedrawBudgetExhausted
+        ),
+        ParliamentNoResultKindV1::RandomnessRedrawBudgetExhausted
+    );
+    fixture
+        .state
+        .validate()
+        .expect("redraw-exhausted opening must restore canonically");
+
+    let bytes = norito::to_bytes(&fixture.state).expect("encode terminal opening");
+    let decoded = norito::decode_from_bytes::<ParliamentAttemptStateV1>(&bytes)
+        .expect("decode terminal opening");
+    assert_eq!(decoded, fixture.state);
+    decoded
+        .validate()
+        .expect("Norito-decoded redraw exhaustion must restore canonically");
+    assert_eq!(
+        norito::to_bytes(&decoded).expect("re-encode terminal opening"),
+        bytes
+    );
+
+    let mut below_ceiling = decoded.clone();
+    below_ceiling.randomness_redraws_before_attempt -= 1;
+    assert_eq!(
+        below_ceiling.validate(),
+        Err(ParliamentReducerErrorV1::BallotFailureKindMismatch),
+        "the redraw-exhaustion classification requires the exact shared ceiling"
+    );
+    let mut disguised_as_capacity = decoded;
+    let disguised_ballot = disguised_as_capacity
+        .ballots
+        .get_mut(&fixture.ballot_id)
+        .expect("terminal ballot");
+    disguised_ballot.failure_kind =
+        Some(ParliamentBallotFailureKindV1::ConfirmationJuryCapacityUnavailable);
+    disguised_ballot.failure_root = Some(parliament_ballot_failure_root_v1(
+        governance_attempt_id,
+        fixture.ballot_id,
+        ParliamentBallotFailureKindV1::ConfirmationJuryCapacityUnavailable,
+        result_height,
+    ));
+    assert_eq!(
+        disguised_as_capacity.validate(),
+        Err(ParliamentReducerErrorV1::BallotFailureKindMismatch),
+        "two eligible candidates cannot be reclassified as capacity unavailable"
+    );
+}
+
+#[test]
 fn sealed_and_released_cross_store_bindings_fail_closed_on_substitution() {
     let mut fixture = opened_policy_ballot(3, 3);
     let governance_attempt_id = fixture.state.attempt.id;

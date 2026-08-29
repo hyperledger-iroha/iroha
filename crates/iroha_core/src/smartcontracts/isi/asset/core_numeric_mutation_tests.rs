@@ -1065,6 +1065,55 @@ fn asset_transfer_controls_require_asset_owner_authority() {
     );
 }
 #[test]
+fn generic_account_metadata_instructions_cannot_replace_or_remove_transfer_controls() {
+    let (state, asset_definition_id, _) = build_asset_transfer_control_test_state(10);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let mut block = state.block(header);
+    let mut stx = block.transaction();
+    SetAssetTransferAvailability::new(
+        ALICE_ID.clone(),
+        asset_definition_id,
+        0,
+        AssetTransferAvailability::Enabled,
+        AssetTransferAvailability::Disabled,
+        Some("compliance hold".to_owned()),
+    )
+    .execute(&ALICE_ID, &mut stx)
+    .expect("native control instruction stores the reserved metadata");
+    let metadata_key: Name = ASSET_TRANSFER_CONTROL_METADATA_KEY
+        .parse()
+        .expect("metadata key");
+    let original = stx
+        .world
+        .account(&ALICE_ID)
+        .expect("controlled account exists")
+        .metadata()
+        .get(&metadata_key)
+        .cloned()
+        .expect("native controls exist");
+    let set_error = SetKeyValue::account(
+        ALICE_ID.clone(),
+        metadata_key.clone(),
+        iroha_primitives::json::Json::new("attacker replacement"),
+    )
+    .execute(&ALICE_ID, &mut stx)
+    .expect_err("generic metadata set must reject the native control key");
+    assert!(set_error.to_string().contains("reserved"));
+    let remove_error = RemoveKeyValue::account(ALICE_ID.clone(), metadata_key.clone())
+        .execute(&ALICE_ID, &mut stx)
+        .expect_err("generic metadata removal must reject the native control key");
+    assert!(remove_error.to_string().contains("reserved"));
+    assert_eq!(
+        stx.world
+            .account(&ALICE_ID)
+            .expect("controlled account exists")
+            .metadata()
+            .get(&metadata_key),
+        Some(&original),
+        "rejected generic mutations must leave controls intact"
+    );
+}
+#[test]
 fn genesis_has_inherent_transfer_control_authority() {
     let (state, asset_definition_id, _) = build_asset_transfer_control_test_state(10);
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);

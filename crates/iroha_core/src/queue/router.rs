@@ -12214,6 +12214,7 @@ mod tests {
         .expect("contract address");
         let instruction = iroha_data_model::isi::smart_contract_code::ActivateContractInstance {
             contract_address,
+            expected_revision: 1,
             code_hash: Hash::new(b"contract-code"),
         };
         let tx = sample_transaction(
@@ -12310,6 +12311,7 @@ mod tests {
             InstructionBox::from(
                 iroha_data_model::isi::smart_contract_code::ActivateContractInstance {
                     contract_address,
+                    expected_revision: 1,
                     code_hash: Hash::new(b"contract-code"),
                 },
             ),
@@ -12400,6 +12402,7 @@ mod tests {
             InstructionBox::from(
                 iroha_data_model::isi::smart_contract_code::ActivateContractInstance {
                     contract_address,
+                    expected_revision: 1,
                     code_hash: Hash::new(b"contract-code"),
                 },
             ),
@@ -15940,6 +15943,7 @@ mod tests {
                 InstructionBox::from(
                     iroha_data_model::isi::smart_contract_code::ActivateContractInstance {
                         contract_address,
+                        expected_revision: 1,
                         code_hash: Hash::new(b"contract-code"),
                     },
                 ),

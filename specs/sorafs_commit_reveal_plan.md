@@ -59,9 +59,9 @@ review, and genuine production evidence.
   `AcceptSorafsModerationJurorAssignment`,
   `ActivateSorafsModerationCase`, `SubmitSorafsModerationCommit`,
   `RaiseSorafsModerationChallenge`, `ResolveSorafsModerationChallenge`,
-  `SubmitSorafsModerationReveal`, and `FinalizeSorafsModerationCase` implement
-  the consensus-owned lifecycle. There is no direct-open instruction that can
-  bypass intake or sortition.
+  `ExpireSorafsModerationChallenge`, `SubmitSorafsModerationReveal`, and
+  `FinalizeSorafsModerationCase` implement the consensus-owned lifecycle. There
+  is no direct-open instruction that can bypass intake or sortition.
   Block time is the only phase clock. The sortition instruction explicitly
   binds the latest committed parent hash after registration closes, rejects an
   appellant finalizer even when that account also holds management permission,
@@ -70,22 +70,26 @@ review, and genuine production evidence.
   normalized to block time; canonical juror accounts are bound to transaction
   authority; policy revisions and case policy digests are race-checked; and
   every transition preflights counters and canonical state encoding before any
-  mutation. Accepted challenges and challenges still unresolved when the reveal
-  window closes both terminate fail-safe without no-show penalties. The latter
-  are durably marked `expired`, so a late resolver cannot reopen an elapsed
-  reveal window, penalize every blocked juror, or leave the case permanently
-  open. Other finalization persists a `quorum_not_met` outcome instead of
-  leaving failed-quorum ballots open and atomically emits policy-bound no-show records.
+  mutation. Public challenges lock a 150-unit governance-voting-asset bond and
+  have a submission deadline followed by exactly 24 hours of resolution grace.
+  Accepted challenges refund the bond and terminate the ballot. Rejected
+  challenges refund the remainder after a 25% slash rounded toward zero at the
+  voting asset's declared scale. Unresolved challenges fail open after
+  the grace: anyone may mark them `expired` for a full refund, and finalization
+  sweeps any pending records before tallying. Other finalization persists a
+  `quorum_not_met` outcome instead of leaving failed-quorum ballots open and
+  atomically emits policy-bound no-show records.
 - Typed `FindSorafsModeration*` queries expose the active policy, appeal,
   permissioned juror-eligibility summary, case, commitment, reveal, challenge,
   outcome, no-show, and ledger status through
   Iroha's existing generic Torii query API. Mutations use the existing signed
   transaction API; no parallel bespoke contract transport or compatibility
   route is required. `CanManageSorafsModeration` gates policy activation,
-  sortition, activation, challenge resolution, and finalization in the default executor,
-  with native permission checks as defense in depth. Commit, reveal, and
-  challenge submission remain authenticated public instructions with native
-  authority and phase enforcement.
+  sortition, activation, challenge resolution, and finalization in the default
+  executor, with native permission checks as defense in depth. Commit, reveal,
+  bonded challenge submission, and post-grace challenge expiry remain
+  authenticated public instructions with native authority and phase
+  enforcement.
 - sorafs_node no longer owns ballot, appeal, scheduler, checkpoint, or event-stream authority.
   All case, assignment, commit, reveal, challenge, outcome, and no-show state is
   native consensus state; the node retains only screening, quarantine,

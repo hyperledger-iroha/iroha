@@ -1134,7 +1134,7 @@ isi! {
 }
 impl crate::seal::Instruction for SubmitSorafsModerationCommit {}
 isi! {
-    /// Raise one bounded payload-free challenge during a moderation challenge window.
+    /// Raise one bounded, bonded, payload-free public moderation challenge.
     pub struct RaiseSorafsModerationChallenge {
         /// Moderation case identifier.
         pub case_id: String,
@@ -1168,6 +1168,18 @@ isi! {
     }
 }
 impl crate::seal::Instruction for ResolveSorafsModerationChallenge {}
+isi! {
+    /// Permissionlessly expire one unresolved moderation challenge after its resolution grace.
+    pub struct ExpireSorafsModerationChallenge {
+        /// Moderation case identifier.
+        pub case_id: String,
+        /// Ballot round identifier.
+        pub round_id: String,
+        /// Existing challenge identifier.
+        pub challenge_id: String,
+    }
+}
+impl crate::seal::Instruction for ExpireSorafsModerationChallenge {}
 isi! {
     /// Submit one canonical juror reveal to an authoritative moderation case.
     pub struct SubmitSorafsModerationReveal {
@@ -1892,6 +1904,17 @@ impl ResolveSorafsModerationChallenge {
         }
     }
 }
+impl ExpireSorafsModerationChallenge {
+    /// Construct a permissionless challenge-expiry instruction.
+    #[must_use]
+    pub fn new(case_id: String, round_id: String, challenge_id: String) -> Self {
+        Self {
+            case_id,
+            round_id,
+            challenge_id,
+        }
+    }
+}
 impl SubmitSorafsModerationReveal {
     /// Construct a canonical reveal submission.
     #[must_use]
@@ -2262,6 +2285,11 @@ impl_sorafs_decode_from_slice!(ResolveSorafsModerationChallenge {
     round_id: String,
     challenge_id: String,
     decision: ModerationChallengeDecisionV1,
+});
+impl_sorafs_decode_from_slice!(ExpireSorafsModerationChallenge {
+    case_id: String,
+    round_id: String,
+    challenge_id: String,
 });
 impl_sorafs_decode_from_slice!(SubmitSorafsModerationReveal {
     reveal_payload: Vec<u8>,
@@ -2664,11 +2692,25 @@ mod tests {
             version: crate::sorafs::moderation_ledger::MODERATION_LEDGER_POLICY_VERSION_V1,
             revision: 1,
             predecessor_policy_digest: None,
+            challenge_voting_asset_id: crate::asset::AssetDefinitionId::derive_from_components(
+                crate::domain::DomainId::try_new("sora", "universal")
+                    .expect("governance domain"),
+                "xor".parse().expect("governance asset name"),
+            ),
+            challenge_bond_amount: Quantity::from(
+                crate::sorafs::moderation_ledger::MODERATION_CHALLENGE_BOND_AMOUNT_V1,
+            ),
+            challenge_escrow_account: owner(),
+            challenge_slash_receiver_account: owner(),
+            challenge_rejected_slash_bps:
+                crate::sorafs::moderation_ledger::MODERATION_CHALLENGE_REJECTED_SLASH_BPS_V1,
+            challenge_resolution_grace_ms:
+                crate::sorafs::moderation_ledger::MODERATION_CHALLENGE_RESOLUTION_GRACE_MS_V1,
             max_panel_size: 5,
             max_candidate_pool_size: 32,
             max_waitlist_size: 5,
             max_exclusions_per_case: 16,
-            max_total_window_ms: 60_000,
+            max_total_window_ms: 90_000_000,
             max_challenges_per_case: 4,
             missing_commit_penalty_points: 10,
             unrevealed_commit_penalty_points: 20,
@@ -2709,8 +2751,11 @@ mod tests {
             registration_deadline_unix_ms: 1_000,
             acceptance_deadline_unix_ms: 2_000,
             commit_deadline_unix_ms: 3_000,
-            challenge_deadline_unix_ms: 4_000,
-            reveal_deadline_unix_ms: 5_000,
+            challenge_submission_deadline_unix_ms: 4_000,
+            challenge_resolution_deadline_unix_ms: 4_000
+                + crate::sorafs::moderation_ledger::MODERATION_CHALLENGE_RESOLUTION_GRACE_MS_V1,
+            reveal_deadline_unix_ms: 4_001
+                + crate::sorafs::moderation_ledger::MODERATION_CHALLENGE_RESOLUTION_GRACE_MS_V1,
             policy_digest: moderation_policy().digest().expect("policy digest"),
         }
     }
@@ -3087,6 +3132,11 @@ mod tests {
             "challenge-1".to_owned(),
             ModerationChallengeDecisionV1::Rejected,
         ));
+        assert_slice_roundtrip(ExpireSorafsModerationChallenge::new(
+            "case-1".to_owned(),
+            "round-1".to_owned(),
+            "challenge-1".to_owned(),
+        ));
         assert_slice_roundtrip(SubmitSorafsModerationReveal::new(vec![0x09, 0x0A]));
         assert_slice_roundtrip(FinalizeSorafsModerationCase::new(
             "case-1".to_owned(),
@@ -3407,6 +3457,14 @@ mod tests {
                 "round-1".to_owned(),
                 "challenge-1".to_owned(),
                 ModerationChallengeDecisionV1::Rejected,
+            ),
+        );
+        assert_registry_decodes(
+            &registry,
+            ExpireSorafsModerationChallenge::new(
+                "case-1".to_owned(),
+                "round-1".to_owned(),
+                "challenge-1".to_owned(),
             ),
         );
         assert_registry_decodes(

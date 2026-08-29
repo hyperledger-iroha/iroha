@@ -158,6 +158,7 @@ fn scoped_permission_route_remains_coordinator_with_other_private_targets() {
         InstructionBox::from(
             iroha_data_model::isi::smart_contract_code::ActivateContractInstance {
                 contract_address,
+                expected_revision: 1,
                 code_hash: Hash::new(b"contract-code"),
             },
         ),

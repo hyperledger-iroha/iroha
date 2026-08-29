@@ -1021,13 +1021,55 @@ fn protected_contract_identity_openapi_is_signed_and_exact() {
         ],
     );
     let variants = contract_schema(schemas, "GovernedContractResponse").get("oneOf").and_then(Value::as_array).expect("governed variants");
-    assert_eq!(variants.len(), 2);
-    for (variant, inventory) in variants.iter().zip(["governed.found.fields", "governed.missing.fields"]) {
+    assert_eq!(variants.len(), 3);
+    for (variant, inventory) in variants.iter().zip(["governed.found.fields", "governed.inactive.fields", "governed.missing.fields"]) {
         let variant = variant.as_object().expect("governed variant");
         assert_eq!(variant.get("additionalProperties"), Some(&Value::Bool(false)));
         let expected = asset_field_set(inventory);
         assert_eq!(schema_fields(variant, "required", "governed variant").iter().filter_map(Value::as_str).collect::<BTreeSet<_>>(), expected);
         assert_eq!(variant.get("properties").and_then(Value::as_object).map(object_field_set), Some(expected));
+    }
+    for (schema, expected) in [
+        (
+            "GovernedContractLifecycleV1",
+            [
+                "origin",
+                "origin_account",
+                "origin_proposal_content_id_hex",
+                "origin_governance_attempt_id_hex",
+                "owner",
+                "pending_owner",
+                "parliament_delegated",
+                "active_code_hash_hex",
+                "revision",
+                "emergency_hold",
+            ]
+            .into_iter()
+            .collect::<BTreeSet<_>>(),
+        ),
+        (
+            "GovernedContractEmergencyHoldV1",
+            [
+                "incident_digest_hex",
+                "proposal_content_id_hex",
+                "governance_attempt_id_hex",
+                "reason",
+                "imposed_at_height",
+                "expires_at_height",
+            ]
+            .into_iter()
+            .collect::<BTreeSet<_>>(),
+        ),
+    ] {
+        let schema = contract_schema(schemas, schema);
+        assert_eq!(schema.get("additionalProperties"), Some(&Value::Bool(false)));
+        assert_eq!(
+            schema_fields(schema, "required", "governed lifecycle component")
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<BTreeSet<_>>(),
+            expected
+        );
     }
 }
 

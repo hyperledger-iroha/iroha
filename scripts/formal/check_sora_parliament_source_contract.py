@@ -10,7 +10,10 @@ persisted attempt can exceed the authoritative framed-state bound, when a signed
 draft can claim a consensus-owned certificate outcome, or when the
 current specifications regress to the retired proposal-time JIT description. It
 also pins the modeled no-pulse hidden-electorate capacity failure and atomic
-Policy-to-Confirmation capacity handoff.
+Policy-to-Confirmation capacity handoff. The model and implementation must also
+share one proposal-wide fresh-randomness redraw ceiling across successor
+attempts, sortition/Confirmation generations, and timed-OVN ballot retries;
+committed transport replay must remain state-idempotent.
 It also keeps the PR model run bound to archived copies of its exact inputs and
 to stable, source-identified result metadata.
 """
@@ -112,7 +115,10 @@ def main() -> int:
             "BallotOpeningDeadlineExpired",
             "SortitionRetriesExhausted",
             "ConfirmationJuryCapacityUnavailable",
+            "RandomnessRedrawBudgetExhausted",
             "impl From<ParliamentBallotFailureKindV1> for ParliamentNoResultKindV1",
+            "ParliamentBallotFailureKindV1::RandomnessRedrawBudgetExhausted => {",
+            "Self::RandomnessRedrawBudgetExhausted",
             "pub opening_deadline_height: u64",
             "ExecutionFailed",
             "parliament_execution_failure_root_v1",
@@ -151,6 +157,14 @@ def main() -> int:
             "SortitionPulseAvailable",
             "SortitionRetryLimitExceeded",
             "GovernanceAttemptRetryLimitExceeded",
+            "MAX_PARLIAMENT_RANDOMNESS_REDRAWS_V1",
+            "RandomnessRedrawLimitExceeded",
+            "RandomnessRedrawLineageMismatch",
+            "randomness_redraws_before_attempt: u32",
+            "pub(crate) fn randomness_redraws_used_v1(",
+            "fn ensure_sortition_generation_redraw_available_v1(",
+            "fn ensure_ballot_redraw_available_v1(",
+            "validate_parliament_randomness_redraw_lineage_v1",
             "AttemptStateSizeLimitExceeded",
             "TimedOvnResourceScheduleConflict",
             "TooManyConcurrentCastingContexts",
@@ -198,6 +212,7 @@ def main() -> int:
             "ParliamentBallotFailureKindV1::ReleasePulseUnavailable",
             "ParliamentBallotFailureKindV1::OpeningDeadlineExpired",
             "ParliamentBallotFailureKindV1::ConfirmationJuryCapacityUnavailable",
+            "ParliamentBallotFailureKindV1::RandomnessRedrawBudgetExhausted",
             "eligible_confirmation_candidates: Option<u32>",
             "if requires_confirmation && eligible_confirmation_candidates < 2",
             "request.target_seats < 2",
@@ -236,6 +251,10 @@ def main() -> int:
             "if current_height <= deadline_height",
             "ParliamentNoResultKindV1::PublicFindingDeadlineExpired",
             "let retry_budget_exhausted = ballot.attempt.sequence == ballot.max_ballot_retries;",
+            "proposal_wide_redraw_budget_composes_sortition_and_timed_ovn_retries",
+            "successor_attempt_inherits_exact_proposal_redraw_prefix",
+            "narrow_policy_at_randomness_redraw_ceiling_persists_terminal_no_result",
+            "an exact transport retry must not spend a redraw unit",
             "parliament_public_finding_endorsement_root_v1(",
             "body.public_finding_binding = Some(ParliamentPublicFindingCertificateBindingV1",
             "endorsing_assignments,\n                endorsements,\n                quorum,",
@@ -254,6 +273,148 @@ def main() -> int:
             "norito::core::encoded_frame_len(self)",
             "MAX_PARLIAMENT_ATTEMPT_STATE_BYTES_V1",
             "ParliamentReducerErrorV1::AttemptStateSizeLimitExceeded",
+        ),
+    )
+    redraw_accounting = section(
+        reducer,
+        "pub(crate) fn randomness_redraws_used_v1(",
+        "fn ensure_sortition_generation_redraw_available_v1(",
+        reducer_path,
+    )
+    require_all(
+        reducer_path,
+        redraw_accounting,
+        (
+            "self.attempt.sequence == 0 && sortition_generations > 0",
+            ".checked_sub(baseline_generations)",
+            ".filter(|ballot| ballot.attempt.sequence > 0)",
+            ".randomness_redraws_before_attempt",
+            ".checked_add(sortition_redraws)",
+            ".and_then(|used| used.checked_add(ballot_redraws))",
+            "used > MAX_PARLIAMENT_RANDOMNESS_REDRAWS_V1",
+        ),
+    )
+    sortition_redraw_guard = section(
+        reducer,
+        "fn ensure_sortition_generation_redraw_available_v1(",
+        "fn ensure_ballot_redraw_available_v1(",
+        reducer_path,
+    )
+    require_all(
+        reducer_path,
+        sortition_redraw_guard,
+        (
+            "generations.contains(&slot)",
+            "self.attempt.sequence == 0 && generations.is_empty()",
+            "self.randomness_redraws_used_v1()? < MAX_PARLIAMENT_RANDOMNESS_REDRAWS_V1",
+            "ParliamentReducerErrorV1::RandomnessRedrawLimitExceeded",
+        ),
+    )
+    ballot_redraw_guard = section(
+        reducer,
+        "fn ensure_ballot_redraw_available_v1(",
+        "/// Return whether this immutable attempt currently retains",
+        reducer_path,
+    )
+    require_all(
+        reducer_path,
+        ballot_redraw_guard,
+        (
+            "sequence == 0",
+            "self.randomness_redraws_used_v1()? < MAX_PARLIAMENT_RANDOMNESS_REDRAWS_V1",
+            "ParliamentReducerErrorV1::RandomnessRedrawLimitExceeded",
+        ),
+    )
+    confirmation_redraw_terminalization = section(
+        reducer,
+        "pub fn finalize_opened_ballot(",
+        "/// Construct and freeze the complete automatic governance certificate.",
+        reducer_path,
+    )
+    require_all(
+        reducer_path,
+        confirmation_redraw_terminalization,
+        (
+            "eligible_confirmation_candidates < 2",
+            "self.randomness_redraws_used_v1()? == MAX_PARLIAMENT_RANDOMNESS_REDRAWS_V1",
+            "Some(ParliamentBallotFailureKindV1::RandomnessRedrawBudgetExhausted)",
+            "if let Some(failure_kind) = confirmation_failure_kind",
+            "ballot.failure_kind = Some(failure_kind)",
+            "ballot.attempt.status = BallotAttemptStatusV1::NoResult",
+            "BodyInstanceStatusV1::NoResult",
+            "self.attempt.status = GovernanceAttemptStatusV1::Rejected",
+            "return Ok(ParliamentAggregateOutcomeV1::NoResult)",
+        ),
+    )
+    sortition_failure_terminalization = section(
+        reducer,
+        "pub fn fail_body_election_no_roster(",
+        "/// Seal a canonical roster into a new body instance.",
+        reducer_path,
+    )
+    require_all(
+        reducer_path,
+        sortition_failure_terminalization,
+        (
+            "let proposal_redraw_budget_exhausted =",
+            "self.randomness_redraws_used_v1()? == MAX_PARLIAMENT_RANDOMNESS_REDRAWS_V1",
+            "retry_budget_exhausted || proposal_redraw_budget_exhausted",
+            "election.attempt.sequence == MAX_PARLIAMENT_SORTITION_RETRIES_V1",
+            "self.attempt.status = GovernanceAttemptStatusV1::Rejected",
+        ),
+    )
+    ballot_failure_terminalization = section(
+        reducer,
+        "pub fn fail_ballot_no_result(",
+        "/// Finalize a cryptographically opened aggregate and its body result.",
+        reducer_path,
+    )
+    require_all(
+        reducer_path,
+        ballot_failure_terminalization,
+        (
+            "let proposal_redraw_budget_exhausted =",
+            "self.randomness_redraws_used_v1()? == MAX_PARLIAMENT_RANDOMNESS_REDRAWS_V1",
+            "retry_budget_exhausted || proposal_redraw_budget_exhausted",
+            "self.attempt.status = GovernanceAttemptStatusV1::Rejected",
+        ),
+    )
+    confirmation_redraw_terminal_test = section(
+        reducer,
+        "fn narrow_policy_at_randomness_redraw_ceiling_persists_terminal_no_result()",
+        "fn sealed_and_released_cross_store_bindings_fail_closed_on_substitution()",
+        reducer_path,
+    )
+    require_all(
+        reducer_path,
+        confirmation_redraw_terminal_test,
+        (
+            "MAX_PARLIAMENT_RANDOMNESS_REDRAWS_V1",
+            "ParliamentAggregateOutcomeV1::NoResult",
+            "GovernanceAttemptStatusV1::Rejected",
+            '"the unaffordable Confirmation draw must never enter the pipeline"',
+            '"the narrow Policy result must remain uncommitted"',
+            "BodyInstanceStatusV1::NoResult",
+            "BallotAttemptStatusV1::NoResult",
+            "ParliamentBallotFailureKindV1::RandomnessRedrawBudgetExhausted",
+            '"redraw-exhausted opening must restore canonically"',
+            '"the redraw-exhaustion classification requires the exact shared ceiling"',
+        ),
+    )
+    redraw_lineage = section(
+        reducer,
+        "pub(crate) fn validate_parliament_randomness_redraw_lineage_v1",
+        "#[cfg(test)]\npub(crate) mod tests {",
+        reducer_path,
+    )
+    require_all(
+        reducer_path,
+        redraw_lineage,
+        (
+            "attempts.sort_unstable_by_key(|attempt| attempt.attempt.sequence)",
+            "attempt.randomness_redraws_before_attempt != expected_prefix",
+            "attempt.randomness_redraws_before_attempt >= MAX_PARLIAMENT_RANDOMNESS_REDRAWS_V1",
+            "expected_prefix = attempt.randomness_redraws_used_v1()?",
         ),
     )
     full_attempt_validation = section(
@@ -491,7 +652,7 @@ def main() -> int:
         ),
         (
             "pub struct ParliamentFreezeBallotSurvivorsV1 {",
-            "/// Payload freezing the exact timed-OVN ciphertext and one-hot-proof corpus.",
+            "/// Payload appending the exact next timed-OVN ciphertext and one-hot-proof chunk.",
             ("survivor_participant_hashes", "dropout_root", "survivor_corpus_root"),
         ),
     ):
@@ -553,10 +714,15 @@ def main() -> int:
             "state_transaction.gov.parliament_public_finding_phase_blocks",
             "no_result_kind",
             "fn validated_active_parliament_tle_key_session_for_new_ballot_v1(",
-            ".tle_key_session_eligible_for_new_ballots(key_session_id)",
+            ".tle_key_session_eligible_for_new_ballots(",
+            "key_session_id,\n                state_transaction.block_height(),",
             ".tle_key_session_rosters()",
             "frozen_ordered_roster != Some(ordered_roster)",
             '"active Parliament TLE key session is not bound to the current commit topology"',
+            "let randomness_redraws_before_attempt = previous",
+            "ParliamentAttemptStateV1::randomness_redraws_used_v1",
+            "randomness_redraws_before_attempt\n                    >= crate::governance::parliament::MAX_PARLIAMENT_RANDOMNESS_REDRAWS_V1",
+            "ParliamentAttemptStateV1::try_new_with_randomness_redraws_before_attempt(",
         ),
     )
     manager_partition = section(
@@ -573,6 +739,7 @@ def main() -> int:
             "ParliamentLifecycleTransitionKindV1::BeginInvitationAcceptance",
             "ParliamentLifecycleTransitionKindV1::FailBodyElectionNoRoster",
             "ParliamentLifecycleTransitionKindV1::SealBodyRoster",
+            "ParliamentLifecycleTransitionKindV1::FreezeTimedOvnCorpus",
         ),
     )
     for manager_only in (
@@ -581,7 +748,6 @@ def main() -> int:
         "ParliamentLifecycleTransitionKindV1::RegisterSortitionRequest",
         "ParliamentLifecycleTransitionKindV1::AdvanceBodyPhase",
         "ParliamentLifecycleTransitionKindV1::RegisterBallotAttempt",
-        "ParliamentLifecycleTransitionKindV1::FreezeTimedOvnCorpus",
     ):
         if manager_only in manager_partition:
             raise RuntimeError(
@@ -609,6 +775,8 @@ def main() -> int:
             "fn parliament_invitation_start_is_permissionless_and_election_bound()",
             "fn parliament_no_roster_failure_is_permissionless_and_reducer_derived()",
             "fn parliament_roster_sealing_is_permissionless_and_transcript_derived()",
+            "fn parliament_proof_heavy_ballot_corpus_is_permissionless_but_shape_checked()",
+            "fn parliament_non_manager_can_append_the_exact_next_timed_ovn_chunks()",
         ),
     )
     for branch_start, branch_end, bindings in (
@@ -818,6 +986,9 @@ def main() -> int:
             "telemetry.record_committed_parliament_transition(transition, no_result_kind);",
             "telemetry.seed_parliament_attempts(snapshot);",
             "telemetry_seed.seed_parliament_attempts(parliament_view.iter()",
+            "validate_parliament_randomness_redraw_lineage_v1(",
+            ".filter_map(|(persisted_id, persisted)|",
+            ".chain(std::iter::once(&attempt))",
         ),
     )
 
@@ -1056,13 +1227,17 @@ def main() -> int:
             "TimedOvnLifecycleStateV1::CorpusOpen(_)",
             ".validated_parliament_reducer_binding(key_session)",
             "timed_ovn_reducer_binding_matches(ballot_attempt_id, &lifecycle_binding)",
-            "Some(FailureKind::ConfirmationJuryCapacityUnavailable)",
+            "FailureKind::ConfirmationJuryCapacityUnavailable",
+            "FailureKind::RandomnessRedrawBudgetExhausted",
             "phase == PersistedTimedOvnPhaseV1::Released",
-            "Confirmation-capacity NoResult must retain its released timed-OVN evidence",
+            "post-opening NoResult must retain its released timed-OVN evidence",
             "let tle_key_session_rosters = world.tle_key_session_rosters.view();",
             "validate_tle_key_session_roster_binding_v1(public_state, ordered_roster)",
             '"TLE key session {key_session_id} is missing its frozen ordered roster"',
             '"frozen ordered roster references missing TLE key session {key_session_id}"',
+            "proposal_attempts.sort_unstable_by_key(|attempt| attempt.attempt().sequence)",
+            "validate_parliament_randomness_redraw_lineage_v1(",
+            '"governance Parliament randomness-redraw lineage is invalid: {error}"',
         ),
     )
     restore_size_validation = section(
@@ -1191,7 +1366,7 @@ def main() -> int:
     tle_session_admission = section(
         state,
         "    pub(crate) fn put_tle_key_session(",
-        "    /// Make one committed public TLE key session eligible for new ballots.",
+        "    /// Schedule one committed public TLE key session for next-height activation.",
         state_path,
     )
     require_all(
@@ -1218,7 +1393,8 @@ def main() -> int:
         state_path,
         required_tle_custody,
         (
-            "if let Some(active_key_session_id) = self.active_tle_key_session()",
+            "let next_height = committed_height.checked_add(1).unwrap_or(committed_height);",
+            "self.selectable_tle_key_session_for_fresh_ballot_at(next_height)",
             "attempt.validate()?",
             "for (_, ballot) in attempt.ballot_attempts()",
             "let opening_deadline = ballot.opening_deadline_height()",
@@ -1343,7 +1519,8 @@ def main() -> int:
             "pub fn import_committed_components(",
             ".tle_key_sessions()",
             "pub fn retire_session(",
-            ".tle_key_session_eligible_for_new_ballots(key_session_id)",
+            "let next_height = committed_height.checked_add(1).unwrap_or(committed_height);",
+            ".tle_key_session_eligible_for_new_ballots(key_session_id, next_height)",
             "attempt.tle_key_session_retention_deadline(key_session_id)",
             "deadline == u64::MAX || committed_height <= deadline",
             ".remove(&key_session_id)",
@@ -1503,7 +1680,8 @@ def main() -> int:
             "pub(crate) async fn request_local_partial_release_v1(",
             "ballot_attempt_id: String",
             "signer_admission: crate::QueryAdmissionPermit",
-            "tokio::task::spawn_blocking",
+            "crate::panic_recovery::join_recoverable(",
+            "crate::panic_recovery::spawn_blocking_recoverable(",
             "let _signer_admission = signer_admission;",
             "coordinator.request_partial_release(&view, ballot_attempt_id)",
             "TleReleaseCoordinatorErrorV1::SignerUnavailable",
@@ -1986,9 +2164,16 @@ def main() -> int:
             "FuturePulseSortition ==",
             "SortitionPulseDelayBlocks",
             "MaxSortitionRetries",
+            "MaxRandomnessRedraws",
+            "governanceAttemptSequence",
+            "randomnessRedrawsBeforeAttempt",
+            "InitialSortitionRedrawCost ==",
+            "ProposalRandomnessRedrawsUsed ==",
+            "ProposalWideRandomnessRedrawBudget ==",
             "sortitionPulseHeight' = height + SortitionPulseDelayBlocks",
             "FailSortitionPulseUnavailable ==",
             "RetryInitialSortitionBatch ==",
+            "ReplayCommittedTransportIdempotently ==",
             "RecordInitialHiddenSortitionCapacityFailure(candidateCount) ==",
             "RecordRetryHiddenSortitionCapacityFailure(candidateCount) ==",
             '"HiddenElectorateCapacityUnavailable"',
@@ -2048,12 +2233,131 @@ def main() -> int:
             '"ExecutionFailed"',
             "FinalizeAggregateApprovedAndCertify ==",
             "FinalizeNarrowPolicyCapacityNoResult(eligibleCount) ==",
+            "FinalizeNarrowPolicyRandomnessRedrawBudgetExhausted ==",
+            "ParliamentBallotFailureKindV1::RandomnessRedrawBudgetExhausted",
             "FinalizeNarrowPolicyAndRegisterConfirmationRequest ==",
             "AtomicPolicyConfirmationCapacity ==",
             "RecordInternalExecutionFailureAtExactHeight ==",
             "~releasePulseKnown",
         ),
     )
+    redraw_accounting_model = section(
+        model,
+        "InitialSortitionRedrawCost ==",
+        "PublicFindingQuorum ==",
+        model_path,
+    )
+    require_all(
+        model_path,
+        redraw_accounting_model,
+        (
+            "BoolToNat(governanceAttemptSequence > 0)",
+            'IF sortitionState = "None"',
+            "sortitionSequence + InitialSortitionRedrawCost",
+            'IF ballotState = "None" THEN 0 ELSE ballotSequence',
+            "randomnessRedrawsBeforeAttempt +",
+            "BoolToNat(confirmationRequestCommitted)",
+        ),
+    )
+    redraw_init_model = section(model, "Init ==", "FindingLifecycleFrame ==", model_path)
+    require_all(
+        model_path,
+        redraw_init_model,
+        (
+            "governanceAttemptSequence = 0",
+            "randomnessRedrawsBeforeAttempt = 0",
+            "governanceAttemptSequence = 1",
+            "0..(MaxRandomnessRedraws - 1)",
+        ),
+    )
+    redraw_budget_invariant = section(
+        model,
+        "ProposalWideRandomnessRedrawBudget ==",
+        "FuturePulseSortition ==",
+        model_path,
+    )
+    require_all(
+        model_path,
+        redraw_budget_invariant,
+        (
+            "ProposalRandomnessRedrawsUsed \\in 0..MaxRandomnessRedraws",
+            "randomnessRedrawsBeforeAttempt < MaxRandomnessRedraws",
+            'sortitionState = "NoRoster"',
+            'ballotState = "NoResult"',
+            'attemptStatus = "Rejected"',
+        ),
+    )
+    initial_sortition_action = section(
+        model,
+        "CommitInitialSortitionBatch ==",
+        "RecordInitialHiddenSortitionCapacityFailure(candidateCount) ==",
+        model_path,
+    )
+    require_all(
+        model_path,
+        initial_sortition_action,
+        (
+            'sortitionState = "None"',
+            "ProposalRandomnessRedrawsUsed + InitialSortitionRedrawCost <=",
+            "MaxRandomnessRedraws",
+        ),
+    )
+    sortition_retry_action = section(
+        model,
+        "RetryInitialSortitionBatch ==",
+        "RecordRetryHiddenSortitionCapacityFailure(candidateCount) ==",
+        model_path,
+    )
+    require_all(
+        model_path,
+        sortition_retry_action,
+        (
+            "ProposalRandomnessRedrawsUsed < MaxRandomnessRedraws",
+            "sortitionSequence' = sortitionSequence + 1",
+        ),
+    )
+    ballot_registration_action = section(
+        model,
+        "RegisterPrivateBallot ==",
+        "CloseRegistrationAtBoundary ==",
+        model_path,
+    )
+    require_all(
+        model_path,
+        ballot_registration_action,
+        (
+            'ballotState \\in {"None", "NoResult"}',
+            'ballotState = "None" \\/',
+            "ProposalRandomnessRedrawsUsed < MaxRandomnessRedraws",
+            'ballotSequence\' = IF ballotState = "None" THEN 0 ELSE ballotSequence + 1',
+        ),
+    )
+    transport_replay_action = section(
+        model,
+        "ReplayCommittedTransportIdempotently ==",
+        "ReducerNext ==",
+        model_path,
+    )
+    require_all(
+        model_path,
+        transport_replay_action,
+        (
+            "sortitionState",
+            "ballotState",
+            "confirmationRequestCommitted",
+            "UNCHANGED vars",
+        ),
+    )
+    for forbidden_update in (
+        "sortitionSequence'",
+        "ballotSequence'",
+        "confirmationRequestCommitted'",
+        "randomnessRedrawsBeforeAttempt'",
+    ):
+        if forbidden_update in transport_replay_action:
+            raise RuntimeError(
+                f"{model_path}: committed transport replay mutates {forbidden_update!r}"
+            )
     for start, end in (
         (
             "RecordInitialHiddenSortitionCapacityFailure(candidateCount) ==",
@@ -2085,8 +2389,29 @@ def main() -> int:
     confirmation_capacity_action = section(
         model,
         "FinalizeNarrowPolicyCapacityNoResult(eligibleCount) ==",
+        "FinalizeNarrowPolicyRandomnessRedrawBudgetExhausted ==",
+        model_path,
+    )
+    confirmation_redraw_exhaustion_action = section(
+        model,
+        "FinalizeNarrowPolicyRandomnessRedrawBudgetExhausted ==",
         "FinalizeNarrowPolicyAndRegisterConfirmationRequest ==",
         model_path,
+    )
+    require_all(
+        model_path,
+        confirmation_redraw_exhaustion_action,
+        (
+            "ProposalRandomnessRedrawsUsed = MaxRandomnessRedraws",
+            'ballotState\' = "NoResult"',
+            'attemptStatus\' = "Rejected"',
+            "eligibleConfirmationCandidates' = 2",
+            "policyBindingCommitted' = FALSE",
+            "confirmationRequirementCommitted' = FALSE",
+            "confirmationRequestCommitted' = FALSE",
+            "confirmationRequestHeight' = None",
+            "confirmationPulseHeight' = None",
+        ),
     )
     require_all(
         model_path,
@@ -2119,6 +2444,7 @@ def main() -> int:
             "confirmationRequestCommitted' = TRUE",
             "confirmationRequestHeight' = height",
             "confirmationPulseHeight' = height + SortitionPulseDelayBlocks",
+            "ProposalRandomnessRedrawsUsed < MaxRandomnessRedraws",
         ),
     )
     if "ConstructCertificate ==" in model:
@@ -2133,6 +2459,7 @@ def main() -> int:
         (
             "SortitionPulseDelayBlocks = 1",
             "MaxSortitionRetries = 2",
+            "MaxRandomnessRedraws = 2",
             "MaxConcurrentReservations = 2",
             "ReservationIds = {Reservation0, Reservation1, Reservation2}",
             "FirstConflictingReservation = Reservation0",
@@ -2148,6 +2475,7 @@ def main() -> int:
             "SecondAssignment = Seat1",
             "FindingRoots = {Finding0, Finding1}",
             "ObjectiveBoundedSortitionRetries",
+            "ProposalWideRandomnessRedrawBudget",
             "HiddenElectorateCapacityConsumesNoPulse",
             "TimedOvnReservationSafety",
             "RejectedReservationDoesNotLeak",
@@ -2165,6 +2493,7 @@ def main() -> int:
     )
     expected_invariants = (
         "TypeOK",
+        "ProposalWideRandomnessRedrawBudget",
         "FuturePulseSortition",
         "ObjectiveBoundedSortitionRetries",
         "HiddenElectorateCapacityConsumesNoPulse",
@@ -2338,6 +2667,10 @@ def main() -> int:
             "without revealing or consuming a pulse",
             "Policy binding, Confirmation requirement, and Confirmation request all",
             "same transition commits the Policy binding and Confirmation requirement",
+            "one proposal-wide redraw budget",
+            "successor governance attempt's first sortition",
+            "Exact request/session transport replays are state-idempotent",
+            "required Confirmation draw at an already exhausted ceiling fails closed",
         ),
     )
     pipeline_spec = read("specs/governance_pipeline.md")

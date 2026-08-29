@@ -2245,9 +2245,11 @@ async fn run_budgeted_scan() -> ScanStats {
         }
         let remaining_read_budget = max_bytes.saturating_sub(bytes_processed);
         let snapshot_loc = loc.clone();
-        let snapshot_load = match task::spawn_blocking(move || {
-            load_attachment_snapshot(&snapshot_loc, remaining_read_budget)
-        })
+        let snapshot_load = match crate::panic_recovery::join_recoverable(
+            crate::panic_recovery::spawn_blocking_recoverable(move || {
+                load_attachment_snapshot(&snapshot_loc, remaining_read_budget)
+            }),
+        )
         .await
         {
             Ok(snapshot_load) => snapshot_load,
@@ -2316,10 +2318,13 @@ async fn run_budgeted_scan() -> ScanStats {
             {
                 MAX_INFLIGHT_OBSERVED.fetch_max(prev as usize, AtomicOrdering::SeqCst);
             }
-            let result =
-                task::spawn_blocking(move || process_attachment_snapshot_at(&loc_owned, snapshot))
-                    .await
-                    .map_err(|err| err.to_string())?;
+            let result = crate::panic_recovery::join_recoverable(
+                crate::panic_recovery::spawn_blocking_recoverable(move || {
+                    process_attachment_snapshot_at(&loc_owned, snapshot)
+                }),
+            )
+            .await
+            .map_err(|err| err.to_string())?;
             drop(permit);
             let after = inflight.fetch_sub(1, Ordering::SeqCst) - 1;
             telemetry_clone.with_metrics(|tel| tel.set_torii_zk_prover_inflight(after));
@@ -2422,7 +2427,10 @@ pub fn start_worker() {
             if let Some(reason) = stats.budget_exhausted {
                 iroha_logger::warn!(%reason, processed = stats.processed_reports, bytes = stats.bytes_processed, "Background prover scan hit budget");
             }
-            let _ = task::spawn_blocking(gc_reports_once).await;
+            let _ = crate::panic_recovery::join_recoverable(
+                crate::panic_recovery::spawn_blocking_recoverable(gc_reports_once),
+            )
+            .await;
             tokio::time::sleep(period).await;
         }
     });

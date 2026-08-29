@@ -174,6 +174,41 @@ def test_iso_status_polls_use_fresh_operator_nonces() -> None:
     assert all(call["allow_redirects"] is False for call in session.calls)
 
 
+def test_iso_status_exposes_pinned_participant_provenance() -> None:
+    session = RecordingSession(
+        [
+            response(
+                200,
+                {
+                    "message_id": "provenance-1",
+                    "status": "Accepted",
+                    "originator_participant_id": "originator-bank",
+                    "counterparty_participant_id": "counterparty-bank",
+                    "admitting_participant_id": "originator-bank",
+                    "admitting_operator_key": "ed0120operator",
+                    "pinned_profile_id": "generic-pacs008",
+                    "pinned_signature_policy": "operator-request-v1",
+                },
+            )
+        ]
+    )
+    client = ToriiClient(
+        "https://torii.example",
+        session=session,
+        operator_signing_context=context(),
+    )
+
+    record = client.get_iso_message_status("provenance-1")
+
+    assert record is not None
+    assert record.originator_participant_id == "originator-bank"
+    assert record.counterparty_participant_id == "counterparty-bank"
+    assert record.admitting_participant_id == "originator-bank"
+    assert record.admitting_operator_key == "ed0120operator"
+    assert record.pinned_profile_id == "generic-pacs008"
+    assert record.pinned_signature_policy == "operator-request-v1"
+
+
 @pytest.mark.parametrize(
     "profile",
     [" Swift-CBPR-Plus", "swift_cbpr_plus", "swift-"],

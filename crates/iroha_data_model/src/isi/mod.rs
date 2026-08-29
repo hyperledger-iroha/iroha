@@ -374,6 +374,7 @@ impl_direct_instruction_box!(crate::isi::sorafs::ActivateSorafsModerationCase);
 impl_direct_instruction_box!(crate::isi::sorafs::SubmitSorafsModerationCommit);
 impl_direct_instruction_box!(crate::isi::sorafs::RaiseSorafsModerationChallenge);
 impl_direct_instruction_box!(crate::isi::sorafs::ResolveSorafsModerationChallenge);
+impl_direct_instruction_box!(crate::isi::sorafs::ExpireSorafsModerationChallenge);
 impl_direct_instruction_box!(crate::isi::sorafs::SubmitSorafsModerationReveal);
 impl_direct_instruction_box!(crate::isi::sorafs::FinalizeSorafsModerationCase);
 impl_direct_instruction_box!(crate::isi::space_directory::PublishSpaceDirectoryManifest);
@@ -472,6 +473,10 @@ impl_direct_instruction_box!(crate::isi::confidential::SetPoseidonParamsLifecycl
 // Allow direct boxing of governance instructions
 #[cfg(feature = "governance")]
 impl_direct_instruction_box!(crate::isi::governance::ProposeDeployContract);
+#[cfg(feature = "governance")]
+impl_direct_instruction_box!(crate::isi::governance::ProposeContractLifecycleGovernance);
+#[cfg(feature = "governance")]
+impl_direct_instruction_box!(crate::isi::governance::ProposeContractEmergencyHold);
 #[cfg(feature = "governance")]
 impl_direct_instruction_box!(crate::isi::governance::ProposeRuntimeUpgradeProposal);
 #[cfg(feature = "governance")]
@@ -2765,19 +2770,19 @@ pub mod prelude {
             AppendSorafsStreamTokenReputationJournalEntry, ApprovePinManifest, BindManifestAlias,
             CancelSorafsOrderbookOrder, ChargeSorafsReserveRent, CommitSorafsPopCredentialBatch,
             CompleteReplicationOrder, DecideSorafsReserveAppeal, DecideSorafsReserveMovement,
-            DrawSorafsReserveCredit, ExpireReplicationOrder, FinalizeSorafsModerationCase,
-            FinalizeSorafsModerationSortition, IssueReplicationOrder, MaintainSorafsOrderbook,
-            MatchSorafsOrderbook, PublishSorafsPopRevocationList, RaiseSorafsModerationChallenge,
-            RecordCapacityTelemetry, RecordSorafsOrderbookSettlementReceipt,
-            RefundSorafsAnonymousServiceEscrow, RegisterCapacityDeclaration,
-            RegisterCapacityDispute, RegisterPinManifest, RegisterSorafsAnonymousJurorCandidacy,
-            RegisterSorafsAnonymousServiceNote, RegisterSorafsCitizenBond,
-            RegisterSorafsModerationJurorEligibility, RegisterSorafsReserveAccount,
-            RepaySorafsReserveCredit, RequestSorafsCitizenBondExit, RequestSorafsReserveMovement,
-            ResolveSorafsCapacityDispute, ResolveSorafsModerationChallenge, RetirePinManifest,
-            ReviseReplicationOrderAssignments, RevokeProviderIngestCompletionAuthority,
-            RotateSorafsCitizenBondAuthorization, SetPricingSchedule,
-            SetProviderIngestCompletionAuthority, SetSorafsModerationPolicy,
+            DrawSorafsReserveCredit, ExpireReplicationOrder, ExpireSorafsModerationChallenge,
+            FinalizeSorafsModerationCase, FinalizeSorafsModerationSortition, IssueReplicationOrder,
+            MaintainSorafsOrderbook, MatchSorafsOrderbook, PublishSorafsPopRevocationList,
+            RaiseSorafsModerationChallenge, RecordCapacityTelemetry,
+            RecordSorafsOrderbookSettlementReceipt, RefundSorafsAnonymousServiceEscrow,
+            RegisterCapacityDeclaration, RegisterCapacityDispute, RegisterPinManifest,
+            RegisterSorafsAnonymousJurorCandidacy, RegisterSorafsAnonymousServiceNote,
+            RegisterSorafsCitizenBond, RegisterSorafsModerationJurorEligibility,
+            RegisterSorafsReserveAccount, RepaySorafsReserveCredit, RequestSorafsCitizenBondExit,
+            RequestSorafsReserveMovement, ResolveSorafsCapacityDispute,
+            ResolveSorafsModerationChallenge, RetirePinManifest, ReviseReplicationOrderAssignments,
+            RevokeProviderIngestCompletionAuthority, RotateSorafsCitizenBondAuthorization,
+            SetPricingSchedule, SetProviderIngestCompletionAuthority, SetSorafsModerationPolicy,
             SetSorafsOrderbookPolicy, SetSorafsPopIssuerPolicy,
             SetSorafsReputationJournalAuthorityPolicy, SetSorafsReservePolicy,
             SlashSorafsAnonymousServiceEscrow, SubmitSorafsModerationAppeal,

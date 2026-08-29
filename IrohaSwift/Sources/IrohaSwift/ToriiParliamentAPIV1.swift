@@ -41,7 +41,7 @@ public struct ToriiParliamentProposalV1: Sendable, Equatable, Encodable {
     fileprivate let exactWireData: Data
     private let requiresExactIntegerEncoding: Bool
 
-    /// Validate one exact seven-kind proposal wire value before it can enter a draft request.
+    /// Validate one exact nine-kind proposal wire value before it can enter a draft request.
     public init(validating data: Data) throws {
         do {
             try StrictJSONDuplicateKeyRejector.rejectDuplicateObjectKeys(
@@ -692,6 +692,19 @@ public enum ToriiParliamentAPIV1 {
     public static let maximumGovernanceAttemptRetries: UInt32 = 16
     public static let maximumSortitionRequestsPerBatch = 10
 
+    /// Closed Parliament V1 proposal-kind inventory in append-only Norito index order.
+    public static let proposalKinds = [
+        "DeployContract",
+        "RuntimeUpgrade",
+        "SccpRouteGovernance",
+        "ValidationFeePolicy",
+        "ValidationFeePayoutLifecycle",
+        "MusubiRegistryGovernance",
+        "SorafsProviderGovernance",
+        "ContractLifecycleGovernance",
+        "ContractEmergencyHold",
+    ]
+
     public static let publicTransitionDigestDomain =
         "iroha.governance.parliament.lifecycle_transition.digest.v1"
     public static let automaticOutcomeDigestDomain =
@@ -755,6 +768,7 @@ public enum ToriiParliamentAPIV1 {
         .init(noritoIndex: 6, jsonTag: "BallotOpeningDeadlineExpired"),
         .init(noritoIndex: 7, jsonTag: "SortitionRetriesExhausted"),
         .init(noritoIndex: 8, jsonTag: "ConfirmationJuryCapacityUnavailable"),
+        .init(noritoIndex: 9, jsonTag: "RandomnessRedrawBudgetExhausted"),
     ]
 
     public static let bodyStateFields = [

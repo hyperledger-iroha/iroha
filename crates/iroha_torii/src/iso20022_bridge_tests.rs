@@ -1,7 +1,8 @@
 use super::*;
+use base64::Engine as _;
 use iroha_core::iso_bridge::reference_data::SnapshotState;
 use iroha_core::state::World;
-use iroha_crypto::{Algorithm, KeyPair};
+use iroha_crypto::{Algorithm, KeyPair, PublicKey, Signature};
 use iroha_data_model::{
     Registrable, ValidationFail,
     account::Account,
@@ -176,6 +177,8 @@ fn sample_asset_definition_literal() -> String {
 fn sample_config() -> actual::IsoBridge {
     let (_account_id, account_literal, private_key) = sample_account_bundle();
     let asset_definition = sample_asset_definition_literal();
+    let originator_operator = fixture_key_pair(0xAB).public_key().clone();
+    let counterparty_operator = fixture_key_pair(0xAC).public_key().clone();
     actual::IsoBridge {
         enabled: true,
         max_body_bytes: iroha_config::parameters::defaults::torii::ISO_BRIDGE_MAX_BODY_BYTES,
@@ -192,6 +195,23 @@ fn sample_config() -> actual::IsoBridge {
             account_id: account_literal.clone(),
             private_key,
         }),
+        participants: vec![
+            actual::IsoBridgeParticipant {
+                id: "originator-bank".to_owned(),
+                operator_keys: vec![originator_operator],
+                financial_identifiers: vec!["DEUTDEFF".to_owned()],
+                allowed_profiles: vec!["generic-iso20022".to_owned()],
+                roles: vec!["originator".to_owned(), "counterparty".to_owned()],
+            },
+            actual::IsoBridgeParticipant {
+                id: "counterparty-bank".to_owned(),
+                operator_keys: vec![counterparty_operator],
+                financial_identifiers: vec!["MARKDEFF".to_owned()],
+                allowed_profiles: vec!["generic-iso20022".to_owned()],
+                roles: vec!["originator".to_owned(), "counterparty".to_owned()],
+            },
+        ],
+        audit_admin_keys: Vec::new(),
         account_aliases: vec![actual::IsoAccountAlias {
             iban: "GB82 WEST 1234 5698 7654 32".to_string(),
             account_id: account_literal,
@@ -9012,10 +9032,11 @@ fn runtime_rejects_unbounded_or_excessive_store_counts() {
     }
 }
 #[test]
-fn durable_store_reload_streams_only_deterministic_newest_records() {
+fn lowering_store_capacity_preserves_every_unexpired_replay_identity() {
     let store = TempDir::new().expect("tempdir");
     let mut config = sample_config();
     config.store_dir = Some(store.path().to_path_buf());
+    config.store_retention_secs = 0;
     config.store_max_records = 4;
     {
         let runtime = Iso20022BridgeRuntime::from_config(&config)
@@ -9057,23 +9078,36 @@ fn durable_store_reload_streams_only_deterministic_newest_records() {
     let reloaded = Iso20022BridgeRuntime::from_config(&config)
         .expect("cfg")
         .expect("enabled");
-    assert_eq!(reloaded.records.len(), 2);
-    assert_eq!(reloaded.tx_hash_index.len(), 2);
-    assert_eq!(reloaded.payload_hash_index.len(), 2);
-    assert_eq!(reloaded.business_message_id_index.len(), 2);
-    assert!(reloaded.message_status("old").is_none());
-    assert!(reloaded.message_status("middle").is_none());
+    assert_eq!(reloaded.records.len(), 4);
+    assert_eq!(reloaded.tx_hash_index.len(), 4);
+    assert_eq!(reloaded.payload_hash_index.len(), 4);
+    assert_eq!(reloaded.business_message_id_index.len(), 4);
+    assert!(reloaded.message_status("old").is_some());
+    assert!(reloaded.message_status("middle").is_some());
     assert!(reloaded.message_status("tie-a").is_some());
     assert!(reloaded.message_status("tie-z").is_some());
-    for evicted in ["old", "middle"] {
+    for protected in ["old", "middle", "tie-a", "tie-z"] {
         assert!(
-            !store
+            store
                 .path()
                 .join("messages")
-                .join(message_filename(evicted))
+                .join(message_filename(protected))
                 .exists()
         );
     }
+    assert!(!reloaded.check_and_record_inbound(
+        "capacity-rejected",
+        IsoMessageMetadata::inbound(
+            "generic-iso20022",
+            "pacs.008",
+            None,
+            Some("capacity-rejected-biz".to_owned()),
+            None,
+            "capacity-rejected-hash".to_owned(),
+            "snapshot".to_owned(),
+            false,
+        ),
+    ));
 }
 fn assert_digest_correct_record_mutation_is_rejected(
     message_id: &str,
@@ -9180,7 +9214,7 @@ fn durable_store_retention_is_independent_from_dedupe_ttl() {
     );
 }
 #[test]
-fn durable_store_compacts_oldest_record_when_max_records_exceeded() {
+fn durable_store_never_evicts_an_unexpired_identity_for_capacity() {
     let store = TempDir::new().expect("tempdir");
     let mut config = sample_config();
     config.store_dir = Some(store.path().to_path_buf());
@@ -9204,7 +9238,7 @@ fn durable_store_compacts_oldest_record_when_max_records_exceeded() {
     runtime.mark_accepted("compact-old", "tx-compact-old");
     runtime.mark_settled("compact-old", SystemTime::now());
     std::thread::sleep(Duration::from_millis(1));
-    assert!(runtime.check_and_record_inbound(
+    assert!(!runtime.check_and_record_inbound(
         "compact-new",
         IsoMessageMetadata::inbound(
             "generic-iso20022",
@@ -9217,16 +9251,16 @@ fn durable_store_compacts_oldest_record_when_max_records_exceeded() {
             false,
         ),
     ));
-    assert!(runtime.message_status("compact-old").is_none());
-    assert!(runtime.message_status("compact-new").is_some());
+    assert!(runtime.message_status("compact-old").is_some());
+    assert!(runtime.message_status("compact-new").is_none());
     assert!(
         runtime
             .business_message_id_index
             .get(&normalise_business_message_id("compact-old-biz").expect("business id"))
-            .is_none()
+            .is_some()
     );
     assert!(
-        !store
+        store
             .path()
             .join("messages")
             .join(message_filename("compact-old"))
@@ -9247,7 +9281,7 @@ fn durable_store_compacts_oldest_record_when_max_records_exceeded() {
             .and_then(JsonValue::as_object)
             .and_then(|entry| entry.get("message_id"))
             .and_then(JsonValue::as_str),
-        Some("compact-new")
+        Some("compact-old")
     );
 }
 #[test]
@@ -9280,6 +9314,12 @@ fn durable_store_compacts_records_older_than_retention_window() {
     }
     runtime.persist_message("age-expired");
     assert!(runtime.message_status("age-expired").is_none());
+    assert!(runtime.replay_tombstones.contains_key("age-expired"));
+    assert!(
+        runtime
+            .business_message_id_index
+            .contains_key(&normalise_business_message_id("age-expired-biz").expect("business id"))
+    );
     assert!(
         !store
             .path()
@@ -10769,11 +10809,11 @@ fn pacs009_rejects_unknown_bic() {
     );
 }
 #[test]
-fn rejected_message_can_be_retried() {
+fn rejected_message_identity_remains_reserved_until_dedupe_expiry() {
     let runtime = sample_runtime();
     assert!(runtime.check_and_record_message("m1"));
     runtime.mark_rejected("m1", Some("missing mapping".to_string()), None);
-    assert!(runtime.check_and_record_message("m1"));
+    assert!(!runtime.check_and_record_message("m1"));
 }
 #[test]
 fn status_transitions_are_recorded() {
@@ -10848,7 +10888,7 @@ fn durable_indeterminate_queue_outcome_survives_reload_and_pins_capacity() {
 }
 #[test]
 fn status_history_encoded_byte_cap_accepts_exact_boundary() {
-    let mut exact = IsoMessageRecord::pending(Instant::now());
+    let mut exact = IsoMessageRecordV2::pending(Instant::now());
     exact.status_history.clear();
     exact.state = IsoMessageState::Rejected;
     exact.updated_at = std::time::UNIX_EPOCH;
@@ -10875,7 +10915,7 @@ fn status_history_encoded_byte_cap_accepts_exact_boundary() {
     ))
     .expect("encode exact-bound history");
     assert_eq!(canonical.len(), ISO_STATUS_HISTORY_MAX_ENCODED_BYTES_V1);
-    let mut overflow = IsoMessageRecord::pending(Instant::now());
+    let mut overflow = IsoMessageRecordV2::pending(Instant::now());
     overflow.status_history.clear();
     overflow.state = IsoMessageState::Rejected;
     overflow.updated_at = std::time::UNIX_EPOCH;
@@ -10888,7 +10928,7 @@ fn status_history_encoded_byte_cap_accepts_exact_boundary() {
 }
 #[test]
 fn alternating_status_history_refuses_entry_overflow_before_memory_or_disk_mutation() {
-    let mut record = IsoMessageRecord::pending(Instant::now());
+    let mut record = IsoMessageRecordV2::pending(Instant::now());
     for index in 1..ISO_STATUS_HISTORY_MAX_ENTRIES_V1 {
         let accepted = index % 2 == 1;
         record
@@ -10919,6 +10959,16 @@ fn alternating_status_history_refuses_entry_overflow_before_memory_or_disk_mutat
         .expect("cfg")
         .expect("enabled");
     let message_id = "bounded-alternating-history";
+    let metadata = inbound_metadata(message_id, "pacs.008");
+    let parties = runtime.compatibility_test_parties(&metadata);
+    runtime
+        .admit_authenticated_inbound(message_id, metadata, parties)
+        .expect("precommit replay identity");
+    let admitted = runtime.records.get(message_id).expect("admitted record");
+    record.metadata = admitted.metadata.clone();
+    record.parties = admitted.parties.clone();
+    record.replay_expires_at = admitted.replay_expires_at;
+    drop(admitted);
     runtime.records.insert(message_id.to_owned(), record);
     runtime
         .tx_hash_index
@@ -10971,7 +11021,7 @@ fn change_reason_encoded_byte_cap_accepts_exact_boundary() {
     let code_bytes = ISO_CHANGE_REASON_MAX_ENCODED_BYTES_V1
         .checked_sub(4)
         .expect("V1 byte cap exceeds array and string syntax");
-    let mut exact = IsoMessageRecord::pending(Instant::now());
+    let mut exact = IsoMessageRecordV2::pending(Instant::now());
     exact
         .try_transition(|candidate| {
             candidate.change_reason_codes = vec!["x".repeat(code_bytes)];
@@ -10990,7 +11040,7 @@ fn change_reason_encoded_byte_cap_accepts_exact_boundary() {
     ))
     .expect("encode exact-bound change reasons");
     assert_eq!(canonical.len(), ISO_CHANGE_REASON_MAX_ENCODED_BYTES_V1);
-    let mut overflow = IsoMessageRecord::pending(Instant::now());
+    let mut overflow = IsoMessageRecordV2::pending(Instant::now());
     let before = persisted_record_json("change-reason-overflow", &overflow)
         .expect("encode pre-transition record");
     assert_eq!(
@@ -11231,5 +11281,368 @@ fn securities_outbox_xml_uses_sese023_context_and_settlement_state() {
     assert!(confirmation.contains("<ExecutionOrder>DELIVERY_THEN_PAYMENT</ExecutionOrder>"));
     parse_message("sese.025", confirmation.as_bytes()).expect("generated sese.025 parses");
 }
+fn participant_message(
+    message_type: &str,
+    from: &str,
+    to: &str,
+    extra_fields: &str,
+) -> ParsedMessage {
+    let fields = format!(
+        "AppHdr/Fr/FIId/FinInstnId/BICFI={from}\n\
+         AppHdr/To/FIId/FinInstnId/BICFI={to}\n\
+         {extra_fields}"
+    );
+    parse_message(message_type, fields.as_bytes()).expect("participant message parses")
+}
+
+#[test]
+fn participant_catalog_binds_initial_from_and_scopes_reads_to_both_parties() {
+    let store = TempDir::new().expect("tempdir");
+    let audit_admin = fixture_key_pair(0xAD);
+    let mut config = sample_config();
+    config.store_dir = Some(store.path().to_path_buf());
+    config.audit_admin_keys = vec![audit_admin.public_key().clone()];
+    let runtime = Iso20022BridgeRuntime::from_config(&config)
+        .expect("valid participant config")
+        .expect("enabled runtime");
+    let originator = fixture_key_pair(0xAB);
+    let counterparty = fixture_key_pair(0xAC);
+    let parsed = participant_message(
+        "pacs.008",
+        "DEUTDEFF",
+        "MARKDEFF",
+        "MsgId=participant-payment",
+    );
+    let profile = runtime.default_profile();
+    let parties = runtime
+        .authorize_initial_submission(originator.public_key(), profile, &parsed)
+        .expect("configured From owner");
+    assert_eq!(parties.originator_participant_id, "originator-bank");
+    assert_eq!(parties.counterparty_participant_id, "counterparty-bank");
+    assert_eq!(
+        runtime.authorize_initial_submission(counterparty.public_key(), profile, &parsed),
+        Err(IsoAdmissionError::NotAuthorized)
+    );
+    let ambiguous_from = parse_message(
+        "pacs.008",
+        b"AppHdr/Fr/FIId/FinInstnId/BICFI=DEUTDEFF\nAppHdr/Fr/FIId/FinInstnId/LEI=5493001KJTIIGC8Y1R12\nAppHdr/To/FIId/FinInstnId/BICFI=MARKDEFF\nMsgId=ambiguous",
+    )
+    .expect("ambiguous From parses");
+    assert_eq!(
+        runtime.authorize_initial_submission(originator.public_key(), profile, &ambiguous_from),
+        Err(IsoAdmissionError::NotAuthorized)
+    );
+    assert_eq!(
+        runtime.authorize_initial_submission(audit_admin.public_key(), profile, &parsed),
+        Err(IsoAdmissionError::NotAuthorized)
+    );
+    runtime
+        .admit_authenticated_inbound(
+            "participant-payment",
+            inbound_metadata("participant-payment", "pacs.008"),
+            parties,
+        )
+        .expect("durable authenticated admission");
+    assert!(runtime.can_read_message(originator.public_key(), "participant-payment"));
+    assert!(runtime.can_read_message(counterparty.public_key(), "participant-payment"));
+    assert!(runtime.can_read_message(audit_admin.public_key(), "participant-payment"));
+    assert!(!runtime.can_read_message(
+        fixture_key_pair(0xAE).public_key(),
+        "participant-payment"
+    ));
+}
+
+#[test]
+fn participant_catalog_rejects_legacy_unscoped_and_overlapping_admin_keys() {
+    let mut unscoped = sample_config();
+    unscoped.participants.clear();
+    let error = runtime_config_error(&unscoped, "unscoped participant catalog must fail");
+    assert!(error.to_string().contains("legacy unscoped bridge configuration"));
+
+    let mut overlapping = sample_config();
+    overlapping.audit_admin_keys = vec![overlapping.participants[0].operator_keys[0].clone()];
+    let error = runtime_config_error(&overlapping, "audit mutation key overlap must fail");
+    assert!(error
+        .to_string()
+        .contains("must not also be a participant mutation key"));
+}
+
+#[test]
+fn lifecycle_roles_reject_cross_party_updates() {
+    let store = TempDir::new().expect("tempdir");
+    let mut config = sample_config();
+    config.store_dir = Some(store.path().to_path_buf());
+    for participant in &mut config.participants {
+        participant
+            .allowed_profiles
+            .push("swift-cbpr-plus".to_owned());
+    }
+    let runtime = Iso20022BridgeRuntime::from_config(&config)
+        .expect("valid participant config")
+        .expect("enabled runtime");
+    let originator = fixture_key_pair(0xAB);
+    let counterparty = fixture_key_pair(0xAC);
+    let original = participant_message(
+        "pacs.008",
+        "DEUTDEFF",
+        "MARKDEFF",
+        "MsgId=owned-payment",
+    );
+    let profile = runtime.default_profile();
+    let parties = runtime
+        .authorize_initial_submission(originator.public_key(), profile, &original)
+        .expect("originator owns From");
+    runtime
+        .admit_authenticated_inbound(
+            "owned-payment",
+            inbound_metadata("owned-payment", "pacs.008"),
+            parties,
+        )
+        .expect("original admitted");
+    let lifecycle = participant_message(
+        "pacs.002",
+        "MARKDEFF",
+        "DEUTDEFF",
+        "BizMsgIdr=status-1\nOrgnlMsgId=owned-payment\nTxSts=ACSC",
+    );
+    assert_eq!(
+        runtime.authorize_lifecycle_submission(
+            originator.public_key(),
+            profile,
+            "pacs.002",
+            &lifecycle,
+        ),
+        Err(IsoAdmissionError::NotAuthorized)
+    );
+    let lifecycle_parties = runtime
+        .authorize_lifecycle_submission(
+            counterparty.public_key(),
+            profile,
+            "pacs.002",
+            &lifecycle,
+        )
+        .expect("original counterparty owns pacs.002");
+    assert_eq!(
+        lifecycle_parties.admitting_participant_id,
+        "counterparty-bank"
+    );
+    let downgraded_profile = runtime
+        .resolve_profile(Some("swift-cbpr-plus"))
+        .expect("built-in SWIFT profile");
+    assert_eq!(
+        runtime.authorize_lifecycle_submission(
+            counterparty.public_key(),
+            downgraded_profile,
+            "pacs.002",
+            &lifecycle,
+        ),
+        Err(IsoAdmissionError::NotAuthorized)
+    );
+    let cancellation = participant_message(
+        "camt.056",
+        "DEUTDEFF",
+        "MARKDEFF",
+        "BizMsgIdr=cancel-1\nOrgnlGrpInf/OrgnlMsgId=owned-payment",
+    );
+    runtime
+        .authorize_lifecycle_submission(
+            originator.public_key(),
+            profile,
+            "camt.056",
+            &cancellation,
+        )
+        .expect("original originator owns camt.056");
+    assert_eq!(
+        runtime.authorize_lifecycle_submission(
+            counterparty.public_key(),
+            profile,
+            "camt.056",
+            &cancellation,
+        ),
+        Err(IsoAdmissionError::NotAuthorized)
+    );
+}
+
+#[test]
+fn settling_pacs002_requires_committed_transaction_evidence() {
+    let runtime = sample_runtime();
+    record_original(&runtime, "settlement-evidence", "pacs.008");
+    let lifecycle_id = "settlement-evidence-status";
+    assert!(runtime.check_and_record_inbound(
+        lifecycle_id,
+        inbound_metadata(lifecycle_id, "pacs.002")
+    ));
+    let lifecycle = parse_message(
+        "pacs.002",
+        b"BizMsgIdr=settlement-evidence-status\nOrgnlMsgId=settlement-evidence\nTxSts=ACSC",
+    )
+    .expect("pacs.002 parses");
+    assert!(
+        runtime
+            .apply_inbound_lifecycle_message_with_evidence(
+                lifecycle_id,
+                "pacs.002",
+                &lifecycle,
+                false,
+            )
+            .is_err()
+    );
+    assert_ne!(
+        runtime
+            .message_status("settlement-evidence")
+            .expect("original remains")
+            .pacs002_code(),
+        "ACSC"
+    );
+    assert!(runtime.mark_queued("settlement-evidence"));
+    runtime
+        .apply_inbound_lifecycle_message_with_evidence(
+            lifecycle_id,
+            "pacs.002",
+            &lifecycle,
+            true,
+        )
+        .expect("committed evidence permits settlement transition");
+    assert_eq!(
+        runtime
+            .message_status("settlement-evidence")
+            .expect("original settles")
+            .pacs002_code(),
+        "ACSC"
+    );
+}
+
+#[test]
+fn unexpired_replay_tombstone_survives_detail_pruning_and_restart() {
+    let store = TempDir::new().expect("tempdir");
+    let mut config = sample_config();
+    config.store_dir = Some(store.path().to_path_buf());
+    config.store_retention_secs = 1;
+    config.dedupe_ttl_secs = 3_600;
+    let runtime = Iso20022BridgeRuntime::from_config(&config)
+        .expect("runtime")
+        .expect("enabled");
+    let metadata = inbound_metadata("durable-replay", "pacs.008");
+    assert!(runtime.check_and_record_inbound("durable-replay", metadata.clone()));
+    runtime.mark_accepted("durable-replay", "tx-durable-replay");
+    runtime.mark_settled("durable-replay", SystemTime::now());
+    runtime
+        .records
+        .get_mut("durable-replay")
+        .expect("rich record")
+        .updated_at = SystemTime::UNIX_EPOCH;
+    runtime.compact_persisted_records();
+    assert!(!runtime.records.contains_key("durable-replay"));
+    assert!(runtime.replay_tombstones.contains_key("durable-replay"));
+    drop(runtime);
+    let reloaded = Iso20022BridgeRuntime::from_config(&config)
+        .expect("restart loads tombstone")
+        .expect("enabled");
+    assert!(!reloaded.check_and_record_inbound("durable-replay", metadata));
+}
+
+#[test]
+fn protected_replay_capacity_fails_closed_without_mutation() {
+    let store = TempDir::new().expect("tempdir");
+    let mut config = sample_config();
+    config.store_dir = Some(store.path().to_path_buf());
+    config.store_max_records = 1;
+    let runtime = Iso20022BridgeRuntime::from_config(&config)
+        .expect("runtime")
+        .expect("enabled");
+    let first = runtime.compatibility_test_parties(&inbound_metadata("one", "pacs.008"));
+    runtime
+        .admit_authenticated_inbound("one", inbound_metadata("one", "pacs.008"), first)
+        .expect("first admission");
+    let second = runtime.compatibility_test_parties(&inbound_metadata("two", "pacs.008"));
+    assert_eq!(
+        runtime.admit_authenticated_inbound(
+            "two",
+            inbound_metadata("two", "pacs.008"),
+            second,
+        ),
+        Err(IsoAdmissionError::ProtectedCapacity)
+    );
+    assert!(!runtime.records.contains_key("two"));
+}
+
+#[test]
+fn detail_persistence_failure_keeps_the_precommitted_replay_tombstone() {
+    let store = TempDir::new().expect("tempdir");
+    fs::write(store.path().join("messages"), b"block rich-record directory creation")
+        .expect("write rich-record blocker");
+    let mut config = sample_config();
+    config.store_dir = Some(store.path().to_path_buf());
+    let runtime = Iso20022BridgeRuntime::from_config(&config)
+        .expect("runtime")
+        .expect("enabled");
+    let metadata = inbound_metadata("precommitted-replay", "pacs.008");
+    let parties = runtime.compatibility_test_parties(&metadata);
+    assert_eq!(
+        runtime.admit_authenticated_inbound(
+            "precommitted-replay",
+            metadata.clone(),
+            parties,
+        ),
+        Err(IsoAdmissionError::PersistenceUnavailable)
+    );
+    assert!(!runtime.records.contains_key("precommitted-replay"));
+    assert!(runtime.replay_tombstones.contains_key("precommitted-replay"));
+    drop(runtime);
+
+    let reloaded = Iso20022BridgeRuntime::from_config(&config)
+        .expect("restart loads precommitted tombstone")
+        .expect("enabled");
+    let parties = reloaded.compatibility_test_parties(&metadata);
+    assert_eq!(
+        reloaded.admit_authenticated_inbound("precommitted-replay", metadata, parties),
+        Err(IsoAdmissionError::Duplicate)
+    );
+}
+
+#[test]
+fn outbound_document_signature_covers_exact_xml_bytes() {
+    let runtime = sample_runtime();
+    let signed = runtime
+        .sign_outbound_document("<Document>status</Document>".to_owned())
+        .expect("outbound signature");
+    let public_key = PublicKey::from_str(&signed.public_key).expect("canonical signer key");
+    let signature = Signature::from_bytes(
+        &BASE64_STANDARD
+            .decode(signed.signature)
+            .expect("base64 signature"),
+    );
+    let mut payload = b"iroha.iso20022.outbound.v2\0".to_vec();
+    payload.extend_from_slice(signed.xml.as_bytes());
+    signature
+        .verify(&public_key, &payload)
+        .expect("signature verifies exact XML");
+    payload.push(b'!');
+    assert!(signature.verify(&public_key, &payload).is_err());
+}
+
+#[test]
+fn legacy_iso_record_store_fails_fast_with_schema_incompatibility() {
+    let store = TempDir::new().expect("tempdir");
+    let messages = store.path().join("messages");
+    fs::create_dir_all(&messages).expect("messages directory");
+    fs::write(
+        messages.join(message_filename("legacy-record")),
+        r#"{"version":1,"message_id":"legacy-record"}"#,
+    )
+    .expect("legacy record fixture");
+    let mut config = sample_config();
+    config.store_dir = Some(store.path().to_path_buf());
+    let error = match Iso20022BridgeRuntime::from_config(&config) {
+        Ok(_) => panic!("legacy store must not be accepted"),
+        Err(error) => error,
+    };
+    assert!(
+        error
+            .to_string()
+            .contains("incompatible ISO bridge store record schema version 1")
+    );
+}
+
 include!("iso20022_bridge/tests/lifecycle_tail.rs");
 include!("iso20022_bridge/tests/wrong_family_test.rs");

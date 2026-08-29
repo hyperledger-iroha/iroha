@@ -1971,20 +1971,42 @@ async fn torii_visibility_account_from_headers_rejects_unsigned_account_header()
         routing::ENDPOINT_ACCOUNTS_TRANSACTIONS,
     )
     .expect_err("bare account headers must not create caller identity");
-    match err {
-        Error::Query(iroha_data_model::ValidationFail::NotPermitted(message)) => {
-            assert!(
-                message.contains("requires canonical request signing"),
-                "unexpected rejection message: {message}"
-            );
-        }
-        other => panic!("unexpected error: {other:?}"),
-    }
+    let Error::AppUnauthorized { code, message } = err else {
+        panic!("bare identity must be reported as authentication failure")
+    };
+    assert_eq!(code, "alias_auth_invalid");
+    assert!(message.contains("complete canonical request signature"));
+}
+#[cfg(feature = "app_api")]
+#[test]
+fn torii_visibility_account_from_headers_rejects_partial_signature_as_unauthorized() {
+    let authority = routed_read_test_account(0x8f);
+    let app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+    let method = Method::GET;
+    let uri: Uri = "/v1/explorer/transactions"
+        .parse()
+        .expect("valid URI");
+    let mut headers = HeaderMap::new();
+    headers.insert(HEADER_SIGNATURE, HeaderValue::from_static("00"));
+    let err = torii_visibility_account_from_headers(
+        &app,
+        &headers,
+        &method,
+        &uri,
+        &[],
+        routing::ENDPOINT_EXPLORER_TRANSACTIONS,
+    )
+    .expect_err("partial canonical auth must not degrade to anonymous access");
+    let Error::AppUnauthorized { code, .. } = &err else {
+        panic!("partial canonical auth must be reported as authentication failure")
+    };
+    assert_eq!(*code, "canonical_authentication_invalid");
+    assert_eq!(err.into_response().status(), StatusCode::UNAUTHORIZED);
 }
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn torii_visibility_account_from_headers_accepts_signed_caller() {
-    let key_pair = routed_read_ed25519_test_keypair(0x8f);
+    let key_pair = routed_read_ed25519_test_keypair(0x90);
     let authority = AccountId::new(key_pair.public_key().clone());
     let app = mk_app_state_for_tests_with_world(world_with_account(&authority));
     let method = Method::GET;

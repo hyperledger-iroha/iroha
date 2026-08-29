@@ -2172,9 +2172,114 @@ pub async fn handle_gov_protected_get(
     }))
 }
 #[derive(Debug, JsonSerialize)]
+/// JSON projection of a retained Parliament emergency hold.
+pub struct GovernedContractEmergencyHoldV1 {
+    /// Lowercase incident-evidence digest.
+    pub incident_digest_hex: String,
+    /// Lowercase proposal content identifier.
+    pub proposal_content_id_hex: String,
+    /// Lowercase governance-attempt identifier.
+    pub governance_attempt_id_hex: String,
+    /// Human-readable containment reason.
+    pub reason: String,
+    /// Block at which containment was imposed.
+    pub imposed_at_height: u64,
+    /// First block at which execution is permitted again.
+    pub expires_at_height: u64,
+}
+#[derive(Debug, JsonSerialize)]
+/// Stable app-facing projection of the canonical contract lifecycle record.
+pub struct GovernedContractLifecycleV1 {
+    /// Immutable deployment kind: `direct` or `parliament`.
+    pub origin: String,
+    /// Direct deployer or Parliament proposer recorded as immutable provenance.
+    pub origin_account: String,
+    /// Parliament proposal content identifier, when governance deployed the contract.
+    pub origin_proposal_content_id_hex: Option<String>,
+    /// Parliament attempt identifier, when governance deployed the contract.
+    pub origin_governance_attempt_id_hex: Option<String>,
+    /// Canonical account id or the literal `parliament` for the current owner.
+    pub owner: String,
+    /// Canonical account id or `parliament` for an outstanding ownership offer.
+    pub pending_owner: Option<String>,
+    /// Whether an account owner has delegated activation and deactivation to Parliament.
+    pub parliament_delegated: bool,
+    /// Lowercase active artifact hash, or `None` while the contract is inactive.
+    pub active_code_hash_hex: Option<String>,
+    /// Non-zero compare-and-swap revision.
+    pub revision: u64,
+    /// Retained emergency-hold record, including after expiry.
+    pub emergency_hold: Option<GovernedContractEmergencyHoldV1>,
+}
+fn governed_contract_owner_label(
+    owner: &iroha_data_model::smart_contract::ContractLifecycleOwnerV1,
+) -> String {
+    match owner {
+        iroha_data_model::smart_contract::ContractLifecycleOwnerV1::Account(account) => {
+            account.to_string()
+        }
+        iroha_data_model::smart_contract::ContractLifecycleOwnerV1::Parliament => {
+            "parliament".to_owned()
+        }
+    }
+}
+impl From<&iroha_data_model::smart_contract::ContractLifecycleControlV1>
+    for GovernedContractLifecycleV1
+{
+    fn from(lifecycle: &iroha_data_model::smart_contract::ContractLifecycleControlV1) -> Self {
+        use iroha_data_model::smart_contract::{
+            ContractDeploymentOriginV1, ContractParliamentDelegationV1,
+        };
+        let (origin, origin_account, origin_proposal_content_id_hex, origin_governance_attempt_id_hex) =
+            match &lifecycle.origin {
+                ContractDeploymentOriginV1::Direct(origin) => (
+                    "direct".to_owned(),
+                    origin.deployer.to_string(),
+                    None,
+                    None,
+                ),
+                ContractDeploymentOriginV1::Parliament(origin) => (
+                    "parliament".to_owned(),
+                    origin.proposer.to_string(),
+                    Some(hex::encode(origin.proposal_content_id)),
+                    Some(hex::encode(origin.governance_attempt_id)),
+                ),
+            };
+        let emergency_hold = lifecycle.emergency_hold.as_ref().map(|hold| {
+            GovernedContractEmergencyHoldV1 {
+                incident_digest_hex: hex::encode(hold.incident_digest),
+                proposal_content_id_hex: hex::encode(hold.proposal_content_id),
+                governance_attempt_id_hex: hex::encode(hold.governance_attempt_id),
+                reason: hold.reason.clone(),
+                imposed_at_height: hold.imposed_at_height,
+                expires_at_height: hold.expires_at_height,
+            }
+        });
+        Self {
+            origin,
+            origin_account,
+            origin_proposal_content_id_hex,
+            origin_governance_attempt_id_hex,
+            owner: governed_contract_owner_label(&lifecycle.owner),
+            pending_owner: lifecycle
+                .pending_owner
+                .as_ref()
+                .map(governed_contract_owner_label),
+            parliament_delegated: lifecycle.parliament_delegation
+                == ContractParliamentDelegationV1::Lifecycle,
+            active_code_hash_hex: lifecycle
+                .active_code_hash
+                .map(<[u8; 32]>::from)
+                .map(hex::encode),
+            revision: lifecycle.revision,
+            emergency_hold,
+        }
+    }
+}
+#[derive(Debug, JsonSerialize)]
 /// Response for reading governance-managed contract binding state by canonical address.
 pub struct GovernedContractResponse {
-    /// Whether the contract is currently bound in state.
+    /// Whether a lifecycle record exists for this address, including inactive contracts.
     pub found: bool,
     /// Canonical public contract address queried.
     pub contract_address: iroha_data_model::smart_contract::ContractAddress,
@@ -2184,6 +2289,15 @@ pub struct GovernedContractResponse {
     /// Dataspace alias derived from the contract address, when known.
     #[norito(skip_serializing_if = "Option::is_none")]
     pub dataspace: Option<String>,
+    /// Whether code is currently active at this address.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub active: Option<bool>,
+    /// Complete revisioned ownership, delegation, active-code, and hold record.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub lifecycle: Option<GovernedContractLifecycleV1>,
+    /// Whether the retained emergency hold contains execution at the queried height.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub emergency_hold_active: Option<bool>,
     /// Active code hash bound to the contract address, when present.
     #[norito(skip_serializing_if = "Option::is_none")]
     pub code_hash_hex: Option<String>,
@@ -2242,17 +2356,34 @@ pub async fn handle_gov_contract_get(
             ))
         })?;
     let view = state.view();
-    let active_code_hash = view
-        .world()
-        .contract_instances()
-        .get(&contract_address)
-        .copied();
-    let Some(active_code_hash) = active_code_hash else {
+    let lifecycle =
+        iroha_core::smartcontracts::code::fetch_contract_lifecycle(view.world(), &contract_address)
+            .map_err(governed_contract_invariant)?;
+    let Some((contract_subject, lifecycle)) = lifecycle else {
         return Ok(JsonBody(GovernedContractResponse {
             found: false,
             contract_address,
             contract_subject_account: None,
             dataspace: Some(dataspace),
+            active: None,
+            lifecycle: None,
+            emergency_hold_active: None,
+            code_hash_hex: None,
+            abi_hash_hex: None,
+            public_entrypoints: None,
+        }));
+    };
+    let emergency_hold_active = lifecycle
+        .is_held_at(u64::try_from(view.height()).expect("supported state heights fit in u64"));
+    let Some(active_code_hash) = lifecycle.active_code_hash else {
+        return Ok(JsonBody(GovernedContractResponse {
+            found: true,
+            contract_address,
+            contract_subject_account: Some(contract_subject.to_string()),
+            dataspace: Some(dataspace),
+            active: Some(false),
+            lifecycle: Some((&lifecycle).into()),
+            emergency_hold_active: Some(emergency_hold_active),
             code_hash_hex: None,
             abi_hash_hex: None,
             public_entrypoints: None,
@@ -2349,6 +2480,9 @@ pub async fn handle_gov_contract_get(
         contract_address,
         contract_subject_account: Some(record.contract_subject.to_string()),
         dataspace: Some(dataspace),
+        active: Some(true),
+        lifecycle: Some((&lifecycle).into()),
+        emergency_hold_active: Some(emergency_hold_active),
         code_hash_hex: Some(hex::encode(code_hash_bytes)),
         abi_hash_hex: Some(hex::encode(abi_hash_bytes)),
         public_entrypoints: Some(public_entrypoints),
@@ -3336,6 +3470,12 @@ seiyaku GovernedReadFixture {
         assert_eq!(code_hash, verified.code_hash);
         register_manifest(&harness.authority, signed_manifest, &mut transaction)
             .expect("register governed contract manifest");
+        transaction
+            .world_mut_for_testing()
+            .bind_inactive_contract_subject_for_testing(
+                contract_address.clone(),
+                harness.authority.clone(),
+            );
         activate_instance(
             &harness.authority,
             contract_address.clone(),
@@ -4814,7 +4954,7 @@ seiyaku GovernedReadFixture {
         }
     }
     #[tokio::test]
-    async fn governed_contract_read_serializes_exact_inactive_shape() {
+    async fn governed_contract_read_serializes_exact_missing_shape() {
         let harness = mk_governance_harness(true);
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
@@ -4854,6 +4994,73 @@ seiyaku GovernedReadFixture {
         );
     }
     #[tokio::test]
+    async fn governed_contract_read_retains_inactive_lifecycle_projection() {
+        let harness = mk_governance_harness(true);
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
+            &harness.authority,
+            94,
+            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+        )
+        .expect("inactive contract address");
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = harness.state.block(header);
+        let mut transaction = block.transaction();
+        transaction
+            .world_mut_for_testing()
+            .bind_inactive_contract_subject_for_testing(
+                contract_address.clone(),
+                harness.authority.clone(),
+            );
+        transaction.apply();
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit inactive lifecycle fixture");
+
+        let response = handle_gov_contract_get(
+            harness.state,
+            axum::extract::Path(contract_address.to_string()),
+        )
+        .await
+        .expect("inactive governed contract read");
+        let value = norito::json::to_value(&response.0).expect("serialize inactive response");
+        let object = value.as_object().expect("inactive response object");
+        assert_eq!(object.get("found"), Some(&norito::json::Value::Bool(true)));
+        assert_eq!(
+            object.get("active"),
+            Some(&norito::json::Value::Bool(false))
+        );
+        assert_eq!(
+            object.get("emergency_hold_active"),
+            Some(&norito::json::Value::Bool(false))
+        );
+        assert!(object.contains_key("contract_subject_account"));
+        let lifecycle = object
+            .get("lifecycle")
+            .and_then(norito::json::Value::as_object)
+            .expect("complete lifecycle projection");
+        assert_eq!(
+            lifecycle
+                .get("revision")
+                .and_then(norito::json::Value::as_u64),
+            Some(1)
+        );
+        assert!(lifecycle.contains_key("origin"));
+        assert!(lifecycle.contains_key("origin_account"));
+        assert!(lifecycle.contains_key("origin_proposal_content_id_hex"));
+        assert!(lifecycle.contains_key("origin_governance_attempt_id_hex"));
+        assert!(lifecycle.contains_key("owner"));
+        assert!(lifecycle.contains_key("pending_owner"));
+        assert!(lifecycle.contains_key("parliament_delegated"));
+        assert!(lifecycle.contains_key("active_code_hash_hex"));
+        assert!(lifecycle.contains_key("emergency_hold"));
+        assert!(!object.contains_key("code_hash_hex"));
+        assert!(!object.contains_key("abi_hash_hex"));
+        assert!(!object.contains_key("public_entrypoints"));
+    }
+    #[tokio::test]
     async fn governed_contract_read_verifies_real_artifact_and_exact_active_shape() {
         let harness = mk_governance_harness(true);
         let (contract_address, expected_code_hash) = install_governed_contract_for_test(&harness);
@@ -4872,6 +5079,9 @@ seiyaku GovernedReadFixture {
                 "contract_address",
                 "contract_subject_account",
                 "dataspace",
+                "active",
+                "lifecycle",
+                "emergency_hold_active",
                 "code_hash_hex",
                 "abi_hash_hex",
                 "public_entrypoints",
@@ -4880,6 +5090,7 @@ seiyaku GovernedReadFixture {
             .collect()
         );
         assert_eq!(object.get("found"), Some(&norito::json::Value::Bool(true)));
+        assert_eq!(object.get("active"), Some(&norito::json::Value::Bool(true)));
         assert_eq!(
             object
                 .get("contract_address")

@@ -44,7 +44,7 @@ use std::{
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-use tokio::{sync::Mutex, task};
+use tokio::sync::Mutex;
 use zstd::stream::read::Decoder as ZstdDecoder;
 const MAX_ATTACHMENT_BYTES_FALLBACK: usize = 4 * 1024 * 1024; // fallback 4 MiB
 const ATTACHMENT_TTL_SECS_FALLBACK: u64 = 7 * 24 * 60 * 60; // fallback 7 days
@@ -1556,13 +1556,15 @@ async fn sanitize_attachment_in_process(
     admission: Option<crate::ProofBodyAdmissionLease>,
 ) -> Result<SanitizerOutcome, SanitizeError> {
     let declared = declared_type.clone();
-    let mut outcome = task::spawn_blocking(move || {
+    let mut outcome = crate::panic_recovery::join_recoverable(
+        crate::panic_recovery::spawn_blocking_recoverable(move || {
         #[cfg(test)]
         wait_for_sanitizer_worker_test_gate();
         let outcome = sanitize_attachment_sync(declared.as_deref(), body.as_ref(), &cfg);
         drop(admission);
         outcome
-    })
+    }),
+    )
     .await
     .map_err(|err| {
         SanitizeError::new(
@@ -1587,13 +1589,15 @@ async fn sanitize_attachment_subprocess(
         max_archive_depth: cfg.max_archive_depth,
         timeout_ms: cfg.timeout.as_millis().max(1) as u64,
     };
-    let outcome = task::spawn_blocking(move || {
+    let outcome = crate::panic_recovery::join_recoverable(
+        crate::panic_recovery::spawn_blocking_recoverable(move || {
         #[cfg(test)]
         wait_for_sanitizer_worker_test_gate();
         let outcome = run_sanitizer_subprocess(request, cfg.timeout, admission.clone());
         drop(admission);
         outcome
-    })
+    }),
+    )
     .await
     .map_err(|err| {
         SanitizeError::new(

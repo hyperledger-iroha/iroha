@@ -625,7 +625,7 @@ fn install_contract_with_interface_and_lifecycle(
         DataSpaceId::UNIVERSAL,
     )
     .expect("derive contract address");
-    activate_instance(authority, contract_address.clone(), code_hash, &mut tx)
+    activate_instance(authority, contract_address.clone(), 1, code_hash, &mut tx)
         .expect("activate contract");
     // Most host tests exercise an isolated syscall and use a fixture that represents a
     // contract after its lifecycle transition. Lifecycle-specific tests opt into retaining

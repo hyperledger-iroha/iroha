@@ -20,6 +20,7 @@ use axum::{
 use base64::{Engine as _, encoded_len, engine::general_purpose::URL_SAFE_NO_PAD};
 use iroha_config::parameters::{ProductionRuntimeHandleError, validate_production_runtime_handle};
 use iroha_core::{
+    panic_hook::catch_unwind_suppressed,
     privacy_engines::bootle_lantern::{
         codec::{
             BLIND_ISSUANCE_AUTHORIZATION_BYTES_V1, BLIND_ISSUANCE_REQUEST_BYTES_V1,
@@ -46,11 +47,12 @@ use iroha_data_model::privacy::{
     PrivacyStatementContextV1, PrivacyTransactionIntentDigestV1,
 };
 use sha2::{Digest as _, Sha256};
+#[cfg(test)]
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::{
     collections::BTreeSet,
     fmt,
     hint::black_box,
-    panic::{AssertUnwindSafe, catch_unwind},
     path::PathBuf,
     sync::{Arc, Mutex},
 };
@@ -427,14 +429,14 @@ impl QualifiedProviderRegistryV1 {
     ) -> Result<(Self, BootleLanternIssuanceRuntimeSecretsV1), BootleLanternIssuanceApiErrorV1>
     {
         let inner = registry.ok_or(BootleLanternIssuanceApiErrorV1::ProviderMissing)?;
-        let observed_handle = catch_unwind(AssertUnwindSafe(|| inner.handle().to_owned()))
+        let observed_handle = catch_unwind_suppressed(|| inner.handle().to_owned())
             .map_err(|_| BootleLanternIssuanceApiErrorV1::ProviderUnavailable)?;
         validate_production_runtime_handle(&observed_handle)
             .map_err(|_| BootleLanternIssuanceApiErrorV1::ProviderMismatch)?;
         if observed_handle != config.runtime_provider_registry_handle {
             return Err(BootleLanternIssuanceApiErrorV1::ProviderMismatch);
         }
-        let qualification = catch_unwind(AssertUnwindSafe(|| inner.qualification()))
+        let qualification = catch_unwind_suppressed(|| inner.qualification())
             .map_err(|_| BootleLanternIssuanceApiErrorV1::ProviderUnavailable)?
             .map_err(|_| BootleLanternIssuanceApiErrorV1::ProviderUnavailable)?;
         let expected = BootleLanternIssuanceRuntimeProviderQualificationV1::new(
@@ -444,7 +446,7 @@ impl QualifiedProviderRegistryV1 {
         if !qualification.is_valid() || qualification != expected {
             return Err(BootleLanternIssuanceApiErrorV1::ProviderMismatch);
         }
-        let secrets = catch_unwind(AssertUnwindSafe(|| inner.resolve(bindings)))
+        let secrets = catch_unwind_suppressed(|| inner.resolve(bindings))
             .map_err(|_| BootleLanternIssuanceApiErrorV1::ProviderUnavailable)?
             .map_err(|_| BootleLanternIssuanceApiErrorV1::ProviderUnavailable)?;
         let qualified = Self {
@@ -456,9 +458,9 @@ impl QualifiedProviderRegistryV1 {
         Ok((qualified, secrets))
     }
     fn assert_current(&self) -> Result<(), BootleLanternIssuanceApiErrorV1> {
-        let observed_handle = catch_unwind(AssertUnwindSafe(|| self.inner.handle().to_owned()))
+        let observed_handle = catch_unwind_suppressed(|| self.inner.handle().to_owned())
             .map_err(|_| BootleLanternIssuanceApiErrorV1::ProviderUnavailable)?;
-        let current = catch_unwind(AssertUnwindSafe(|| self.inner.qualification()))
+        let current = catch_unwind_suppressed(|| self.inner.qualification())
             .map_err(|_| BootleLanternIssuanceApiErrorV1::ProviderUnavailable)?
             .map_err(|_| BootleLanternIssuanceApiErrorV1::ProviderUnavailable)?;
         if observed_handle != self.handle || !current.is_valid() || current != self.qualification {
@@ -750,12 +752,12 @@ impl BootleLanternIssuanceToriiRuntimeV1 {
         let bindings = BootleLanternIssuanceRuntimeProviderBindingsV1::from_config(&config)?;
         let (provider_registry, secrets) =
             QualifiedProviderRegistryV1::resolve(&config, provider_registry, &bindings)?;
-        let provider_ids = catch_unwind(AssertUnwindSafe(|| {
+        let provider_ids = catch_unwind_suppressed(|| {
             (
                 secrets.issuer_provider.issuer_id(),
                 secrets.issuer_provider.policy_id(),
             )
-        }))
+        })
         .map_err(|_| BootleLanternIssuanceApiErrorV1::ProviderUnavailable)?;
         if provider_ids.0 != config.issuer_id || provider_ids.1 != config.policy_id {
             return Err(BootleLanternIssuanceApiErrorV1::ProviderMismatch);
@@ -1401,7 +1403,7 @@ fn validate_authorization_output_fields_v1(
 fn call_issuer_provider_v1<T>(
     operation: impl FnOnce() -> Result<T, BootleLanternIssuerCryptoProviderErrorV1>,
 ) -> Result<T, BootleLanternIssuanceApiErrorV1> {
-    catch_unwind(AssertUnwindSafe(operation))
+    catch_unwind_suppressed(operation)
         .map_err(|_| BootleLanternIssuanceApiErrorV1::ProviderUnavailable)?
         .map_err(map_provider_error_v1)
 }
@@ -1412,9 +1414,9 @@ fn call_authenticator_v1(
     request_binding: [u8; 32],
     committed_height: u64,
 ) -> Result<BootleLanternIssuanceAuthenticatedPrincipalV1, BootleLanternIssuanceApiErrorV1> {
-    catch_unwind(AssertUnwindSafe(|| {
+    catch_unwind_suppressed(|| {
         authenticator.authenticate(opaque_credential, action, request_binding, committed_height)
-    }))
+    })
     .map_err(|_| BootleLanternIssuanceApiErrorV1::ProviderUnavailable)?
     .map_err(|error| match error {
         BootleLanternIssuanceAuthenticationErrorV1::Denied => {
@@ -1797,9 +1799,11 @@ where
         + Send
         + 'static,
 {
-    tokio::task::spawn_blocking(move || operation(&permit))
-        .await
-        .map_err(|_| BootleLanternIssuanceApiErrorV1::ProviderUnavailable)?
+    crate::panic_recovery::join_recoverable(crate::panic_recovery::spawn_blocking_recoverable(
+        move || operation(&permit),
+    ))
+    .await
+    .map_err(|_| BootleLanternIssuanceApiErrorV1::ProviderUnavailable)?
 }
 /// Handle `POST` authorization requests with an exact empty body.
 pub async fn handle_post_bootle_lantern_issuance_authorize(

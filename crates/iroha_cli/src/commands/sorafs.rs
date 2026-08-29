@@ -15373,7 +15373,8 @@ fn moderation_quarantine_juror_plan_ballot_json(
     );
     for field in [
         "commit_deadline_unix_ms",
-        "challenge_deadline_unix_ms",
+        "challenge_submission_deadline_unix_ms",
+        "challenge_resolution_deadline_unix_ms",
         "reveal_deadline_unix_ms",
     ] {
         fields.insert(
@@ -21508,8 +21509,9 @@ json_response_fixture!(StatusCode::OK, &norito::json!({
                     "jurors": (jurors),
                     "quorum": 2_u64,
                     "commit_deadline_unix_ms": 1_800_000_200_000_u64,
-                    "challenge_deadline_unix_ms": 1_800_000_300_000_u64,
-                    "reveal_deadline_unix_ms": 1_800_000_400_000_u64
+                    "challenge_submission_deadline_unix_ms": 1_800_000_300_000_u64,
+                    "challenge_resolution_deadline_unix_ms": 1_800_086_700_000_u64,
+                    "reveal_deadline_unix_ms": 1_800_086_800_000_u64
                 },
                 "opened_at_unix_ms": 1_800_000_100_000_u64
             },

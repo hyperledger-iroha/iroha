@@ -254,6 +254,7 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::sorafs::SubmitSorafsModerationCommit>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::RaiseSorafsModerationChallenge>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::ResolveSorafsModerationChallenge>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::ExpireSorafsModerationChallenge>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::SubmitSorafsModerationReveal>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::FinalizeSorafsModerationCase>,
     dispatch_instruction::<iroha_data_model::isi::content::PublishContentBundle>,
@@ -439,6 +440,14 @@ define_instruction_handlers! {
         iroha_data_model::isi::smart_contract_code::CancelSmartContractCodeUpload
     >,
     dispatch_instruction::<iroha_data_model::isi::smart_contract_code::ActivateContractInstance>,
+    dispatch_instruction::<
+        iroha_data_model::isi::smart_contract_code::SetContractParliamentDelegation
+    >,
+    dispatch_instruction::<iroha_data_model::isi::smart_contract_code::OfferContractOwnership>,
+    dispatch_instruction::<iroha_data_model::isi::smart_contract_code::AcceptContractOwnership>,
+    dispatch_instruction::<
+        iroha_data_model::isi::smart_contract_code::CancelContractOwnershipOffer
+    >,
     dispatch_instruction::<iroha_data_model::isi::smart_contract_code::CommitContractDeployment>,
     dispatch_instruction::<iroha_data_model::isi::smart_contract_code::DeactivateContractInstance>,
     dispatch_instruction::<iroha_data_model::isi::smart_contract_code::RemoveSmartContractBytes>,
@@ -472,6 +481,10 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::endorsement::SubmitDomainEndorsement>,
     dispatch_instruction::<iroha_data_model::isi::ministry::SubmitAgendaProposal>,
     dispatch_instruction::<iroha_data_model::isi::governance::ProposeDeployContract>,
+    dispatch_instruction::<
+        iroha_data_model::isi::governance::ProposeContractLifecycleGovernance
+    >,
+    dispatch_instruction::<iroha_data_model::isi::governance::ProposeContractEmergencyHold>,
     dispatch_instruction::<iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal>,
     dispatch_instruction::<iroha_data_model::isi::governance::ProposeSccpRouteGovernance>,
     dispatch_instruction::<iroha_data_model::isi::governance::ProposeSorafsProviderGovernance>,
@@ -2263,6 +2276,43 @@ mod tests {
             .execute(&account_id, &mut state_transaction)?;
         state_transaction.apply();
         state_block.commit_world_overlay_for_testing().unwrap();
+        Ok(())
+    }
+    #[test]
+    async fn registration_metadata_values_share_the_set_key_value_limit() -> Result<()> {
+        use iroha_data_model::{
+            parameter::{CustomParameter, CustomParameterId},
+            prelude::Parameter,
+        };
+        use iroha_primitives::json::Json;
+        use std::str::FromStr as _;
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_test_domains(&kura)?;
+        let block_header = ValidBlock::new_dummy(checked_keypair().private_key())
+            .as_ref()
+            .header();
+        let mut state_block = state.block(block_header);
+        let mut state_transaction = state_block.transaction();
+        let limit_id = CustomParameterId::from_str("max_metadata_value_bytes")?;
+        SetParameter::new(Parameter::Custom(CustomParameter::new(
+            limit_id,
+            Json::new(16_u64),
+        )))
+        .execute(&ALICE_ID, &mut state_transaction)?;
+        let mut metadata = Metadata::default();
+        metadata.insert("small".parse()?, Json::new("ok"));
+        crate::smartcontracts::limits::enforce_metadata_value_sizes(
+            &mut state_transaction,
+            &metadata,
+        )?;
+        metadata.insert("large".parse()?, Json::new("X".repeat(32)));
+        assert!(matches!(
+            crate::smartcontracts::limits::enforce_metadata_value_sizes(
+                &mut state_transaction,
+                &metadata,
+            ),
+            Err(Error::InvalidParameter(_))
+        ));
         Ok(())
     }
     #[test]
