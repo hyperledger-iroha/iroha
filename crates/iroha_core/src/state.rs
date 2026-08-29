@@ -8512,6 +8512,8 @@ impl WorldView<'_> {
     }
 
     /// Read only the opaque pool epoch and current root.
+    ///
+    /// Returns `None` when the pool is absent or its current root lacks retained provenance.
     #[must_use]
     pub fn private_settlement_pool_head_v1(
         &self,
@@ -8519,9 +8521,16 @@ impl WorldView<'_> {
         pool_id: iroha_data_model::privacy::PrivacyPoolIdV1,
     ) -> Option<(u64, iroha_data_model::privacy::PrivacyRootV1)> {
         let key = PrivateSettlementPoolKeyV1::new(route, pool_id).ok()?;
-        self.private_settlement_pools
-            .get(&key)
-            .map(|pool| (pool.epoch(), pool.root()))
+        let pool = self.private_settlement_pools.get(&key)?;
+        let epoch = pool.epoch();
+        let root = pool.root();
+        self.private_settlement_roots
+            .get(&PrivateSettlementRootKeyV1 {
+                pool: key,
+                epoch,
+                root,
+            })?;
+        Some((epoch, root))
     }
 }
 /// Verifying-key binding enforced for a ZK asset operation.

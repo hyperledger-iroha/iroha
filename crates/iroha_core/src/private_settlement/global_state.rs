@@ -12,10 +12,11 @@ use super::{
     },
 };
 use iroha_crypto::Hash;
+#[cfg(test)]
+use iroha_data_model::nexus::PrivateSettlementPoolGovernanceV1;
 use iroha_data_model::{
     nexus::{
-        PrivateSettlementAbortReceiptV1, PrivateSettlementPoolGovernanceV1,
-        PrivateSettlementReceiptV1, PrivateSettlementRouteV1,
+        PrivateSettlementAbortReceiptV1, PrivateSettlementReceiptV1, PrivateSettlementRouteV1,
     },
     privacy::{
         PrivacyCommitmentV1, PrivacyEncryptedOutputV1, PrivacyNullifierV1, PrivacyPoolIdV1,
@@ -74,16 +75,6 @@ impl PrivateSettlementPoolKeyV1 {
             return Err(PrivateSettlementGlobalStateErrorV1::Pool);
         }
         Ok(Self { route, pool_id })
-    }
-
-    /// Exact participant route.
-    pub(crate) const fn route(self) -> PrivateSettlementRouteV1 {
-        self.route
-    }
-
-    /// Opaque pool identifier.
-    pub(crate) const fn pool_id(self) -> PrivacyPoolIdV1 {
-        self.pool_id
     }
 }
 
@@ -217,7 +208,8 @@ pub(crate) struct PrivateSettlementOutputRecordV1 {
     pub(crate) encrypted_output: PrivacyEncryptedOutputV1,
 }
 
-/// Globally replicated private-settlement state projection.
+/// Test/reference aggregate over the production private-settlement planner maps.
+#[cfg(test)]
 #[derive(Clone, Debug, Default, PartialEq, Eq, Decode, Encode)]
 pub(crate) struct PrivateSettlementGlobalStateV1 {
     governance: BTreeMap<PrivateSettlementPoolKeyV1, PrivateSettlementPoolGovernanceProjectionV1>,
@@ -757,6 +749,7 @@ pub(crate) fn validate_private_settlement_persisted_state_v1(
     Ok(())
 }
 
+#[cfg(test)]
 impl PrivateSettlementGlobalStateV1 {
     /// Explicitly bootstrap one restricted pool through governance.
     pub(crate) fn bootstrap_pool(
@@ -1435,6 +1428,40 @@ pub(crate) mod tests {
         )
         .expect_err("two roots at one pool epoch must fail closed");
         assert_eq!(error, PrivateSettlementGlobalStateErrorV1::Conflict);
+    }
+
+    #[test]
+    fn world_view_pool_head_requires_retained_root_provenance() {
+        let world = finalized_world_fixture();
+        let (pool_key, epoch, root) = {
+            let pools = world.private_settlement_pools.view();
+            let (pool_key, pool) = pools.iter().next().expect("governed fixture pool");
+            (*pool_key, pool.epoch(), pool.root())
+        };
+        assert_eq!(
+            world
+                .view()
+                .private_settlement_pool_head_v1(pool_key.route, pool_key.pool_id),
+            Some((epoch, root))
+        );
+
+        {
+            let mut roots = world.private_settlement_roots.block();
+            roots.remove(PrivateSettlementRootKeyV1 {
+                pool: pool_key,
+                epoch,
+                root,
+            });
+            roots.commit();
+        }
+
+        assert_eq!(
+            world
+                .view()
+                .private_settlement_pool_head_v1(pool_key.route, pool_key.pool_id),
+            None,
+            "an unproven pool frontier must not be reported"
+        );
     }
 
     #[test]
