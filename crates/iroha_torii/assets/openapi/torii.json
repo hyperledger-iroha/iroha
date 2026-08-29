@@ -9848,43 +9848,6 @@
         ],
         "type": "object"
       },
-      "GovernanceEnactRequestV1": {
-        "additionalProperties": false,
-        "properties": {
-          "proposal_id": {
-            "maxLength": 64,
-            "minLength": 64,
-            "pattern": "^[0-9a-f]{64}$",
-            "type": "string"
-          }
-        },
-        "required": [
-          "proposal_id"
-        ],
-        "type": "object"
-      },
-      "GovernanceFinalizeRequestV1": {
-        "additionalProperties": false,
-        "properties": {
-          "proposal_id": {
-            "maxLength": 64,
-            "minLength": 64,
-            "pattern": "^[0-9a-f]{64}$",
-            "type": "string"
-          },
-          "referendum_id": {
-            "maxLength": 64,
-            "minLength": 64,
-            "pattern": "^[0-9a-f]{64}$",
-            "type": "string"
-          }
-        },
-        "required": [
-          "proposal_id",
-          "referendum_id"
-        ],
-        "type": "object"
-      },
       "GovernanceManifestProvenanceV1": {
         "additionalProperties": false,
         "description": "Public signature metadata binding the proposed contract manifest to its signer.",
@@ -11896,6 +11859,19 @@
             "properties": {
               "reason": {
                 "const": "SortitionRetriesExhausted",
+                "type": "string"
+              }
+            },
+            "required": [
+              "reason"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "reason": {
+                "const": "ConfirmationJuryCapacityUnavailable",
                 "type": "string"
               }
             },
@@ -29728,6 +29704,12 @@
       "SccpDestinationDeploymentDetailsV1": {
         "additionalProperties": false,
         "properties": {
+          "max_wrapped_supply": {
+            "description": "Positive immutable wrapped-token supply cap in destination base units.",
+            "format": "uint128",
+            "minimum": 1,
+            "type": "integer"
+          },
           "outbound_proof_policy": {
             "$ref": "#/components/schemas/SccpOutboundProofPolicyV1"
           },
@@ -29773,6 +29755,7 @@
           "outbound_proof_policy",
           "route_address",
           "route_code_hash",
+          "max_wrapped_supply",
           "taira_to_token_multiplier"
         ],
         "type": "object"
@@ -31808,6 +31791,12 @@
       "SccpSolanaDestinationDeploymentV1": {
         "additionalProperties": false,
         "properties": {
+          "max_wrapped_supply": {
+            "description": "Positive immutable wrapped-token supply cap in destination base units.",
+            "format": "uint128",
+            "minimum": 1,
+            "type": "integer"
+          },
           "native_verifier_config_hash": {
             "$ref": "#/components/schemas/SccpNonzeroUpperHex32"
           },
@@ -31883,6 +31872,7 @@
           "verifying_key",
           "verifier_key_hash",
           "outbound_proof_policy",
+          "max_wrapped_supply",
           "taira_to_token_multiplier"
         ],
         "type": "object"
@@ -32101,6 +32091,12 @@
           "custody_owner": {
             "$ref": "#/components/schemas/SccpTairaI105Account"
           },
+          "max_outstanding_liability": {
+            "description": "Positive maximum outstanding SORA liability in Taira base units.",
+            "format": "uint128",
+            "minimum": 1,
+            "type": "integer"
+          },
           "payload_amount_scale": {
             "enum": [
               9
@@ -32111,6 +32107,7 @@
         "required": [
           "asset_definition_id",
           "custody_owner",
+          "max_outstanding_liability",
           "payload_amount_scale"
         ],
         "type": "object"
@@ -32348,6 +32345,12 @@
           "jetton_wallet_code_hash": {
             "$ref": "#/components/schemas/SccpNonzeroUpperHex32"
           },
+          "max_wrapped_supply": {
+            "description": "Positive immutable wrapped-token supply cap in destination base units.",
+            "format": "uint128",
+            "minimum": 1,
+            "type": "integer"
+          },
           "outbound_proof_policy": {
             "allOf": [
               {
@@ -32409,6 +32412,7 @@
           "verifier_key_hash",
           "proof_profile_commitment",
           "outbound_proof_policy",
+          "max_wrapped_supply",
           "taira_to_token_multiplier"
         ],
         "type": "object"
@@ -98085,38 +98089,6 @@
           }
         },
         "summary": "Fetch current leader.",
-        "tags": [
-          "Sumeragi"
-        ],
-        "x-iroha-tool-effect": "operator"
-      }
-    },
-    "/v1/sumeragi/pacemaker": {
-      "get": {
-        "description": "Return pacemaker status snapshot.",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response",
-            "headers": {
-              "Cache-Control": {
-                "description": "Authenticated responses which must never be retained.",
-                "required": true,
-                "schema": {
-                  "const": "private, no-store",
-                  "type": "string"
-                }
-              }
-            }
-          }
-        },
-        "summary": "Fetch pacemaker status.",
         "tags": [
           "Sumeragi"
         ],

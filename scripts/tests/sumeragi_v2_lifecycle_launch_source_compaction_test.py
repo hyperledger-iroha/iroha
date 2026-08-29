@@ -14,7 +14,13 @@ ROOT = Path(__file__).resolve().parents[2]
 SOURCE_PATH = ROOT / "crates/iroha_core/src/sumeragi/v2_lifecycle_launch_tests.rs"
 PROVIDER_PATHS = (
     ROOT
+    / "crates/iroha_core/src/sumeragi/v2_lifecycle_launch_ready_proposal_sign_test_fixtures.rs",
+    ROOT
+    / "crates/iroha_core/src/sumeragi/v2_lifecycle_launch_recovered_sign_settlement_source_tests.rs",
+    ROOT
     / "crates/iroha_core/src/sumeragi/v2_lifecycle_launch_recovered_fetch_source_tests.rs",
+    ROOT
+    / "crates/iroha_core/src/sumeragi/v2_lifecycle_launch_certified_response_retry_source_tests.rs",
     ROOT
     / "crates/iroha_core/src/sumeragi/v2_lifecycle_launch_recovered_fetch_settlement_source_tests.rs",
 )
@@ -31,7 +37,7 @@ GUARD_END = (
     "#[test]\n"
     "fn recovered_decision_fetch_composite_dispatch_reserves_capacity_before_claim_and_commit"
 )
-EXPECTED_FINGERPRINT = "7f6cdbc7fb18199365777f2bba799f22e645d46621a9650ea2600c742b4f5d2e"
+EXPECTED_FINGERPRINT = "e04292e8b58c5e5eb3c869f4f8e6abfc54fe1756e6443416585cba7e9895adc9"
 
 
 def guarded_source(source: str = SOURCE) -> str:

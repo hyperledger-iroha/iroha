@@ -134,6 +134,8 @@ pub mod privacy_release_evidence;
 pub mod privacy_state;
 /// Exhaustive native proof verification and verified-effect derivation.
 pub(crate) mod privacy_verifier;
+/// Atomic private-settlement runtime helpers.
+pub mod private_settlement;
 /// Query API types and execution.
 pub mod query;
 /// Transaction queue and mempool logic.

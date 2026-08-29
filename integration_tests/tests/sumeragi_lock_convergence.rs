@@ -23,9 +23,7 @@ async fn sumeragi_view_change_lock_convergence() -> Result<()> {
         .with_block_cadence(Duration::from_millis(500))
         .with_permissioned_consensus()
         .with_config_layer(|layer| {
-            layer
-                .write("telemetry_enabled", true)
-                .write("telemetry_profile", "full");
+            layer.write("telemetry_profile", "full");
         });
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,
@@ -180,9 +178,7 @@ async fn sumeragi_restart_retains_lock_convergence() -> Result<()> {
         .with_peers(4)
         .with_auto_populated_trusted_peers()
         .with_config_layer(|layer| {
-            layer
-                .write("telemetry_enabled", true)
-                .write("telemetry_profile", "full");
+            layer.write("telemetry_profile", "full");
         });
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,

@@ -31,7 +31,8 @@ use iroha_core::{
     },
     tle_release::{
         RuntimeTleReleaseShareCustodyV1, TleKeySessionPublicStateV1, TlePartialReleaseShareV1,
-        TleProjectedPartialReleaseSignerV1 as _, ValidatedTleReleaseProjectionV1,
+        TlePartialReleaseSignerV1 as _, TleProjectedPartialReleaseSignerV1 as _,
+        ValidatedTleReleaseProjectionV1,
     },
 };
 use iroha_crypto::sha256_reader_bounded;
@@ -1128,6 +1129,28 @@ impl ParliamentTlePartialReleaseSignerBrokerBackendV1
         ParliamentTlePartialReleaseSignerBrokerBackendErrorV1,
     > {
         Ok(self.qualification)
+    }
+
+    fn attest_partial_release_capability(
+        &self,
+        session: &iroha_core::tle_release::ValidatedTleKeySessionV1,
+        expected_participant_index: u16,
+    ) -> Result<
+        iroha_core::tle_release::TlePartialReleaseCapabilityAttestationV1,
+        ParliamentTlePartialReleaseSignerBrokerBackendErrorV1,
+    > {
+        self.custody
+            .attest_partial_release_capability(session, expected_participant_index)
+            .map_err(|error| match error {
+                iroha_core::tle_release::TlePartialReleaseCapabilityErrorV1::Unavailable => {
+                    ParliamentTlePartialReleaseSignerBrokerBackendErrorV1::Unavailable
+                }
+                iroha_core::tle_release::TlePartialReleaseCapabilityErrorV1::Unsupported
+                | iroha_core::tle_release::TlePartialReleaseCapabilityErrorV1::NotOwned
+                | iroha_core::tle_release::TlePartialReleaseCapabilityErrorV1::InvalidRequest => {
+                    ParliamentTlePartialReleaseSignerBrokerBackendErrorV1::Rejected
+                }
+            })
     }
 
     fn sign_projected_partial_release(

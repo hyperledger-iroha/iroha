@@ -294,10 +294,12 @@ required-features = ["zk-halo2", "zk-halo2-ipa"]
 name = "isi_gas_calibration"
 path = "benches/isi_gas_calibration.rs"
 harness = false
+required-features = ["bench"]
 
 [[bench]]
 name = "queries"
 harness = false
+required-features = ["bench"]
 
 [[bench]]
 name = "queries_client"
@@ -321,6 +323,10 @@ required-features = ["iroha-core-tests"]
 
 [[example]]
 name = "generate_parity_fixtures"
+required-features = ["iroha-core-tests"]
+
+[[example]]
+name = "gen_pin_snapshot"
 required-features = ["iroha-core-tests"]
 
 [package.metadata.cargo-all-features]

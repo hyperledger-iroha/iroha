@@ -1,0 +1,1818 @@
+//! Four-validator failure-path coverage for SORA Parliament attempt custody.
+
+use super::*;
+use iroha::data_model::{
+    asset::{AssetBalancePolicy, AssetDefinition},
+    domain::{Domain, DomainId},
+    governance::types::{
+        BodyElectionAttemptStatusV1, GovernanceCertificateV1, GovernanceExpectedHeadPresentV1,
+        GovernanceExpectedHeadV1, MAX_PARLIAMENT_SORTITION_RETRIES_V1,
+        ParliamentBallotFailureKindV1, RuntimeUpgradeProposal,
+        parliament_execution_failure_root_v1,
+    },
+    isi::{
+        governance::{ProposeRuntimeUpgradeProposal, UnregisterCitizen},
+        smart_contract_code::ActivateContractInstance,
+    },
+    prelude::{AssetDefinitionId, AssetId, FindAssetById, Mint, Quantity},
+    runtime::RuntimeUpgradeManifest,
+};
+use iroha_executor_data_model::permission::governance::CanProposeRuntimeUpgrade;
+use iroha_test_samples::BOB_ID;
+
+const CAPACITY_BOND_AMOUNT: u64 = 37;
+const CAPACITY_PUBLIC_SEATS: u32 = 1;
+const CAPACITY_HIDDEN_SEATS: u32 = 2;
+const CAPACITY_SORTITION_DELAY_BLOCKS: u64 = 4;
+const CONFIRMATION_CITIZENS: usize = 22;
+const CONFIRMATION_POLICY_SEATS: u32 = 21;
+const CONFIRMATION_REGISTRATION_BLOCKS: u64 = 50;
+const CONFIRMATION_PHASE_BLOCKS: u64 = 4;
+const CONFIRMATION_RELEASE_DELAY_BLOCKS: u64 = 4;
+const CONFIRMATION_OPENING_BLOCKS: u64 = 8;
+const TERMINAL_POLICY_SEATS: u32 = 3;
+const TERMINAL_REGISTRATION_BLOCKS: u64 = 10;
+const TERMINAL_ENACTMENT_DELAY: u64 = 4;
+
+struct ThresholdSessionsV1 {
+    logical_beacon: BeaconSessionId,
+    tle_public_state: TleKeySessionPublicStateV1,
+}
+
+fn assert_runtime_upgrade_registry_empty(client: &Client) -> Result<()> {
+    let norito::json::Value::Object(response) = client.get_runtime_upgrades_json()? else {
+        return Err(eyre!("runtime-upgrade list response is not an object"));
+    };
+    let Some(norito::json::Value::Array(items)) = response.get("items") else {
+        return Err(eyre!("runtime-upgrade list response has no items array"));
+    };
+    assert!(
+        items.is_empty(),
+        "fail-fast execution fixture requires the runtime-upgrade registry to remain empty",
+    );
+    Ok(())
+}
+
+async fn install_threshold_sessions(
+    network: &sandbox::SerializedNetwork,
+    client: &Client,
+) -> Result<ThresholdSessionsV1> {
+    let ordered_roster = ordered_validator_roster(network)?;
+    let beacon_record =
+        deterministic_parliament_beacon_key_record_v1(network.network_id(), &ordered_roster)
+            .wrap_err("derive failure-corridor beacon fixture")?;
+    let tle_public_state =
+        deterministic_parliament_tle_key_public_state_v1(network.network_id(), &ordered_roster)
+            .wrap_err("derive failure-corridor TLE fixture")?;
+    let install_height = next_queue_plan_execution_height(
+        client,
+        beacon_record.session.adaptive_dkg.finalized_at_height,
+        "failure-corridor threshold-key installation",
+    )?;
+    client.submit_all_blocking(
+        [
+            InstructionBox::from(lifecycle_certificate(
+                network,
+                &ordered_roster,
+                ThresholdKeyLifecycleActionV1::InstallGlobalBeaconKey,
+                beacon_record.session.session_id,
+                beacon_record.session.transcript_hash,
+                norito::encode_canonical(&beacon_record)?,
+                install_height,
+            )?),
+            InstructionBox::from(lifecycle_certificate(
+                network,
+                &ordered_roster,
+                ThresholdKeyLifecycleActionV1::InstallParliamentTleKey,
+                *tle_public_state.key_session_id.as_bytes(),
+                tle_public_state.transcript_hash,
+                norito::encode_canonical(&tle_public_state)?,
+                install_height,
+            )?),
+        ],
+        fee(),
+    )?;
+    assert_eq!(current_height(client)?, install_height);
+    let activation_height = install_height
+        .checked_add(1)
+        .ok_or_else(|| eyre!("failure-corridor key activation height overflow"))?;
+    client.submit(
+        Log::new(
+            Level::INFO,
+            "carry Parliament failure-corridor threshold-key activation".to_owned(),
+        ),
+        fee(),
+    )?;
+    network.ensure_blocks(activation_height).await?;
+    assert_eq!(current_height(client)?, activation_height);
+    Ok(ThresholdSessionsV1 {
+        logical_beacon: BeaconSessionId::for_network_v1(&network.network_id()),
+        tle_public_state,
+    })
+}
+
+fn capacity_failure_builder(
+    citizen: &AccountId,
+    citizenship_domain: &DomainId,
+    citizenship_asset_definition: &AssetDefinitionId,
+    contract_address: &ContractAddress,
+) -> NetworkBuilder {
+    let citizenship_asset_literal = citizenship_asset_definition.to_string();
+    let citizenship_escrow_literal = BOB_ID.to_string();
+    NetworkBuilder::new()
+        .with_peers(VALIDATOR_COUNT)
+        .with_auto_populated_trusted_peers()
+        .with_npos_consensus()
+        .with_parliament_beacon_signer_modes(POSITIVE_BEACON_SIGNER_MODES)
+        .with_block_cadence(EXACT_HEIGHT_SUBMISSION_CADENCE)
+        .with_config_layer(move |layer| {
+            layer
+                .write(
+                    [
+                        "network",
+                        "soranet_handshake",
+                        "pow",
+                        "puzzle",
+                        "memory_kib",
+                    ],
+                    i64::from(iroha_crypto::soranet::puzzle::MIN_MEMORY_KIB),
+                )
+                .write(
+                    ["network", "soranet_handshake", "pow", "puzzle", "time_cost"],
+                    1_i64,
+                )
+                .write(
+                    ["network", "soranet_handshake", "pow", "puzzle", "lanes"],
+                    1_i64,
+                )
+                .write(["nexus", "lane_count"], 1_i64)
+                .write(
+                    ["nexus", "storage", "local_budget_bytes"],
+                    TEST_NEXUS_LOCAL_STORAGE_BUDGET_BYTES,
+                )
+                .write(["gov", "citizenship_asset_id"], citizenship_asset_literal)
+                .write(
+                    ["gov", "citizenship_bond_amount"],
+                    CAPACITY_BOND_AMOUNT.to_string(),
+                )
+                .write(
+                    ["gov", "citizenship_escrow_account"],
+                    citizenship_escrow_literal,
+                )
+                .write(["gov", "parliament_alternate_size"], 0_i64)
+                .write(
+                    ["gov", "rules_committee_size"],
+                    i64::from(CAPACITY_PUBLIC_SEATS),
+                )
+                .write(
+                    ["gov", "agenda_council_size"],
+                    i64::from(CAPACITY_PUBLIC_SEATS),
+                )
+                .write(
+                    ["gov", "interest_panel_size"],
+                    i64::from(CAPACITY_PUBLIC_SEATS),
+                )
+                .write(
+                    ["gov", "review_panel_size"],
+                    i64::from(CAPACITY_PUBLIC_SEATS),
+                )
+                .write(
+                    ["gov", "oversight_committee_size"],
+                    i64::from(CAPACITY_PUBLIC_SEATS),
+                )
+                .write(
+                    ["gov", "policy_jury_size"],
+                    i64::from(CAPACITY_HIDDEN_SEATS),
+                )
+                .write(
+                    ["gov", "confirmation_jury_size"],
+                    i64::from(CAPACITY_HIDDEN_SEATS),
+                );
+        })
+        .with_genesis_instruction(Grant::account_permission(
+            Permission::from(CanRegisterSmartContractCode),
+            ALICE_ID.clone(),
+        ))
+        .with_genesis_instruction(Grant::account_permission(
+            Permission::from(CanProposeContractDeployment {
+                contract_address: contract_address.clone(),
+            }),
+            ALICE_ID.clone(),
+        ))
+        .with_genesis_instruction(Register::domain(Domain::new(citizenship_domain.clone())))
+        .with_genesis_instruction(Register::asset_definition(AssetDefinition::numeric(
+            citizenship_asset_definition.clone(),
+            "Citizenship Bond".to_owned(),
+            AssetBalancePolicy::Global,
+            None,
+        )))
+        .with_genesis_instruction(Register::account(Account::new(citizen.clone())))
+        .with_genesis_instruction(Mint::asset_quantity(
+            CAPACITY_BOND_AMOUNT,
+            AssetId::new(citizenship_asset_definition.clone(), citizen.clone()),
+        ))
+        .with_genesis_instruction(RegisterCitizen {
+            owner: citizen.clone(),
+            amount: CAPACITY_BOND_AMOUNT.into(),
+        })
+}
+
+fn confirmation_capacity_builder(
+    citizens: &[AccountId],
+    contract_address: &ContractAddress,
+) -> NetworkBuilder {
+    let mut builder = NetworkBuilder::new()
+        .with_peers(VALIDATOR_COUNT)
+        .with_auto_populated_trusted_peers()
+        .with_npos_consensus()
+        .with_parliament_beacon_signer_modes(POSITIVE_BEACON_SIGNER_MODES)
+        .with_block_cadence(EXACT_HEIGHT_SUBMISSION_CADENCE)
+        .with_config_layer(|layer| {
+            layer
+                .write(
+                    [
+                        "network",
+                        "soranet_handshake",
+                        "pow",
+                        "puzzle",
+                        "memory_kib",
+                    ],
+                    i64::from(iroha_crypto::soranet::puzzle::MIN_MEMORY_KIB),
+                )
+                .write(
+                    ["network", "soranet_handshake", "pow", "puzzle", "time_cost"],
+                    1_i64,
+                )
+                .write(
+                    ["network", "soranet_handshake", "pow", "puzzle", "lanes"],
+                    1_i64,
+                )
+                .write(["nexus", "lane_count"], 1_i64)
+                .write(
+                    ["nexus", "storage", "local_budget_bytes"],
+                    TEST_NEXUS_LOCAL_STORAGE_BUDGET_BYTES,
+                )
+                .write(["gov", "citizenship_bond_amount"], "0")
+                .write(["gov", "parliament_alternate_size"], 0_i64)
+                .write(["gov", "parliament_invitation_phase_blocks"], 60_i64)
+                .write(["gov", "parliament_public_finding_phase_blocks"], 8_i64)
+                .write(
+                    ["gov", "rules_committee_size"],
+                    i64::from(CAPACITY_PUBLIC_SEATS),
+                )
+                .write(
+                    ["gov", "agenda_council_size"],
+                    i64::from(CAPACITY_PUBLIC_SEATS),
+                )
+                .write(
+                    ["gov", "interest_panel_size"],
+                    i64::from(CAPACITY_PUBLIC_SEATS),
+                )
+                .write(
+                    ["gov", "review_panel_size"],
+                    i64::from(CAPACITY_PUBLIC_SEATS),
+                )
+                .write(
+                    ["gov", "oversight_committee_size"],
+                    i64::from(CAPACITY_PUBLIC_SEATS),
+                )
+                .write(
+                    ["gov", "policy_jury_size"],
+                    i64::from(CONFIRMATION_POLICY_SEATS),
+                )
+                .write(["gov", "confirmation_jury_size"], 3_i64)
+                .write(
+                    ["gov", "parliament_timed_ovn", "registration_phase_blocks"],
+                    CONFIRMATION_REGISTRATION_BLOCKS as i64,
+                )
+                .write(
+                    [
+                        "gov",
+                        "parliament_timed_ovn",
+                        "survivor_freeze_phase_blocks",
+                    ],
+                    CONFIRMATION_PHASE_BLOCKS as i64,
+                )
+                .write(
+                    ["gov", "parliament_timed_ovn", "commitment_phase_blocks"],
+                    CONFIRMATION_PHASE_BLOCKS as i64,
+                )
+                .write(
+                    ["gov", "parliament_timed_ovn", "release_delay_blocks"],
+                    CONFIRMATION_RELEASE_DELAY_BLOCKS as i64,
+                )
+                .write(
+                    ["gov", "parliament_timed_ovn", "opening_phase_blocks"],
+                    CONFIRMATION_OPENING_BLOCKS as i64,
+                )
+                .write(["gov", "parliament_timed_ovn", "max_ballot_retries"], 0_i64)
+                .write(
+                    ["gov", "parliament_timed_ovn", "max_corpus_entries"],
+                    32_i64,
+                );
+        })
+        .with_genesis_instruction(Grant::account_permission(
+            Permission::from(CanRegisterSmartContractCode),
+            ALICE_ID.clone(),
+        ))
+        .with_genesis_instruction(Grant::account_permission(
+            Permission::from(CanProposeContractDeployment {
+                contract_address: contract_address.clone(),
+            }),
+            ALICE_ID.clone(),
+        ));
+    for citizen in citizens {
+        builder = builder
+            .with_genesis_instruction(Register::account(Account::new(citizen.clone())))
+            .with_genesis_instruction(RegisterCitizen {
+                owner: citizen.clone(),
+                amount: 0_u64.into(),
+            });
+    }
+    builder
+}
+
+fn certified_terminal_builder(
+    citizens: &[AccountId],
+    contract_address: &ContractAddress,
+    runtime_abi_hash: [u8; 32],
+) -> NetworkBuilder {
+    let mut builder = NetworkBuilder::new()
+        .with_peers(VALIDATOR_COUNT)
+        .with_auto_populated_trusted_peers()
+        .with_npos_consensus()
+        .with_parliament_beacon_signer_modes(POSITIVE_BEACON_SIGNER_MODES)
+        .with_block_cadence(EXACT_HEIGHT_SUBMISSION_CADENCE)
+        .with_config_layer(|layer| {
+            layer
+                .write(
+                    [
+                        "network",
+                        "soranet_handshake",
+                        "pow",
+                        "puzzle",
+                        "memory_kib",
+                    ],
+                    i64::from(iroha_crypto::soranet::puzzle::MIN_MEMORY_KIB),
+                )
+                .write(
+                    ["network", "soranet_handshake", "pow", "puzzle", "time_cost"],
+                    1_i64,
+                )
+                .write(
+                    ["network", "soranet_handshake", "pow", "puzzle", "lanes"],
+                    1_i64,
+                )
+                .write(["nexus", "lane_count"], 1_i64)
+                .write(
+                    ["nexus", "storage", "local_budget_bytes"],
+                    TEST_NEXUS_LOCAL_STORAGE_BUDGET_BYTES,
+                )
+                .write(["gov", "citizenship_bond_amount"], "0")
+                .write(
+                    ["gov", "min_enactment_delay"],
+                    TERMINAL_ENACTMENT_DELAY as i64,
+                )
+                .write(["gov", "parliament_alternate_size"], 0_i64)
+                .write(["gov", "parliament_invitation_phase_blocks"], 40_i64)
+                .write(["gov", "parliament_public_finding_phase_blocks"], 8_i64)
+                .write(
+                    ["gov", "rules_committee_size"],
+                    i64::from(CAPACITY_PUBLIC_SEATS),
+                )
+                .write(
+                    ["gov", "agenda_council_size"],
+                    i64::from(CAPACITY_PUBLIC_SEATS),
+                )
+                .write(
+                    ["gov", "interest_panel_size"],
+                    i64::from(CAPACITY_PUBLIC_SEATS),
+                )
+                .write(
+                    ["gov", "review_panel_size"],
+                    i64::from(CAPACITY_PUBLIC_SEATS),
+                )
+                .write(
+                    ["gov", "coordination_council_size"],
+                    i64::from(CAPACITY_PUBLIC_SEATS),
+                )
+                .write(
+                    ["gov", "mpc_committee_size"],
+                    i64::from(CAPACITY_PUBLIC_SEATS),
+                )
+                .write(
+                    ["gov", "fma_committee_size"],
+                    i64::from(CAPACITY_PUBLIC_SEATS),
+                )
+                .write(
+                    ["gov", "oversight_committee_size"],
+                    i64::from(CAPACITY_PUBLIC_SEATS),
+                )
+                .write(
+                    ["gov", "policy_jury_size"],
+                    i64::from(TERMINAL_POLICY_SEATS),
+                )
+                .write(["gov", "confirmation_jury_size"], 3_i64)
+                .write(
+                    ["gov", "parliament_timed_ovn", "registration_phase_blocks"],
+                    TERMINAL_REGISTRATION_BLOCKS as i64,
+                )
+                .write(
+                    [
+                        "gov",
+                        "parliament_timed_ovn",
+                        "survivor_freeze_phase_blocks",
+                    ],
+                    CONFIRMATION_PHASE_BLOCKS as i64,
+                )
+                .write(
+                    ["gov", "parliament_timed_ovn", "commitment_phase_blocks"],
+                    CONFIRMATION_PHASE_BLOCKS as i64,
+                )
+                .write(
+                    ["gov", "parliament_timed_ovn", "release_delay_blocks"],
+                    CONFIRMATION_RELEASE_DELAY_BLOCKS as i64,
+                )
+                .write(
+                    ["gov", "parliament_timed_ovn", "opening_phase_blocks"],
+                    CONFIRMATION_OPENING_BLOCKS as i64,
+                )
+                .write(["gov", "parliament_timed_ovn", "max_ballot_retries"], 0_i64)
+                .write(["gov", "parliament_timed_ovn", "max_corpus_entries"], 8_i64);
+        })
+        .with_genesis_instruction(Grant::account_permission(
+            Permission::from(CanRegisterSmartContractCode),
+            ALICE_ID.clone(),
+        ))
+        .with_genesis_instruction(Grant::account_permission(
+            Permission::from(CanProposeContractDeployment {
+                contract_address: contract_address.clone(),
+            }),
+            ALICE_ID.clone(),
+        ))
+        .with_genesis_instruction(Grant::account_permission(
+            Permission::from(CanProposeRuntimeUpgrade {
+                abi_version: 1,
+                abi_hash: runtime_abi_hash,
+            }),
+            ALICE_ID.clone(),
+        ));
+    for citizen in citizens {
+        builder = builder
+            .with_genesis_instruction(Register::account(Account::new(citizen.clone())))
+            .with_genesis_instruction(RegisterCitizen {
+                owner: citizen.clone(),
+                amount: 0_u64.into(),
+            });
+    }
+    builder
+}
+
+async fn draw_and_seal_failure_path_bodies(
+    network: &sandbox::SerializedNetwork,
+    client: &Client,
+    attempt_id: GovernanceAttemptId,
+    citizens: &[AccountId],
+    citizen_keys: &[KeyPair],
+    logical_beacon: BeaconSessionId,
+    policy_seats: u32,
+) -> Result<BTreeMap<ParliamentBody, BodyInstanceId>> {
+    let required_bodies = read_attempt(client, attempt_id)?
+        .required_bodies()
+        .iter()
+        .map(|required| required.body)
+        .collect::<Vec<_>>();
+    let request_height =
+        next_queue_plan_execution_height(client, 0, "confirmation-capacity initial sortition")?;
+    let pulse_height = request_height
+        .checked_add(CAPACITY_SORTITION_DELAY_BLOCKS)
+        .ok_or_else(|| eyre!("confirmation-capacity sortition height overflow"))?;
+    let mut election_ids = BTreeMap::new();
+    let mut request_ids = Vec::new();
+    let mut registrations = Vec::new();
+    for body in &required_bodies {
+        let election_id = BodyElectionAttemptId::derive_v1(attempt_id, *body, 0);
+        let target_seats = if *body == ParliamentBody::PolicyJury {
+            policy_seats
+        } else {
+            CAPACITY_PUBLIC_SEATS
+        };
+        let request = SortitionRequestV1::try_new_canonical(
+            attempt_id,
+            election_id,
+            *body,
+            parliament_candidate_root_v1(attempt_id, *body, citizens),
+            u32::try_from(citizens.len())?,
+            target_seats,
+            request_height,
+            pulse_height,
+            logical_beacon,
+            None,
+        )
+        .map_err(|error| eyre!("construct confirmation-capacity sortition request: {error}"))?;
+        election_ids.insert(*body, election_id);
+        request_ids.push(request.id);
+        registrations.push(ParliamentSortitionRequestRegistrationV1 {
+            sequence: 0,
+            request,
+        });
+    }
+    request_ids.sort_unstable();
+    submit_transition(
+        client,
+        attempt_id,
+        ParliamentLifecycleTransitionV1::RegisterSortitionRequest(
+            ParliamentRegisterSortitionRequestV1 {
+                requests: registrations,
+            },
+        ),
+    )?;
+    assert_eq!(current_height(client)?, request_height);
+    advance_to_autonomous_predecessor(
+        network,
+        client,
+        pulse_height,
+        "confirmation-capacity initial sortition pulse",
+    )
+    .await?;
+    network.ensure_blocks(pulse_height).await?;
+    let pulses = network
+        .peers()
+        .iter()
+        .map(|peer| pulse_at(&peer.client(), pulse_height))
+        .collect::<Result<Vec<_>>>()?;
+    assert!(pulses.windows(2).all(|pair| pair[0] == pair[1]));
+    submit_transition(
+        client,
+        attempt_id,
+        ParliamentLifecycleTransitionV1::ConsumeSortitionPulseBatch(
+            ParliamentConsumeSortitionPulseBatchV1 {
+                request_ids,
+                beacon_session_id: logical_beacon,
+                pulse_height,
+                pulse_id: BeaconPulseId::new(pulses[0].pulse_id),
+            },
+        ),
+    )?;
+    submit_transitions(
+        client,
+        attempt_id,
+        required_bodies.iter().map(|body| {
+            ParliamentLifecycleTransitionV1::BeginInvitationAcceptance(
+                ParliamentBeginInvitationAcceptanceV1 {
+                    election_attempt_id: election_ids[body],
+                },
+            )
+        }),
+    )?;
+
+    let invitations = read_attempt(client, attempt_id)?;
+    let invitation_close_height = required_bodies
+        .iter()
+        .map(|body| {
+            invitations
+                .election(&election_ids[body])
+                .and_then(|election| election.invitation_close_height())
+                .expect("confirmation-capacity invitation deadline is frozen")
+        })
+        .reduce(|left, right| {
+            assert_eq!(left, right);
+            left
+        })
+        .expect("governance attempt requires at least one Parliament body");
+    let mut invitations_by_member =
+        BTreeMap::<AccountId, Vec<(ParliamentBody, BodyElectionAttemptId)>>::new();
+    for body in &required_bodies {
+        let election = invitations
+            .election(&election_ids[body])
+            .expect("confirmation-capacity election exists");
+        for assignment in election.primary_assignments() {
+            invitations_by_member
+                .entry(assignment.member.clone())
+                .or_default()
+                .push((*body, election_ids[body]));
+        }
+    }
+    for (member, member_invitations) in invitations_by_member {
+        submit_transitions(
+            &client_for(client, &member, citizen_keys),
+            attempt_id,
+            member_invitations
+                .into_iter()
+                .map(|(body, election_attempt_id)| {
+                    ParliamentLifecycleTransitionV1::RecordInvitationResponse(
+                        ParliamentRecordInvitationResponseV1 {
+                            election_attempt_id,
+                            body,
+                            decision: ParliamentInvitationDecisionV1::Accept,
+                        },
+                    )
+                }),
+        )?;
+    }
+    assert!(current_height(client)? <= invitation_close_height);
+    let roster_seal_height = invitation_close_height
+        .checked_add(1)
+        .ok_or_else(|| eyre!("confirmation-capacity roster seal height overflow"))?;
+    advance_to_queue_plan_authority_height(
+        network,
+        client,
+        roster_seal_height,
+        "confirmation-capacity roster sealing",
+    )
+    .await?;
+    submit_transitions(
+        client,
+        attempt_id,
+        required_bodies.iter().map(|body| {
+            ParliamentLifecycleTransitionV1::SealBodyRoster(ParliamentSealBodyRosterV1 {
+                election_attempt_id: election_ids[body],
+            })
+        }),
+    )?;
+    assert_eq!(current_height(client)?, roster_seal_height);
+
+    let sealed = read_attempt(client, attempt_id)?;
+    let mut body_ids = BTreeMap::new();
+    for body in required_bodies {
+        let body_state = sealed
+            .sealed_body_for_role(body)
+            .expect("confirmation-capacity body roster is sealed");
+        let expected_seats = if body == ParliamentBody::PolicyJury {
+            policy_seats
+        } else {
+            CAPACITY_PUBLIC_SEATS
+        };
+        assert_eq!(body_state.instance().original_seats, expected_seats);
+        assert_eq!(body_state.assignments().len(), expected_seats as usize);
+        body_ids.insert(body, body_state.instance().id);
+    }
+    Ok(body_ids)
+}
+
+fn complete_failure_path_public_findings(
+    client: &Client,
+    citizen_keys: &[KeyPair],
+    attempt_id: GovernanceAttemptId,
+    body_ids: &BTreeMap<ParliamentBody, BodyInstanceId>,
+) -> Result<()> {
+    let phases = [
+        DeliberationPhaseV1::Orientation,
+        DeliberationPhaseV1::Evidence,
+        DeliberationPhaseV1::Questions,
+        DeliberationPhaseV1::Responses,
+        DeliberationPhaseV1::Deliberation,
+        DeliberationPhaseV1::Reflection,
+    ];
+    for (body, body_id) in body_ids {
+        if *body == ParliamentBody::PolicyJury {
+            continue;
+        }
+        submit_transitions(
+            client,
+            attempt_id,
+            phases.into_iter().map(|target| {
+                ParliamentLifecycleTransitionV1::AdvanceBodyPhase(ParliamentAdvanceBodyPhaseV1 {
+                    body_instance_id: *body_id,
+                    target,
+                })
+            }),
+        )?;
+        let reflecting = read_attempt(client, attempt_id)?;
+        let member = reflecting
+            .body(body_id)
+            .and_then(|state| state.assignments().first())
+            .map(|assignment| assignment.member.clone())
+            .ok_or_else(|| eyre!("one-seat public body has no assignment"))?;
+        submit_transition(
+            &client_for(client, &member, citizen_keys),
+            attempt_id,
+            ParliamentLifecycleTransitionV1::EndorsePublicFinding(
+                ParliamentEndorsePublicFindingV1 {
+                    body_instance_id: *body_id,
+                    result_root: public_finding_root(attempt_id, *body),
+                },
+            ),
+        )?;
+        assert_eq!(
+            read_attempt(client, attempt_id)?
+                .body(body_id)
+                .expect("completed public body")
+                .instance()
+                .status,
+            BodyInstanceStatusV1::Approved,
+        );
+    }
+    Ok(())
+}
+
+async fn finalize_failure_path_policy_ballot(
+    network: &sandbox::SerializedNetwork,
+    client: &Client,
+    citizen_keys: &[KeyPair],
+    attempt_id: GovernanceAttemptId,
+    body_ids: &BTreeMap<ParliamentBody, BodyInstanceId>,
+    sessions: &ThresholdSessionsV1,
+    policy_seats: u32,
+    registration_phase_blocks: u64,
+    aye_ballots: usize,
+) -> Result<BallotAttemptId> {
+    let policy_body_id = body_ids[&ParliamentBody::PolicyJury];
+    submit_transitions(
+        client,
+        attempt_id,
+        [
+            DeliberationPhaseV1::Orientation,
+            DeliberationPhaseV1::Evidence,
+            DeliberationPhaseV1::Questions,
+            DeliberationPhaseV1::Responses,
+            DeliberationPhaseV1::Deliberation,
+            DeliberationPhaseV1::Reflection,
+            DeliberationPhaseV1::Vote,
+        ]
+        .into_iter()
+        .map(|target| {
+            ParliamentLifecycleTransitionV1::AdvanceBodyPhase(ParliamentAdvanceBodyPhaseV1 {
+                body_instance_id: policy_body_id,
+                target,
+            })
+        }),
+    )?;
+
+    let ballot_attempt_id = BallotAttemptId::derive_v1(policy_body_id, 0);
+    let registered_at_height =
+        next_queue_plan_execution_height(client, 0, "confirmation-capacity ballot registration")?;
+    let registration_close_height = registered_at_height
+        .checked_add(registration_phase_blocks)
+        .ok_or_else(|| eyre!("confirmation-capacity registration height overflow"))?;
+    let survivor_freeze_height = registration_close_height
+        .checked_add(CONFIRMATION_PHASE_BLOCKS)
+        .ok_or_else(|| eyre!("confirmation-capacity survivor height overflow"))?;
+    let commitment_close_height = survivor_freeze_height
+        .checked_add(CONFIRMATION_PHASE_BLOCKS)
+        .ok_or_else(|| eyre!("confirmation-capacity commitment height overflow"))?;
+    let release_height = commitment_close_height
+        .checked_add(CONFIRMATION_RELEASE_DELAY_BLOCKS)
+        .ok_or_else(|| eyre!("confirmation-capacity release height overflow"))?;
+    let tle_session_id = TleSessionId::derive_v1(
+        ballot_attempt_id,
+        sessions.tle_public_state.key_session_id,
+        sessions.logical_beacon,
+        release_height,
+    );
+    submit_transition(
+        client,
+        attempt_id,
+        ParliamentLifecycleTransitionV1::RegisterBallotAttempt(ParliamentRegisterBallotAttemptV1 {
+            body_instance_id: policy_body_id,
+            ballot_attempt_id,
+            sequence: 0,
+            tle_session_id,
+            tle_key_session_id: sessions.tle_public_state.key_session_id,
+            release_beacon_session_id: sessions.logical_beacon,
+            release_height,
+        }),
+    )?;
+    assert_eq!(current_height(client)?, registered_at_height);
+
+    let casting_response = client.get_parliament_timed_ovn_casting_context(ballot_attempt_id)?;
+    let casting = casting_archive(&casting_response, ballot_attempt_id)?;
+    let validated_casting = casting
+        .validate_v1()
+        .wrap_err("validate confirmation-capacity casting context")?;
+    let policy_members = read_attempt(client, attempt_id)?
+        .body(&policy_body_id)
+        .expect("Policy Jury body exists")
+        .assignments()
+        .iter()
+        .map(|assignment| assignment.member.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(policy_members.len(), policy_seats as usize);
+    assert!(aye_ballots <= policy_members.len());
+
+    let mut registration_secrets = BTreeMap::new();
+    for (index, member) in policy_members.iter().enumerate() {
+        let participant_hash = parliament_ballot_participant_hash_v1(ballot_attempt_id, member);
+        let mut rng = StdRng::from_seed(
+            Hash::new_from_chunks(&[
+                b"iroha.integration.parliament.confirmation-capacity-registration.v1\0",
+                attempt_id.as_bytes(),
+                &[u8::try_from(index)?],
+            ])
+            .into(),
+        );
+        let (secret, registration) = TimedOvnRegistrationSecretV1::generate_with_rng(
+            validated_casting.timed_ovn_session(),
+            participant_hash,
+            &mut rng,
+        )
+        .wrap_err("generate confirmation-capacity timed-OVN registration")?;
+        submit_transition(
+            &client_for(client, member, citizen_keys),
+            attempt_id,
+            ParliamentLifecycleTransitionV1::RegisterBallotParticipant(
+                ParliamentRegisterBallotParticipantV1 {
+                    ballot_attempt_id,
+                    registration_record: registration.to_bytes(),
+                },
+            ),
+        )?;
+        assert!(
+            registration_secrets
+                .insert(participant_hash, secret)
+                .is_none()
+        );
+    }
+    assert!(current_height(client)? < registration_close_height);
+    advance_to_queue_plan_authority_height(
+        network,
+        client,
+        registration_close_height,
+        "confirmation-capacity registration close",
+    )
+    .await?;
+    submit_transition(
+        client,
+        attempt_id,
+        ParliamentLifecycleTransitionV1::CloseBallotRegistration(
+            ParliamentCloseBallotRegistrationV1 { ballot_attempt_id },
+        ),
+    )?;
+    assert_eq!(current_height(client)?, registration_close_height);
+
+    advance_to_queue_plan_authority_height(
+        network,
+        client,
+        survivor_freeze_height,
+        "confirmation-capacity survivor freeze",
+    )
+    .await?;
+    submit_transition(
+        client,
+        attempt_id,
+        ParliamentLifecycleTransitionV1::FreezeBallotSurvivors(ParliamentFreezeBallotSurvivorsV1 {
+            ballot_attempt_id,
+        }),
+    )?;
+    assert_eq!(current_height(client)?, survivor_freeze_height);
+
+    let survivors_response = client.get_parliament_timed_ovn_casting_context(ballot_attempt_id)?;
+    let survivors_archive = casting_archive(&survivors_response, ballot_attempt_id)?;
+    let survivor_ids = survivors_archive
+        .survivor_participant_hashes()
+        .expect("survivor freeze exposes exact participant hashes");
+    assert_eq!(survivor_ids.len(), policy_seats as usize);
+    let validated_survivors = survivors_archive
+        .validate_v1()
+        .wrap_err("validate confirmation-capacity survivor context")?;
+    let prepared = validated_survivors
+        .prepared_attempt()
+        .expect("survivor-frozen context prepares the ballot roster");
+    let mut ballot_records = Vec::with_capacity(survivor_ids.len());
+    for (index, participant_hash) in survivor_ids.iter().enumerate() {
+        let choice = if index < aye_ballots {
+            TimedOvnChoiceV1::Aye
+        } else {
+            TimedOvnChoiceV1::Nay
+        };
+        let mut rng = StdRng::from_seed(
+            Hash::new_from_chunks(&[
+                b"iroha.integration.parliament.confirmation-capacity-ballot.v1\0",
+                attempt_id.as_bytes(),
+                &[u8::try_from(index)?],
+            ])
+            .into(),
+        );
+        let record = registration_secrets
+            .get(participant_hash)
+            .ok_or_else(|| eyre!("survivor has no retained registration secret"))?
+            .cast_ballot_with_rng(prepared.survivor_roster(), choice, &mut rng)
+            .wrap_err("generate confirmation-capacity timed-OVN ballot")?
+            .to_bytes();
+        assert_eq!(record.len(), TIMED_OVN_BALLOT_RECORD_BYTES_V1);
+        ballot_records.push(record);
+    }
+    advance_to_queue_plan_authority_height(
+        network,
+        client,
+        commitment_close_height,
+        "confirmation-capacity commitment close",
+    )
+    .await?;
+    submit_transition(
+        client,
+        attempt_id,
+        ParliamentLifecycleTransitionV1::FreezeTimedOvnCorpus(ParliamentFreezeTimedOvnCorpusV1 {
+            ballot_attempt_id,
+            ballot_records,
+        }),
+    )?;
+    assert_eq!(current_height(client)?, commitment_close_height);
+
+    advance_to_autonomous_predecessor(
+        network,
+        client,
+        release_height,
+        "confirmation-capacity release pulse",
+    )
+    .await?;
+    network.ensure_blocks(release_height).await?;
+    let pulses = network
+        .peers()
+        .iter()
+        .map(|peer| pulse_at(&peer.client(), release_height))
+        .collect::<Result<Vec<_>>>()?;
+    assert!(pulses.windows(2).all(|pair| pair[0] == pair[1]));
+    submit_transition(
+        client,
+        attempt_id,
+        ParliamentLifecycleTransitionV1::BeginBallotOpeningBatch(
+            ParliamentBeginBallotOpeningBatchV1 {
+                ballot_attempt_ids: vec![ballot_attempt_id],
+                release_beacon_session_id: sessions.logical_beacon,
+                release_height,
+                pulse_id: BeaconPulseId::new(pulses[0].pulse_id),
+            },
+        ),
+    )?;
+
+    let release_context = client.get_parliament_tle_release_context(ballot_attempt_id)?;
+    let validated_release = release_projection(&release_context)?
+        .validate()
+        .wrap_err("validate confirmation-capacity release context")?;
+    let mut partials = BTreeMap::new();
+    for peer in network.peers() {
+        let peer_client = peer.client();
+        let peer_context = peer_client.get_parliament_tle_release_context(ballot_attempt_id)?;
+        assert_eq!(peer_context, release_context);
+        let partial =
+            release_partial(peer_client.post_parliament_tle_partial_release(&peer_context)?);
+        validated_release
+            .session()
+            .verify_partial_release(
+                validated_release.identity(),
+                validated_release.finalized_height(),
+                &partial,
+            )
+            .wrap_err("verify confirmation-capacity partial release")?;
+        partials.insert(partial.participant_index, partial);
+    }
+    assert_eq!(partials.len(), VALIDATOR_COUNT);
+    let threshold_partials = partials
+        .into_values()
+        .take(usize::from(release_context.tle_key_session.threshold))
+        .collect::<Vec<_>>();
+    let final_release = validated_release
+        .session()
+        .combine_partial_releases(
+            validated_release.identity(),
+            validated_release.finalized_height(),
+            &threshold_partials,
+        )
+        .wrap_err("combine confirmation-capacity final release")?;
+    submit_transition(
+        client,
+        attempt_id,
+        ParliamentLifecycleTransitionV1::FinalizeOpenedBallot(ParliamentFinalizeOpenedBallotV1 {
+            ballot_attempt_id,
+            final_release: ParliamentTleFinalReleaseSignatureV1 {
+                key_session_id: final_release.key_session_id,
+                identity_digest: final_release.identity_digest,
+                signature: final_release.signature,
+            },
+        }),
+    )?;
+    Ok(ballot_attempt_id)
+}
+
+async fn certify_failure_path_attempt(
+    network: &sandbox::SerializedNetwork,
+    client: &Client,
+    citizens: &[AccountId],
+    citizen_keys: &[KeyPair],
+    attempt_id: GovernanceAttemptId,
+    sessions: &ThresholdSessionsV1,
+) -> Result<GovernanceCertificateV1> {
+    submit_transition(
+        client,
+        attempt_id,
+        ParliamentLifecycleTransitionV1::CompleteQualification,
+    )?;
+    let body_ids = draw_and_seal_failure_path_bodies(
+        network,
+        client,
+        attempt_id,
+        citizens,
+        citizen_keys,
+        sessions.logical_beacon,
+        TERMINAL_POLICY_SEATS,
+    )
+    .await?;
+    complete_failure_path_public_findings(client, citizen_keys, attempt_id, &body_ids)?;
+    finalize_failure_path_policy_ballot(
+        network,
+        client,
+        citizen_keys,
+        attempt_id,
+        &body_ids,
+        sessions,
+        TERMINAL_POLICY_SEATS,
+        TERMINAL_REGISTRATION_BLOCKS,
+        2,
+    )
+    .await?;
+    let certified = read_attempt(client, attempt_id)?;
+    assert_eq!(
+        certified.attempt().status,
+        GovernanceAttemptStatusV1::Certified,
+    );
+    assert_eq!(certified.attempt().stage, GovernanceStageV1::Enactment);
+    let certificate = certified
+        .certificate()
+        .cloned()
+        .expect("ordinary 2-1 Policy approval constructs a certificate");
+    certificate
+        .validate()
+        .wrap_err("validate failure-path certificate")?;
+    assert_eq!(
+        certificate.enact_at_height,
+        certificate.certified_at_height + TERMINAL_ENACTMENT_DELAY,
+    );
+    Ok(certificate)
+}
+
+#[test]
+fn four_validator_certified_effects_record_supersession_and_execution_failure() -> Result<()> {
+    let name =
+        stringify!(four_validator_certified_effects_record_supersession_and_execution_failure);
+    let handle = std::thread::Builder::new()
+        .name(name.to_owned())
+        .stack_size(PARLIAMENT_NETWORK_STACK_BYTES)
+        .spawn(|| {
+            tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(4)
+                .thread_stack_size(PARLIAMENT_NETWORK_STACK_BYTES)
+                .enable_all()
+                .build()
+                .expect("build four-validator certified-terminal runtime")
+                .block_on(
+                    four_validator_certified_effects_record_supersession_and_execution_failure_impl(
+                    ),
+                )
+        })
+        .expect("spawn four-validator certified-terminal thread");
+    match handle.join() {
+        Ok(result) => result,
+        Err(panic) => std::panic::resume_unwind(panic),
+    }
+}
+
+async fn four_validator_certified_effects_record_supersession_and_execution_failure_impl()
+-> Result<()> {
+    let citizen_keys = citizen_keys();
+    let citizens = citizen_accounts(&citizen_keys);
+    let contract_address = ContractAddress::from_str(CONTRACT_ADDRESS)?;
+    let runtime_abi_hash = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
+    let builder = certified_terminal_builder(&citizens, &contract_address, runtime_abi_hash);
+    let context =
+        stringify!(four_validator_certified_effects_record_supersession_and_execution_failure);
+    let network = sandbox::start_network_async_or_skip(builder, context).await?;
+    let Some(network) = sandbox::enforce_network_start_requirement(network, context)? else {
+        return Ok(());
+    };
+    assert_eq!(network.peers().len(), VALIDATOR_COUNT);
+    network.ensure_blocks(1).await?;
+    let client = network.client();
+    let sessions = install_threshold_sessions(&network, &client).await?;
+
+    let (code_hash, abi_hash) = stage_contract_artifact(&client, &minimal_contract_artifact())?;
+    let (competing_contract_code_hash, competing_abi_hash) = stage_contract_artifact(
+        &client,
+        &minimal_contract_artifact_with_identity(
+            "ParliamentSupersessionCompetitor",
+            "integration-tests-supersession-competitor",
+        ),
+    )?;
+    assert_ne!(
+        competing_contract_code_hash, code_hash,
+        "the supersession fixture must install a genuinely distinct artifact head",
+    );
+    assert_eq!(
+        competing_abi_hash, abi_hash,
+        "the competing artifact must preserve the proposal's exact ABI surface",
+    );
+    let deploy_proposal = ProposalKind::DeployContract(DeployContractProposal {
+        contract_address: contract_address.clone(),
+        code_hash,
+        abi_hash,
+        abi_version: AbiVersion::new(1),
+        manifest_provenance: None,
+    });
+    let deploy_subject_id = deploy_proposal.governed_subject_id_v1()?;
+    let deploy_create = CreateParliamentGovernanceAttemptV1 {
+        proposal: deploy_proposal,
+        attempt_sequence: 0,
+    };
+    let deploy_attempt_id = deploy_create.governance_attempt_id();
+    client.submit_all_blocking(
+        [
+            InstructionBox::from(ProposeDeployContract {
+                contract_address: contract_address.clone(),
+                code_hash,
+                abi_hash,
+                abi_version: AbiVersion::new(1),
+                manifest_provenance: None,
+            }),
+            InstructionBox::from(deploy_create),
+        ],
+        fee(),
+    )?;
+    let deploy_certificate = certify_failure_path_attempt(
+        &network,
+        &client,
+        &citizens,
+        &citizen_keys,
+        deploy_attempt_id,
+        &sessions,
+    )
+    .await?;
+
+    let competing_code_hash = Hash::prehashed(competing_contract_code_hash.into_bytes());
+    client.submit_blocking(
+        ActivateContractInstance {
+            contract_address: contract_address.clone(),
+            code_hash: competing_code_hash,
+        },
+        fee(),
+    )?;
+    assert!(current_height(&client)? < deploy_certificate.enact_at_height);
+    assert_governed_contract_binding(
+        &client,
+        &contract_address,
+        competing_contract_code_hash,
+        competing_abi_hash,
+        "the competing direct binding must be authoritative before enactment",
+    )?;
+    advance_to_autonomous_predecessor(
+        &network,
+        &client,
+        deploy_certificate.enact_at_height,
+        "certified deploy supersession",
+    )
+    .await?;
+    network
+        .ensure_blocks(deploy_certificate.enact_at_height)
+        .await?;
+    let superseded = read_attempt(&client, deploy_attempt_id)?;
+    assert_eq!(
+        superseded.attempt().status,
+        GovernanceAttemptStatusV1::Superseded,
+    );
+    assert_eq!(
+        superseded.terminal_height(),
+        Some(deploy_certificate.enact_at_height),
+    );
+    assert_eq!(
+        superseded.superseding_head(),
+        Some(GovernanceExpectedHeadV1::Present(
+            GovernanceExpectedHeadPresentV1 {
+                subject_id: deploy_subject_id,
+                version: 1,
+                head_root: competing_code_hash.into(),
+            },
+        )),
+        "supersession must bind the exact authoritative contract head",
+    );
+    assert!(superseded.execution_failure_root().is_none());
+    assert_eq!(superseded.certificate(), Some(&deploy_certificate));
+    let superseded_response = client.get_parliament_attempt(deploy_attempt_id)?;
+    for peer in network.peers() {
+        let peer_client = peer.client();
+        assert_eq!(
+            peer_client
+                .get_parliament_attempt(deploy_attempt_id)?
+                .state_payload_hex,
+            superseded_response.state_payload_hex,
+        );
+        assert_governed_contract_binding(
+            &peer_client,
+            &contract_address,
+            competing_contract_code_hash,
+            competing_abi_hash,
+            "all validators must retain the competing contract binding",
+        )?;
+    }
+
+    assert_runtime_upgrade_registry_empty(&client)?;
+    let manifest_start_height = current_height(&client)?
+        .checked_add(10)
+        .ok_or_else(|| eyre!("runtime-upgrade start height overflow"))?;
+    let runtime_manifest = RuntimeUpgradeManifest {
+        name: "parliament-execution-failure".to_owned(),
+        description: "window expires before certified enactment".to_owned(),
+        abi_version: 1,
+        abi_hash: runtime_abi_hash,
+        added_syscalls: Vec::new(),
+        added_pointer_types: Vec::new(),
+        start_height: manifest_start_height,
+        end_height: manifest_start_height
+            .checked_add(10_000)
+            .ok_or_else(|| eyre!("runtime-upgrade end height overflow"))?,
+        sbom_digests: Vec::new(),
+        slsa_attestation: Vec::new(),
+        provenance: Vec::new(),
+    };
+    let runtime_proposal = ProposalKind::RuntimeUpgrade(RuntimeUpgradeProposal {
+        manifest: runtime_manifest.clone(),
+    });
+    let runtime_create = CreateParliamentGovernanceAttemptV1 {
+        proposal: runtime_proposal,
+        attempt_sequence: 0,
+    };
+    let runtime_attempt_id = runtime_create.governance_attempt_id();
+    client.submit_all_blocking(
+        [
+            InstructionBox::from(ProposeRuntimeUpgradeProposal {
+                manifest: runtime_manifest,
+            }),
+            InstructionBox::from(runtime_create),
+        ],
+        fee(),
+    )?;
+    let runtime_certificate = certify_failure_path_attempt(
+        &network,
+        &client,
+        &citizens,
+        &citizen_keys,
+        runtime_attempt_id,
+        &sessions,
+    )
+    .await?;
+    // Runtime-upgrade enactment performs every fallible validation before its registry insert;
+    // after that insert it only emits infallible events and telemetry. This stale `start_height`
+    // therefore proves typed deterministic execution-failure classification and unchanged-state
+    // isolation, not partial-write rollback. The latter needs another governed effect with a
+    // deliberately fallible post-write operation.
+    assert!(
+        runtime_certificate.certified_at_height > manifest_start_height,
+        "the fixture must certify only after the runtime start window has expired",
+    );
+    advance_to_autonomous_predecessor(
+        &network,
+        &client,
+        runtime_certificate.enact_at_height,
+        "certified runtime execution failure",
+    )
+    .await?;
+    network
+        .ensure_blocks(runtime_certificate.enact_at_height)
+        .await?;
+    let execution_failed = read_attempt(&client, runtime_attempt_id)?;
+    let expected_failure_root = parliament_execution_failure_root_v1(
+        &runtime_certificate,
+        runtime_certificate.enact_at_height,
+    );
+    assert_eq!(
+        execution_failed.attempt().status,
+        GovernanceAttemptStatusV1::ExecutionFailed,
+    );
+    assert_eq!(
+        execution_failed.terminal_height(),
+        Some(runtime_certificate.enact_at_height),
+    );
+    assert_eq!(
+        execution_failed.execution_failure_root(),
+        Some(expected_failure_root),
+    );
+    assert!(execution_failed.superseding_head().is_none());
+    assert_eq!(execution_failed.certificate(), Some(&runtime_certificate));
+    assert_runtime_upgrade_registry_empty(&client)?;
+
+    let execution_failed_response = client.get_parliament_attempt(runtime_attempt_id)?;
+    for peer in network.peers() {
+        let peer_client = peer.client();
+        assert_eq!(
+            peer_client
+                .get_parliament_attempt(runtime_attempt_id)?
+                .state_payload_hex,
+            execution_failed_response.state_payload_hex,
+            "all validators must commit the same deterministic failure root",
+        );
+        assert_eq!(
+            peer_client
+                .get_parliament_attempt(deploy_attempt_id)?
+                .state_payload_hex,
+            superseded_response.state_payload_hex,
+            "later attempts must not mutate the prior supersession transcript",
+        );
+        assert_runtime_upgrade_registry_empty(&peer_client)?;
+    }
+
+    let restore_height = current_height(&client)?;
+    let restart_peer = network
+        .peers()
+        .last()
+        .expect("four-validator network has a restore peer")
+        .clone();
+    let config_layers = network.config_layers().collect::<Vec<_>>();
+    assert!(restart_peer.shutdown_if_started().await);
+    tokio::time::timeout(
+        network.peer_startup_timeout(),
+        restart_peer.start_checked(config_layers.iter(), None),
+    )
+    .await
+    .map_err(|_| eyre!("certified-terminal restore exceeded {OPERATION_TIMEOUT:?}"))??;
+    tokio::time::timeout(
+        network.sync_timeout(),
+        restart_peer.once_block(restore_height),
+    )
+    .await
+    .map_err(|_| eyre!("certified-terminal restore did not recover finalized state"))?;
+    let restored_client = restart_peer.client();
+    assert_eq!(
+        restored_client
+            .get_parliament_attempt(deploy_attempt_id)?
+            .state_payload_hex,
+        superseded_response.state_payload_hex,
+    );
+    assert_eq!(
+        restored_client
+            .get_parliament_attempt(runtime_attempt_id)?
+            .state_payload_hex,
+        execution_failed_response.state_payload_hex,
+    );
+    assert_governed_contract_binding(
+        &restored_client,
+        &contract_address,
+        competing_contract_code_hash,
+        competing_abi_hash,
+        "restart must retain the competing contract binding",
+    )?;
+    assert_runtime_upgrade_registry_empty(&restored_client)?;
+    Ok(())
+}
+
+#[test]
+fn four_validator_narrow_policy_aborts_when_confirmation_capacity_is_one() -> Result<()> {
+    let name = stringify!(four_validator_narrow_policy_aborts_when_confirmation_capacity_is_one);
+    let handle = std::thread::Builder::new()
+        .name(name.to_owned())
+        .stack_size(PARLIAMENT_NETWORK_STACK_BYTES)
+        .spawn(|| {
+            tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(4)
+                .thread_stack_size(PARLIAMENT_NETWORK_STACK_BYTES)
+                .enable_all()
+                .build()
+                .expect("build four-validator Confirmation-capacity runtime")
+                .block_on(
+                    four_validator_narrow_policy_aborts_when_confirmation_capacity_is_one_impl(),
+                )
+        })
+        .expect("spawn four-validator Confirmation-capacity thread");
+    match handle.join() {
+        Ok(result) => result,
+        Err(panic) => std::panic::resume_unwind(panic),
+    }
+}
+
+async fn four_validator_narrow_policy_aborts_when_confirmation_capacity_is_one_impl() -> Result<()>
+{
+    let citizen_keys = citizen_keys()
+        .into_iter()
+        .take(CONFIRMATION_CITIZENS)
+        .collect::<Vec<_>>();
+    let citizens = citizen_accounts(&citizen_keys);
+    assert_eq!(citizens.len(), CONFIRMATION_CITIZENS);
+    let contract_address = ContractAddress::from_str(NO_RESULT_RETRY_CONTRACT_ADDRESS)?;
+    let builder = confirmation_capacity_builder(&citizens, &contract_address);
+    let context = stringify!(four_validator_narrow_policy_aborts_when_confirmation_capacity_is_one);
+    let network = sandbox::start_network_async_or_skip(builder, context).await?;
+    let Some(network) = sandbox::enforce_network_start_requirement(network, context)? else {
+        return Ok(());
+    };
+    assert_eq!(network.peers().len(), VALIDATOR_COUNT);
+    network.ensure_blocks(1).await?;
+    let client = network.client();
+    let sessions = install_threshold_sessions(&network, &client).await?;
+
+    let (code_hash, abi_hash) = stage_contract_artifact(&client, &minimal_contract_artifact())?;
+    let proposal = ProposalKind::DeployContract(DeployContractProposal {
+        contract_address: contract_address.clone(),
+        code_hash,
+        abi_hash,
+        abi_version: AbiVersion::new(1),
+        manifest_provenance: None,
+    });
+    let create = CreateParliamentGovernanceAttemptV1 {
+        proposal,
+        attempt_sequence: 0,
+    };
+    let attempt_id = create.governance_attempt_id();
+    client.submit_all_blocking(
+        [
+            InstructionBox::from(ProposeDeployContract {
+                contract_address: contract_address.clone(),
+                code_hash,
+                abi_hash,
+                abi_version: AbiVersion::new(1),
+                manifest_provenance: None,
+            }),
+            InstructionBox::from(create),
+        ],
+        fee(),
+    )?;
+    submit_transition(
+        &client,
+        attempt_id,
+        ParliamentLifecycleTransitionV1::CompleteQualification,
+    )?;
+
+    let body_ids = draw_and_seal_failure_path_bodies(
+        &network,
+        &client,
+        attempt_id,
+        &citizens,
+        &citizen_keys,
+        sessions.logical_beacon,
+        CONFIRMATION_POLICY_SEATS,
+    )
+    .await?;
+    complete_failure_path_public_findings(&client, &citizen_keys, attempt_id, &body_ids)?;
+    let policy_members = read_attempt(&client, attempt_id)?
+        .body(&body_ids[&ParliamentBody::PolicyJury])
+        .expect("Policy Jury body exists")
+        .assignments()
+        .iter()
+        .map(|assignment| assignment.member.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        citizens
+            .iter()
+            .filter(|candidate| !policy_members.contains(candidate))
+            .count(),
+        1,
+        "the fixture must leave exactly one disjoint Confirmation candidate",
+    );
+    let ballot_attempt_id = finalize_failure_path_policy_ballot(
+        &network,
+        &client,
+        &citizen_keys,
+        attempt_id,
+        &body_ids,
+        &sessions,
+        CONFIRMATION_POLICY_SEATS,
+        CONFIRMATION_REGISTRATION_BLOCKS,
+        11,
+    )
+    .await?;
+
+    let rejected = read_attempt(&client, attempt_id)?;
+    assert_eq!(
+        rejected.attempt().status,
+        GovernanceAttemptStatusV1::Rejected,
+    );
+    assert_eq!(rejected.attempt().stage, GovernanceStageV1::PolicyJury);
+    assert_eq!(
+        rejected
+            .required_bodies()
+            .last()
+            .map(|required| required.body),
+        Some(ParliamentBody::PolicyJury),
+        "an unfillable Confirmation requirement must never be committed",
+    );
+    assert!(
+        rejected
+            .required_bodies()
+            .iter()
+            .all(|required| required.body != ParliamentBody::ConfirmationJury),
+    );
+    assert!(rejected.certificate().is_none());
+    let policy_body = rejected
+        .body(&body_ids[&ParliamentBody::PolicyJury])
+        .expect("failed Policy Jury remains auditable");
+    assert_eq!(
+        policy_body.instance().status,
+        BodyInstanceStatusV1::NoResult,
+    );
+    assert!(policy_body.result_root().is_none());
+    let ballot = rejected
+        .ballot(&ballot_attempt_id)
+        .expect("failed narrow ballot remains auditable");
+    assert_eq!(ballot.attempt().status, BallotAttemptStatusV1::NoResult);
+    assert_eq!(ballot.accepted_ballots(), Some(CONFIRMATION_POLICY_SEATS));
+    assert_eq!(ballot.eligible_confirmation_candidates(), Some(1));
+    assert_eq!(
+        ballot.failure_kind(),
+        Some(ParliamentBallotFailureKindV1::ConfirmationJuryCapacityUnavailable),
+    );
+    assert!(ballot.failure_height().is_some());
+    assert_governed_contract_absent(
+        &client,
+        &contract_address,
+        "Confirmation-capacity rejection effect isolation",
+    )?;
+
+    let rejected_height = current_height(&client)?;
+    network.ensure_blocks(rejected_height).await?;
+    let rejected_response = client.get_parliament_attempt(attempt_id)?;
+    for peer in network.peers() {
+        let peer_client = peer.client();
+        let peer_response = peer_client.get_parliament_attempt(attempt_id)?;
+        assert_eq!(peer_response.current_height, rejected_height);
+        assert_eq!(
+            peer_response.state_payload_hex, rejected_response.state_payload_hex,
+            "all validators must commit the same Confirmation-capacity abort",
+        );
+        assert_governed_contract_absent(
+            &peer_client,
+            &contract_address,
+            "Confirmation-capacity peer effect isolation",
+        )?;
+    }
+
+    let restart_peer = network
+        .peers()
+        .last()
+        .expect("four-validator network has a restore peer")
+        .clone();
+    let config_layers = network.config_layers().collect::<Vec<_>>();
+    assert!(restart_peer.shutdown_if_started().await);
+    tokio::time::timeout(
+        network.peer_startup_timeout(),
+        restart_peer.start_checked(config_layers.iter(), None),
+    )
+    .await
+    .map_err(|_| eyre!("Confirmation-capacity restore exceeded {OPERATION_TIMEOUT:?}"))??;
+    tokio::time::timeout(
+        network.sync_timeout(),
+        restart_peer.once_block(rejected_height),
+    )
+    .await
+    .map_err(|_| eyre!("Confirmation-capacity restore did not recover finalized state"))?;
+    let restored = restart_peer.client().get_parliament_attempt(attempt_id)?;
+    assert_eq!(
+        restored.state_payload_hex, rejected_response.state_payload_hex,
+        "restart must retain the complete Confirmation-capacity transcript",
+    );
+    assert_governed_contract_absent(
+        &restart_peer.client(),
+        &contract_address,
+        "Confirmation-capacity restart effect isolation",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn four_validator_hidden_capacity_retains_then_releases_citizenship_bond() -> Result<()> {
+    let name = stringify!(four_validator_hidden_capacity_retains_then_releases_citizenship_bond);
+    let handle = std::thread::Builder::new()
+        .name(name.to_owned())
+        .stack_size(PARLIAMENT_NETWORK_STACK_BYTES)
+        .spawn(|| {
+            tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(4)
+                .thread_stack_size(PARLIAMENT_NETWORK_STACK_BYTES)
+                .enable_all()
+                .build()
+                .expect("build four-validator Parliament failure-path runtime")
+                .block_on(
+                    four_validator_hidden_capacity_retains_then_releases_citizenship_bond_impl(),
+                )
+        })
+        .expect("spawn four-validator Parliament failure-path thread");
+    match handle.join() {
+        Ok(result) => result,
+        Err(panic) => std::panic::resume_unwind(panic),
+    }
+}
+
+async fn four_validator_hidden_capacity_retains_then_releases_citizenship_bond_impl() -> Result<()>
+{
+    let all_keys = citizen_keys();
+    let citizen_key = all_keys
+        .first()
+        .cloned()
+        .ok_or_else(|| eyre!("deterministic citizen fixture is empty"))?;
+    let citizen = AccountId::new(citizen_key.public_key().clone());
+    let citizens = vec![citizen.clone()];
+    let citizenship_domain = DomainId::try_new("parliament-bond", "universal")?;
+    let citizenship_asset_definition =
+        AssetDefinitionId::derive_from_components(citizenship_domain.clone(), "xor".parse()?);
+    let citizen_asset_id = AssetId::new(citizenship_asset_definition.clone(), citizen.clone());
+    let contract_address = ContractAddress::from_str(CONTRACT_ADDRESS)?;
+    let builder = capacity_failure_builder(
+        &citizen,
+        &citizenship_domain,
+        &citizenship_asset_definition,
+        &contract_address,
+    );
+
+    let context = stringify!(four_validator_hidden_capacity_retains_then_releases_citizenship_bond);
+    let network = sandbox::start_network_async_or_skip(builder, context).await?;
+    let Some(network) = sandbox::enforce_network_start_requirement(network, context)? else {
+        return Ok(());
+    };
+    assert_eq!(network.peers().len(), VALIDATOR_COUNT);
+    network.ensure_blocks(1).await?;
+    let client = network.client();
+    let citizen_client = client_for(&client, &citizen, std::slice::from_ref(&citizen_key));
+
+    assert_asset_not_found(
+        &client,
+        &citizen_asset_id,
+        "genesis citizenship escrow custody",
+    )?;
+
+    let (code_hash, abi_hash) = stage_contract_artifact(&client, &minimal_contract_artifact())?;
+    let proposal = ProposalKind::DeployContract(DeployContractProposal {
+        contract_address: contract_address.clone(),
+        code_hash,
+        abi_hash,
+        abi_version: AbiVersion::new(1),
+        manifest_provenance: None,
+    });
+    let create = CreateParliamentGovernanceAttemptV1 {
+        proposal,
+        attempt_sequence: 0,
+    };
+    let attempt_id = create.governance_attempt_id();
+    client.submit_all_blocking(
+        [
+            InstructionBox::from(ProposeDeployContract {
+                contract_address: contract_address.clone(),
+                code_hash,
+                abi_hash,
+                abi_version: AbiVersion::new(1),
+                manifest_provenance: None,
+            }),
+            InstructionBox::from(create),
+        ],
+        fee(),
+    )?;
+    submit_transition(
+        &client,
+        attempt_id,
+        ParliamentLifecycleTransitionV1::CompleteQualification,
+    )?;
+
+    let initial = read_attempt(&client, attempt_id)?;
+    let required_bodies = initial
+        .required_bodies()
+        .iter()
+        .map(|required| required.body)
+        .collect::<Vec<_>>();
+    assert!(required_bodies.contains(&ParliamentBody::PolicyJury));
+    let logical_beacon = BeaconSessionId::for_network_v1(&network.network_id());
+    let mut first_failed_pulse_height = None;
+    let mut final_failure_ids = BTreeMap::new();
+
+    for sequence in 0..=MAX_PARLIAMENT_SORTITION_RETRIES_V1 {
+        let request_height =
+            next_queue_plan_execution_height(&client, 0, "hidden-capacity sortition intent")?;
+        let pulse_height = request_height
+            .checked_add(CAPACITY_SORTITION_DELAY_BLOCKS)
+            .ok_or_else(|| eyre!("hidden-capacity pulse height overflow"))?;
+        first_failed_pulse_height.get_or_insert(pulse_height);
+        let mut registrations = Vec::with_capacity(required_bodies.len());
+        for body in &required_bodies {
+            let election_attempt_id = BodyElectionAttemptId::derive_v1(attempt_id, *body, sequence);
+            let target_seats = if *body == ParliamentBody::PolicyJury {
+                CAPACITY_HIDDEN_SEATS
+            } else {
+                CAPACITY_PUBLIC_SEATS
+            };
+            let request = SortitionRequestV1::try_new_canonical(
+                attempt_id,
+                election_attempt_id,
+                *body,
+                parliament_candidate_root_v1(attempt_id, *body, &citizens),
+                1,
+                target_seats,
+                request_height,
+                pulse_height,
+                logical_beacon,
+                None,
+            )
+            .map_err(|error| eyre!("construct hidden-capacity request: {error}"))?;
+            final_failure_ids.insert(*body, election_attempt_id);
+            registrations.push(ParliamentSortitionRequestRegistrationV1 { sequence, request });
+        }
+        submit_transition(
+            &client,
+            attempt_id,
+            ParliamentLifecycleTransitionV1::RegisterSortitionRequest(
+                ParliamentRegisterSortitionRequestV1 {
+                    requests: registrations,
+                },
+            ),
+        )?;
+        assert_eq!(current_height(&client)?, request_height);
+
+        let observed = read_attempt(&client, attempt_id)?;
+        for failure_id in final_failure_ids.values() {
+            let failure = observed
+                .sortition_capacity_failure(failure_id)
+                .expect("Core retains typed hidden-capacity evidence");
+            assert_eq!(failure.sequence(), sequence);
+            assert_eq!(failure.candidate_count(), 1);
+            assert_eq!(failure.failure_height(), request_height);
+            assert_eq!(failure.status(), BodyElectionAttemptStatusV1::NoRoster);
+            assert!(observed.election(failure_id).is_none());
+        }
+
+        if sequence < MAX_PARLIAMENT_SORTITION_RETRIES_V1 {
+            assert_eq!(observed.attempt().status, GovernanceAttemptStatusV1::Active,);
+            if sequence == 0 || sequence + 1 == MAX_PARLIAMENT_SORTITION_RETRIES_V1 {
+                let error = citizen_client
+                    .submit_blocking(
+                        UnregisterCitizen {
+                            owner: citizen.clone(),
+                        },
+                        fee(),
+                    )
+                    .expect_err("retryable hidden-capacity evidence must retain the bond");
+                assert!(
+                    format!("{error:?}").contains("active Parliament attempt"),
+                    "unexpected retained-bond rejection: {error:?}",
+                );
+            }
+        } else {
+            assert_eq!(
+                observed.attempt().status,
+                GovernanceAttemptStatusV1::Rejected,
+            );
+            assert_eq!(
+                observed.terminal_height(),
+                None,
+                "terminal_height is reserved for certified-effect execution outcomes",
+            );
+        }
+    }
+
+    assert_no_global_beacon_pulse_at(
+        &client,
+        first_failed_pulse_height.expect("at least one capacity failure"),
+        "pre-request capacity evidence must not consume or demand a beacon pulse",
+    )?;
+    let rejected_response = client.get_parliament_attempt(attempt_id)?;
+    for peer in network.peers() {
+        let peer_response = peer.client().get_parliament_attempt(attempt_id)?;
+        assert_eq!(
+            peer_response.state_payload_hex, rejected_response.state_payload_hex,
+            "all validators must agree on terminal capacity evidence",
+        );
+    }
+
+    citizen_client.submit_blocking(
+        UnregisterCitizen {
+            owner: citizen.clone(),
+        },
+        fee(),
+    )?;
+    let returned_bond = client.query_single(FindAssetById::new(citizen_asset_id))?;
+    assert_eq!(
+        returned_bond.value(),
+        &Quantity::from(CAPACITY_BOND_AMOUNT),
+        "terminal rejection must release the exact citizenship collateral",
+    );
+
+    let restored_height = current_height(&client)?;
+    network.ensure_blocks(restored_height).await?;
+    let restart_peer = network
+        .peers()
+        .last()
+        .expect("four-validator network has a restore peer")
+        .clone();
+    let config_layers = network.config_layers().collect::<Vec<_>>();
+    assert!(restart_peer.shutdown_if_started().await);
+    tokio::time::timeout(
+        network.peer_startup_timeout(),
+        restart_peer.start_checked(config_layers.iter(), None),
+    )
+    .await
+    .map_err(|_| eyre!("capacity failure restore exceeded {OPERATION_TIMEOUT:?}"))??;
+    tokio::time::timeout(
+        network.sync_timeout(),
+        restart_peer.once_block(restored_height),
+    )
+    .await
+    .map_err(|_| eyre!("capacity failure restore did not recover finalized state"))?;
+    let restored_response = restart_peer.client().get_parliament_attempt(attempt_id)?;
+    assert_eq!(
+        restored_response.state_payload_hex, rejected_response.state_payload_hex,
+        "restart must retain the complete typed capacity transcript",
+    );
+    let restored_bond = restart_peer
+        .client()
+        .query_single(FindAssetById::new(AssetId::new(
+            citizenship_asset_definition,
+            citizen,
+        )))?;
+    assert_eq!(
+        restored_bond.value(),
+        &Quantity::from(CAPACITY_BOND_AMOUNT),
+        "restart must retain the released owner balance",
+    );
+    Ok(())
+}

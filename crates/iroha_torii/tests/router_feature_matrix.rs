@@ -132,61 +132,19 @@ async fn router_builds_under_current_features() {
     let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
     let _ = peers_tx; // keep channel alive
     let da_receipt_signer = cfg.common.key_pair.clone();
-    // Build Torii. Telemetry handle is only required when the feature is enabled.
-    let torii = {
-        #[cfg(feature = "telemetry")]
-        {
-            // Create a dummy Telemetry handle; it won't be used in this test.
-            let telemetry = {
-                use iroha_core::telemetry as core_telemetry;
-                use iroha_primitives::time::TimeSource;
-                let metrics = fixtures::shared_metrics();
-                let (_mh, ts) = TimeSource::new_mock(core::time::Duration::default());
-                core_telemetry::start(
-                    metrics,
-                    state.clone(),
-                    kura.clone(),
-                    queue.clone(),
-                    peers_rx.clone(),
-                    local_peer_id,
-                    ts,
-                    false,
-                )
-                .0
-            };
-            iroha_torii::Torii::new(
-                ChainId::from("test-chain"),
-                iroha_torii::test_utils::signed_query_network_id(),
-                kiso,
-                cfg.torii.clone(),
-                queue,
-                tokio::sync::broadcast::channel(1).0,
-                LiveQueryStore::start_test(),
-                kura,
-                state,
-                da_receipt_signer.clone(),
-                iroha_torii::OnlinePeersProvider::new(peers_rx),
-                telemetry,
-                true,
-            )
-        }
-        #[cfg(not(feature = "telemetry"))]
-        {
-            iroha_torii::Torii::new(
-                ChainId::from("test-chain"),
-                iroha_torii::test_utils::signed_query_network_id(),
-                kiso,
-                cfg.torii.clone(),
-                queue,
-                tokio::sync::broadcast::channel(1).0,
-                LiveQueryStore::start_test(),
-                kura,
-                state,
-                da_receipt_signer.clone(),
-                iroha_torii::OnlinePeersProvider::new(peers_rx),
-            )
-        }
-    };
+    let torii = iroha_torii::Torii::new(
+        ChainId::from("test-chain"),
+        iroha_torii::test_utils::signed_query_network_id(),
+        kiso,
+        cfg.torii.clone(),
+        queue,
+        tokio::sync::broadcast::channel(1).0,
+        LiveQueryStore::start_test(),
+        kura,
+        state,
+        da_receipt_signer,
+        iroha_torii::OnlinePeersProvider::new(peers_rx),
+    );
     let app = torii.api_router_for_tests();
     diff_openapi_if_available(&app).await;
     // A couple of smoke GETs that are present regardless of features
@@ -407,7 +365,7 @@ async fn router_builds_under_current_features() {
 }
 #[cfg(feature = "telemetry")]
 #[tokio::test]
-async fn router_exposes_status_when_telemetry_enabled() {
+async fn router_exposes_status_with_operator_telemetry_profile() {
     // Build with telemetry enabled
     let cfg = mk_minimal_root_cfg();
     let (kiso, _child) = KisoHandle::start(cfg.clone());
@@ -444,7 +402,7 @@ async fn router_exposes_status_when_telemetry_enabled() {
         )
         .0
     };
-    let torii = iroha_torii::Torii::new(
+    let torii = iroha_torii::Torii::new_with_handle(
         ChainId::from("test-chain"),
         iroha_torii::test_utils::signed_query_network_id(),
         kiso,
@@ -456,8 +414,11 @@ async fn router_exposes_status_when_telemetry_enabled() {
         state,
         da_receipt_signer,
         iroha_torii::OnlinePeersProvider::new(peers_rx),
-        telemetry,
-        true,
+        None,
+        iroha_torii::MaybeTelemetry::from_profile(
+            Some(telemetry),
+            iroha_config::parameters::actual::TelemetryProfile::Operator,
+        ),
     );
     let app = torii.api_router_for_tests();
     let resp = app

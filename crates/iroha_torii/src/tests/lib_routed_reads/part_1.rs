@@ -1616,7 +1616,9 @@ fn exact_alias_resolve_rejects_expired_authoritative_lease() {
             norito::codec::Encode::encode(&expired),
         );
     tx.apply();
-    block.commit().expect("commit expired alias lease");
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit expired alias lease");
     let route = resolve_torii_route_for_dataspace_id(app.as_ref(), DataSpaceId::UNIVERSAL)
         .expect("universal route");
     let response = execute_alias_resolve_local_read(
@@ -1659,7 +1661,9 @@ fn exact_alias_resolve_rejects_rekey_index_split_brain() {
             iroha_data_model::account::rekey::AccountRekeyRecord::new(alias, forged),
         );
     tx.apply();
-    block.commit().expect("commit split-brain rekey record");
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit split-brain rekey record");
     let route = resolve_torii_route_for_dataspace_id(app.as_ref(), DataSpaceId::UNIVERSAL)
         .expect("universal route");
     let response = execute_alias_resolve_local_read(

@@ -25,6 +25,8 @@ pub mod offline;
 pub mod oracle;
 /// Canonical first-release privacy governance and proof admission.
 pub mod privacy;
+/// Atomic private cross-dataspace settlement carrier execution.
+pub mod private_settlement;
 pub mod query;
 pub mod ram_lfe;
 pub mod repo;
@@ -544,6 +546,15 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::privacy::RotatePrivacyZkX509CrlV1>,
     dispatch_instruction::<iroha_data_model::isi::privacy::RevokePrivacyZkX509CrlV1>,
     dispatch_instruction::<iroha_data_model::isi::privacy::SubmitPrivacyProofV1>,
+    dispatch_instruction::<
+        iroha_data_model::isi::private_settlement::ActivatePrivateSettlementPoolV1
+    >,
+    dispatch_instruction::<
+        iroha_data_model::isi::private_settlement::AbortAtomicPrivateSettlementV1
+    >,
+    dispatch_instruction::<
+        iroha_data_model::isi::private_settlement::FinalizeAtomicPrivateSettlementV1
+    >,
 }
 pub(crate) fn execute_borrowed_instruction(
     instruction: &InstructionBox,
@@ -1255,7 +1266,7 @@ mod tests {
         ))
         .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut state_transaction)?;
         state_transaction.apply();
-        state_block.commit().unwrap();
+        state_block.commit_world_overlay_for_testing().unwrap();
         Ok(state)
     }
     fn configure_lane_relay_catalogs(
@@ -2180,7 +2191,7 @@ mod tests {
         SetKeyValue::nft(nft_id.clone(), key.clone(), vec![1_u32, 2_u32, 3_u32])
             .execute(&account_id, &mut state_transaction)?;
         state_transaction.apply();
-        state_block.commit().unwrap();
+        state_block.commit_world_overlay_for_testing().unwrap();
         let state_view = state.view();
         let nft = state_view.world.nft(&nft_id)?;
         let value = nft.content.get(&key).cloned();
@@ -2201,7 +2212,7 @@ mod tests {
         SetKeyValue::account(account_id.clone(), key.clone(), vec![1_u32, 2_u32, 3_u32])
             .execute(&account_id, &mut state_transaction)?;
         state_transaction.apply();
-        state_block.commit().unwrap();
+        state_block.commit_world_overlay_for_testing().unwrap();
         let bytes = state.view().world.map_account(&account_id, |account| {
             account.value().metadata().get(&key).cloned()
         })?;
@@ -2243,7 +2254,7 @@ mod tests {
         SetKeyValue::account(account_id.clone(), key.clone(), ok)
             .execute(&account_id, &mut state_transaction)?;
         state_transaction.apply();
-        state_block.commit().unwrap();
+        state_block.commit_world_overlay_for_testing().unwrap();
         Ok(())
     }
     #[test]
@@ -2273,7 +2284,7 @@ mod tests {
         }
         .execute(&alice, &mut stx)?;
         stx.apply();
-        state_block.commit().unwrap();
+        state_block.commit_world_overlay_for_testing().unwrap();
         // Verify it is stored
         let got = state.view().world().contract_manifests().get(&h).cloned();
         assert_eq!(got, Some(manifest.clone()));
@@ -2377,7 +2388,7 @@ mod tests {
         Burn::trigger_repetitions(1, trigger_id.clone())
             .execute(&account_id, &mut state_transaction)?;
         state_transaction.apply();
-        state_block.commit().unwrap();
+        state_block.commit_world_overlay_for_testing().unwrap();
         // Verify trigger is no longer active
         let active = state
             .view()
@@ -2422,7 +2433,7 @@ mod tests {
             ) if message == "trigger repeat count must be greater than zero"
         ));
         state_transaction.apply();
-        state_block.commit().unwrap();
+        state_block.commit_world_overlay_for_testing().unwrap();
         // Rejection must leave trigger state unchanged.
         let active = state
             .view()
@@ -2458,7 +2469,7 @@ mod tests {
         RegisterBox::Trigger(Register::trigger(trigger))
             .execute(&ALICE_ID, &mut state_transaction)?;
         state_transaction.apply();
-        state_block.commit().unwrap();
+        state_block.commit_world_overlay_for_testing().unwrap();
         let registered = state
             .view()
             .world
@@ -2490,7 +2501,7 @@ mod tests {
         )
         .execute(&account_id, &mut state_transaction)?;
         state_transaction.apply();
-        state_block.commit().unwrap();
+        state_block.commit_world_overlay_for_testing().unwrap();
         let value = state
             .view()
             .world
@@ -2525,7 +2536,7 @@ mod tests {
         InstructionBox::from(RemoveAssetKeyValue::new(asset_id.clone(), key))
             .execute(&account_id, &mut state_transaction)?;
         state_transaction.apply();
-        state_block.commit().unwrap();
+        state_block.commit_world_overlay_for_testing().unwrap();
         let view = state.view();
         let metadata = view.world.asset_metadata().get(&asset_id);
         assert!(metadata.is_none(), "asset metadata should be cleared");
@@ -2546,7 +2557,7 @@ mod tests {
         SetKeyValue::domain(domain_id.clone(), key.clone(), vec![1_u32, 2_u32, 3_u32])
             .execute(&account_id, &mut state_transaction)?;
         state_transaction.apply();
-        state_block.commit().unwrap();
+        state_block.commit_world_overlay_for_testing().unwrap();
         let bytes = state
             .view()
             .world
@@ -2575,7 +2586,7 @@ mod tests {
             Error::Find(_)
         ));
         state_transaction.apply();
-        state_block.commit().unwrap();
+        state_block.commit_world_overlay_for_testing().unwrap();
         Ok(())
     }
     #[test]
@@ -2617,7 +2628,7 @@ mod tests {
             Error::InvariantViolation(_)
         ));
         state_transaction.apply();
-        state_block.commit().unwrap();
+        state_block.commit_world_overlay_for_testing().unwrap();
         Ok(())
     }
     #[test]
@@ -2653,7 +2664,7 @@ mod tests {
             Error::Math(_)
         ));
         state_transaction.apply();
-        state_block.commit().unwrap();
+        state_block.commit_world_overlay_for_testing().unwrap();
         Ok(())
     }
     #[test]
@@ -2683,7 +2694,7 @@ mod tests {
             "genesis account should remain canonical after registration"
         );
         state_transaction.apply();
-        state_block.commit().unwrap();
+        state_block.commit_world_overlay_for_testing().unwrap();
         Ok(())
     }
     #[test]

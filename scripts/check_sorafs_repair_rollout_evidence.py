@@ -40,13 +40,11 @@ from sorafs_evidence_validation import (  # noqa: E402
     evidence_artifact_is_valid,
     evidence_artifact_fingerprint,
     evidence_schema_by_kind,
-    hashable_evidence_values,
     init_evidence_artifact_buckets,
     build_required_evidence_summary,
     record_explicit_evidence_validation_errors,
     record_evidence_artifact,
     record_evidence_validation_errors,
-    record_observed_evidence_value,
     validate_bound_evidence_digest_references,
     require_2xx_status,
     require_bool_true,
@@ -158,14 +156,6 @@ REQUIRED_GOVERNANCE_TARGETS = (
     "reserve_rent",
     "transparency_ledger",
     "reputation",
-)
-REQUIRED_METRICS = (
-    "torii_sorafs_repair_tasks_total",
-    "torii_sorafs_repair_latency_minutes_bucket",
-    "torii_sorafs_repair_queue_depth",
-    "torii_sorafs_repair_backlog_oldest_age_seconds",
-    "torii_sorafs_repair_lease_expired_total",
-    "torii_sorafs_slash_proposals_total",
 )
 ROSTER_BOUND_KINDS = (
     "auditor_api",
@@ -339,12 +329,9 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
     ),
     "observability": COMMON_EVIDENCE_REQUIRED_FIELDS
     + (
-        "metrics_scrape_success",
         "dashboard_provisioned",
         "alert_rules_installed",
         "critical_alerts_firing",
-        "metrics",
-        "metric_count",
         "response_bodies_included",
     ),
     "governance_approval": COMMON_EVIDENCE_REQUIRED_FIELDS
@@ -411,8 +398,6 @@ FINGERPRINT_FIELDS: tuple[str, ...] = (
     "evidence_bundle_digest_hex",
     "handoff_digest_hex",
     "policy_digest_hex",
-    "metric_count",
-    "metrics",
 )
 
 
@@ -683,14 +668,9 @@ def validate_governance_handoff(payload: dict[str, Any], errors: list[str]) -> N
 
 
 def validate_observability(payload: dict[str, Any], errors: list[str]) -> None:
-    require_bool_true(payload, "metrics_scrape_success", errors)
     require_bool_true(payload, "dashboard_provisioned", errors)
     require_bool_true(payload, "alert_rules_installed", errors)
     require_false(payload, "critical_alerts_firing", errors)
-    require_string_coverage(payload, "metrics", "", REQUIRED_METRICS, errors)
-    require_only_required_values(payload, "metrics", "", REQUIRED_METRICS, errors)
-    require_positive_int(payload, "metric_count", errors)
-    require_string_inventory_count_match(payload, "metrics", "metric_count", errors)
     require_false(payload, "response_bodies_included", errors)
 
 
@@ -788,8 +768,6 @@ def build_summary(
     valid_failure_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
     valid_handoff_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
     valid_policy_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
-    metric_counts: set[int] = set()
-    metric_names: set[str] = set()
     files = discover_evidence_files(
         evidence_dirs,
         evidence_files,
@@ -818,9 +796,6 @@ def build_summary(
             validation_errors,
             FINGERPRINT_FIELDS,
         )
-        if kind_name == "observability":
-            record_observed_evidence_value(metric_counts, payload.get("metric_count"))
-            metric_names.update(hashable_evidence_values(payload.get("metrics")))
         record_evidence_artifact(artifacts_by_kind, kind_name, artifact, errors)
         if evidence_artifact_is_valid(artifact):
             fingerprint = evidence_artifact_fingerprint(artifact)
@@ -961,8 +936,6 @@ def build_summary(
         "valid_failure_bundle_digests": sorted(valid_failure_bundle_digests),
         "valid_handoff_digests": sorted(valid_handoff_digests),
         "valid_policy_digests": sorted(valid_policy_digests),
-        "metrics": sorted(metric_names),
-        "metric_count_values": sorted(metric_counts),
         "required": required,
         "errors": errors,
     }

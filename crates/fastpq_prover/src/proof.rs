@@ -1,14 +1,15 @@
+#[cfg(test)]
+use crate::trace_commitment;
 use crate::{
     Error, Result, TransitionBatch,
     backend::{
-        self, AIR_COMPOSITION_ALPHA_COUNT, Backend, BackendArtifact, BackendConfig, ExecutionMode,
-        LOOKUP_PRODUCT_DOMAIN, PoseidonExecutionMode, StarkBackend, TRANSCRIPT_TAG_AIR_ROOTS,
-        TRANSCRIPT_TAG_ALPHA_PREFIX, TRANSCRIPT_TAG_GAMMA, TRANSCRIPT_TAG_INIT,
-        TRANSCRIPT_TAG_ROOTS,
+        self, AIR_COMPOSITION_ALPHA_COUNT, BackendArtifact, BackendConfig, ExecutionMode,
+        PoseidonExecutionMode, StarkBackend, TRANSCRIPT_TAG_AIR_ROOTS, TRANSCRIPT_TAG_ALPHA_PREFIX,
+        TRANSCRIPT_TAG_INIT, TRANSCRIPT_TAG_ROOTS,
     },
     ordering,
     semantics::{ProofSemantics, validate_batch_semantics},
-    trace, trace_commitment,
+    trace,
 };
 use core::convert::TryFrom;
 use fastpq_isi::{CANONICAL_PARAMETER_SETS, StarkParameterSet, find_by_name};
@@ -16,17 +17,12 @@ use iroha_crypto::Hash;
 use norito::{NoritoDeserialize, NoritoSerialize};
 /// Protocol version advertised by the V1 prover implementation.
 const PROTOCOL_VERSION: u16 = 1;
-/// First catalogue version using coherent trace/LDE roots with the bijective
-/// Goldilocks `x^7` Poseidon S-box.
-///
-/// Versions 1 and 2 used the non-permuting `x^5` S-box. Versions 3 and 4 used
-/// independently generated trace/LDE roots, so a blowup-stride AIR opening did
-/// not reach the next trace point. All four are intentionally rejected.
-const X7_PARAMS_VERSION_BASE: u16 = 5;
-/// Domain tag for permission root fallback commitments.
-const PERM_ROOT_DOMAIN: &[u8] = b"fastpq:v1:perm_root";
-/// Domain tag for transaction set hash fallback commitments.
-const TX_SET_DOMAIN: &[u8] = b"fastpq:v1:tx_set";
+#[cfg(test)]
+/// Canonical first-release schema identity for [`PublicIO`].
+const PUBLIC_IO_SCHEMA_NAME: &str = "fastpq_prover::proof::PublicIOV1";
+#[cfg(test)]
+/// Canonical first-release schema identity for [`Proof`].
+const PROOF_SCHEMA_NAME: &str = "fastpq_prover::proof::ProofV1";
 /// Default maximum transitions accepted by the V1 verifier.
 const DEFAULT_MAX_VERIFY_TRANSITIONS: usize = 256;
 /// Default maximum batch payload bytes accepted by the V1 verifier.
@@ -46,8 +42,8 @@ const DEFAULT_MAX_VERIFY_FRI_ROUND_VALUES: usize = 16;
 /// Default maximum AIR row values carried by a sampled opening.
 const DEFAULT_MAX_VERIFY_AIR_ROW_VALUES: usize = trace::DEFAULT_MAX_TRACE_COLUMNS;
 /// Public inputs committed by the prover and checked by the verifier.
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, Default)]
-#[repr(C)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, Default)]
+#[norito(schema_name = "fastpq_prover::proof::PublicIOV1")]
 pub struct PublicIO {
     /// Data-space identifier (little-endian UUID).
     pub dsid: [u8; 16],
@@ -63,12 +59,9 @@ pub struct PublicIO {
     pub tx_set_hash: [u8; 32],
     /// Deterministic ordering hash over canonicalised transitions.
     pub ordering_hash: [u8; 32],
-    /// Poseidon hashes for each permission lookup row included in the batch.
-    pub permission_hashes: Vec<[u8; 32]>,
 }
 /// Evaluation opening for the verifier queries into the FRI domain.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
-#[repr(C)]
 pub struct QueryOpening {
     /// Domain index opened by the prover.
     pub index: u32,
@@ -76,12 +69,11 @@ pub struct QueryOpening {
     pub value: u64,
     /// Full LDE leaf chunk containing `value`.
     pub chunk_values: Vec<u64>,
-    /// Merkle authentication path from the LDE leaf chunk to `lookup_root`.
+    /// Merkle authentication path from the LDE leaf chunk to `lde_root`.
     pub merkle_path: Vec<u64>,
 }
 /// Opened FRI fold group for one query at one round.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
-#[repr(C)]
 pub struct FriRoundOpening {
     /// FRI round number.
     pub round: u32,
@@ -98,7 +90,6 @@ pub struct FriRoundOpening {
 }
 /// Per-query FRI opening chain across all committed rounds.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
-#[repr(C)]
 pub struct FriQueryOpening {
     /// Initial evaluation-domain index sampled by the transcript.
     pub initial_index: u32,
@@ -116,13 +107,13 @@ pub struct FriQueryOpening {
 }
 /// Sampled AIR row and composition opening.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
-#[repr(C)]
 pub struct AirConstraintOpening {
     /// Evaluation-domain index sampled by the verifier transcript.
     pub index: u32,
     /// AIR trace row values at `index`.
     pub current_row: Vec<u64>,
-    /// AIR trace row values at `(index + 1) mod domain_size`.
+    /// AIR trace row values at `(index + blowup_factor) mod domain_size`, the
+    /// next base-trace point in the LDE domain.
     pub next_row: Vec<u64>,
     /// Merkle authentication path for `current_row` under `air_trace_root`.
     pub current_row_path: Vec<u64>,
@@ -135,12 +126,10 @@ pub struct AirConstraintOpening {
 }
 /// Proof artifact produced by the FASTPQ prover.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
-#[repr(C)]
+#[norito(schema_name = "fastpq_prover::proof::ProofV1")]
 pub struct Proof {
     /// Protocol version used to derive Fiat–Shamir challenges.
     pub protocol_version: u16,
-    /// Canonical parameter catalogue version.
-    pub params_version: u16,
     /// Parameter set name used by the prover.
     pub parameter: String,
     /// Deterministic commitment over the canonicalised batch.
@@ -153,15 +142,11 @@ pub struct Proof {
     pub air_trace_root: [u8; 32],
     /// Poseidon commitment over the AIR composition evaluation vector.
     pub air_composition_root: [u8; 32],
-    /// Poseidon commitment over the lookup witness LDE leaves.
-    pub lookup_root: [u8; 32],
-    /// Number of evaluation rows committed by `lookup_root`.
+    /// Poseidon commitment over the LDE leaves.
+    pub lde_root: [u8; 32],
+    /// Number of evaluation rows committed by `lde_root`.
     pub lde_domain_size: u32,
-    /// Lookup grand-product accumulator evaluated by the prover.
-    pub lookup_grand_product: u64,
-    /// Lookup Fiat–Shamir challenge (`γ`).
-    pub lookup_challenge: u64,
-    /// Composition challenges sampled after `γ`.
+    /// Composition challenges sampled after the LDE and trace roots.
     pub alphas: Vec<u64>,
     /// FRI folding challenges (`β_ℓ`).
     pub betas: Vec<u64>,
@@ -239,17 +224,15 @@ pub fn enforce_default_verify_limits(batch: &TransitionBatch, proof: &Proof) -> 
 /// FASTPQ prover wiring canonical STARK parameters to the backend.
 #[derive(Debug, Clone)]
 pub struct Prover {
-    params: StarkParameterSet,
     backend: StarkBackend,
 }
 impl Prover {
     fn new(params: StarkParameterSet) -> Self {
-        Self::from_backend_config(params, BackendConfig::new(params))
+        Self::from_backend_config(BackendConfig::new(params))
     }
-    fn from_backend_config(params: StarkParameterSet, config: BackendConfig) -> Self {
+    fn from_backend_config(config: BackendConfig) -> Self {
         Self {
             backend: StarkBackend::new(config),
-            params,
         }
     }
     /// Construct a prover using a canonical parameter set.
@@ -303,9 +286,9 @@ impl Prover {
         let config = BackendConfig::new(params)
             .with_execution_mode(execution_mode)
             .with_poseidon_mode(poseidon_mode);
-        Ok(Self::from_backend_config(params, config))
+        Ok(Self::from_backend_config(config))
     }
-    /// Iterate over canonical parameter sets exposed by this crate.
+    /// Return the sole canonical parameter set exposed by this crate.
     pub fn canonical_parameter_sets() -> &'static [StarkParameterSet] {
         &CANONICAL_PARAMETER_SETS
     }
@@ -314,7 +297,8 @@ impl Prover {
     /// # Errors
     ///
     /// Returns [`Error::InvalidProofSemantics`] unless the batch is an unchanged empty statement or
-    /// contains only fully witnessed transfers. Other errors propagate from [`trace_commitment`]
+    /// contains only fully witnessed transfers. Other errors propagate from
+    /// [`crate::trace_commitment`]
     /// and the configured backend implementation. The generated proof is verified through the
     /// canonical verifier path before being returned.
     pub fn prove(&self, batch: &TransitionBatch) -> Result<Proof> {
@@ -345,24 +329,25 @@ impl Prover {
     }
 
     fn prove_raw(&self, batch: &TransitionBatch) -> Result<Proof> {
-        let params_version = canonical_params_version(&self.params)
-            .ok_or_else(|| Error::UnknownParameter(self.params.name.to_string()))?;
-        if self.params.name != batch.parameter {
+        if self.backend.parameter_name() != batch.parameter {
             return Err(Error::ParameterMismatch {
-                expected: self.params.name.to_owned(),
+                expected: self.backend.parameter_name().to_owned(),
                 actual: batch.parameter.clone(),
             });
         }
-        trace::ensure_trace_schema_limit(batch, DEFAULT_MAX_VERIFY_AIR_ROW_VALUES)?;
-        let commitment = trace_commitment(&self.params, batch)?;
-        let ordering = ordering::ordering_hash(batch)?;
-        let permission_hashes = collect_permission_hashes(batch)?;
-        let public_io = build_public_io(batch, ordering, permission_hashes);
+        let canonical = batch.canonicalized();
+        trace::ensure_trace_schema_limit(&canonical, DEFAULT_MAX_VERIFY_AIR_ROW_VALUES)?;
+        let ordering = ordering::ordering_hash(&canonical)?;
+        let public_io = build_public_io(&canonical, ordering);
         let artifact = self
             .backend
-            .prove(batch, &public_io, PROTOCOL_VERSION, params_version)?;
-        let proof = materialise_proof(commitment, public_io, artifact, params_version)?;
-        verify_with_limits_raw(batch, &proof, prover_self_check_limits(batch, &proof))?;
+            .prove(&canonical, &public_io, PROTOCOL_VERSION)?;
+        let proof = materialise_proof(public_io, artifact)?;
+        verify_with_limits_raw(
+            &canonical,
+            &proof,
+            prover_self_check_limits(&canonical, &proof),
+        )?;
         Ok(proof)
     }
 }
@@ -385,8 +370,8 @@ pub fn verify_with_semantics(
 ) -> Result<()> {
     verify_with_limits_and_semantics(batch, proof, VerifyLimits::default(), semantics)
 }
-/// Verify a V1 proof from proof contents, public inputs, commitments, Merkle paths, lookup product
-/// binding, AIR openings, FRI query chains, challenges, and parameter/version checks.
+/// Verify a V1 proof from proof contents, public inputs, commitments, Merkle paths, AIR openings,
+/// FRI query chains, challenges, and protocol/parameter checks.
 ///
 /// # Errors
 ///
@@ -418,9 +403,30 @@ pub fn verify_with_limits_and_semantics(
     // Bound attacker-controlled batch/proof scans before inspecting profile semantics or
     // rebuilding transcript commitments.
     enforce_verify_limits(batch, proof, limits)?;
+    verify_prechecked_with_semantics(batch, proof, limits.max_air_row_values, semantics)
+}
+
+/// Verify an AXT proof after the caller has applied [`VerifyLimits::default`].
+///
+/// This is crate-private so only admission paths that performed the exact default
+/// preflight can skip its repeated payload scans.
+pub(crate) fn verify_with_default_limits_prechecked_and_semantics(
+    batch: &TransitionBatch,
+    proof: &Proof,
+    semantics: ProofSemantics,
+) -> Result<()> {
+    verify_prechecked_with_semantics(batch, proof, DEFAULT_MAX_VERIFY_AIR_ROW_VALUES, semantics)
+}
+
+fn verify_prechecked_with_semantics(
+    batch: &TransitionBatch,
+    proof: &Proof,
+    max_air_row_values: usize,
+    semantics: ProofSemantics,
+) -> Result<()> {
     validate_canonical_goldilocks_elements(proof)?;
     validate_batch_semantics(batch, semantics)?;
-    trace::ensure_trace_schema_limit(batch, limits.max_air_row_values)?;
+    trace::ensure_trace_schema_limit(batch, max_air_row_values)?;
     verify_after_limits(batch, proof)
 }
 
@@ -461,19 +467,14 @@ fn validate_canonical_goldilocks_roots(proof: &Proof) -> Result<()> {
     ensure_canonical_goldilocks_encoding(&proof.trace_root, "trace_root", &[])?;
     ensure_canonical_goldilocks_encoding(&proof.air_trace_root, "air_trace_root", &[])?;
     ensure_canonical_goldilocks_encoding(&proof.air_composition_root, "air_composition_root", &[])?;
-    ensure_canonical_goldilocks_encoding(&proof.lookup_root, "lookup_root", &[])?;
+    ensure_canonical_goldilocks_encoding(&proof.lde_root, "lde_root", &[])?;
     for (index, root) in proof.fri_layers.iter().enumerate() {
         ensure_canonical_goldilocks_encoding(root, "fri_layers", &[index])?;
-    }
-    for (index, hash) in proof.public_io.permission_hashes.iter().enumerate() {
-        ensure_canonical_goldilocks_encoding(hash, "public_io.permission_hashes", &[index])?;
     }
     Ok(())
 }
 
 fn validate_canonical_goldilocks_transcript_scalars(proof: &Proof) -> Result<()> {
-    ensure_canonical_goldilocks(proof.lookup_grand_product, "lookup_grand_product", &[])?;
-    ensure_canonical_goldilocks(proof.lookup_challenge, "lookup_challenge", &[])?;
     for (index, &alpha) in proof.alphas.iter().enumerate() {
         ensure_canonical_goldilocks(alpha, "alphas", &[index])?;
     }
@@ -631,22 +632,9 @@ fn verify_after_limits(batch: &TransitionBatch, proof: &Proof) -> Result<()> {
             actual: batch.parameter.clone(),
         });
     }
-    let expected_version = canonical_params_version(&params)
-        .ok_or_else(|| Error::UnknownParameter(proof.parameter.clone()))?;
-    if proof.params_version != expected_version {
-        return Err(Error::ParameterVersionMismatch {
-            parameter: proof.parameter.clone(),
-            expected: expected_version,
-            actual: proof.params_version,
-        });
-    }
-    let expected_commitment = trace_commitment(&params, batch)?;
-    if expected_commitment != proof.trace_commitment {
-        return Err(Error::CommitmentMismatch);
-    }
-    let expected_permission_hashes = collect_permission_hashes(batch)?;
-    let expected_ordering = ordering::ordering_hash(batch)?;
-    let expected_public_io = build_public_io(batch, expected_ordering, expected_permission_hashes);
+    let canonical = batch.canonicalized();
+    let expected_ordering = ordering::ordering_hash(&canonical)?;
+    let expected_public_io = build_public_io(&canonical, expected_ordering);
     ensure_public_io_matches(&expected_public_io, &proof.public_io)?;
     let lde_domain_size = usize::try_from(proof.lde_domain_size)
         .map_err(|_| Error::QueryIndexOverflow { index: usize::MAX })?;
@@ -655,18 +643,20 @@ fn verify_after_limits(batch: &TransitionBatch, proof: &Proof) -> Result<()> {
     }
     let expected_derived = backend::derive_batch_commitments(
         &params,
-        batch,
+        &canonical,
         &expected_public_io,
         proof.protocol_version,
-        proof.params_version,
     )?;
+    if proof.trace_commitment != expected_derived.trace_commitment {
+        return Err(Error::CommitmentMismatch);
+    }
     if proof.trace_root != field_norito::core::to_bytes(expected_derived.trace_root) {
         return Err(Error::TraceRootMismatch);
     }
-    if proof.lookup_root != field_norito::core::to_bytes(expected_derived.lookup_root)
+    if proof.lde_root != field_norito::core::to_bytes(expected_derived.lde_root)
         || proof.lde_domain_size != expected_derived.lde_domain_size
     {
-        return Err(Error::LookupRootMismatch);
+        return Err(Error::LdeRootMismatch);
     }
     if proof.air_trace_root != field_norito::core::to_bytes(expected_derived.air_trace_root) {
         return Err(Error::AirTraceRootMismatch);
@@ -676,13 +666,9 @@ fn verify_after_limits(batch: &TransitionBatch, proof: &Proof) -> Result<()> {
     {
         return Err(Error::AirCompositionRootMismatch);
     }
-    if proof.lookup_grand_product != expected_derived.lookup_grand_product {
-        return Err(Error::LookupGrandProductMismatch);
-    }
     let trace_root =
         field_norito::core::from_bytes(&proof.trace_root).ok_or(Error::TraceRootMismatch)?;
-    let lde_root =
-        field_norito::core::from_bytes(&proof.lookup_root).ok_or(Error::LookupRootMismatch)?;
+    let lde_root = field_norito::core::from_bytes(&proof.lde_root).ok_or(Error::LdeRootMismatch)?;
     let air_trace_root =
         field_norito::core::from_bytes(&proof.air_trace_root).ok_or(Error::AirTraceRootMismatch)?;
     let air_composition_root = field_norito::core::from_bytes(&proof.air_composition_root)
@@ -691,17 +677,12 @@ fn verify_after_limits(batch: &TransitionBatch, proof: &Proof) -> Result<()> {
         &proof.public_io,
         &proof.parameter,
         proof.protocol_version,
-        proof.params_version,
         TRANSCRIPT_TAG_INIT,
     )?;
     transcript.append_message(
         TRANSCRIPT_TAG_ROOTS,
         &[lde_root.to_le_bytes(), trace_root.to_le_bytes()].concat(),
     );
-    let gamma = transcript.challenge_field(TRANSCRIPT_TAG_GAMMA);
-    if gamma != proof.lookup_challenge {
-        return Err(Error::LookupChallengeMismatch);
-    }
     if proof.alphas.len() != AIR_COMPOSITION_ALPHA_COUNT {
         return Err(Error::AirChallengeCountMismatch {
             expected: AIR_COMPOSITION_ALPHA_COUNT,
@@ -722,10 +703,6 @@ fn verify_after_limits(batch: &TransitionBatch, proof: &Proof) -> Result<()> {
             air_composition_root.to_le_bytes(),
         ]
         .concat(),
-    );
-    transcript.append_message(
-        LOOKUP_PRODUCT_DOMAIN,
-        &proof.lookup_grand_product.to_le_bytes(),
     );
     let fri_layer_lengths =
         expected_fri_layer_lengths(lde_domain_size, params.fri.arity, params.fri.max_reductions)?;
@@ -1364,8 +1341,7 @@ fn batch_size_hint(batch: &TransitionBatch) -> usize {
         total = total
             .saturating_add(transition.key.len())
             .saturating_add(transition.pre_value.len())
-            .saturating_add(transition.post_value.len())
-            .saturating_add(operation_size_hint(&transition.operation));
+            .saturating_add(transition.post_value.len());
     }
     for (key, value) in &batch.metadata {
         total = total.saturating_add(key.len()).saturating_add(value.len());
@@ -1375,14 +1351,11 @@ fn batch_size_hint(batch: &TransitionBatch) -> usize {
 fn proof_size_hint(proof: &Proof) -> usize {
     let mut total = 0usize;
     total = total.saturating_add(2); // protocol_version
-    total = total.saturating_add(2); // params_version
     total = total.saturating_add(proof.parameter.len());
     total = total.saturating_add(32); // trace_commitment
-    total = total.saturating_add(public_io_size_hint(&proof.public_io));
-    total = total.saturating_add(32 * 4); // trace, AIR, composition, and lookup roots
+    total = total.saturating_add(16 + 8 + 32 * 5); // dsid, slot, roots, tx set, ordering hash
+    total = total.saturating_add(32 * 4); // trace, AIR, composition, and LDE roots
     total = total.saturating_add(4); // lde_domain_size
-    total = total.saturating_add(8); // lookup_grand_product
-    total = total.saturating_add(8); // lookup_challenge
     total = total.saturating_add(proof.alphas.len().saturating_mul(8));
     total = total.saturating_add(proof.betas.len().saturating_mul(8));
     total = total.saturating_add(proof.fri_layers.len().saturating_mul(32));
@@ -1416,38 +1389,7 @@ fn proof_size_hint(proof: &Proof) -> usize {
     }
     total
 }
-fn public_io_size_hint(public_io: &PublicIO) -> usize {
-    let mut total = 0usize;
-    total = total.saturating_add(16); // dsid
-    total = total.saturating_add(8); // slot
-    total = total.saturating_add(32 * 5); // roots, tx set, and ordering hashes
-    total = total.saturating_add(public_io.permission_hashes.len().saturating_mul(32));
-    total
-}
-fn operation_size_hint(operation: &crate::OperationKind) -> usize {
-    match operation {
-        crate::OperationKind::RoleGrant {
-            role_id,
-            permission_id,
-            ..
-        }
-        | crate::OperationKind::RoleRevoke {
-            role_id,
-            permission_id,
-            ..
-        } => role_id.len().saturating_add(permission_id.len()),
-        crate::OperationKind::Transfer
-        | crate::OperationKind::Mint
-        | crate::OperationKind::Burn
-        | crate::OperationKind::MetaSet => 0,
-    }
-}
-fn materialise_proof(
-    commitment: Hash,
-    public_io: PublicIO,
-    artifact: BackendArtifact,
-    params_version: u16,
-) -> Result<Proof> {
+fn materialise_proof(public_io: PublicIO, artifact: BackendArtifact) -> Result<Proof> {
     if artifact.query_openings.len() != artifact.query_chunks.len() {
         return Err(Error::QueryCountMismatch {
             expected: artifact.query_openings.len(),
@@ -1493,17 +1435,14 @@ fn materialise_proof(
         .collect();
     Ok(Proof {
         protocol_version: PROTOCOL_VERSION,
-        params_version,
         parameter: artifact.parameter,
-        trace_commitment: commitment,
+        trace_commitment: artifact.trace_commitment,
         public_io,
         trace_root: field_norito::core::to_bytes(artifact.trace_root),
         air_trace_root: field_norito::core::to_bytes(artifact.air_trace_root),
         air_composition_root: field_norito::core::to_bytes(artifact.air_composition_root),
-        lookup_root: field_norito::core::to_bytes(artifact.lookup_root),
+        lde_root: field_norito::core::to_bytes(artifact.lde_root),
         lde_domain_size: artifact.lde_domain_size,
-        lookup_grand_product: artifact.lookup_grand_product,
-        lookup_challenge: artifact.lookup_challenge,
         alphas: artifact.alphas,
         betas: artifact.fri_betas,
         fri_layers,
@@ -1512,31 +1451,16 @@ fn materialise_proof(
         fri_queries: artifact.fri_query_openings,
     })
 }
-fn build_public_io(
-    batch: &TransitionBatch,
-    ordering_hash: Hash,
-    permission_hashes: Vec<[u8; 32]>,
-) -> PublicIO {
+fn build_public_io(batch: &TransitionBatch, ordering_hash: Hash) -> PublicIO {
     let inputs = &batch.public_inputs;
-    let perm_root = if is_zero_bytes(&inputs.perm_root) {
-        perm_root_from_permission_hashes(&permission_hashes)
-    } else {
-        inputs.perm_root
-    };
-    let tx_set_hash = if is_zero_bytes(&inputs.tx_set_hash) {
-        tx_set_hash_from_ordering(&ordering_hash)
-    } else {
-        inputs.tx_set_hash
-    };
     PublicIO {
         dsid: inputs.dsid,
         slot: inputs.slot,
         old_root: inputs.old_root,
         new_root: inputs.new_root,
-        perm_root,
-        tx_set_hash,
-        ordering_hash: hash_norito::core::to_bytes(&ordering_hash),
-        permission_hashes,
+        perm_root: inputs.perm_root,
+        tx_set_hash: inputs.tx_set_hash,
+        ordering_hash: ordering_hash.into(),
     }
 }
 fn ensure_public_io_matches(expected: &PublicIO, actual: &PublicIO) -> Result<()> {
@@ -1563,71 +1487,7 @@ fn ensure_public_io_matches(expected: &PublicIO, actual: &PublicIO) -> Result<()
     if actual.ordering_hash != expected.ordering_hash {
         return Err(Error::OrderingHashMismatch);
     }
-    if actual.permission_hashes != expected.permission_hashes {
-        return Err(Error::PermissionHashMismatch);
-    }
     Ok(())
-}
-fn is_zero_bytes(bytes: &[u8]) -> bool {
-    bytes.iter().all(|&b| b == 0)
-}
-fn perm_root_from_permission_hashes(hashes: &[[u8; 32]]) -> [u8; 32] {
-    if hashes.is_empty() {
-        return [0u8; 32];
-    }
-    let mut payload = Vec::with_capacity(PERM_ROOT_DOMAIN.len() + hashes.len() * 32);
-    payload.extend_from_slice(PERM_ROOT_DOMAIN);
-    for hash in hashes {
-        payload.extend_from_slice(hash);
-    }
-    hash_norito::core::to_bytes(&Hash::new(payload))
-}
-fn tx_set_hash_from_ordering(ordering_hash: &Hash) -> [u8; 32] {
-    let mut payload = Vec::with_capacity(TX_SET_DOMAIN.len() + Hash::LENGTH);
-    payload.extend_from_slice(TX_SET_DOMAIN);
-    payload.extend_from_slice(ordering_hash.as_ref());
-    hash_norito::core::to_bytes(&Hash::new(payload))
-}
-fn collect_permission_hashes(batch: &TransitionBatch) -> Result<Vec<[u8; 32]>> {
-    let mut canonical = batch.clone();
-    canonical.sort();
-    let mut hashes = Vec::new();
-    for transition in &canonical.transitions {
-        match &transition.operation {
-            crate::OperationKind::RoleGrant {
-                role_id,
-                permission_id,
-                epoch,
-            }
-            | crate::OperationKind::RoleRevoke {
-                role_id,
-                permission_id,
-                epoch,
-            } => {
-                let digest = trace::permission_hash(role_id, permission_id, *epoch)?;
-                hashes.push(field_norito::core::to_bytes(digest));
-            }
-            _ => {}
-        }
-    }
-    Ok(hashes)
-}
-fn canonical_params_version(params: &StarkParameterSet) -> Option<u16> {
-    CANONICAL_PARAMETER_SETS
-        .iter()
-        .position(|candidate| candidate == params)
-        .and_then(|idx| u16::try_from(idx).ok())
-        .and_then(|idx| X7_PARAMS_VERSION_BASE.checked_add(idx))
-}
-mod hash_norito {
-    pub mod core {
-        use iroha_crypto::Hash;
-        pub fn to_bytes(hash: &Hash) -> [u8; 32] {
-            let mut out = [0u8; 32];
-            out.copy_from_slice(hash.as_ref());
-            out
-        }
-    }
 }
 mod field_norito {
     pub mod core {
@@ -1690,13 +1550,13 @@ mod tests {
             b"asset/xor/alice".to_vec(),
             1_u64.to_le_bytes().to_vec(),
             2_u64.to_le_bytes().to_vec(),
-            OperationKind::Mint,
+            OperationKind::MetaSet,
         ));
         batch.push(StateTransition::new(
             b"asset/xor/bob".to_vec(),
             10_u64.to_le_bytes().to_vec(),
             11_u64.to_le_bytes().to_vec(),
-            OperationKind::Mint,
+            OperationKind::MetaSet,
         ));
         batch.sort();
         annotate_batch(&mut batch);
@@ -1708,35 +1568,11 @@ mod tests {
             let key = format!("asset/xor/account-{idx:04}").into_bytes();
             let idx_u64 = u64::try_from(idx).expect("sample row index fits u64");
             let pre = idx_u64.to_le_bytes().to_vec();
-            let op = match idx % 3 {
-                0 => OperationKind::Mint,
-                1 => OperationKind::Burn,
-                _ => OperationKind::MetaSet,
-            };
-            let post_value = if matches!(&op, OperationKind::Burn) {
-                idx_u64 - 1
-            } else {
-                idx_u64.wrapping_add(1)
-            };
+            let op = OperationKind::MetaSet;
+            let post_value = idx_u64.wrapping_add(1);
             let post = post_value.to_le_bytes().to_vec();
             batch.push(StateTransition::new(key, pre, post, op));
         }
-        batch.sort();
-        annotate_batch(&mut batch);
-        batch
-    }
-    fn sample_batch_with_permission() -> TransitionBatch {
-        let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
-        batch.push(StateTransition::new(
-            b"role/sora-admin/permission/transfer".to_vec(),
-            0u64.to_le_bytes().to_vec(),
-            1u64.to_le_bytes().to_vec(),
-            OperationKind::RoleGrant {
-                role_id: vec![0xAB; 32],
-                permission_id: vec![0xCD; 32],
-                epoch: 7,
-            },
-        ));
         batch.sort();
         annotate_batch(&mut batch);
         batch
@@ -1750,16 +1586,13 @@ mod tests {
     ) -> (TransitionBatch, Proof) {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch_with_size(rows);
-        let commitment = trace_commitment(&prover.params, &batch).unwrap();
         let ordering = ordering::ordering_hash(&batch).unwrap();
-        let permission_hashes = collect_permission_hashes(&batch).unwrap();
-        let public_io = build_public_io(&batch, ordering, permission_hashes);
-        let params_version = canonical_params_version(&prover.params).unwrap();
+        let public_io = build_public_io(&batch, ordering);
         let artifact = prover
             .backend
-            .prove(&batch, &public_io, PROTOCOL_VERSION, params_version)
+            .prove(&batch, &public_io, PROTOCOL_VERSION)
             .unwrap();
-        let proof = materialise_proof(commitment, public_io, artifact, params_version).unwrap();
+        let proof = materialise_proof(public_io, artifact).unwrap();
         verify_with_limits(&batch, &proof, limits).unwrap();
         (batch, proof)
     }
@@ -1849,71 +1682,56 @@ mod tests {
     }
     fn target_public_io_for(batch: &TransitionBatch) -> PublicIO {
         let ordering = ordering::ordering_hash(batch).unwrap();
-        let permission_hashes = collect_permission_hashes(batch).unwrap();
-        build_public_io(batch, ordering, permission_hashes)
+        build_public_io(batch, ordering)
     }
     fn proof_over_source_trace_with_target_statement(
         prover: &Prover,
         source: &TransitionBatch,
         target: &TransitionBatch,
     ) -> Proof {
-        let target_commitment = trace_commitment(&prover.params, target).unwrap();
+        let params = find_by_name(prover.backend.parameter_name())
+            .copied()
+            .expect("prover uses a canonical parameter set");
+        let target_commitment = trace_commitment(&params, target).unwrap();
         let target_public_io = target_public_io_for(target);
-        let params_version = canonical_params_version(&prover.params).unwrap();
-        let artifact = prover
+        let mut artifact = prover
             .backend
-            .prove(source, &target_public_io, PROTOCOL_VERSION, params_version)
+            .prove(source, &target_public_io, PROTOCOL_VERSION)
             .unwrap();
-        materialise_proof(
-            target_commitment,
-            target_public_io,
-            artifact,
-            params_version,
-        )
-        .unwrap()
+        artifact.trace_commitment = target_commitment;
+        materialise_proof(target_public_io, artifact).unwrap()
     }
     fn proof_over_source_lde_with_target_trace_root(
         prover: &Prover,
         source: &TransitionBatch,
         target: &TransitionBatch,
     ) -> Proof {
-        let target_commitment = trace_commitment(&prover.params, target).unwrap();
+        let params = find_by_name(prover.backend.parameter_name())
+            .copied()
+            .expect("prover uses a canonical parameter set");
+        let target_commitment = trace_commitment(&params, target).unwrap();
         let target_public_io = target_public_io_for(target);
-        let params_version = canonical_params_version(&prover.params).unwrap();
-        let target_roots = backend::derive_batch_commitments(
-            &prover.params,
-            target,
-            &target_public_io,
-            PROTOCOL_VERSION,
-            params_version,
-        )
-        .unwrap();
-        let artifact = prover
+        let target_roots =
+            backend::derive_batch_commitments(&params, target, &target_public_io, PROTOCOL_VERSION)
+                .unwrap();
+        let mut artifact = prover
             .backend
             .prove_with_transcript_trace_root(
                 source,
                 &target_public_io,
                 PROTOCOL_VERSION,
-                params_version,
                 target_roots.trace_root,
             )
             .unwrap();
-        materialise_proof(
-            target_commitment,
-            target_public_io,
-            artifact,
-            params_version,
-        )
-        .unwrap()
+        artifact.trace_commitment = target_commitment;
+        materialise_proof(target_public_io, artifact).unwrap()
     }
     fn graft_artifact_commitments(target: &mut Proof, donor: &Proof) {
         target.trace_root = donor.trace_root;
-        target.lookup_root = donor.lookup_root;
+        target.lde_root = donor.lde_root;
         target.air_trace_root = donor.air_trace_root;
         target.air_composition_root = donor.air_composition_root;
         target.lde_domain_size = donor.lde_domain_size;
-        target.lookup_grand_product = donor.lookup_grand_product;
-        target.lookup_challenge = donor.lookup_challenge;
         target.alphas = donor.alphas.clone();
         target.betas = donor.betas.clone();
         target.fri_layers = donor.fri_layers.clone();
@@ -1975,21 +1793,17 @@ mod tests {
     fn sample_backend_artifact() -> BackendArtifact {
         BackendArtifact {
             parameter: "fastpq-lane-balanced".to_owned(),
-            trace_rows: 1,
+            trace_commitment: Hash::new(b"materialise-proof-test"),
             trace_root: 11,
             air_trace_root: 12,
             air_composition_root: 13,
-            lookup_root: 14,
+            lde_root: 14,
             lde_domain_size: 1,
-            lookup_grand_product: 15,
-            lookup_challenge: 16,
-            alphas: vec![17, 18],
-            fri_arity: 2,
-            fri_blowup: 2,
-            fri_layers: vec![19],
+            alphas: vec![15, 16],
+            fri_layers: vec![17],
             fri_betas: Vec::new(),
-            query_openings: vec![(0, 20)],
-            query_chunks: vec![vec![20]],
+            query_openings: vec![(0, 18)],
+            query_chunks: vec![vec![18]],
             query_paths: vec![Vec::new()],
             air_openings: vec![AirConstraintOpening {
                 index: 0,
@@ -1997,52 +1811,39 @@ mod tests {
                 next_row: Vec::new(),
                 current_row_path: Vec::new(),
                 next_row_path: Vec::new(),
-                composition_value: 21,
+                composition_value: 19,
                 composition_path: Vec::new(),
             }],
             fri_query_openings: vec![FriQueryOpening {
                 initial_index: 0,
                 rounds: Vec::new(),
                 final_index: 0,
-                final_values: vec![21],
+                final_values: vec![19],
                 final_merkle_path: Vec::new(),
             }],
         }
     }
     fn materialise_sample_artifact(artifact: BackendArtifact) -> Result<Proof> {
-        materialise_proof(
-            Hash::new(b"materialise-proof-test"),
-            PublicIO::default(),
-            artifact,
-            7,
-        )
+        materialise_proof(PublicIO::default(), artifact)
     }
     #[test]
-    fn public_io_falls_back_to_derived_inputs() {
+    fn public_io_preserves_explicit_zero_permission_and_tx_set_hash() {
         let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
         batch.public_inputs.dsid = [0x11; 16];
         batch.public_inputs.slot = 7;
         batch.public_inputs.old_root = [0xAA; 32];
         batch.public_inputs.new_root = [0xBB; 32];
         batch.push(StateTransition::new(
-            b"role/sora-admin/permission/transfer".to_vec(),
-            0u64.to_le_bytes().to_vec(),
-            1u64.to_le_bytes().to_vec(),
-            OperationKind::RoleGrant {
-                role_id: vec![0xAB; 32],
-                permission_id: vec![0xCD; 32],
-                epoch: 7,
-            },
+            b"metadata/permission-root-binding".to_vec(),
+            b"old".to_vec(),
+            b"new".to_vec(),
+            OperationKind::MetaSet,
         ));
         batch.sort();
         let ordering = ordering::ordering_hash(&batch).expect("ordering");
-        let permission_hashes = collect_permission_hashes(&batch).expect("permission hashes");
-        let public_io = build_public_io(&batch, ordering, permission_hashes.clone());
-        assert_eq!(
-            public_io.perm_root,
-            perm_root_from_permission_hashes(&permission_hashes)
-        );
-        assert_eq!(public_io.tx_set_hash, tx_set_hash_from_ordering(&ordering));
+        let public_io = build_public_io(&batch, ordering);
+        assert_eq!(public_io.perm_root, batch.public_inputs.perm_root);
+        assert_eq!(public_io.tx_set_hash, batch.public_inputs.tx_set_hash);
     }
     #[test]
     fn public_io_preserves_explicit_roots_and_hashes_claims() {
@@ -2054,19 +1855,15 @@ mod tests {
         batch.public_inputs.perm_root = [0x44; 32];
         batch.public_inputs.tx_set_hash = [0x55; 32];
         let ordering = Hash::new(b"explicit-ordering-hash");
-        let permission_hashes = vec![[0x66; 32], [0x77; 32]];
-        let public_io = build_public_io(&batch, ordering, permission_hashes.clone());
+        let public_io = build_public_io(&batch, ordering);
         assert_eq!(public_io.dsid, batch.public_inputs.dsid);
         assert_eq!(public_io.slot, batch.public_inputs.slot);
         assert_eq!(public_io.old_root, batch.public_inputs.old_root);
         assert_eq!(public_io.new_root, batch.public_inputs.new_root);
         assert_eq!(public_io.perm_root, batch.public_inputs.perm_root);
         assert_eq!(public_io.tx_set_hash, batch.public_inputs.tx_set_hash);
-        assert_eq!(
-            public_io.ordering_hash,
-            hash_norito::core::to_bytes(&ordering)
-        );
-        assert_eq!(public_io.permission_hashes, permission_hashes);
+        let expected_ordering: [u8; Hash::LENGTH] = ordering.into();
+        assert_eq!(public_io.ordering_hash, expected_ordering);
     }
     #[test]
     fn public_io_matcher_reports_direct_mismatches() {
@@ -2078,7 +1875,6 @@ mod tests {
             perm_root: [0x44; 32],
             tx_set_hash: [0x55; 32],
             ordering_hash: [0x66; 32],
-            permission_hashes: vec![[0x77; 32]],
         };
         let mut actual = expected.clone();
         actual.dsid[0] ^= 0x01;
@@ -2124,169 +1920,20 @@ mod tests {
             ensure_public_io_matches(&expected, &actual),
             Err(Error::OrderingHashMismatch)
         ));
-        let mut actual = expected.clone();
-        actual.permission_hashes.push([0x88; 32]);
-        assert!(matches!(
-            ensure_public_io_matches(&expected, &actual),
-            Err(Error::PermissionHashMismatch)
-        ));
         ensure_public_io_matches(&expected, &expected).unwrap();
     }
     #[test]
-    fn public_io_hash_helpers_are_domain_separated() {
-        assert!(is_zero_bytes(&[0u8; 32]));
-        assert!(!is_zero_bytes(&[0, 0, 1]));
-        assert_eq!(perm_root_from_permission_hashes(&[]), [0u8; 32]);
-        let first = [[0x11; 32]];
-        let second = [[0x22; 32]];
-        let first_root = perm_root_from_permission_hashes(&first);
-        let second_root = perm_root_from_permission_hashes(&second);
-        let ordering_root = tx_set_hash_from_ordering(&Hash::new(first[0]));
-        assert_ne!(first_root, [0u8; 32]);
-        assert_ne!(first_root, second_root);
-        assert_ne!(first_root, ordering_root);
-    }
-    #[test]
-    fn collect_permission_hashes_sorts_roles_and_validates_lengths() {
-        let grant_role = vec![0x11; 32];
-        let grant_permission = vec![0x22; 32];
-        let revoke_role = vec![0x33; 32];
-        let revoke_permission = vec![0x44; 32];
-        let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
-        batch.push(StateTransition::new(
-            b"z/revoke".to_vec(),
-            vec![1],
-            vec![2],
-            OperationKind::RoleRevoke {
-                role_id: revoke_role.clone(),
-                permission_id: revoke_permission.clone(),
-                epoch: 9,
-            },
-        ));
-        batch.push(StateTransition::new(
-            b"a/grant".to_vec(),
-            vec![3],
-            vec![4],
-            OperationKind::RoleGrant {
-                role_id: grant_role.clone(),
-                permission_id: grant_permission.clone(),
-                epoch: 7,
-            },
-        ));
-        batch.push(StateTransition::new(
-            b"m/mint".to_vec(),
-            vec![5],
-            vec![6],
-            OperationKind::Mint,
-        ));
-        let hashes = collect_permission_hashes(&batch).unwrap();
-        assert_eq!(
-            hashes,
-            vec![
-                field_norito::core::to_bytes(
-                    trace::permission_hash(&grant_role, &grant_permission, 7).unwrap()
-                ),
-                field_norito::core::to_bytes(
-                    trace::permission_hash(&revoke_role, &revoke_permission, 9).unwrap()
-                ),
-            ]
-        );
-        let mut bad_role = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
-        bad_role.push(StateTransition::new(
-            b"bad-role".to_vec(),
-            Vec::new(),
-            Vec::new(),
-            OperationKind::RoleGrant {
-                role_id: vec![0xAA; 31],
-                permission_id: vec![0xBB; 32],
-                epoch: 1,
-            },
-        ));
-        assert!(matches!(
-            collect_permission_hashes(&bad_role),
-            Err(Error::InvalidRoleIdLength { length: 31 })
-        ));
-        let mut bad_permission =
-            TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
-        bad_permission.push(StateTransition::new(
-            b"bad-permission".to_vec(),
-            Vec::new(),
-            Vec::new(),
-            OperationKind::RoleRevoke {
-                role_id: vec![0xAA; 32],
-                permission_id: vec![0xBB; 31],
-                epoch: 1,
-            },
-        ));
-        assert!(matches!(
-            collect_permission_hashes(&bad_permission),
-            Err(Error::InvalidPermissionIdLength { length: 31 })
-        ));
-    }
-    #[test]
-    fn batch_size_hint_counts_metadata_and_operation_payloads() {
-        let role_id = vec![0xAA; 5];
-        let permission_id = vec![0xBB; 7];
+    fn batch_size_hint_counts_transition_and_metadata_payloads() {
         let mut batch = TransitionBatch::new("param", PublicInputs::default());
         batch.push(StateTransition::new(
             b"key".to_vec(),
             vec![1, 2],
             vec![3, 4, 5],
-            OperationKind::RoleRevoke {
-                role_id: role_id.clone(),
-                permission_id: permission_id.clone(),
-                epoch: 99,
-            },
+            OperationKind::MetaSet,
         ));
         batch.metadata.insert("meta".to_owned(), vec![9, 8, 7]);
-        let expected = "param".len()
-            + "key".len()
-            + 2
-            + 3
-            + role_id.len()
-            + permission_id.len()
-            + "meta".len()
-            + 3;
+        let expected = "param".len() + "key".len() + 2 + 3 + "meta".len() + 3;
         assert_eq!(batch_size_hint(&batch), expected);
-        assert_eq!(operation_size_hint(&OperationKind::Transfer), 0);
-        assert_eq!(operation_size_hint(&OperationKind::Mint), 0);
-        assert_eq!(operation_size_hint(&OperationKind::Burn), 0);
-        assert_eq!(operation_size_hint(&OperationKind::MetaSet), 0);
-    }
-    #[test]
-    fn operation_size_hint_counts_role_grant_and_revoke_payloads() {
-        let role_id = vec![0x11; 3];
-        let permission_id = vec![0x22; 4];
-        let expected = role_id.len() + permission_id.len();
-        assert_eq!(
-            operation_size_hint(&OperationKind::RoleGrant {
-                role_id: role_id.clone(),
-                permission_id: permission_id.clone(),
-                epoch: 1,
-            }),
-            expected
-        );
-        assert_eq!(
-            operation_size_hint(&OperationKind::RoleRevoke {
-                role_id,
-                permission_id,
-                epoch: 2,
-            }),
-            expected
-        );
-    }
-    #[test]
-    fn fallback_roots_are_order_and_input_sensitive() {
-        let first = [0x11; 32];
-        let second = [0x22; 32];
-        assert_ne!(
-            perm_root_from_permission_hashes(&[first, second]),
-            perm_root_from_permission_hashes(&[second, first])
-        );
-        assert_ne!(
-            tx_set_hash_from_ordering(&Hash::new(b"ordering-a")),
-            tx_set_hash_from_ordering(&Hash::new(b"ordering-b"))
-        );
     }
     #[test]
     fn raw_crypto_verifier_accepts_canonical_v1_roundtrip() {
@@ -2317,7 +1964,7 @@ mod tests {
         super::verify(&batch, &proof).expect("full-width slot verification");
     }
     #[test]
-    fn strict_state_profile_rejects_cryptographically_valid_mint_statement() {
+    fn strict_state_profile_rejects_cryptographically_valid_metadata_statement() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch();
         let raw_proof = prover
@@ -2340,60 +1987,26 @@ mod tests {
         ));
     }
     #[test]
-    fn raw_prover_and_verifier_reject_wrong_mint_and_burn_direction() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
-        for (operation, valid_before, valid_after, invalid_after, expected_operation) in [
-            (OperationKind::Mint, 4_u64, 5_u64, 3_u64, "mint"),
-            (OperationKind::Burn, 5_u64, 4_u64, 6_u64, "burn"),
-        ] {
-            let mut valid = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
-            valid.push(StateTransition::new(
-                b"asset/xor/alice".to_vec(),
-                valid_before.to_le_bytes().to_vec(),
-                valid_after.to_le_bytes().to_vec(),
-                operation.clone(),
-            ));
-            let proof = prover
-                .prove_raw_statement(&valid)
-                .expect("correctly directed raw statement");
-            verify_raw_statement(&valid, &proof).expect("correctly directed raw verification");
-
-            let mut invalid = valid.clone();
-            invalid.transitions[0].post_value = invalid_after.to_le_bytes().to_vec();
-            assert!(matches!(
-                prover.prove_raw_statement(&invalid),
-                Err(Error::InvalidAssetValueChange { operation }) if operation == expected_operation
-            ));
-            assert!(matches!(
-                verify_raw_statement(&invalid, &proof),
-                Err(Error::InvalidAssetValueChange { operation }) if operation == expected_operation
-            ));
-        }
-    }
-    #[test]
     fn verify_rejects_batch_parameter_mismatch_before_replay() {
         let (mut batch, proof) = sample_proof_with_size(8);
-        batch.parameter = "fastpq-lane-latency".to_owned();
+        batch.parameter = "test-mismatched-parameter".to_owned();
         let err = verify(&batch, &proof).unwrap_err();
         assert!(matches!(
             err,
             Error::ParameterMismatch {
                 expected,
                 actual
-            } if expected == "fastpq-lane-balanced" && actual == "fastpq-lane-latency"
+            } if expected == "fastpq-lane-balanced" && actual == "test-mismatched-parameter"
         ));
     }
     #[test]
-    fn verify_rejects_known_parameter_relabelled_proof() {
+    fn verify_rejects_unknown_parameter_relabelled_proof() {
         let (batch, mut proof) = sample_proof_with_size(8);
-        proof.parameter = "fastpq-lane-latency".to_owned();
+        proof.parameter = "test-unknown-parameter".to_owned();
         let err = verify(&batch, &proof).unwrap_err();
         assert!(matches!(
             err,
-            Error::ParameterMismatch {
-                expected,
-                actual
-            } if expected == "fastpq-lane-latency" && actual == "fastpq-lane-balanced"
+            Error::UnknownParameter(parameter) if parameter == "test-unknown-parameter"
         ));
     }
     #[test]
@@ -2422,57 +2035,29 @@ mod tests {
         assert_eq!(prover.backend.execution_mode(), ExecutionMode::Cpu);
     }
     #[test]
-    fn canonical_params_versions_track_catalogue_order() {
-        let sets = Prover::canonical_parameter_sets();
-        assert_eq!(sets, CANONICAL_PARAMETER_SETS.as_slice());
+    fn canonical_parameter_sets_expose_the_canonical_catalogue() {
         assert_eq!(
-            sets.iter()
-                .map(canonical_params_version)
-                .collect::<Vec<_>>(),
-            vec![Some(5), Some(6)]
+            Prover::canonical_parameter_sets(),
+            CANONICAL_PARAMETER_SETS.as_slice()
         );
-        for (idx, params) in sets.iter().enumerate() {
-            assert_eq!(
-                canonical_params_version(params),
-                Some(
-                    X7_PARAMS_VERSION_BASE
-                        + u16::try_from(idx).expect("test catalogue version fits u16")
-                )
-            );
-        }
-        let mut custom = sets[0];
-        custom.name = "fastpq-local-test-parameter";
-        assert_eq!(canonical_params_version(&custom), None);
-
-        let mut same_name_custom = sets[0];
-        same_name_custom.trace_root ^= 1;
-        assert_eq!(canonical_params_version(&same_name_custom), None);
-        let prover = Prover::new(same_name_custom);
-        assert!(matches!(
-            prover.prove_raw_statement(&sample_batch()),
-            Err(Error::UnknownParameter(parameter)) if parameter == sets[0].name
-        ));
     }
     #[test]
     fn materialise_proof_maps_backend_artifact_fields() {
         let proof = materialise_sample_artifact(sample_backend_artifact()).unwrap();
         assert_eq!(proof.protocol_version, PROTOCOL_VERSION);
-        assert_eq!(proof.params_version, 7);
         assert_eq!(proof.parameter, "fastpq-lane-balanced");
         assert_eq!(proof.trace_root, field_norito::core::to_bytes(11));
         assert_eq!(proof.air_trace_root, field_norito::core::to_bytes(12));
         assert_eq!(proof.air_composition_root, field_norito::core::to_bytes(13));
-        assert_eq!(proof.lookup_root, field_norito::core::to_bytes(14));
+        assert_eq!(proof.lde_root, field_norito::core::to_bytes(14));
         assert_eq!(proof.lde_domain_size, 1);
-        assert_eq!(proof.lookup_grand_product, 15);
-        assert_eq!(proof.lookup_challenge, 16);
-        assert_eq!(proof.alphas, vec![17, 18]);
+        assert_eq!(proof.alphas, vec![15, 16]);
         assert_eq!(proof.betas, Vec::<u64>::new());
-        assert_eq!(proof.fri_layers, vec![field_norito::core::to_bytes(19)]);
+        assert_eq!(proof.fri_layers, vec![field_norito::core::to_bytes(17)]);
         assert_eq!(proof.queries.len(), 1);
         assert_eq!(proof.queries[0].index, 0);
-        assert_eq!(proof.queries[0].value, 20);
-        assert_eq!(proof.queries[0].chunk_values, vec![20]);
+        assert_eq!(proof.queries[0].value, 18);
+        assert_eq!(proof.queries[0].chunk_values, vec![18]);
         assert_eq!(proof.air_openings.len(), 1);
         assert_eq!(proof.fri_queries.len(), 1);
     }
@@ -2487,14 +2072,13 @@ mod tests {
             perm_root: [0x04; 32],
             tx_set_hash: [0x05; 32],
             ordering_hash: [0x06; 32],
-            permission_hashes: vec![[0x07; 32], [0x08; 32]],
         };
-        let proof = materialise_proof(commitment, public_io.clone(), sample_backend_artifact(), 11)
-            .expect("materialise proof");
+        let mut artifact = sample_backend_artifact();
+        artifact.trace_commitment = commitment;
+        let proof = materialise_proof(public_io.clone(), artifact).expect("materialise proof");
         assert_eq!(proof.commitment(), commitment);
         assert_eq!(proof.trace_commitment, commitment);
         assert_eq!(proof.public_io, public_io);
-        assert_eq!(proof.params_version, 11);
     }
     #[test]
     fn materialise_proof_preserves_multiple_query_openings_and_paths() {
@@ -2607,12 +2191,12 @@ mod tests {
         assert_verify_rejects(
             &batch,
             &proof,
-            |tampered| tampered.lookup_root[8] = 1,
+            |tampered| tampered.lde_root[8] = 1,
             |err| {
                 matches!(
                     err,
                     Error::NonCanonicalGoldilocksElement {
-                        context: "lookup_root",
+                        context: "lde_root",
                         indices,
                     } if indices.is_empty()
                 )
@@ -2869,19 +2453,11 @@ mod tests {
         ));
     }
     #[test]
-    fn verify_parameter_version_rejects_before_trace_root_binding() {
-        let (batch, mut proof) = sample_proof_with_size(8);
-        proof.params_version = proof.params_version.wrapping_add(1);
-        proof.trace_root[0] ^= 0xAA;
-        let err = verify(&batch, &proof).unwrap_err();
-        assert!(matches!(err, Error::ParameterVersionMismatch { .. }));
-    }
-    #[test]
     fn verify_parameter_mismatch_rejects_before_trace_root_binding() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let mut batch = sample_batch();
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
-        batch.parameter = "fastpq-lane-latency".to_owned();
+        batch.parameter = "test-mismatched-parameter".to_owned();
         proof.trace_root[0] ^= 0xAA;
         let err = verify(&batch, &proof).unwrap_err();
         assert!(matches!(
@@ -2889,7 +2465,7 @@ mod tests {
             Error::ParameterMismatch {
                 expected,
                 actual,
-            } if expected == "fastpq-lane-balanced" && actual == "fastpq-lane-latency"
+            } if expected == "fastpq-lane-balanced" && actual == "test-mismatched-parameter"
         ));
     }
     #[test]
@@ -2918,7 +2494,7 @@ mod tests {
         let batch = sample_batch();
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
         proof.trace_root = field_norito::core::to_bytes(42);
-        proof.lookup_root[8] = 1;
+        proof.lde_root[8] = 1;
         proof.air_trace_root[8] = 1;
         proof.air_composition_root[8] = 1;
         let err = verify(&batch, &proof).unwrap_err();
@@ -2934,12 +2510,12 @@ mod tests {
         );
     }
     #[test]
-    fn verify_rejects_valid_field_lookup_root_tamper_after_trace_binding() {
+    fn verify_rejects_valid_field_lde_root_tamper_after_trace_binding() {
         let (batch, mut proof) = sample_proof_with_size(32);
-        proof.lookup_root = field_norito::core::to_bytes(42);
+        proof.lde_root = field_norito::core::to_bytes(42);
         let err = verify(&batch, &proof).unwrap_err();
         assert!(
-            matches!(err, Error::LookupRootMismatch),
+            matches!(err, Error::LdeRootMismatch),
             "unexpected verifier error: {err:?}"
         );
     }
@@ -3021,11 +2597,11 @@ mod tests {
         let proof = proof_over_source_lde_with_target_trace_root(&prover, &source, &target);
         let legitimate = prover.prove_raw_statement(&target).unwrap();
         assert_eq!(proof.trace_root, legitimate.trace_root);
-        assert_ne!(proof.lookup_root, legitimate.lookup_root);
+        assert_ne!(proof.lde_root, legitimate.lde_root);
 
         let err = verify(&target, &proof).unwrap_err();
         assert!(
-            matches!(err, Error::LookupRootMismatch),
+            matches!(err, Error::LdeRootMismatch),
             "unexpected verifier error: {err:?}"
         );
     }
@@ -3036,23 +2612,6 @@ mod tests {
         let mut target = source.clone();
         target.public_inputs.slot = target.public_inputs.slot.wrapping_add(1);
         target.public_inputs.dsid[0] ^= 0x5A;
-        let proof = proof_over_source_trace_with_target_statement(&prover, &source, &target);
-        let err = verify(&target, &proof).unwrap_err();
-        assert!(
-            matches!(err, Error::TraceRootMismatch),
-            "unexpected verifier error: {err:?}"
-        );
-    }
-    #[test]
-    fn verify_rejects_permission_witness_replay_with_target_statement() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
-        let source = sample_batch_with_permission();
-        let mut target = source.clone();
-        let OperationKind::RoleGrant { permission_id, .. } = &mut target.transitions[0].operation
-        else {
-            panic!("expected role grant transition");
-        };
-        permission_id[0] ^= 0x33;
         let proof = proof_over_source_trace_with_target_statement(&prover, &source, &target);
         let err = verify(&target, &proof).unwrap_err();
         assert!(
@@ -3090,7 +2649,7 @@ mod tests {
         let mut proof = proof_over_source_trace_with_target_statement(&prover, &source, &target);
         let target_proof = prover.prove_raw_statement(&target).unwrap();
         proof.trace_root = target_proof.trace_root;
-        proof.lookup_root = target_proof.lookup_root;
+        proof.lde_root = target_proof.lde_root;
         proof.air_trace_root = target_proof.air_trace_root;
         proof.air_composition_root = target_proof.air_composition_root;
         proof.lde_domain_size = target_proof.lde_domain_size;
@@ -3098,9 +2657,7 @@ mod tests {
         assert!(
             matches!(
                 err,
-                Error::LookupGrandProductMismatch
-                    | Error::LookupChallengeMismatch
-                    | Error::FriChallengeMismatch { .. }
+                Error::FriChallengeMismatch { .. }
                     | Error::FriLayerMismatch { .. }
                     | Error::QueryMismatch { .. }
                     | Error::QueryMerklePathMismatch { .. }
@@ -3182,52 +2739,18 @@ mod tests {
         ));
     }
     #[test]
-    fn verify_rejects_permission_hash_mutation() {
+    fn verify_preserves_explicit_zero_roots_and_hashes() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
-        let batch = sample_batch_with_permission();
-        let mut proof = prover.prove_raw_statement(&batch).unwrap();
-        assert!(
-            !proof.public_io.permission_hashes.is_empty(),
-            "expected at least one permission hash for mutation test"
-        );
-        proof.public_io.permission_hashes[0][0] ^= 0x01;
-        let err = verify(&batch, &proof).unwrap_err();
-        assert!(matches!(err, Error::PermissionHashMismatch));
-    }
-    #[test]
-    fn verify_rejects_spoofed_permission_hashes_with_explicit_perm_root() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
-        let mut batch = sample_batch_with_permission();
-        let spoofed_hashes = vec![
-            field_norito::core::to_bytes(0x11),
-            field_norito::core::to_bytes(0x22),
-        ];
-        batch.public_inputs.perm_root = perm_root_from_permission_hashes(&spoofed_hashes);
-        let mut proof = prover.prove_raw_statement(&batch).unwrap();
-        assert_eq!(proof.public_io.perm_root, batch.public_inputs.perm_root);
-        proof.public_io.permission_hashes = spoofed_hashes;
-        let err = verify(&batch, &proof).unwrap_err();
-        assert!(matches!(err, Error::PermissionHashMismatch));
-    }
-    #[test]
-    fn verify_rejects_erased_derived_public_io_roots() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
-        let mut batch = sample_batch_with_permission();
+        let mut batch = sample_batch();
         batch.public_inputs.perm_root = [0; 32];
         batch.public_inputs.tx_set_hash = [0; 32];
         let proof = prover.prove_raw_statement(&batch).unwrap();
-        assert_ne!(proof.public_io.perm_root, [0; 32]);
-        assert_ne!(proof.public_io.tx_set_hash, [0; 32]);
+        assert_eq!(proof.public_io.perm_root, [0; 32]);
+        assert_eq!(proof.public_io.tx_set_hash, [0; 32]);
         assert_verify_rejects(
             &batch,
             &proof,
-            |tampered| tampered.public_io.perm_root = [0; 32],
-            |err| matches!(err, Error::PublicIoMismatch { field: "perm_root" }),
-        );
-        assert_verify_rejects(
-            &batch,
-            &proof,
-            |tampered| tampered.public_io.tx_set_hash = [0; 32],
+            |tampered| tampered.public_io.tx_set_hash = [1; 32],
             |err| {
                 matches!(
                     err,
@@ -3250,31 +2773,13 @@ mod tests {
         assert!(matches!(err, Error::FriChallengeMismatch { round: 0 }));
     }
     #[test]
-    fn verify_rejects_wrong_lookup_challenge() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
-        let batch = sample_batch_with_size(8);
-        let mut proof = prover.prove_raw_statement(&batch).unwrap();
-        proof.lookup_challenge = proof.lookup_challenge.wrapping_add(1);
-        let err = verify(&batch, &proof).unwrap_err();
-        assert!(matches!(err, Error::LookupChallengeMismatch));
-    }
-    #[test]
-    fn verify_rejects_wrong_lookup_grand_product() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
-        let batch = sample_batch_with_size(8);
-        let mut proof = prover.prove_raw_statement(&batch).unwrap();
-        proof.lookup_grand_product = proof.lookup_grand_product.wrapping_add(1);
-        let err = verify(&batch, &proof).unwrap_err();
-        assert!(matches!(err, Error::LookupGrandProductMismatch));
-    }
-    #[test]
-    fn verify_rejects_modified_lookup_root() {
+    fn verify_rejects_modified_lde_root() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch_with_size(16);
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
-        proof.lookup_root[0] ^= 0xAA;
+        proof.lde_root[0] ^= 0xAA;
         let err = verify(&batch, &proof).unwrap_err();
-        assert!(matches!(err, Error::LookupRootMismatch));
+        assert!(matches!(err, Error::LdeRootMismatch));
     }
     #[test]
     fn verify_rejects_fri_layer_length_mismatch() {
@@ -4170,7 +3675,7 @@ mod tests {
         proof.lde_domain_size = proof.lde_domain_size.saturating_add(1);
         let err = verify(&batch, &proof).unwrap_err();
         assert!(
-            matches!(err, Error::LookupRootMismatch),
+            matches!(err, Error::LdeRootMismatch),
             "unexpected verifier error: {err:?}"
         );
     }
@@ -4363,27 +3868,6 @@ mod tests {
             )
             .expect("balanced terminal degree bound"),
             1
-        );
-    }
-    #[test]
-    fn latency_fri_schedule_authenticates_a_linear_terminal_bound() {
-        let params = fastpq_isi::params::FASTPQ_CANONICAL_LATENCY;
-        let lengths = expected_fri_layer_lengths(
-            1usize << params.lde_log_size,
-            params.fri.arity,
-            params.fri.max_reductions,
-        )
-        .expect("latency FRI schedule");
-        assert_eq!(lengths, vec![1 << 20, 1 << 16, 1 << 12, 1 << 8, 1 << 4]);
-        assert_eq!(
-            fri_terminal_degree_bound(
-                1usize << params.lde_log_size,
-                params.fri.blowup_factor,
-                params.fri.arity,
-                &lengths,
-            )
-            .expect("latency terminal degree bound"),
-            2
         );
     }
     #[test]
@@ -4775,7 +4259,7 @@ mod tests {
         ));
     }
     #[test]
-    fn verify_rejects_mismatched_large_batch_by_commitment() {
+    fn verify_rejects_mismatched_large_batch_by_ordering_hash_before_commitment() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let small_batch = sample_batch();
         let proof = prover.prove_raw_statement(&small_batch).unwrap();
@@ -4784,7 +4268,7 @@ mod tests {
             limits.max_transitions = large_batch.transitions.len()
         });
         let err = verify_with_limits(&large_batch, &proof, limits).unwrap_err();
-        assert!(matches!(err, Error::CommitmentMismatch));
+        assert!(matches!(err, Error::OrderingHashMismatch));
     }
     #[test]
     fn verify_accepts_large_batch_when_limits_allow() {
@@ -4794,19 +4278,9 @@ mod tests {
         verify_with_limits(&batch, &proof, limits).unwrap();
     }
     #[test]
-    fn verify_rejects_stale_version() {
-        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
-        let batch = sample_batch();
-        let mut proof = prover.prove_raw_statement(&batch).unwrap();
-        proof.params_version = proof.params_version.wrapping_add(1);
-        let err = verify(&batch, &proof).unwrap_err();
-        assert!(matches!(err, Error::ParameterVersionMismatch { .. }));
-    }
-    #[test]
     fn proof_roundtrip_smoke() {
         let proof = Proof {
             protocol_version: PROTOCOL_VERSION,
-            params_version: 1,
             parameter: "fastpq-lane-balanced".to_string(),
             trace_commitment: Hash::new([0u8; 4]),
             public_io: PublicIO {
@@ -4817,18 +4291,15 @@ mod tests {
                 perm_root: [3; 32],
                 tx_set_hash: [4; 32],
                 ordering_hash: [5; 32],
-                permission_hashes: vec![[6; 32]],
             },
             trace_root: [7; 32],
             air_trace_root: [8; 32],
             air_composition_root: [9; 32],
-            lookup_root: [10; 32],
+            lde_root: [10; 32],
             lde_domain_size: 1,
-            lookup_grand_product: 11,
-            lookup_challenge: 12,
-            alphas: vec![13, 14],
-            betas: vec![15, 16],
-            fri_layers: vec![[17; 32], [18; 32]],
+            alphas: vec![11, 12],
+            betas: vec![13, 14],
+            fri_layers: vec![[15; 32], [16; 32]],
             queries: vec![QueryOpening {
                 index: 0,
                 value: 123,
@@ -4870,14 +4341,32 @@ mod tests {
         assert_eq!(decoded, proof);
     }
     #[test]
-    fn hash_norito_to_bytes_matches_hash_bytes() {
-        let raw = [
-            0xAA, 0xBB, 0xCC, 0xDD, 0x01, 0x23, 0x45, 0x67, 0x89, 0x10, 0x32, 0x54, 0x76, 0x98,
-            0xBA, 0xDC, 0xFE, 0xEF, 0xCD, 0xAB, 0x89, 0x67, 0x45, 0x23, 0x01, 0xFF, 0xEE, 0xDD,
-            0xCC, 0xBB, 0xAA, 0x99,
-        ];
-        let hash = Hash::prehashed(raw);
-        assert_eq!(hash_norito::core::to_bytes(&hash), raw);
+    fn release_schema_identities_reject_the_pre_release_proof_header() {
+        let public_io_schema = norito::core::schema_hash_for_name(PUBLIC_IO_SCHEMA_NAME);
+        assert_eq!(
+            <PublicIO as NoritoSerialize>::schema_hash(),
+            public_io_schema
+        );
+        assert_eq!(
+            <PublicIO as NoritoDeserialize<'static>>::schema_hash(),
+            public_io_schema
+        );
+
+        let proof_schema = norito::core::schema_hash_for_name(PROOF_SCHEMA_NAME);
+        assert_eq!(<Proof as NoritoSerialize>::schema_hash(), proof_schema);
+        assert_eq!(
+            <Proof as NoritoDeserialize<'static>>::schema_hash(),
+            proof_schema
+        );
+        let proof = materialise_sample_artifact(sample_backend_artifact()).unwrap();
+        let mut encoded = norito::core::to_bytes(&proof).expect("encode release proof");
+        assert_eq!(&encoded[6..22], proof_schema.as_slice());
+        let pre_release_schema = norito::core::schema_hash_for_name("fastpq_prover::proof::Proof");
+        encoded[6..22].copy_from_slice(&pre_release_schema);
+        assert!(
+            norito::decode_from_bytes::<Proof>(&encoded).is_err(),
+            "the pre-release proof schema must not decode as release V1"
+        );
     }
     #[test]
     fn field_norito_to_bytes_encodes_le() {
@@ -4913,22 +4402,21 @@ mod tests {
     }
     fn proof_with_every_goldilocks_container() -> Proof {
         let mut proof = materialise_sample_artifact(sample_backend_artifact()).unwrap();
-        proof.public_io.permission_hashes = vec![field_norito::core::to_bytes(22)];
-        proof.betas = vec![23];
-        proof.queries[0].merkle_path = vec![24];
-        proof.air_openings[0].current_row = vec![25];
-        proof.air_openings[0].next_row = vec![26];
-        proof.air_openings[0].current_row_path = vec![27];
-        proof.air_openings[0].next_row_path = vec![28];
-        proof.air_openings[0].composition_path = vec![29];
+        proof.betas = vec![22];
+        proof.queries[0].merkle_path = vec![23];
+        proof.air_openings[0].current_row = vec![24];
+        proof.air_openings[0].next_row = vec![25];
+        proof.air_openings[0].current_row_path = vec![26];
+        proof.air_openings[0].next_row_path = vec![27];
+        proof.air_openings[0].composition_path = vec![28];
         proof.fri_queries[0].rounds = vec![FriRoundOpening {
             round: 0,
             index: 0,
-            values: vec![30],
-            folded_value: 31,
-            merkle_path: vec![32],
+            values: vec![29],
+            folded_value: 30,
+            merkle_path: vec![31],
         }];
-        proof.fri_queries[0].final_merkle_path = vec![33];
+        proof.fri_queries[0].final_merkle_path = vec![32];
         validate_canonical_goldilocks_elements(&proof).unwrap();
         proof
     }
@@ -4945,26 +4433,11 @@ mod tests {
         assert_noncanonical_goldilocks_rejected(&proof, "air_composition_root", &[], |proof| {
             proof.air_composition_root = field_norito::core::to_bytes(GOLDILOCKS_MODULUS);
         });
-        assert_noncanonical_goldilocks_rejected(&proof, "lookup_root", &[], |proof| {
-            proof.lookup_root = field_norito::core::to_bytes(GOLDILOCKS_MODULUS);
+        assert_noncanonical_goldilocks_rejected(&proof, "lde_root", &[], |proof| {
+            proof.lde_root = field_norito::core::to_bytes(GOLDILOCKS_MODULUS);
         });
         assert_noncanonical_goldilocks_rejected(&proof, "fri_layers", &[0], |proof| {
             proof.fri_layers[0] = field_norito::core::to_bytes(GOLDILOCKS_MODULUS);
-        });
-        assert_noncanonical_goldilocks_rejected(
-            &proof,
-            "public_io.permission_hashes",
-            &[0],
-            |proof| {
-                proof.public_io.permission_hashes[0] =
-                    field_norito::core::to_bytes(GOLDILOCKS_MODULUS);
-            },
-        );
-        assert_noncanonical_goldilocks_rejected(&proof, "lookup_grand_product", &[], |proof| {
-            proof.lookup_grand_product = GOLDILOCKS_MODULUS
-        });
-        assert_noncanonical_goldilocks_rejected(&proof, "lookup_challenge", &[], |proof| {
-            proof.lookup_challenge = GOLDILOCKS_MODULUS
         });
         assert_noncanonical_goldilocks_rejected(&proof, "alphas", &[0], |proof| {
             proof.alphas[0] = GOLDILOCKS_MODULUS;

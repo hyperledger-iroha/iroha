@@ -233,6 +233,23 @@ impl RecoveredDecisionFetchStoreBodyAuthorityV1 {
 }
 #[cfg_attr(not(test), allow(dead_code))]
 impl DurableCertifiedFetchBodyReceipt {
+    /// Build a byte-consistent durability projection for selector-only tests.
+    #[cfg(test)]
+    pub(crate) fn for_authenticated_response_test(
+        authenticated: &AuthenticatedCertifiedBodyResponse,
+    ) -> Self {
+        let response = authenticated.response();
+        Self {
+            request_hash: response.request_hash,
+            response_hash: HashOf::new(response),
+            durable_body: DurableBodyReceipt::for_test(
+                response.manifest.round.context_id,
+                response.manifest.round,
+                response.manifest.subject,
+                HashOf::new(&response.manifest),
+            ),
+        }
+    }
     /// Hash of the exact authenticated request family served by the response.
     pub(crate) const fn request_hash(&self) -> HashOf<wire::CertifiedBodyRequest> {
         self.request_hash

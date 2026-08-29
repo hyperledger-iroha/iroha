@@ -2038,6 +2038,7 @@ fn establish_configured_lane_markers_for_test(kura: &Kura, lane_config: &Runtime
                 .expect("install explicit Kura test lane marker");
         }
     }
+    kura.replace_lane_storage_entries_for_test(lane_config);
 }
 
 fn populate_strict_kura_store(dir: &TempDir, count: usize) {

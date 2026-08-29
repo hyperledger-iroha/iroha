@@ -777,12 +777,8 @@ fn first_release_kura_enum_tags_are_contiguous_and_unknown_tags_fail_closed() {
     assert_tag(&LaneBlockExecutionPreflightArtifactFormat::Current, 0);
     assert_tag(&LaneBlockApplicationReceiptArtifactFormat::Current, 0);
     assert_tag(
-        &LaneBlockApplicationReceiptArtifactFormat::DirectExecution,
-        1,
-    );
-    assert_tag(
         &LaneBlockApplicationReceiptArtifactFormat::MergeExecution,
-        2,
+        1,
     );
 
     let stable = AutonomousLifecycleStableStateV1::terminal_outcome_pending_reservation();

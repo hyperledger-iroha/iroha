@@ -65,7 +65,9 @@ fn referendum_open_and_close_by_height() {
             )
         });
         assert!(!has_opened_at_h1);
-        sblock1.commit().expect("commit block at H=1");
+        sblock1
+            .commit_empty_block_for_testing()
+            .expect("commit block at H=1");
     }
     {
         let view = state.view();
@@ -93,7 +95,9 @@ fn referendum_open_and_close_by_height() {
                     )
             )
         });
-        sblock2.commit().expect("commit block at H=2");
+        sblock2
+            .commit_empty_block_for_testing()
+            .expect("commit block at H=2");
         let status_open_at_h2 = state
             .view()
             .world()
@@ -118,7 +122,9 @@ fn referendum_open_and_close_by_height() {
             )
         )
     });
-    sblock3.commit().expect("commit block at H=3");
+    sblock3
+        .commit_empty_block_for_testing()
+        .expect("commit block at H=3");
     let status_open_at_h3 = state
         .view()
         .world()
@@ -142,7 +148,9 @@ fn referendum_open_and_close_by_height() {
                 )
         )
     });
-    sblock4.commit().expect("commit block at H=4");
+    sblock4
+        .commit_empty_block_for_testing()
+        .expect("commit block at H=4");
     let status_closed_at_h4 = state
         .view()
         .world()

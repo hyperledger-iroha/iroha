@@ -24335,7 +24335,7 @@ mod tests {
             );
         tx.apply();
         block
-            .commit()
+            .commit_world_overlay_for_testing()
             .expect("commit Inrou public-lane validator fixture");
     }
     fn insert_inrou_service_placement_record_fixture(
@@ -27199,7 +27199,7 @@ mod tests {
             }
             replication_orders.apply();
         }
-        block.commit()?;
+        block.commit_world_overlay_for_testing()?;
         Ok(())
     }
     fn canonical_test_runtime_state_dir(temp_dir: &tempfile::TempDir) -> Result<PathBuf> {
@@ -27665,7 +27665,7 @@ mod tests {
             pin_manifests.insert(digest, record);
         }
         pin_manifests.apply();
-        block.commit()?;
+        block.commit_world_overlay_for_testing()?;
         Ok(())
     }
     #[test]
@@ -29783,7 +29783,7 @@ mod tests {
         }
         .execute(&ALICE_ID, &mut tx)?;
         tx.apply();
-        block.commit()?;
+        block.commit_world_overlay_for_testing()?;
 
         {
             let view = state.view();
@@ -29960,7 +29960,7 @@ mod tests {
         }
         .execute(&ALICE_ID, &mut tx)?;
         tx.apply();
-        block.commit()?;
+        block.commit_world_overlay_for_testing()?;
 
         {
             let view = state.view();

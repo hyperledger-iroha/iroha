@@ -7186,6 +7186,12 @@ mod tests {
         artifact: SccpGroth16Bn254ProofArtifactV1,
         bridge_proof: BridgeSccpDestinationProofV1,
     }
+    const TEST_MAX_OUTSTANDING_LIABILITY: u128 = 1_000_000_000_000;
+
+    const fn test_max_wrapped_supply(multiplier: u64) -> u128 {
+        TEST_MAX_OUTSTANDING_LIABILITY * multiplier as u128
+    }
+
     #[test]
     fn taira_finality_network_id_matches_the_governed_genesis_vector() {
         assert_eq!(

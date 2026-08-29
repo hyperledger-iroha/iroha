@@ -2932,6 +2932,64 @@ pub(crate) struct AutonomousLifecycleTerminalOutcomeStageObservation {
     source_kind: AutonomousLifecycleTerminalOutcomeSourceKind,
     stage: AutonomousLifecycleTerminalOutcomeDurableStage,
 }
+/// Move-only Kura authorization for removing one State-committed Queue owner.
+///
+/// Construction reopens the hash-addressed entrypoint claim, its exact
+/// producer-authenticated payload and retirement, and the matching Complete
+/// terminal outcome. Queue must still join the target to its current durable
+/// QueuePlan binding and prove that no newer reservation owns the hash.
+#[must_use = "Kura terminal cleanup authorization must be consumed by Queue"]
+pub(crate) struct AutonomousLifecycleCommittedQueueCleanupAuthorization {
+    target_entrypoint_hash: Hash,
+    retirement_hash: Hash,
+    terminal_outcome_hash: Hash,
+    reservation_group: LaneQueueReservationGroupBindingV1,
+    ordered_keys: Vec<LaneQueueReservationKeyV1>,
+}
+impl AutonomousLifecycleCommittedQueueCleanupAuthorization {
+    /// Build exact structural authority for Queue unit tests.
+    #[cfg(test)]
+    pub(crate) fn for_queue_test(
+        target_entrypoint_hash: Hash,
+        ordered_keys: Vec<LaneQueueReservationKeyV1>,
+    ) -> Self {
+        let reservation_group =
+            lane_queue_reservation_group_binding_from_ordered_keys(ordered_keys.iter())
+                .expect("test Queue cleanup authority must carry one exact reservation group");
+        Self {
+            target_entrypoint_hash,
+            retirement_hash: Hash::new(b"test durable retirement"),
+            terminal_outcome_hash: Hash::new(b"test Complete terminal outcome"),
+            reservation_group,
+            ordered_keys,
+        }
+    }
+
+    /// Return the exact entrypoint whose later State commit may be removed.
+    #[must_use]
+    pub(crate) const fn target_entrypoint_hash(&self) -> Hash {
+        self.target_entrypoint_hash
+    }
+
+    /// Consume the authorization into the exact facts Queue must revalidate.
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        Hash,
+        Hash,
+        Hash,
+        LaneQueueReservationGroupBindingV1,
+        Vec<LaneQueueReservationKeyV1>,
+    ) {
+        (
+            self.target_entrypoint_hash,
+            self.retirement_hash,
+            self.terminal_outcome_hash,
+            self.reservation_group,
+            self.ordered_keys,
+        )
+    }
+}
 impl AutonomousLifecycleTerminalOutcomeStageObservation {
     /// Return the exact order-sensitive reservation-group identity.
     #[must_use]
@@ -3738,14 +3796,14 @@ impl LaneBlockExecutionInputArtifact {
         norito::encode_canonical(self)
     }
 }
-/// Known metadata format variants for durable lane-block direct-execution preflights.
+/// Known metadata format variants for durable lane-block execution preflights.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 pub enum LaneBlockExecutionPreflightArtifactFormat {
     #[codec(index = 0)]
-    /// Non-committing direct-execution preflight result for recovered lane input.
+    /// Non-committing execution preflight result for recovered lane input.
     Current,
 }
-/// Durable result of non-committing direct-execution preflight for a lane block.
+/// Durable result of a non-committing execution preflight for a lane block.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 pub struct LaneBlockExecutionPreflightArtifact {
@@ -3770,7 +3828,7 @@ pub struct LaneBlockExecutionPreflightArtifact {
 }
 impl LaneBlockExecutionPreflightArtifact {
     const FORMAT_LABEL: &'static str = "lane.execution_preflight";
-    /// Construct a durable direct-execution preflight result from recovered input.
+    /// Construct a durable execution preflight result from recovered input.
     #[must_use]
     pub fn new(
         input: &LaneBlockExecutionInputArtifact,
@@ -3822,13 +3880,10 @@ pub enum LaneBlockApplicationReceiptArtifactFormat {
     /// Canonical global block results proving lane payload state application.
     Current,
     #[codec(index = 1)]
-    /// Direct standalone execution results proving lane payload state application.
-    DirectExecution,
-    #[codec(index = 2)]
     /// Canonical merge-batch execution results proving lane payload state application.
     MergeExecution,
 }
-/// Durable receipt proving a certified standalone lane block has committed results.
+/// Durable receipt proving that a certified lane block has committed results.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 pub struct LaneBlockApplicationReceiptArtifact {
@@ -3838,9 +3893,9 @@ pub struct LaneBlockApplicationReceiptArtifact {
     pub proposal: LaneBlockProposalV1,
     /// Exact authenticated source of the applied executable payload.
     pub source: LaneBlockExecutionSourceV1,
-    /// Canonical block height, or committed preflight base height for direct execution.
+    /// Canonical block height carrying the application result.
     pub application_block_height: u64,
-    /// Canonical block hash, or committed preflight base WSV hash for direct execution.
+    /// Canonical block hash carrying the application result.
     pub application_block_hash: HashOf<BlockHeader>,
     /// Accepted entrypoint indices in the canonical block body.
     pub entrypoint_indices: Vec<u64>,
@@ -3974,44 +4029,6 @@ impl LaneBlockApplicationReceiptArtifact {
             merge_settlement_hash: None,
         }
     }
-    /// Construct a durable application receipt from clean direct-execution preflight results.
-    #[must_use]
-    pub fn new_direct_execution(
-        input: &LaneBlockExecutionInputArtifact,
-        preflight: &LaneBlockExecutionPreflightArtifact,
-    ) -> Option<Self> {
-        let application_block_hash = preflight.preflight_state_hash?;
-        if preflight.has_rejections()
-            || input.proposal != preflight.proposal
-            || input.source != preflight.source
-            || input.proposal.descriptor.accepted_candidate_indices != preflight.entrypoint_indices
-            || input.entrypoint_hashes != preflight.entrypoint_hashes
-        {
-            return None;
-        }
-        Some(Self {
-            format: LaneBlockApplicationReceiptArtifactFormat::DirectExecution,
-            proposal: input.proposal.clone(),
-            source: input.source.clone(),
-            application_block_height: preflight.preflight_state_height,
-            application_block_hash,
-            entrypoint_indices: preflight.entrypoint_indices.clone(),
-            entrypoint_hashes: preflight.entrypoint_hashes.clone(),
-            result_hashes: preflight.result_hashes.clone(),
-            results: preflight.results.clone(),
-            merge_epoch_id: None,
-            merge_entry_hash: None,
-            merge_carrier_block_height: None,
-            merge_carrier_block_hash: None,
-            merge_source_bundle_hash: None,
-            merge_batch_identity_hash: None,
-            merge_batch_hash: None,
-            merge_base_state_hash: None,
-            merge_write_set_root: None,
-            merge_expected_post_state_hash: None,
-            merge_settlement_hash: None,
-        })
-    }
     fn new_merge_execution(
         entry: &MergeLedgerEntry,
         batch: &MergeExecutionBatch,
@@ -4054,7 +4071,6 @@ impl LaneBlockApplicationReceiptArtifact {
     pub fn format_label(&self) -> &'static str {
         match self.format {
             LaneBlockApplicationReceiptArtifactFormat::Current
-            | LaneBlockApplicationReceiptArtifactFormat::DirectExecution
             | LaneBlockApplicationReceiptArtifactFormat::MergeExecution => Self::FORMAT_LABEL,
         }
     }

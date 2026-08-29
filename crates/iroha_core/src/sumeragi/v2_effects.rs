@@ -10231,11 +10231,15 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                         "pending certified Fetch lost its body-pipeline owner".to_owned(),
                     )
                 })?;
-        if body_pipeline_owner.tag != pending.task.tag
-            || body_pipeline_owner.manifest_hash != Some(HashOf::new(&response.manifest))
+        // A certified-only Fetch legitimately starts without proposal manifest
+        // metadata. Its authenticated response supplies the canonical manifest at
+        // this atomic retirement-to-durable-body transition; until then the exact
+        // pipeline owner must still match the frozen pending Fetch, including None.
+        if body_pipeline_owner.tag != candidate.fetch_tag()
+            || body_pipeline_owner.manifest_hash != candidate.proposal_manifest_hash()
         {
             return Err(EffectTransportError::BodyMismatch(
-                "persisted response differs from the exact body-pipeline owner",
+                "pending certified Fetch differs from the exact body-pipeline owner",
             ));
         }
         let claim_preflight = self

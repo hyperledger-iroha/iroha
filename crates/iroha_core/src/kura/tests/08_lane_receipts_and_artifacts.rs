@@ -592,111 +592,6 @@ fn lane_block_application_receipt_waits_for_committed_results() {
     assert!(!kura.lane_block_application_receipt_available(&proposal));
 }
 #[test]
-fn lane_block_direct_application_receipt_persists_clean_preflight_results() {
-    let (
-        (_temp_dir, config, lane_config),
-        (lane_id, _lane_entry, lane_block_height),
-        (block, _ownership, proposal),
-        kura,
-    ) = MarkedLaneBlockFixture::uncommitted().into_parts();
-    kura.store_block(block)
-        .expect("store block with lane artifact but no canonical results");
-    assert!(
-        !kura
-            .persist_lane_block_application_receipt_if_ready(&proposal)
-            .expect("canonical receipt is not ready while block results are absent")
-    );
-    let recovered = kura
-        .recover_lane_block_payload(&proposal)
-        .expect("recover executable lane payload");
-    kura.persist_lane_block_execution_input(&recovered)
-        .expect("persist lane execution input");
-    let input = kura
-        .read_lane_block_execution_input(lane_id, lane_block_height)
-        .expect("lane execution input");
-    let state_hash = Some(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
-        b"direct application base state hash",
-    )));
-    let result = TransactionResult::new(TransactionResultInner::Ok(DataTriggerSequence::new()));
-    kura.persist_lane_block_execution_preflight(&input, 7, state_hash, vec![result.clone()])
-        .expect("persist clean lane execution preflight");
-    let preflight = kura
-        .read_lane_block_execution_preflight(lane_id, lane_block_height)
-        .expect("lane execution preflight");
-    kura.persist_direct_lane_block_application_receipt(&input, &preflight)
-        .expect("persist direct lane application receipt");
-    kura.persist_direct_lane_block_application_receipt(&input, &preflight)
-        .expect("direct lane application receipt persistence is idempotent");
-    let receipt = kura
-        .read_lane_block_application_receipt(lane_id, lane_block_height)
-        .expect("direct lane application receipt");
-    assert_eq!(
-        receipt.format,
-        LaneBlockApplicationReceiptArtifactFormat::DirectExecution
-    );
-    assert_eq!(receipt.application_block_height, 7);
-    assert_eq!(
-        receipt.application_block_hash,
-        preflight
-            .preflight_state_hash
-            .expect("direct receipt state hash")
-    );
-    assert_eq!(receipt.results, vec![result]);
-    assert!(kura.lane_block_application_receipt_available(&proposal));
-    drop(kura);
-    let (reloaded, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
-        .expect("reload kura");
-    assert_eq!(
-        reloaded.read_lane_block_application_receipt(lane_id, lane_block_height),
-        Some(receipt)
-    );
-    assert!(reloaded.lane_block_application_receipt_available(&proposal));
-}
-#[test]
-fn lane_block_direct_application_receipt_rejects_rejected_preflight() {
-    let (
-        (_temp_dir, _config, _lane_config),
-        (lane_id, _lane_entry, lane_block_height),
-        (block, _ownership, proposal),
-        kura,
-    ) = MarkedLaneBlockFixture::uncommitted().into_parts();
-    kura.store_block(block)
-        .expect("store block with lane artifact");
-    let recovered = kura
-        .recover_lane_block_payload(&proposal)
-        .expect("recover executable lane payload");
-    kura.persist_lane_block_execution_input(&recovered)
-        .expect("persist lane execution input");
-    let input = kura
-        .read_lane_block_execution_input(lane_id, lane_block_height)
-        .expect("lane execution input");
-    let state_hash = Some(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
-        b"rejected direct application base state hash",
-    )));
-    let rejected = TransactionResult::new(TransactionResultInner::Err(
-        iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
-            iroha_data_model::ValidationFail::NotPermitted(
-                "direct receipt rejected preflight".to_owned(),
-            ),
-        ),
-    ));
-    kura.persist_lane_block_execution_preflight(&input, 7, state_hash, vec![rejected])
-        .expect("persist rejected lane execution preflight");
-    let preflight = kura
-        .read_lane_block_execution_preflight(lane_id, lane_block_height)
-        .expect("lane execution preflight");
-    assert!(
-        kura.persist_direct_lane_block_application_receipt(&input, &preflight)
-            .is_err(),
-        "direct receipts must reject failed preflight evidence"
-    );
-    assert_eq!(
-        kura.read_lane_block_application_receipt(lane_id, lane_block_height),
-        None
-    );
-    assert!(!kura.lane_block_application_receipt_available(&proposal));
-}
-#[test]
 fn lane_block_application_receipt_read_rejects_tampered_sidecar() {
     let (
         (temp_dir, _config, _lane_config),
@@ -1284,7 +1179,7 @@ fn lane_block_execution_preflight_rejects_result_count_drift() {
     );
 }
 #[test]
-fn lane_block_direct_application_input_requires_predecessor_receipt() {
+fn lane_block_application_input_requires_predecessor_receipt() {
     let (
         (_temp_dir, _config, _lane_config),
         (lane_id, _lane_entry, lane_block_height),
@@ -1353,7 +1248,7 @@ fn lane_block_predecessor_receipt_rejects_missing_non_genesis_descriptor() {
     );
 }
 #[test]
-fn lane_block_direct_application_input_accepts_canonical_predecessor_receipt() {
+fn lane_block_application_input_accepts_canonical_predecessor_receipt() {
     let (_temp_dir, config, lane_config) = two_lane_storage_fixture();
     let lane_id = LaneId::from(1);
     let lane_entry = lane_config.entry(lane_id).expect("lane entry");
@@ -1438,6 +1333,12 @@ fn lane_block_direct_application_input_accepts_canonical_predecessor_receipt() {
         "canonical predecessor application must unblock the successor"
     );
     assert!(
+        kura.canonical_lane_block_predecessor_receipt_revalidates_without_sidecar_repair(
+            &successor_proposal,
+        ),
+        "the exact canonical predecessor receipt must authorize an autonomous successor"
+    );
+    assert!(
         kura.read_preflighted_lane_block_execution_input_for_application(
             &successor_proposal,
             0,
@@ -1464,6 +1365,12 @@ fn lane_block_direct_application_input_accepts_canonical_predecessor_receipt() {
         !kura.lane_block_predecessor_application_receipt_available(&wrong_hash_proposal),
         "a different declared predecessor descriptor must not authorize a successor"
     );
+    assert!(
+        !kura.canonical_lane_block_predecessor_receipt_revalidates_without_sidecar_repair(
+            &wrong_hash_proposal,
+        ),
+        "canonical autonomous-predecessor admission must bind the exact descriptor hash"
+    );
     let mut non_increasing_global_height = successor_ownership.clone();
     non_increasing_global_height.proposal_height = predecessor_ownership.proposal_height;
     let non_increasing_global_height_proposal =
@@ -1474,6 +1381,12 @@ fn lane_block_direct_application_input_accepts_canonical_predecessor_receipt() {
         ),
         "a predecessor must be anchored at an earlier global proposal height"
     );
+    assert!(
+        !kura.canonical_lane_block_predecessor_receipt_revalidates_without_sidecar_repair(
+            &non_increasing_global_height_proposal,
+        ),
+        "canonical autonomous-predecessor admission must reject a non-increasing proposal height"
+    );
     let mut wrong_dataspace = successor_ownership.clone();
     wrong_dataspace.dataspace_id = DataSpaceId::new(dataspace_id.as_u64().saturating_add(1));
     let wrong_dataspace_proposal = canonical_proposal_for(wrong_dataspace);
@@ -1481,12 +1394,24 @@ fn lane_block_direct_application_input_accepts_canonical_predecessor_receipt() {
         !kura.lane_block_predecessor_application_receipt_available(&wrong_dataspace_proposal),
         "a predecessor receipt from another dataspace must not authorize a successor"
     );
+    assert!(
+        !kura.canonical_lane_block_predecessor_receipt_revalidates_without_sidecar_repair(
+            &wrong_dataspace_proposal,
+        ),
+        "canonical autonomous-predecessor admission must bind the exact dataspace"
+    );
     let mut wrong_incarnation = successor_ownership;
     wrong_incarnation.lane_incarnation = Hash::new(b"different successor lane incarnation");
     let wrong_incarnation_proposal = canonical_proposal_for(wrong_incarnation);
     assert!(
         !kura.lane_block_predecessor_application_receipt_available(&wrong_incarnation_proposal),
         "a predecessor receipt from another lane incarnation must not authorize a successor"
+    );
+    assert!(
+        !kura.canonical_lane_block_predecessor_receipt_revalidates_without_sidecar_repair(
+            &wrong_incarnation_proposal,
+        ),
+        "canonical autonomous-predecessor admission must bind the exact lane incarnation"
     );
 }
 fn predecessor_application_receipt_fails_closed_while_durability_barrier_fails() {
@@ -1731,7 +1656,7 @@ fn canonical_lane_block_application_receipt_overrides_conflicting_preflight() {
     );
     assert!(
         kura.lane_block_application_receipt_conflicts_with_preflight(&proposal),
-        "direct-execution preflight mismatch must be detected"
+        "execution preflight mismatch must be detected"
     );
     assert!(
         kura.lane_block_application_receipt_available(&proposal),

@@ -1,0 +1,21 @@
+extends = "base.toml"
+
+[nexus]
+
+[nexus.atomic_private_settlement]
+enabled = true
+activation_height = 100_000
+minimum_activation_notice_blocks = 7_200
+proof_profile_version = 1
+max_participants = 16
+max_expiry_blocks = 7_200
+audit_timeout_blocks = 1_200
+prepare_timeout_blocks = 1_200
+commit_timeout_blocks = 1_200
+capsule_padding_classes_bytes = [4_096, 16_384, 65_536, 262_144]
+max_proof_bytes = 8_388_608
+max_capsule_bytes = 1_048_576
+max_carrier_bytes = 4_194_304
+sidecar_retention_blocks = 1_000_000
+default_min_auditor_approvals = 1
+permitted_policy_versions = [1]

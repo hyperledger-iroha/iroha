@@ -236,7 +236,9 @@ fn schedule_shielded_only_requires_window() {
         .expect("register confidential asset state");
     set_confidential_policy_mode(&mut stx, &asset_def_id, ConfidentialPolicyMode::Convertible);
     stx.apply();
-    block.commit().expect("commit setup block");
+    block
+        .commit_empty_block_for_testing()
+        .expect("commit setup block");
     let header2 =
         iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block2 = state.block(header2);
@@ -303,7 +305,9 @@ fn shielded_transition_abort_retains_active_confidential_mode_when_supply_is_non
         )
         .expect("mint should succeed");
     stx.apply();
-    block.commit().expect("commit setup block");
+    block
+        .commit_empty_block_for_testing()
+        .expect("commit setup block");
     let header2 =
         iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block2 = state.block(header2);
@@ -342,7 +346,9 @@ fn shielded_transition_abort_retains_active_confidential_mode_when_supply_is_non
         .expect("asset definition exists")
         .set_confidential_policy(policy);
     stx2.apply();
-    block2.commit().expect("commit scheduling block");
+    block2
+        .commit_empty_block_for_testing()
+        .expect("commit scheduling block");
     let header3 = iroha_data_model::block::BlockHeader::new(
         NonZeroU64::new(effective_height).unwrap(),
         None,
@@ -354,7 +360,9 @@ fn shielded_transition_abort_retains_active_confidential_mode_when_supply_is_non
     let mut block3 = state.block(header3);
     let stx3 = block3.transaction();
     stx3.apply();
-    block3.commit().expect("commit transition block");
+    block3
+        .commit_world_overlay_for_testing()
+        .expect("commit transition block");
     let view = state.view();
     let def = view
         .world
@@ -407,7 +415,9 @@ fn policy_transition_reaches_shielded_only_on_schedule() {
         .expect("register confidential asset state");
     set_confidential_policy_mode(&mut stx, &asset_def_id, ConfidentialPolicyMode::Convertible);
     stx.apply();
-    block.commit().expect("commit setup block");
+    block
+        .commit_empty_block_for_testing()
+        .expect("commit setup block");
     let header2 =
         iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block2 = state.block(header2);
@@ -424,13 +434,17 @@ fn policy_transition_reaches_shielded_only_on_schedule() {
         .execute(&owner, &mut stx2)
         .expect("schedule transition");
     stx2.apply();
-    block2.commit().expect("commit scheduling block");
+    block2
+        .commit_empty_block_for_testing()
+        .expect("commit scheduling block");
     let transition_height =
         NonZeroU64::new(effective_height).expect("effective height must be non-zero");
     let header_transition =
         iroha_data_model::block::BlockHeader::new(transition_height, None, None, None, 0, 0);
     let block_transition = state.block(header_transition);
-    block_transition.commit().expect("commit transition block");
+    block_transition
+        .commit_world_overlay_for_testing()
+        .expect("commit transition block");
     let view = state.view();
     let def = view
         .world

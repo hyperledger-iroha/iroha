@@ -536,7 +536,9 @@ pub(super) mod tests {
         );
         activate_policy(&mut stx, &authority);
         stx.apply();
-        block.commit().expect("commit configured orderbook");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit configured orderbook");
         state.push_block_hash_for_testing(iroha_crypto::HashOf::new(&block_header()));
         let view = state.view();
         for limit in [0, ORDERBOOK_QUERY_MAX_ITEMS_V1 + 1] {

@@ -14,6 +14,8 @@ enum ToriiConnectJSON {
                 return String(integer)
             }
             return String(number)
+        case .integer(let integer):
+            return integer
         case .bool(let bool):
             return bool ? "true" : "false"
         default:

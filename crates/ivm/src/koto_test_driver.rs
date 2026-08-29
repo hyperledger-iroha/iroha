@@ -1351,8 +1351,7 @@ fn build_host_for_fixture(
     fixture_name: Option<&str>,
 ) -> Result<KotoTestHost, String> {
     let caller = default_caller_account()?;
-    let base_host =
-        WsvHost::new_with_subject(MockWorldStateView::default(), caller, HashMap::new());
+    let base_host = WsvHost::new_with_subject(MockWorldStateView::default(), caller);
     let mut host = KotoTestHost::new(
         base_host,
         compiled

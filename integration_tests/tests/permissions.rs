@@ -356,7 +356,6 @@ fn account_permission_revoke_then_grant_last_wins_detached() -> Result<()> {
             layer
                 .write(["pipeline", "parallel_overlay"], true)
                 .write(["pipeline", "parallel_apply"], true)
-                .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full");
         });
     let Some((network, rt)) = sandbox::start_network_blocking_or_skip(

@@ -2735,6 +2735,47 @@ struct ParliamentTleBrokerPartialReleaseSigner {
 }
 
 impl ParliamentTleBrokerPartialReleaseSigner {
+    fn attest_projected_capability(
+        &self,
+        session: &iroha_core::tle_release::ValidatedTleKeySessionV1,
+        expected_participant_index: u16,
+    ) -> Result<iroha_core::tle_release::TlePartialReleaseCapabilityAttestationV1, BrokerError> {
+        retry_consensus_signer_once_after_unavailable(self.session.as_ref(), || {
+            live_exact_qualification(self.session.as_ref(), &self.binding, self.metadata_digest)?;
+            let request_payload = encode_canonical(
+                &ParliamentTleCapabilityAttestRequestWireV1 {
+                    key_session: session.public_state().clone(),
+                    participant_index: expected_participant_index,
+                },
+                MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1,
+            )?;
+            let result = provider_call!(
+                self,
+                call,
+                OPERATION_PARLIAMENT_TLE_CAPABILITY_ATTEST_V1,
+                request_payload,
+                false,
+            )?;
+            let attested = self
+                .session
+                .decode_result::<ParliamentTleCapabilityAttestResultWireV1>(&result)?;
+            let expected = iroha_core::tle_release::TlePartialReleaseCapabilityAttestationV1::for_validated_session(
+                session,
+                expected_participant_index,
+            )
+            .map_err(|_| BrokerError::Rejected)?;
+            if attested.key_session_id != expected.key_session_id()
+                || attested.transcript_hash != expected.transcript_hash()
+                || attested.participant_index != expected.participant_index()
+            {
+                self.session.poison();
+                return Err(BrokerError::Rejected);
+            }
+            live_exact_qualification(self.session.as_ref(), &self.binding, self.metadata_digest)?;
+            Ok(expected)
+        })
+    }
+
     fn sign_projected_partial_release(
         &self,
         projection: &iroha_core::tle_release::AuthorizedTleReleaseProjectionV1,
@@ -2775,6 +2816,28 @@ impl ParliamentTleBrokerPartialReleaseSigner {
 impl iroha_core::tle_release::TlePartialReleaseSignerV1
     for ParliamentTleBrokerPartialReleaseSigner
 {
+    fn attest_partial_release_capability(
+        &self,
+        session: &iroha_core::tle_release::ValidatedTleKeySessionV1,
+        expected_participant_index: u16,
+    ) -> Result<
+        iroha_core::tle_release::TlePartialReleaseCapabilityAttestationV1,
+        iroha_core::tle_release::TlePartialReleaseCapabilityErrorV1,
+    > {
+        self.attest_projected_capability(session, expected_participant_index)
+            .map_err(|error| match error {
+                BrokerError::Unavailable
+                | BrokerError::Protocol
+                | BrokerError::BindingMismatch
+                | BrokerError::Ambiguous => {
+                    iroha_core::tle_release::TlePartialReleaseCapabilityErrorV1::Unavailable
+                }
+                BrokerError::StaleOrRevoked | BrokerError::Rejected | BrokerError::Conflict => {
+                    iroha_core::tle_release::TlePartialReleaseCapabilityErrorV1::NotOwned
+                }
+            })
+    }
+
     fn sign_partial_release(
         &self,
         context: &iroha_core::tle_release::AuthorizedTleReleaseContextV1,

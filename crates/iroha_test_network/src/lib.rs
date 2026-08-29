@@ -6418,7 +6418,6 @@ impl NetworkBuilder {
         let concurrency_threads =
             i64::try_from(test_concurrency_threads()).expect("test concurrency threads fit in i64");
         writer
-            .write(["telemetry_enabled"], true)
             .write(
                 ["concurrency", "scheduler_min_threads"],
                 concurrency_threads,

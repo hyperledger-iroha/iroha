@@ -400,8 +400,8 @@ Configuration and Determinism
   overlay and committed topology unchanged.
 - **Safety:** Commit revalidates the signed plan against committed state under
   the lifecycle lock before publishing storage or topology. Retirement and
-  replacement fail closed while a lane has unmerged relay progress, an
-  unapplied certified lane block, or an unrepaired direct-application marker.
+  replacement fail closed while a lane has unmerged relay progress or an
+  unapplied certified lane block.
 - **Propagation:** Queue routing, per-lane limits, and manifests are rebuilt
   from the committed catalog. Consensus, DA, and RBC workers consume the same
   refreshed state snapshot, while snapshots and startup replay restore the

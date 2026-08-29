@@ -5168,7 +5168,9 @@ mod tests {
         let mut transaction = block.transaction();
         operation(&mut transaction)?;
         transaction.apply();
-        block.commit().expect("commit test block");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit test block");
         Ok(())
     }
     fn scalar(value: u64) -> [u8; 32] {

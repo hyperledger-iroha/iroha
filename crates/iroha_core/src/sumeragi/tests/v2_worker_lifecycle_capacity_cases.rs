@@ -865,6 +865,49 @@ impl LifecyclePlannerIoFixture {
         try_send_tracked_completion(&self.completion_tx, &self.admission, completion)
             .expect("publish the ordinary signature completion");
     }
+    /// Publish one tracked ordinary completion ahead of a lifecycle Sign result.
+    pub(in crate::sumeragi) fn publish_auxiliary_completion_fixture(&self) {
+        try_send_tracked_completion(
+            &self.completion_tx,
+            &self.admission,
+            V2IoCompletion::AuxiliaryNoop,
+        )
+        .expect("publish one tracked ordinary completion");
+    }
+    /// Execute one lifecycle-owned Sign through the production signing helper.
+    pub(in crate::sumeragi) fn execute_one_recovered_lifecycle_sign_fixture(
+        &self,
+        services: &ProductionV2Services,
+        output_guard: Arc<ConsensusOutputGuard>,
+    ) {
+        let command = self
+            .command_rx
+            .try_recv()
+            .expect("one recovered lifecycle Sign remains queued");
+        let V2IoCommand::RecoveredLifecycleSign(task) = command else {
+            panic!("expected the exact recovered lifecycle Sign command")
+        };
+        let key = task.dispatch_key();
+        let result = sign_recovered_lifecycle_task(
+            &self.body_store,
+            &self.context,
+            &services.key_pair,
+            task,
+        )
+        .expect("sign the exact recovered lifecycle task");
+        self.command_rx
+            .complete_recovered_lifecycle_sign(key, &result)
+            .expect("move exact recovered Sign tracker to CompletionPending");
+        try_send_tracked_completion_with_lifecycle_ordinal(
+            &self.completion_tx,
+            &self.admission,
+            V2IoCompletion::RecoveredLifecycleSign(Box::new(
+                GuardedRecoveredLifecycleSignWorkerResultV1::new(result, output_guard),
+            )),
+            Some(key.lifecycle_ordinal()),
+        )
+        .expect("publish one guarded recovered lifecycle Sign completion");
+    }
     /// Execute one exact certified-Fetch persistence command through the same
     /// ownership transitions as the production worker and publish its guarded
     /// completion into the service's sole physical completion FIFO.
@@ -1091,6 +1134,18 @@ pub(in crate::sumeragi) fn install_local_signer_for_test(
     );
     services.key_pair = key_pair.clone();
 }
+/// Align a manual service with the exact recovered adapter incarnation.
+pub(in crate::sumeragi) fn install_active_tag_for_test(
+    services: &mut ProductionV2Services,
+    active_tag: EventTag,
+) {
+    assert_eq!(
+        services.context.height,
+        active_tag.height(),
+        "test service tag must remain in its immutable height"
+    );
+    services.active_tag = active_tag;
+}
 #[test]
 fn lifecycle_capacity_reservation_freezes_fifo_tail_and_rolls_back_under_lock() {
     let (service, _) = fixture();
@@ -1242,11 +1297,58 @@ fn lifecycle_capacity_wait_classifies_live_release_and_terminal_service_loss() {
         wait.status(&service),
         LifecycleIoCapacityWaitStatus::SamePending
     );
+    let pending_wait = LifecycleIoCapacityWait {
+        queue: Arc::clone(&wait.queue),
+        output_guard: Arc::clone(&wait.output_guard),
+        target: LifecycleIngressIoTargetSeal::for_test(
+            &service.context,
+            LifecycleIngressIoTargetKind::CertifiedFetchBodyPersistence,
+            15,
+        ),
+        observed_generation: wait.observed_generation,
+    };
+    assert!(
+        pending_wait.into_released_target(&service).is_err(),
+        "SamePending cannot expose the wait-held target",
+    );
+    let (foreign_service, _foreign_io) = fixture();
+    let foreign_wait = LifecycleIoCapacityWait {
+        queue: Arc::clone(&wait.queue),
+        output_guard: Arc::clone(&wait.output_guard),
+        target: LifecycleIngressIoTargetSeal::for_test(
+            &service.context,
+            LifecycleIngressIoTargetKind::CertifiedFetchBodyPersistence,
+            16,
+        ),
+        observed_generation: wait.observed_generation,
+    };
+    assert!(
+        foreign_wait.into_released_target(&foreign_service).is_err(),
+        "a foreign service cannot expose the wait-held target",
+    );
     assert!(admission.try_reserve(V2IoAdmissionClass::Consensus));
     admission.release();
     assert_eq!(
         wait.status(&service),
         LifecycleIoCapacityWaitStatus::Released
+    );
+    let released_wait = LifecycleIoCapacityWait {
+        queue: Arc::clone(&wait.queue),
+        output_guard: Arc::clone(&wait.output_guard),
+        target: LifecycleIngressIoTargetSeal::for_test(
+            &service.context,
+            LifecycleIngressIoTargetKind::CertifiedFetchBodyPersistence,
+            17,
+        ),
+        observed_generation: wait.observed_generation,
+    };
+    let released_target = match released_wait.into_released_target(&service) {
+        Ok(target) => target,
+        Err(_) => panic!("the same-service release must yield its exact retained target"),
+    };
+    assert_eq!(
+        released_target.kind(),
+        LifecycleIngressIoTargetKind::CertifiedFetchBodyPersistence,
     );
     admission
         .lifecycle_capacity_generation

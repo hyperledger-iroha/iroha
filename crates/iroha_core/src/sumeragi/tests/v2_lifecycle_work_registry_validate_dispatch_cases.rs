@@ -1803,8 +1803,8 @@ fn owned_ready_durable_validate_fixture_from_waiting_with_commitment(
     let AdapterEffect::ValidateBody { round, subject, .. } = &fixture.effect else {
         unreachable!("Ready Validate fixture retains one Validate effect")
     };
-    let expected_decision = validated_commitment
-        .map(|commitment| (*round, *round, *subject, commitment));
+    let expected_decision =
+        validated_commitment.map(|commitment| (*round, *round, *subject, commitment));
     let mut retry_owner = RecoveredDurableValidateRetryOwnerV1::for_test(
         fixture.effect.clone(),
         durable.clone(),
@@ -1818,10 +1818,8 @@ fn owned_ready_durable_validate_fixture_from_waiting_with_commitment(
             let commitment = validated_commitment.unwrap_or_else(|| {
                 ValidatedBodyReceipt::for_test(durable.clone()).execution_commitment()
             });
-            let validated_receipt = ValidatedBodyReceipt::for_test_with_commitment(
-                durable.clone(),
-                commitment,
-            );
+            let validated_receipt =
+                ValidatedBodyReceipt::for_test_with_commitment(durable.clone(), commitment);
             (
                 dispatch
                     .execute(&mut store, |_| Ok::<_, DetachedValidationError>(commitment))
@@ -1843,7 +1841,10 @@ fn owned_ready_durable_validate_fixture_from_waiting_with_commitment(
     if let Some(validated_receipt) = &validated_receipt {
         assert!(
             retry_owner.bind_validated_marker(
-                (validated_receipt.durable().round(), validated_receipt.durable().subject()),
+                (
+                    validated_receipt.durable().round(),
+                    validated_receipt.durable().subject()
+                ),
                 validated_receipt,
             ),
             "seal the exact successful marker into the live Validate retry owner"

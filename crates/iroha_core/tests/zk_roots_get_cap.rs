@@ -70,7 +70,6 @@ fn zk_roots_get_respects_cap_and_max() {
                 metal_threadgroup_width: None,
                 metal_trace: defaults::zk::fastpq::METAL_TRACE,
                 metal_debug_enum: defaults::zk::fastpq::METAL_DEBUG_ENUM,
-                metal_debug_fused: defaults::zk::fastpq::METAL_DEBUG_FUSED,
             },
             stark: cfg::Stark::default(),
             sccp: cfg::Sccp::default(),

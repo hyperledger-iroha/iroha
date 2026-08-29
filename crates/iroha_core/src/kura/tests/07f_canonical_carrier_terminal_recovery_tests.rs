@@ -434,7 +434,19 @@ fn canonical_terminal_projection_for_test(
 fn lifecycle_release_terminal_outcomes_are_exact_idempotent_and_ordered() {
     let temp_dir = TempDir::new().expect("terminal-outcome temp dir");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let lane_config = two_lane_runtime_config();
+    let lane_count = NonZeroU32::new(2).expect("two terminal-outcome lanes");
+    let primary_lane = ModelLaneConfig::default();
+    let secondary_lane = ModelLaneConfig {
+        id: LaneId::new(1),
+        alias: "beta".to_owned(),
+        ..ModelLaneConfig::default()
+    };
+    let initial_catalog = LaneCatalog::new(lane_count, vec![primary_lane.clone()])
+        .expect("terminal-outcome primary catalog");
+    let configured_catalog = LaneCatalog::new(lane_count, vec![primary_lane, secondary_lane])
+        .expect("terminal-outcome two-lane catalog");
+    let initial_lane_config = RuntimeLaneConfig::from_catalog(&initial_catalog);
+    let lane_config = RuntimeLaneConfig::from_catalog(&configured_catalog);
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let local_peer = PeerId::new(signer.public_key().clone());
     let height_context_id = HeightContextId(HashOf::<HeightContext>::from_untyped_unchecked(
@@ -446,16 +458,74 @@ fn lifecycle_release_terminal_outcomes_are_exact_idempotent_and_ordered() {
     ];
     let payloads = lanes
         .iter()
-        .map(|lane| {
-            let (_, _, template) =
-                autonomous_lane_payload_for_kura(lane.lane_id, lane.dataspace_id, 1, &signer);
+        .enumerate()
+        .map(|(index, lane)| {
+            let salt = u8::try_from(index + 1).expect("terminal-outcome lane salt fits u8");
+            let template =
+                canonical_terminal_payload_for_test(lane, height_context_id, &signer, salt);
+            let incarnation_tag = [0xA0_u8
+                .checked_add(u8::try_from(index).expect("terminal-outcome lane index fits u8"))
+                .expect("terminal-outcome incarnation tag remains bounded")];
+            let template = rebind_autonomous_lane_payload_for_kura(
+                &template,
+                lane.lane_id,
+                lane.dataspace_id,
+                1,
+                &incarnation_tag,
+                &signer,
+            );
             lifecycle_terminal_bound_payload_for_test(&template, height_context_id, &signer)
         })
         .collect::<Vec<_>>();
+    assert_ne!(
+        payloads[0].entrypoint_hashes[0], payloads[1].entrypoint_hashes[0],
+        "terminal-outcome attempts require distinct global entrypoint claims",
+    );
     let network_id = payloads[0].network_id;
     let epoch = payloads[0].epoch;
-    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
-        .expect("terminal-outcome Kura");
+    let initial_incarnations = BTreeMap::from([(
+        LaneId::SINGLE,
+        payloads[0].origin_proposal.descriptor.lane_incarnation,
+    )]);
+    let configured_incarnations = BTreeMap::from([
+        (
+            LaneId::SINGLE,
+            payloads[0].origin_proposal.descriptor.lane_incarnation,
+        ),
+        (
+            LaneId::new(1),
+            payloads[1].origin_proposal.descriptor.lane_incarnation,
+        ),
+    ]);
+    let initial_activations = BTreeMap::from([(LaneId::SINGLE, 0)]);
+    let configured_activations = BTreeMap::from([(LaneId::SINGLE, 0), (LaneId::new(1), 0)]);
+    let configured_catalog_hash = LaneLifecycleParameterV1::catalog_hash(&configured_catalog);
+    let (kura, _) =
+        Kura::new_with_configured_lane_catalog(&config, &lane_config, &configured_catalog)
+            .expect("terminal-outcome Kura");
+    kura.establish_or_verify_configured_primary_geometry_anchor(
+        initial_lane_config.primary(),
+        initial_incarnations[&LaneId::SINGLE],
+        configured_catalog_hash,
+    )
+    .expect("bind terminal-outcome primary geometry");
+    kura.apply_lane_geometry_transition(
+        &initial_lane_config,
+        &lane_config,
+        &initial_incarnations,
+        &configured_incarnations,
+        &initial_activations,
+        &configured_activations,
+        &BTreeSet::new(),
+    )
+    .expect("journal terminal-outcome secondary geometry");
+    kura.mark_lane_geometry_catalog_published(
+        &lane_config,
+        &configured_incarnations,
+        &configured_activations,
+        Some(configured_catalog_hash),
+    )
+    .expect("publish terminal-outcome two-lane geometry");
     kura.bind_local_peer_id(local_peer.clone())
         .expect("bind terminal-outcome local peer");
     let generation = kura
@@ -463,7 +533,6 @@ fn lifecycle_release_terminal_outcomes_are_exact_idempotent_and_ordered() {
         .expect("claim terminal-outcome process generation");
     let mut attempts = Vec::new();
     for (index, (lane, payload)) in lanes.iter().zip(&payloads).enumerate() {
-        install_autonomous_lane_marker_for_kura(&kura, &lane_config, payload);
         kura.persist_lane_executable_payload(payload, network_id, epoch)
             .expect("persist terminal-outcome payload");
         let (_, group) = install_live_lifecycle_cursor_for_terminal_test(
@@ -579,6 +648,15 @@ fn lifecycle_release_terminal_outcomes_are_exact_idempotent_and_ordered() {
         first_pending.stage(),
         AutonomousLifecycleTerminalOutcomeStageV1::Pending { .. }
     ));
+    assert!(
+        kura.authorize_completed_autonomous_queue_cleanup_for_entrypoints(
+            network_id,
+            &first_payload.entrypoint_hashes,
+        )
+        .expect("inspect Pending release cleanup authority")
+        .is_empty(),
+        "a Released claim without its Complete terminal source must not authorize Queue cleanup",
+    );
     let mut tampered_reserved_terminal = first_pending.clone();
     let AutonomousLifecycleTerminalOutcomeStageV1::Pending { reserved_terminal } =
         &mut tampered_reserved_terminal.body.stage
@@ -808,14 +886,40 @@ fn lifecycle_release_terminal_outcomes_are_exact_idempotent_and_ordered() {
             .is_empty()
     );
     drop(kura);
-    let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
-        .expect("reopen completed outcomes");
+    let (reopened, _) =
+        Kura::new_with_configured_lane_catalog(&config, &lane_config, &configured_catalog)
+            .expect("reopen completed outcomes");
+    reopened
+        .recover_lane_geometry_journal(
+            &lane_config,
+            &configured_incarnations,
+            &configured_activations,
+        )
+        .expect("restore completed-outcome lane geometry");
     assert!(
         reopened
             .pending_autonomous_lifecycle_terminal_outcome_inventory()
             .expect("restart terminal inventory")
             .is_empty(),
         "Complete outcomes must stay terminal across restart",
+    );
+    let reopened_cleanup_authorizations = reopened
+        .authorize_completed_autonomous_queue_cleanup_for_entrypoints(
+            network_id,
+            &first_payload.entrypoint_hashes,
+        )
+        .expect("reconstruct exact committed Queue cleanup authority after restart");
+    assert_eq!(
+        reopened_cleanup_authorizations
+            .iter()
+            .map(AutonomousLifecycleCommittedQueueCleanupAuthorization::target_entrypoint_hash)
+            .collect::<BTreeSet<_>>(),
+        first_payload
+            .entrypoint_hashes
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>(),
+        "restart must reauthorize every exact Complete release member from durable Kura evidence",
     );
     let missing_artifact_namespace = first_path
         .parent()

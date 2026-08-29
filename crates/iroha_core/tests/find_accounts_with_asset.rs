@@ -64,7 +64,7 @@ fn multi_account_mint_returns_only_positive_holders() {
     .execute(&ALICE_ID, &mut stx)
     .expect("zero mint succeeds");
     stx.apply();
-    state_block.commit().unwrap();
+    state_block.commit_world_overlay_for_testing().unwrap();
     let expected: BTreeSet<_> = [holder_a.clone(), holder_b.clone()].into_iter().collect();
     let view = state.view();
     let actual: BTreeSet<_> = FindAccountsWithAsset::new(definition_id)

@@ -6,9 +6,10 @@ only in opaque handles, canonical public intent/plan bytes, and public signed
 transaction results.  The Rust process owns all credential reads, decoding,
 proving, signing, single-use custody, and zeroization.
 
-This IPWW controller is closed over the eleven generic protocols.  ZK-X509
-uses its separately authenticated, profile-owned worker transport and is
-intentionally rejected here rather than routed through a generic bundle.
+This IPWW controller is closed over the eleven generic protocols plus one
+purpose-separated atomic private-settlement command family. ZK-X509 uses its
+separately authenticated, profile-owned worker transport and is intentionally
+rejected here rather than routed through a generic bundle.
 
 Release qualification must also reject any wheel that still exposes a direct
 ``execution_bundle`` PyO3 transaction-builder argument.  This controller does
@@ -35,8 +36,11 @@ PRIVACY_WALLET_WORKER_PROTOCOL_VERSION_V1 = 1
 PRIVACY_WALLET_WORKER_MAX_FRAME_BYTES_V1 = 34 * 1_024 * 1_024
 PRIVACY_WALLET_WORKER_MAX_PUBLIC_INTENT_BYTES_V1 = 524_288
 PRIVACY_WALLET_WORKER_MAX_EXECUTION_PLAN_BYTES_V1 = 2 * 1_024 * 1_024
+PRIVACY_WALLET_WORKER_MAX_SETTLEMENT_PUBLIC_OBJECT_BYTES_V1 = 4 * 1_024 * 1_024
+PRIVACY_WALLET_WORKER_MAX_SETTLEMENT_PROOF_BYTES_V1 = 8 * 1_024 * 1_024
 PRIVACY_WALLET_WORKER_MIN_TTL_MILLIS_V1 = 1_000
 PRIVACY_WALLET_WORKER_MAX_TTL_MILLIS_V1 = 15 * 60 * 1_000
+ATOMIC_PRIVATE_SETTLEMENT_PROTOCOL_LABEL_V1 = "atomic-private-settlement-v1"
 
 _MAGIC_V1 = b"IPWW"
 _AUTH_KEY_BYTES_V1 = 32
@@ -77,6 +81,10 @@ class PrivacyWalletWorkerCommandV1(IntEnum):
     INSPECT = 3
     CANCEL = 4
     EXECUTE = 5
+    IMPORT_PRIVATE_SETTLEMENT = 6
+    INSPECT_PRIVATE_SETTLEMENT = 7
+    CANCEL_PRIVATE_SETTLEMENT = 8
+    PROVE_PRIVATE_SETTLEMENT = 9
 
 
 class PrivacyWalletWorkerErrorCodeV1(IntEnum):
@@ -111,6 +119,8 @@ class PrivacyWalletWorkerErrorCodeV1(IntEnum):
     NATIVE_ACTION_FAILED = 27
     NATIVE_SELF_INSPECTION_FAILED = 28
     PUBLIC_ACTION_MISMATCH = 29
+    INVALID_PRIVATE_SETTLEMENT_BUNDLE = 30
+    NATIVE_PRIVATE_SETTLEMENT_PROOF_FAILED = 31
 
 
 class PrivacyWalletWorkerErrorV1(RuntimeError):
@@ -141,8 +151,11 @@ class PrivacyWalletWitnessBindingV1:
     def __post_init__(self) -> None:
         _require_text(self.signer_wallet_id, _MAX_SIGNER_BYTES_V1, "signer_wallet_id")
         _require_text(self.protocol_id, _MAX_PROTOCOL_BYTES_V1, "protocol_id")
-        if self.protocol_id not in PRIVACY_GENERIC11_WORKER_OPERATION_SCHEMAS_V1:
-            raise ValueError("protocol_id is not in the closed generic-11 worker registry")
+        if (
+            self.protocol_id not in PRIVACY_GENERIC11_WORKER_OPERATION_SCHEMAS_V1
+            and self.protocol_id != ATOMIC_PRIVATE_SETTLEMENT_PROTOCOL_LABEL_V1
+        ):
+            raise ValueError("protocol_id is not in the closed worker registry")
         for field_name in (
             "network_id",
             "compiled_profile_digest",
@@ -151,7 +164,10 @@ class PrivacyWalletWitnessBindingV1:
             "signed_release_authority_digest",
         ):
             _require_nonzero_bytes(getattr(self, field_name), _DIGEST_BYTES_V1, field_name)
-        if self.network_id[-1] & 1 != 1:
+        if (
+            self.protocol_id != ATOMIC_PRIVATE_SETTLEMENT_PROTOCOL_LABEL_V1
+            and self.network_id[-1] & 1 != 1
+        ):
             raise ValueError("network_id must carry the canonical Iroha hash marker bit")
 
 
@@ -180,6 +196,34 @@ class PrivacyWalletWitnessLeaseV1:
     authority_public_key: str
     protocol_id: str
     operation_schema: str
+
+
+@dataclass(frozen=True)
+class PrivateSettlementWalletLeaseV1:
+    """Public inspection of one Rust-custodied settlement witness bundle."""
+
+    handle: PrivacyWalletWitnessHandleV1
+    expires_at_millis: int
+    wallet_id: str
+    proof_binding_digest: bytes
+    statement_digest: bytes
+    capsule_digest: bytes
+    audit_plaintext_commitment: bytes
+
+
+@dataclass(frozen=True)
+class PrivateSettlementPreparedProofV1:
+    """Public artifacts returned by terminal native settlement proving."""
+
+    wallet_id: str
+    canonical_genesis_hash: bytes
+    proof_binding_digest: bytes
+    statement_digest: bytes
+    capsule_digest: bytes
+    audit_plaintext_commitment: bytes
+    statement_norito: bytes
+    proof: bytes
+    audit_capsule_norito: bytes
 
 
 @dataclass(frozen=True)
@@ -350,6 +394,7 @@ class PrivacyWalletWorkerControllerV1:
     ) -> PrivacyWalletWitnessLeaseV1:
         """Ask Rust to read and custody a bundle; Python never opens the path."""
 
+        _require_generic_binding(binding)
         path = _require_credential_path(credential_path)
         if type(ttl_millis) is not int or not (
             PRIVACY_WALLET_WORKER_MIN_TTL_MILLIS_V1
@@ -366,6 +411,7 @@ class PrivacyWalletWorkerControllerV1:
         handle: PrivacyWalletWitnessHandleV1,
         binding: PrivacyWalletWitnessBindingV1,
     ) -> PrivacyWalletWitnessLeaseV1:
+        _require_generic_binding(binding)
         response = self._exchange(
             PrivacyWalletWorkerCommandV1.INSPECT,
             _encode_handle_binding(handle, binding),
@@ -380,6 +426,7 @@ class PrivacyWalletWorkerControllerV1:
         handle: PrivacyWalletWitnessHandleV1,
         binding: PrivacyWalletWitnessBindingV1,
     ) -> None:
+        _require_generic_binding(binding)
         response = self._exchange(
             PrivacyWalletWorkerCommandV1.CANCEL,
             _encode_handle_binding(handle, binding),
@@ -402,6 +449,7 @@ class PrivacyWalletWorkerControllerV1:
     ) -> PrivacyWalletSignedActionV1:
         """Consume a handle inside Rust and return public self-inspected signed wire."""
 
+        _require_generic_binding(binding)
         public_intent = _require_public_bytes(
             canonical_public_intent,
             PRIVACY_WALLET_WORKER_MAX_PUBLIC_INTENT_BYTES_V1,
@@ -423,6 +471,139 @@ class PrivacyWalletWorkerControllerV1:
         )
         response = self._exchange(PrivacyWalletWorkerCommandV1.EXECUTE, payload)
         return self._decode_signed_action(response, binding)
+
+    def import_private_settlement_credential(
+        self,
+        credential_path: str | os.PathLike[str],
+        binding: PrivacyWalletWitnessBindingV1,
+        *,
+        ttl_millis: int,
+    ) -> PrivateSettlementWalletLeaseV1:
+        """Ask Rust to custody one owner-only settlement bundle by path."""
+
+        _require_private_settlement_binding(binding)
+        path = _require_credential_path(credential_path)
+        if type(ttl_millis) is not int or not (
+            PRIVACY_WALLET_WORKER_MIN_TTL_MILLIS_V1
+            <= ttl_millis
+            <= PRIVACY_WALLET_WORKER_MAX_TTL_MILLIS_V1
+        ):
+            raise ValueError("ttl_millis is outside the closed worker range")
+        payload = (
+            _put_text(os.fspath(path))
+            + _encode_binding(binding)
+            + struct.pack(">Q", ttl_millis)
+        )
+        response = self._exchange(
+            PrivacyWalletWorkerCommandV1.IMPORT_PRIVATE_SETTLEMENT, payload
+        )
+        return self._decode_private_settlement_lease(response, binding)
+
+    def inspect_private_settlement(
+        self,
+        handle: PrivacyWalletWitnessHandleV1,
+        binding: PrivacyWalletWitnessBindingV1,
+    ) -> PrivateSettlementWalletLeaseV1:
+        """Inspect only public commitments retained beside a settlement handle."""
+
+        _require_private_settlement_binding(binding)
+        response = self._exchange(
+            PrivacyWalletWorkerCommandV1.INSPECT_PRIVATE_SETTLEMENT,
+            _encode_handle_binding(handle, binding),
+        )
+        lease = self._decode_private_settlement_lease(response, binding)
+        if lease.handle != handle:
+            raise self._malformed(
+                "private-settlement inspect response substituted the witness handle"
+            )
+        return lease
+
+    def cancel_private_settlement(
+        self,
+        handle: PrivacyWalletWitnessHandleV1,
+        binding: PrivacyWalletWitnessBindingV1,
+    ) -> None:
+        """Cancel and wipe an unused settlement witness handle."""
+
+        _require_private_settlement_binding(binding)
+        response = self._exchange(
+            PrivacyWalletWorkerCommandV1.CANCEL_PRIVATE_SETTLEMENT,
+            _encode_handle_binding(handle, binding),
+        )
+        try:
+            cursor = _Cursor(response)
+            if cursor.u8() != 2:
+                raise PrivacyWalletWorkerErrorV1(
+                    "private-settlement cancel response has the wrong result tag"
+                )
+            cursor.finish()
+        except PrivacyWalletWorkerErrorV1 as error:
+            raise self._malformed(str(error)) from error
+
+    def prove_private_settlement(
+        self,
+        handle: PrivacyWalletWitnessHandleV1,
+        binding: PrivacyWalletWitnessBindingV1,
+        *,
+        manifest_norito: bytes,
+        statement_norito: bytes,
+        audit_capsule_norito: bytes,
+        audit_policy_norito: bytes,
+        canonical_genesis_hash: bytes,
+        current_height: int,
+    ) -> PrivateSettlementPreparedProofV1:
+        """Consume one handle in Rust and return only public proof artifacts."""
+
+        _require_private_settlement_binding(binding)
+        manifest = _require_opaque_public_bytes(
+            manifest_norito,
+            PRIVACY_WALLET_WORKER_MAX_SETTLEMENT_PUBLIC_OBJECT_BYTES_V1,
+            "manifest_norito",
+        )
+        statement = _require_opaque_public_bytes(
+            statement_norito,
+            PRIVACY_WALLET_WORKER_MAX_SETTLEMENT_PUBLIC_OBJECT_BYTES_V1,
+            "statement_norito",
+        )
+        capsule = _require_opaque_public_bytes(
+            audit_capsule_norito,
+            PRIVACY_WALLET_WORKER_MAX_SETTLEMENT_PUBLIC_OBJECT_BYTES_V1,
+            "audit_capsule_norito",
+        )
+        policy = _require_opaque_public_bytes(
+            audit_policy_norito,
+            PRIVACY_WALLET_WORKER_MAX_SETTLEMENT_PUBLIC_OBJECT_BYTES_V1,
+            "audit_policy_norito",
+        )
+        genesis_hash = _require_nonzero_bytes(
+            canonical_genesis_hash,
+            _DIGEST_BYTES_V1,
+            "canonical_genesis_hash",
+        )
+        if not hmac.compare_digest(genesis_hash, binding.network_id):
+            raise ValueError("canonical_genesis_hash does not match the witness binding")
+        if type(current_height) is not int or not 1 <= current_height <= _U64_MAX:
+            raise ValueError("current_height is outside the canonical u64 range")
+        payload = b"".join(
+            (
+                _encode_handle_binding(handle, binding),
+                _put_bytes_u32(manifest),
+                _put_bytes_u32(statement),
+                _put_bytes_u32(capsule),
+                _put_bytes_u32(policy),
+                genesis_hash,
+                struct.pack(">Q", current_height),
+            )
+        )
+        response = self._exchange(
+            PrivacyWalletWorkerCommandV1.PROVE_PRIVATE_SETTLEMENT, payload
+        )
+        return self._decode_private_settlement_proof(
+            response,
+            binding,
+            expected_statement=statement,
+            expected_capsule=capsule,
+        )
 
     def close(self) -> None:
         with self._lock:
@@ -517,7 +698,8 @@ class PrivacyWalletWorkerControllerV1:
             cursor.finish()
             expected_schema = PRIVACY_GENERIC11_WORKER_OPERATION_SCHEMAS_V1.get(protocol_id)
             if (
-                expires_at_millis == 0
+                handle.value[0] & 0x80 != 0
+                or expires_at_millis == 0
                 or wallet_id != binding.signer_wallet_id
                 or protocol_id != binding.protocol_id
                 or expected_schema != operation_schema
@@ -600,6 +782,99 @@ class PrivacyWalletWorkerControllerV1:
                 encoded_proof_envelope_bytes=counts[2],
                 adaptive_signed_transaction_bytes=counts[3],
                 submitted_versioned_transaction_bytes=counts[4],
+            )
+        except (PrivacyWalletWorkerErrorV1, TypeError, ValueError) as error:
+            raise self._malformed(str(error)) from error
+
+    def _decode_private_settlement_lease(
+        self,
+        payload: bytes,
+        binding: PrivacyWalletWitnessBindingV1,
+    ) -> PrivateSettlementWalletLeaseV1:
+        try:
+            cursor = _Cursor(payload)
+            if cursor.u8() != 4:
+                raise PrivacyWalletWorkerErrorV1(
+                    "private-settlement lease has the wrong result tag"
+                )
+            handle = PrivacyWalletWitnessHandleV1(cursor.take(_HANDLE_BYTES_V1))
+            expires_at_millis = cursor.u64()
+            wallet_id = cursor.text(_MAX_SIGNER_BYTES_V1, "wallet_id")
+            digests = tuple(cursor.take(_DIGEST_BYTES_V1) for _ in range(4))
+            cursor.finish()
+            if (
+                handle.value[0] & 0x80 == 0
+                or expires_at_millis == 0
+                or wallet_id != binding.signer_wallet_id
+                or not hmac.compare_digest(digests[0], binding.public_intent_digest)
+                or any(not any(digest) for digest in digests)
+            ):
+                raise PrivacyWalletWorkerErrorV1(
+                    "private-settlement lease does not match the request binding"
+                )
+            return PrivateSettlementWalletLeaseV1(
+                handle=handle,
+                expires_at_millis=expires_at_millis,
+                wallet_id=wallet_id,
+                proof_binding_digest=digests[0],
+                statement_digest=digests[1],
+                capsule_digest=digests[2],
+                audit_plaintext_commitment=digests[3],
+            )
+        except (PrivacyWalletWorkerErrorV1, TypeError, ValueError) as error:
+            raise self._malformed(str(error)) from error
+
+    def _decode_private_settlement_proof(
+        self,
+        payload: bytes,
+        binding: PrivacyWalletWitnessBindingV1,
+        *,
+        expected_statement: bytes,
+        expected_capsule: bytes,
+    ) -> PrivateSettlementPreparedProofV1:
+        try:
+            cursor = _Cursor(payload)
+            if cursor.u8() != 5:
+                raise PrivacyWalletWorkerErrorV1(
+                    "private-settlement proof has the wrong result tag"
+                )
+            wallet_id = cursor.text(_MAX_SIGNER_BYTES_V1, "wallet_id")
+            genesis_hash = cursor.take(_DIGEST_BYTES_V1)
+            digests = tuple(cursor.take(_DIGEST_BYTES_V1) for _ in range(4))
+            statement = cursor.bytes_u32(
+                PRIVACY_WALLET_WORKER_MAX_SETTLEMENT_PUBLIC_OBJECT_BYTES_V1,
+                "private-settlement statement",
+            )
+            proof = cursor.bytes_u32(
+                PRIVACY_WALLET_WORKER_MAX_SETTLEMENT_PROOF_BYTES_V1,
+                "private-settlement proof",
+            )
+            capsule = cursor.bytes_u32(
+                PRIVACY_WALLET_WORKER_MAX_SETTLEMENT_PUBLIC_OBJECT_BYTES_V1,
+                "private-settlement audit capsule",
+            )
+            cursor.finish()
+            if (
+                wallet_id != binding.signer_wallet_id
+                or not hmac.compare_digest(genesis_hash, binding.network_id)
+                or not hmac.compare_digest(digests[0], binding.public_intent_digest)
+                or any(not any(digest) for digest in digests)
+                or not hmac.compare_digest(statement, expected_statement)
+                or not hmac.compare_digest(capsule, expected_capsule)
+            ):
+                raise PrivacyWalletWorkerErrorV1(
+                    "private-settlement proof response substituted public artifacts"
+                )
+            return PrivateSettlementPreparedProofV1(
+                wallet_id=wallet_id,
+                canonical_genesis_hash=genesis_hash,
+                proof_binding_digest=digests[0],
+                statement_digest=digests[1],
+                capsule_digest=digests[2],
+                audit_plaintext_commitment=digests[3],
+                statement_norito=statement,
+                proof=proof,
+                audit_capsule_norito=capsule,
             )
         except (PrivacyWalletWorkerErrorV1, TypeError, ValueError) as error:
             raise self._malformed(str(error)) from error
@@ -731,11 +1006,45 @@ def _require_public_bytes(value: object, maximum: int, label: str) -> bytes:
     return value
 
 
+def _require_opaque_public_bytes(value: object, maximum: int, label: str) -> bytes:
+    if type(value) is not bytes:
+        raise TypeError(f"{label} must be immutable bytes")
+    if not 1 <= len(value) <= maximum:
+        raise ValueError(f"{label} violates the bounded public-byte contract")
+    return value
+
+
+def _require_generic_binding(
+    binding: PrivacyWalletWitnessBindingV1,
+) -> PrivacyWalletWitnessBindingV1:
+    if not isinstance(binding, PrivacyWalletWitnessBindingV1):
+        raise TypeError("binding must be a PrivacyWalletWitnessBindingV1")
+    if binding.protocol_id not in PRIVACY_GENERIC11_WORKER_OPERATION_SCHEMAS_V1:
+        raise ValueError("binding does not select a generic privacy-worker protocol")
+    return binding
+
+
+def _require_private_settlement_binding(
+    binding: PrivacyWalletWitnessBindingV1,
+) -> PrivacyWalletWitnessBindingV1:
+    if not isinstance(binding, PrivacyWalletWitnessBindingV1):
+        raise TypeError("binding must be a PrivacyWalletWitnessBindingV1")
+    if binding.protocol_id != ATOMIC_PRIVATE_SETTLEMENT_PROTOCOL_LABEL_V1:
+        raise ValueError("binding does not select atomic private settlement")
+    return binding
+
+
 def _put_text(value: str) -> bytes:
     encoded = value.encode("utf-8")
     if len(encoded) > 0xFFFF:
         raise ValueError("worker text exceeds the u16 wire bound")
     return struct.pack(">H", len(encoded)) + encoded
+
+
+def _put_bytes_u32(value: bytes) -> bytes:
+    if len(value) > 0xFFFFFFFF:
+        raise ValueError("worker byte field exceeds the u32 wire bound")
+    return struct.pack(">I", len(value)) + value
 
 
 def _encode_binding(binding: PrivacyWalletWitnessBindingV1) -> bytes:
@@ -842,13 +1151,18 @@ def _zeroize(value: bytearray) -> None:
 
 
 __all__ = [
+    "ATOMIC_PRIVATE_SETTLEMENT_PROTOCOL_LABEL_V1",
     "PRIVACY_GENERIC11_WORKER_OPERATION_SCHEMAS_V1",
     "PRIVACY_WALLET_WORKER_MAX_EXECUTION_PLAN_BYTES_V1",
     "PRIVACY_WALLET_WORKER_MAX_FRAME_BYTES_V1",
     "PRIVACY_WALLET_WORKER_MAX_PUBLIC_INTENT_BYTES_V1",
+    "PRIVACY_WALLET_WORKER_MAX_SETTLEMENT_PROOF_BYTES_V1",
+    "PRIVACY_WALLET_WORKER_MAX_SETTLEMENT_PUBLIC_OBJECT_BYTES_V1",
     "PRIVACY_WALLET_WORKER_MAX_TTL_MILLIS_V1",
     "PRIVACY_WALLET_WORKER_MIN_TTL_MILLIS_V1",
     "PRIVACY_WALLET_WORKER_PROTOCOL_VERSION_V1",
+    "PrivateSettlementPreparedProofV1",
+    "PrivateSettlementWalletLeaseV1",
     "PrivacyWalletSignedActionV1",
     "PrivacyWalletWitnessBindingV1",
     "PrivacyWalletWitnessHandleV1",

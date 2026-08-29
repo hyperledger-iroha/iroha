@@ -3,7 +3,8 @@
 //! the performance integration helper. The tool scans an artifact directory
 //! (either passed as the first CLI argument or via `SUMERAGI_BASELINE_ARTIFACT_DIR`),
 //! groups runs per scenario, and renders a Markdown report containing aggregated
-//! throughput and latency measurements alongside per-run details.
+//! throughput, signed cadence, queue, and view-change measurements alongside
+//! per-run details.
 use norito::json::{self, Map, Value, native::Number};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -105,20 +106,19 @@ fn generate_report(root: &Path) -> Result<String> {
     writeln!(output, "\n## Summary\n")?;
     writeln!(
         output,
-        "| Scenario | Runs | Peers | Block cadence (ms) | Blocks sampled (median) | Throughput (median blk/s) | Commit EMA (median ms) | Observed block (median ms) |"
+        "| Scenario | Runs | Peers | Block cadence (ms) | Blocks sampled (median) | Throughput (median blk/s) | Observed block (median ms) |"
     )?;
-    writeln!(output, "| --- | --- | --- | --- | --- | --- | --- | --- |")?;
+    writeln!(output, "| --- | --- | --- | --- | --- | --- | --- |")?;
     for (scenario, runs) in &grouped {
         let summary = ScenarioSummary::from_runs(scenario, runs)?;
         writeln!(
             output,
-            "| {scenario} | {runs} | {peers} | {cadence_ms:.0} | {blocks_median:.0} | {throughput_median:.2} | {commit_median:.0} | {observed_block_median:.0} |",
+            "| {scenario} | {runs} | {peers} | {cadence_ms:.0} | {blocks_median:.0} | {throughput_median:.2} | {observed_block_median:.0} |",
             runs = summary.runs,
             peers = summary.peers,
             cadence_ms = summary.block_cadence_ms,
             blocks_median = summary.blocks_sampled.median,
             throughput_median = summary.throughput.median,
-            commit_median = summary.commit.median,
             observed_block_median = summary.observed_block_time.median,
         )?;
     }
@@ -129,14 +129,14 @@ fn generate_report(root: &Path) -> Result<String> {
     Ok(output)
 }
 #[derive(Debug, Clone)]
-struct PhaseStats {
+struct SampleStats {
     _samples: u64,
     _min: f64,
     max: f64,
     _mean: f64,
     median: f64,
 }
-impl PhaseStats {
+impl SampleStats {
     fn from_object(map: &Map, path: &Path) -> Result<Self> {
         Ok(Self {
             _samples: require_u64(map, "samples", path)?,
@@ -157,13 +157,12 @@ struct ScenarioSample {
     elapsed_ms: f64,
     throughput_blocks_per_sec: f64,
     observed_block_time_ms: f64,
-    phase_stats: BTreeMap<String, PhaseStats>,
     telemetry_samples: u64,
     final_height_total: u64,
     final_height_non_empty: u64,
     environment: BTreeMap<String, String>,
-    queue_stats: BTreeMap<String, PhaseStats>,
-    view_change_installs: Option<PhaseStats>,
+    queue_stats: BTreeMap<String, SampleStats>,
+    view_change_installs: Option<SampleStats>,
     status_view_changes: Option<f64>,
 }
 impl ScenarioSample {
@@ -188,17 +187,6 @@ impl ScenarioSample {
         let elapsed_ms = require_f64(timing, "elapsed_ms", &path)?;
         let throughput_blocks_per_sec = require_f64(timing, "throughput_blocks_per_sec", &path)?;
         let observed_block_time_ms = require_f64(timing, "observed_block_time_ms", &path)?;
-        let phase_root = require_object(root, "phase_latency_ema_ms", &path)?;
-        let mut phase_stats = BTreeMap::new();
-        for (phase, value) in phase_root {
-            let obj = value.as_object().ok_or_else(|| ReportError::InvalidType {
-                path: path.clone(),
-                field: format!("phase_latency_ema_ms.{phase}"),
-                expected: "object",
-                actual: value_type(value),
-            })?;
-            phase_stats.insert(phase.clone(), PhaseStats::from_object(obj, &path)?);
-        }
         let queue_root = root
             .get("queue")
             .and_then(Value::as_object)
@@ -207,7 +195,7 @@ impl ScenarioSample {
         let mut queue_stats = BTreeMap::new();
         for (key, value) in &queue_root {
             if let Some(obj) = value.as_object() {
-                queue_stats.insert(key.clone(), PhaseStats::from_object(obj, &path)?);
+                queue_stats.insert(key.clone(), SampleStats::from_object(obj, &path)?);
             }
         }
         let view_root = root
@@ -218,7 +206,7 @@ impl ScenarioSample {
         let view_change_installs = view_root
             .get("install_total")
             .and_then(Value::as_object)
-            .map(|obj| PhaseStats::from_object(obj, &path))
+            .map(|obj| SampleStats::from_object(obj, &path))
             .transpose()?;
         let status_view_changes = view_root
             .get("status_view_changes")
@@ -253,7 +241,6 @@ impl ScenarioSample {
             elapsed_ms,
             throughput_blocks_per_sec,
             observed_block_time_ms,
-            phase_stats,
             telemetry_samples,
             final_height_total,
             final_height_non_empty,
@@ -304,8 +291,6 @@ struct ScenarioSummary {
     block_cadence_ms: f64,
     blocks_sampled: StatsSummary,
     throughput: StatsSummary,
-    commit: StatsSummary,
-    commit_max: f64,
     observed_block_time: StatsSummary,
 }
 impl ScenarioSummary {
@@ -319,8 +304,6 @@ impl ScenarioSummary {
         let mut block_cadence_values = Vec::new();
         let mut blocks_sampled_vals = Vec::new();
         let mut throughput_vals = Vec::new();
-        let mut commit_median_vals = Vec::new();
-        let mut commit_max_vals = Vec::new();
         let mut observed_block_vals = Vec::new();
         for run in runs {
             peers_set.insert(run.peers);
@@ -333,14 +316,6 @@ impl ScenarioSummary {
             blocks_sampled_vals.push(u64_to_f64(run.blocks_sampled, "blocks_sampled")?);
             throughput_vals.push(run.throughput_blocks_per_sec);
             observed_block_vals.push(run.observed_block_time_ms);
-            let commit_stats = run.phase_stats.get("commit").ok_or_else(|| {
-                ReportError::Aggregate(format!(
-                    "scenario `{scenario}` run `{}` missing commit stats",
-                    run.source.display()
-                ))
-            })?;
-            commit_median_vals.push(commit_stats.median);
-            commit_max_vals.push(commit_stats.max);
         }
         if peers_set.len() != 1 {
             return Err(ReportError::Inconsistent {
@@ -360,8 +335,6 @@ impl ScenarioSummary {
             block_cadence_ms: block_cadence_values[0],
             blocks_sampled: StatsSummary::from_values(&blocks_sampled_vals, "blocks_sampled")?,
             throughput: StatsSummary::from_values(&throughput_vals, "throughput")?,
-            commit: StatsSummary::from_values(&commit_median_vals, "commit")?,
-            commit_max: commit_max_vals.into_iter().fold(f64::MIN, f64::max),
             observed_block_time: StatsSummary::from_values(
                 &observed_block_vals,
                 "observed_block_time_ms",
@@ -397,11 +370,6 @@ impl ScenarioSummary {
         )?;
         writeln!(
             writer,
-            "- commit EMA (median): {:.0} ms (max {:.0} ms)",
-            self.commit.median, self.commit_max
-        )?;
-        writeln!(
-            writer,
             "- observed block time (median): {:.0} ms",
             self.observed_block_time.median
         )?;
@@ -410,23 +378,20 @@ impl ScenarioSummary {
     fn render_runs_table(writer: &mut impl fmt::Write, runs: &[ScenarioSample]) -> Result<()> {
         writeln!(
             writer,
-            "\n| Run | Source | Blocks sampled | Elapsed (s) | Throughput (blk/s) | Observed block (ms) | Commit median (ms) | Commit max (ms) | Telemetry samples | Final height | View changes |"
+            "\n| Run | Source | Blocks sampled | Elapsed (s) | Throughput (blk/s) | Observed block (ms) | Telemetry samples | Final height | View changes |"
         )?;
         writeln!(
             writer,
-            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"
         )?;
         for (idx, run) in runs.iter().enumerate() {
-            let commit_stats = run.phase_stats.get("commit").ok_or_else(|| {
-                ReportError::Aggregate(format!("missing commit stats for {}", run.source.display()))
-            })?;
             let elapsed_s = run.elapsed_ms / 1_000.0;
             let view_changes = run
                 .status_view_changes
                 .map_or_else(|| "n/a".to_string(), |v| format!("{v:.0}"));
             writeln!(
                 writer,
-                "| {} | {} | {} | {:.2} | {:.2} | {:.0} | {:.0} | {:.0} | {} | {}/{} | {} |",
+                "| {} | {} | {} | {:.2} | {:.2} | {:.0} | {} | {}/{} | {} |",
                 idx + 1,
                 run.source
                     .file_name()
@@ -436,8 +401,6 @@ impl ScenarioSummary {
                 elapsed_s,
                 run.throughput_blocks_per_sec,
                 run.observed_block_time_ms,
-                commit_stats.median,
-                commit_stats.max,
                 run.telemetry_samples,
                 run.final_height_non_empty,
                 run.final_height_total,

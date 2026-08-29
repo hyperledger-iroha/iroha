@@ -37,6 +37,9 @@ fun assertMasterConfiguration(storage: MasterStorage): BridgeConfig {
         config.routeRevision != 0 && config.tairaToTonMultiplier == SCCP_TAIRA_TO_TON_MULTIPLIER
     ) throw SccpErrors.InvalidConfiguration;
     assert (
+        config.maxWrappedSupply > 0 && storage.totalSupply <= config.maxWrappedSupply
+    ) throw SccpErrors.InvalidConfiguration;
+    assert (
         hashes.sourceLaneHash == sccpLaneHash(config.sourceLaneBytes) &&
         hashes.destinationLaneHash == sccpLaneHash(config.destinationLaneBytes) &&
         finalityTail.verifyingKey.hash() == finalityTail.verifyingKeyCellHash &&
@@ -147,6 +150,13 @@ fun onInternalMessage(in: InMessage) {
 
             var replay = storage.replay.load();
             if (!replay.mints.exists(messageId)) {
+                assert (
+                    sccpMintFitsSupplyCap(
+                        storage.totalSupply,
+                        msg.jettonAmount,
+                        config.maxWrappedSupply,
+                    )
+                ) throw SccpErrors.SupplyCapExceeded;
                 val record: MasterMintRecord = {
                     status: SCCP_PENDING_MINT,
                     queryId: msg.queryId,

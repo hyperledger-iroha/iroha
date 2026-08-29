@@ -82,8 +82,6 @@ fn validate_transfer_state_transition(batch: &TransitionBatch) -> Result<()> {
             "empty batch changes the public state root",
         ));
     }
-    // TODO: Admit Mint, Burn, role, and generic metadata updates only after their supply,
-    // permission-table, and state-tree witnesses are constrained and adversarially tested.
     require_all_operations(
         batch,
         ProofSemantics::TransferStateTransition,
@@ -214,19 +212,17 @@ mod tests {
     }
 
     #[test]
-    fn axt_transfer_profile_rejects_appended_supply_or_metadata_rows() {
-        for operation in [OperationKind::Burn, OperationKind::MetaSet] {
-            let mut candidate = batch([0x11; 32], [0x22; 32]);
-            push(&mut candidate, OperationKind::Transfer);
-            push(&mut candidate, operation);
-            assert!(matches!(
-                validate_batch_semantics(&candidate, ProofSemantics::AxtTransferClaim),
-                Err(Error::InvalidProofSemantics {
-                    profile: "axt_transfer_claim",
-                    ..
-                })
-            ));
-        }
+    fn axt_transfer_profile_rejects_appended_metadata_row() {
+        let mut candidate = batch([0x11; 32], [0x22; 32]);
+        push(&mut candidate, OperationKind::Transfer);
+        push(&mut candidate, OperationKind::MetaSet);
+        assert!(matches!(
+            validate_batch_semantics(&candidate, ProofSemantics::AxtTransferClaim),
+            Err(Error::InvalidProofSemantics {
+                profile: "axt_transfer_claim",
+                ..
+            })
+        ));
     }
 
     #[test]
@@ -236,17 +232,10 @@ mod tests {
         validate_batch_semantics(&legitimate, ProofSemantics::AxtOpaqueEffect)
             .expect("opaque AXT metadata carrier");
 
-        let mut role_attack = batch([0x11; 32], [0x22; 32]);
-        push(
-            &mut role_attack,
-            OperationKind::RoleGrant {
-                role_id: vec![0x11; 32],
-                permission_id: vec![0x22; 32],
-                epoch: 7,
-            },
-        );
+        let mut transfer_attack = batch([0x11; 32], [0x22; 32]);
+        push(&mut transfer_attack, OperationKind::Transfer);
         assert!(matches!(
-            validate_batch_semantics(&role_attack, ProofSemantics::AxtOpaqueEffect),
+            validate_batch_semantics(&transfer_attack, ProofSemantics::AxtOpaqueEffect),
             Err(Error::InvalidProofSemantics {
                 profile: "axt_opaque_effect",
                 ..

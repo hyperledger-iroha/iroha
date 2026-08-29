@@ -17,10 +17,9 @@ use iroha_data_model::{
     asset::id::AssetDefinitionId,
     block::{BlockHeader, consensus::ExecWitness},
     fastpq::{
-        FastpqOperationKind, FastpqPublicInputs, FastpqRolePermissionDelta, FastpqStateTransition,
-        FastpqTransitionBatch, TRANSFER_TRANSCRIPTS_METADATA_KEY, TransferDeltaTranscript,
-        TransferTranscript, TransferTranscriptBundle, normalized_numeric_to_u64,
-        transfer_asset_scales,
+        FastpqOperationKind, FastpqPublicInputs, FastpqStateTransition, FastpqTransitionBatch,
+        TRANSFER_TRANSCRIPTS_METADATA_KEY, TransferDeltaTranscript, TransferTranscript,
+        TransferTranscriptBundle, normalized_numeric_to_u64, transfer_asset_scales,
     },
     role::{Role, RoleId},
 };
@@ -1078,44 +1077,12 @@ fn state_transition_to_dto(transition: &StateTransition) -> FastpqStateTransitio
 fn operation_to_dto(operation: &OperationKind) -> FastpqOperationKind {
     match operation {
         OperationKind::Transfer => FastpqOperationKind::Transfer,
-        OperationKind::Mint => FastpqOperationKind::Mint,
-        OperationKind::Burn => FastpqOperationKind::Burn,
-        OperationKind::RoleGrant {
-            role_id,
-            permission_id,
-            epoch,
-        } => FastpqOperationKind::RoleGrant(FastpqRolePermissionDelta {
-            role_id: role_id.clone(),
-            permission_id: permission_id.clone(),
-            epoch: *epoch,
-        }),
-        OperationKind::RoleRevoke {
-            role_id,
-            permission_id,
-            epoch,
-        } => FastpqOperationKind::RoleRevoke(FastpqRolePermissionDelta {
-            role_id: role_id.clone(),
-            permission_id: permission_id.clone(),
-            epoch: *epoch,
-        }),
         OperationKind::MetaSet => FastpqOperationKind::MetaSet,
     }
 }
 fn operation_from_dto(operation: &FastpqOperationKind) -> OperationKind {
     match operation {
         FastpqOperationKind::Transfer => OperationKind::Transfer,
-        FastpqOperationKind::Mint => OperationKind::Mint,
-        FastpqOperationKind::Burn => OperationKind::Burn,
-        FastpqOperationKind::RoleGrant(delta) => OperationKind::RoleGrant {
-            role_id: delta.role_id.clone(),
-            permission_id: delta.permission_id.clone(),
-            epoch: delta.epoch,
-        },
-        FastpqOperationKind::RoleRevoke(delta) => OperationKind::RoleRevoke {
-            role_id: delta.role_id.clone(),
-            permission_id: delta.permission_id.clone(),
-            epoch: delta.epoch,
-        },
         FastpqOperationKind::MetaSet => OperationKind::MetaSet,
     }
 }
@@ -2115,7 +2082,6 @@ mod tests {
             metal_threadgroup_width: None,
             metal_trace: iroha_config::parameters::defaults::zk::fastpq::METAL_TRACE,
             metal_debug_enum: iroha_config::parameters::defaults::zk::fastpq::METAL_DEBUG_ENUM,
-            metal_debug_fused: iroha_config::parameters::defaults::zk::fastpq::METAL_DEBUG_FUSED,
         }
     }
     fn sample_template() -> FastpqPublicInputsTemplate {

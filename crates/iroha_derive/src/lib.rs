@@ -1,17 +1,16 @@
 //! Crate with various derive macros.
 //!
-//! Shared helper utilities (e.g., `Emitter`, attribute parsers) live in the
-//! companion `iroha_derive_primitives` crate so other proc-macro crates can use
-//! them without depending on `iroha_derive` directly.
-use darling::{Error as DarlingError, FromDeriveInput as _};
+//! Shared diagnostic and representation helpers live in the companion
+//! `iroha_derive_primitives` crate so other proc-macro crates can use them
+//! without depending on `iroha_derive` directly.
 #[cfg(feature = "config_base")]
 mod config_base;
 mod from_variant;
 #[cfg(feature = "futures")]
 mod futures;
-use manyhow::{Result, ToTokensError, manyhow};
+use manyhow::{Result, manyhow};
 use proc_macro2::TokenStream;
-use quote::{ToTokens, quote};
+use quote::quote;
 /// Define the private diagnostic-emitter convenience trait used by Iroha's
 /// procedural-macro crates.
 ///
@@ -34,12 +33,6 @@ pub fn define_emitter_ext(input: proc_macro::TokenStream) -> proc_macro::TokenSt
                 &mut self,
                 result: manyhow::Result<T, E>,
             ) -> Option<T>;
-
-            #[allow(dead_code)]
-            fn handle_or_default<E: manyhow::ToTokensError + 'static, T: Default>(
-                &mut self,
-                result: manyhow::Result<T, E>,
-            ) -> T;
 
             fn finish_token_stream(self) -> proc_macro2::TokenStream
             where
@@ -65,13 +58,6 @@ pub fn define_emitter_ext(input: proc_macro::TokenStream) -> proc_macro::TokenSt
                         None
                     }
                 }
-            }
-
-            fn handle_or_default<E: manyhow::ToTokensError + 'static, T: Default>(
-                &mut self,
-                result: manyhow::Result<T, E>,
-            ) -> T {
-                self.handle(result).unwrap_or_default()
             }
 
             fn finish_token_stream(self) -> proc_macro2::TokenStream
@@ -100,7 +86,17 @@ pub fn define_emitter_ext(input: proc_macro::TokenStream) -> proc_macro::TokenSt
 /// Helper macro to expand FFI functions
 #[manyhow]
 #[proc_macro_attribute]
-pub fn ffi_impl_opaque(_: TokenStream, item: TokenStream) -> Result<TokenStream> {
+pub fn ffi_impl_opaque(args: TokenStream, item: TokenStream) -> Result<TokenStream> {
+    ffi_impl_opaque_impl(args, item).map_err(Into::into)
+}
+
+fn ffi_impl_opaque_impl(args: TokenStream, item: TokenStream) -> syn::Result<TokenStream> {
+    if !args.is_empty() {
+        return Err(syn::Error::new_spanned(
+            args,
+            "ffi_impl_opaque does not accept arguments",
+        ));
+    }
     let item: syn::ItemImpl = syn::parse2(item)?;
     Ok(quote! {
         #[cfg_attr(
@@ -115,7 +111,7 @@ pub fn ffi_impl_opaque(_: TokenStream, item: TokenStream) -> Result<TokenStream>
 /// and `TryFrom<Enum> for Variant`.
 ///
 /// ```rust
-/// use iroha_derive::FromVariant;
+/// use iroha_macro::FromVariant;
 ///
 /// trait MyTrait {}
 ///
@@ -126,8 +122,8 @@ pub fn ffi_impl_opaque(_: TokenStream, item: TokenStream) -> Result<TokenStream>
 ///     String(String),
 ///     // You can skip implementing `From`
 ///     Vec(#[skip_from] Vec<Obj>),
-///     // You can also skip implementing `From` for item inside containers such as `Box`
-///     Box(#[skip_container] Box<dyn MyTrait>)
+///     // Conversions always use the exact field type; no container is allocated implicitly.
+///     Box(Box<dyn MyTrait>)
 /// }
 ///
 /// // For example, to avoid:
@@ -141,11 +137,9 @@ pub fn ffi_impl_opaque(_: TokenStream, item: TokenStream) -> Result<TokenStream>
 /// }
 /// ```
 #[manyhow]
-#[proc_macro_derive(FromVariant, attributes(skip_from, skip_try_from, skip_container))]
+#[proc_macro_derive(FromVariant, attributes(skip_from, skip_try_from))]
 pub fn from_variant_derive(input: TokenStream) -> Result<TokenStream> {
-    let ast = syn::parse2(input)?;
-    let ast = from_variant::FromVariantInput::from_derive_input(&ast).map_err(darling_error)?;
-    Ok(from_variant::impl_from_variant(&ast))
+    from_variant::impl_from_variant(syn::parse2(input)?).map_err(Into::into)
 }
 /// Macro for wrapping future for getting telemetry info about poll times and numbers
 #[cfg(feature = "futures")]
@@ -161,13 +155,16 @@ pub fn telemetry_future(args: TokenStream, input: TokenStream) -> TokenStream {
 pub fn derive_read_config(input: TokenStream) -> TokenStream {
     config_base::derive_read_config_impl(input)
 }
-#[derive(Debug)]
-struct DarlingErrorWrapper(DarlingError);
-impl ToTokensError for DarlingErrorWrapper {
-    fn to_tokens(&self, tokens: &mut TokenStream) {
-        self.0.clone().write_errors().to_tokens(tokens);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ffi_impl_opaque_rejects_arguments() {
+        let item = quote! { impl Example {} };
+        let error = ffi_impl_opaque_impl(quote! { unexpected }, item)
+            .expect_err("arguments must be rejected");
+        assert!(error.to_string().contains("does not accept arguments"));
     }
-}
-fn darling_error(err: DarlingError) -> manyhow::Error {
-    manyhow::Error::from(DarlingErrorWrapper(err))
 }

@@ -390,7 +390,9 @@ mod tests {
             }
         }
         tx.apply();
-        block.commit().expect("apply seeded block");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("apply seeded block");
     }
     fn seed_world_with_scoped_assets(
         state: &mut State,
@@ -448,6 +450,8 @@ mod tests {
             }
         }
         tx.apply();
-        block.commit().expect("apply seeded block");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("apply seeded block");
     }
 }

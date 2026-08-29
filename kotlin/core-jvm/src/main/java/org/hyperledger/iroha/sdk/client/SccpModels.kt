@@ -875,6 +875,7 @@ object SccpJsonParser {
         val routeAddress: String,
         val routeCodeHash: String,
         val multiplier: Long,
+        val maxWrappedSupply: BigInteger,
         val destinationBindingHash: String,
         val deploymentConfigurationHash: String,
         val governedAddressRoles: List<String>,
@@ -1002,7 +1003,12 @@ object SccpJsonParser {
         val settlement = requiredObject(value, "settlement")
         exactFields(
             settlement,
-            setOf("asset_definition_id", "custody_owner", "payload_amount_scale"),
+            setOf(
+                "asset_definition_id",
+                "custody_owner",
+                "payload_amount_scale",
+                "max_outstanding_liability",
+            ),
             "$label.settlement",
         )
         require(requiredText(settlement, "asset_definition_id") == TAIRA_XOR_ASSET_ID) {
@@ -1010,6 +1016,20 @@ object SccpJsonParser {
         }
         requiredText(settlement, "custody_owner")
         val payloadAmountScale = requiredInt(settlement, "payload_amount_scale", 9, 9)
+        val maxOutstandingLiability = requiredUnsignedInteger(
+            settlement,
+            "max_outstanding_liability",
+            MAX_U128,
+            true,
+        )
+        val expectedMaxWrappedSupply = checkedU128Product(
+            maxOutstandingLiability,
+            BigInteger.valueOf(destination.multiplier),
+            "$label settlement liability cap",
+        )
+        require(destination.maxWrappedSupply == expectedMaxWrappedSupply) {
+            "$label max_wrapped_supply must equal max_outstanding_liability multiplied by taira_to_token_multiplier"
+        }
         val routeConfigurationHash = routeConfigurationHash(
             lane,
             routeId,
@@ -1114,6 +1134,12 @@ object SccpJsonParser {
             1_000_000_000,
             1_000_000_000,
         )
+        val maxWrappedSupply = requiredUnsignedInteger(
+            deployment,
+            "max_wrapped_supply",
+            MAX_U128,
+            true,
+        )
         val destinationBindingHash = destinationBindingHash(
             lane.source,
             family,
@@ -1145,6 +1171,7 @@ object SccpJsonParser {
             addresses[2],
             hashes[3],
             multiplier,
+            maxWrappedSupply,
             destinationBindingHash,
             keccak(concatenate(deploymentConfiguration)).toUpperHex(),
             addresses,
@@ -1201,6 +1228,12 @@ object SccpJsonParser {
         )
         requireDistinctRawHashes(governedHashes, "$label TON deployment")
         val multiplier = requiredLong(deployment, "taira_to_token_multiplier", 1, 1)
+        val maxWrappedSupply = requiredUnsignedInteger(
+            deployment,
+            "max_wrapped_supply",
+            MAX_U128,
+            true,
+        )
         val binding = tonDestinationBindingHash(
             lane.source,
             masterCode,
@@ -1236,6 +1269,7 @@ object SccpJsonParser {
             route.identity,
             routeCode,
             multiplier,
+            maxWrappedSupply,
             binding,
             sha256(configuration).toUpperHex(),
             listOf(master.identity, route.identity),
@@ -1355,6 +1389,7 @@ object SccpJsonParser {
                 writeBytes(output, "taira_ton_xor".toByteArray(Charsets.US_ASCII))
                 writeU32(output, revision.toInt())
                 writeU64(output, BigInteger.valueOf(destination.multiplier))
+                writeU128(output, destination.maxWrappedSupply)
             }.toByteArray()
             val payload = ByteArrayOutputStream().also { output ->
                 output.write(CONCRETE_ROUTE_CONFIGURATION_DOMAIN.toByteArray(Charsets.UTF_8))
@@ -1431,6 +1466,7 @@ object SccpJsonParser {
                     keccak(routeId.toByteArray(Charsets.US_ASCII)),
                     abiWord(revision),
                     abiWord(destination.multiplier),
+                    abiWord(destination.maxWrappedSupply),
                 ),
             ),
         )
@@ -2037,6 +2073,14 @@ object SccpJsonParser {
         }
     }
 
+    private fun checkedU128Product(
+        left: BigInteger,
+        right: BigInteger,
+        label: String,
+    ): BigInteger = left.multiply(right).also {
+        require(it <= MAX_U128) { "$label exceeds u128" }
+    }
+
     private fun requiredDomain(value: Map<String, Any?>, field: String): Int =
         requiredInt(value, field, 0, 5).also {
             require(it == 0 || it == 1 || it == 2 || it == 4 || it == 5) {
@@ -2266,6 +2310,13 @@ object SccpJsonParser {
         }
     }
 
+    private fun writeU128(out: ByteArrayOutputStream, value: BigInteger) {
+        require(value.signum() >= 0 && value <= MAX_U128) { "value must fit u128" }
+        repeat(16) { shift ->
+            out.write(value.shiftRight(shift * 8).and(BigInteger.valueOf(0xff)).toInt())
+        }
+    }
+
     private fun writeU16(out: ByteArrayOutputStream, value: Int) {
         repeat(2) { shift -> out.write((value ushr (shift * 8)) and 0xff) }
     }
@@ -2352,6 +2403,7 @@ object SccpJsonParser {
         "route_address",
         "route_code_hash",
         "taira_to_token_multiplier",
+        "max_wrapped_supply",
     )
     private val TON_DESTINATION_FIELDS = setOf(
         "jetton_master_address",
@@ -2368,6 +2420,7 @@ object SccpJsonParser {
         "proof_profile_commitment",
         "outbound_proof_policy",
         "taira_to_token_multiplier",
+        "max_wrapped_supply",
     )
     private val VERIFYING_KEY_FIELDS = setOf("version", "alpha1", "beta2", "gamma2", "delta2", "ic")
     private val IC_FIELDS = linkedSetOf(

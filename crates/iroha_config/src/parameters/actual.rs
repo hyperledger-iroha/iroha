@@ -139,14 +139,10 @@ pub struct Root {
     pub nexus: Nexus,
     /// Snapshot configuration.
     pub snapshot: Snapshot,
-    /// Master telemetry switch (when false, all telemetry outputs are disabled at runtime).
-    pub telemetry_enabled: bool,
     /// Active telemetry profile describing available capabilities.
     pub telemetry_profile: TelemetryProfile,
     /// Telemetry destination (if enabled).
     pub telemetry: Option<Telemetry>,
-    /// Telemetry redaction policy.
-    pub telemetry_redaction: TelemetryRedaction,
     /// Telemetry integrity policy.
     pub telemetry_integrity: TelemetryIntegrity,
     /// Developer telemetry settings.
@@ -1827,8 +1823,6 @@ pub struct Fastpq {
     pub metal_trace: bool,
     /// Emit verbose Metal device enumeration logs (developer diagnostic; defaults off).
     pub metal_debug_enum: bool,
-    /// Emit verbose fused Poseidon failure diagnostics (developer diagnostic; defaults off).
-    pub metal_debug_fused: bool,
 }
 /// Reference to a verifying key by backend and name.
 #[derive(Debug, Clone)]
@@ -2090,7 +2084,7 @@ impl ParliamentTimedOvn {
             self.max_corpus_entries
         );
         let required_chunk_blocks =
-            iroha_data_model::isi::governance::parliament_timed_ovn_required_chunk_blocks_v1(
+            iroha_data_model::governance::types::parliament_timed_ovn_required_chunk_blocks_v1(
                 self.max_corpus_entries,
             );
         assert!(
@@ -2227,9 +2221,9 @@ pub struct Governance {
     pub review_panel_size: usize,
     /// Coordination Council size.
     pub coordination_council_size: usize,
-    /// Policy Jury size.
+    /// Policy Jury size (at least two for non-identity timed-OVN masks).
     pub policy_jury_size: usize,
-    /// Maximum Confirmation Jury size.
+    /// Confirmation Jury target/cap (at least two for timed-OVN confirmation).
     pub confirmation_jury_size: usize,
     /// Oversight Committee size.
     pub oversight_committee_size: usize,
@@ -2636,6 +2630,105 @@ impl_default!(NexusAxt => {
                 .expect("replay retention window must be non-zero"),
         }
 });
+/// Governed atomic private cross-dataspace settlement configuration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NexusAtomicPrivateSettlement {
+    /// Whether admission is enabled, subject to the governed activation height.
+    pub enabled: bool,
+    /// First block height at which the path may be admitted.
+    pub activation_height: Option<u64>,
+    /// Minimum notice required between governance approval and activation.
+    pub minimum_activation_notice_blocks: NonZeroU64,
+    /// Audited fixed-shape private-note proof profile version.
+    pub proof_profile_version: NonZeroU16,
+    /// Maximum number of ordered dataspace legs in one bundle.
+    pub max_participants: NonZeroU16,
+    /// Maximum admission-to-expiry distance, in blocks.
+    pub max_expiry_blocks: NonZeroU64,
+    /// Maximum auditor-approval phase duration, in blocks.
+    pub audit_timeout_blocks: NonZeroU64,
+    /// Maximum Prepare-QC phase duration, in blocks.
+    pub prepare_timeout_blocks: NonZeroU64,
+    /// Maximum Commit-QC phase duration, in blocks.
+    pub commit_timeout_blocks: NonZeroU64,
+    /// Strictly increasing canonical padded-plaintext classes, in bytes.
+    ///
+    /// The authenticated ciphertext is exactly 16 bytes larger.
+    pub capsule_padding_classes_bytes: Vec<NonZeroU32>,
+    /// Maximum proof sidecar size per leg.
+    pub max_proof_bytes: NonZeroU64,
+    /// Maximum encrypted audit capsule size per leg.
+    pub max_capsule_bytes: NonZeroU64,
+    /// Maximum encoded global carrier size.
+    pub max_carrier_bytes: NonZeroU64,
+    /// Minimum durable sidecar retention after admission, in blocks.
+    pub sidecar_retention_blocks: NonZeroU64,
+    /// Default online auditor threshold for new policies.
+    pub default_min_auditor_approvals: NonZeroU16,
+    /// Audit-policy schema versions accepted by this deployment.
+    pub permitted_policy_versions: BTreeSet<u16>,
+}
+impl_default!(NexusAtomicPrivateSettlement => {
+        Self {
+            enabled: defaults::nexus::atomic_private_settlement::ENABLED,
+            activation_height: None,
+            minimum_activation_notice_blocks: NonZeroU64::new(
+                defaults::nexus::atomic_private_settlement::MINIMUM_ACTIVATION_NOTICE_BLOCKS,
+            )
+            .expect("private-settlement activation notice must be non-zero"),
+            proof_profile_version: NonZeroU16::new(
+                defaults::nexus::atomic_private_settlement::PROOF_PROFILE_VERSION,
+            )
+            .expect("private-settlement proof profile must be non-zero"),
+            max_participants: NonZeroU16::new(
+                defaults::nexus::atomic_private_settlement::MAX_PARTICIPANTS,
+            )
+            .expect("private-settlement participant bound must be non-zero"),
+            max_expiry_blocks: NonZeroU64::new(
+                defaults::nexus::atomic_private_settlement::MAX_EXPIRY_BLOCKS,
+            )
+            .expect("private-settlement expiry bound must be non-zero"),
+            audit_timeout_blocks: NonZeroU64::new(
+                defaults::nexus::atomic_private_settlement::AUDIT_TIMEOUT_BLOCKS,
+            )
+            .expect("private-settlement audit timeout must be non-zero"),
+            prepare_timeout_blocks: NonZeroU64::new(
+                defaults::nexus::atomic_private_settlement::PREPARE_TIMEOUT_BLOCKS,
+            )
+            .expect("private-settlement prepare timeout must be non-zero"),
+            commit_timeout_blocks: NonZeroU64::new(
+                defaults::nexus::atomic_private_settlement::COMMIT_TIMEOUT_BLOCKS,
+            )
+            .expect("private-settlement commit timeout must be non-zero"),
+            capsule_padding_classes_bytes:
+                defaults::nexus::atomic_private_settlement::CAPSULE_PADDING_CLASSES_BYTES
+                    .into_iter()
+                    .map(|bytes| NonZeroU32::new(bytes).expect("padding class must be non-zero"))
+                    .collect(),
+            max_proof_bytes: NonZeroU64::new(
+                defaults::nexus::atomic_private_settlement::MAX_PROOF_BYTES,
+            )
+            .expect("private-settlement proof bound must be non-zero"),
+            max_capsule_bytes: NonZeroU64::new(
+                defaults::nexus::atomic_private_settlement::MAX_CAPSULE_BYTES,
+            )
+            .expect("private-settlement capsule bound must be non-zero"),
+            max_carrier_bytes: NonZeroU64::new(
+                defaults::nexus::atomic_private_settlement::MAX_CARRIER_BYTES,
+            )
+            .expect("private-settlement carrier bound must be non-zero"),
+            sidecar_retention_blocks: NonZeroU64::new(
+                defaults::nexus::atomic_private_settlement::SIDECAR_RETENTION_BLOCKS,
+            )
+            .expect("private-settlement sidecar retention must be non-zero"),
+            default_min_auditor_approvals: NonZeroU16::new(
+                defaults::nexus::atomic_private_settlement::DEFAULT_MIN_AUDITOR_APPROVALS,
+            )
+            .expect("private-settlement auditor threshold must be non-zero"),
+            permitted_policy_versions:
+                defaults::nexus::atomic_private_settlement::PERMITTED_POLICY_VERSIONS.into(),
+        }
+});
 /// Lane-relay emergency override configuration.
 #[derive(Debug, Clone, Copy)]
 pub struct LaneRelayEmergency {
@@ -2854,6 +2947,8 @@ pub struct Nexus {
     pub endorsement: NexusEndorsement,
     /// AXT execution and expiry configuration.
     pub axt: NexusAxt,
+    /// Governed atomic private cross-dataspace settlement policy.
+    pub atomic_private_settlement: NexusAtomicPrivateSettlement,
     /// Lane-relay emergency override configuration.
     pub lane_relay_emergency: LaneRelayEmergency,
     /// Validated lane catalog.
@@ -2896,6 +2991,7 @@ impl_default!(#[allow(clippy::derivable_impls)] Nexus => {
             uploaded_models: NexusUploadedModels::default(),
             endorsement: NexusEndorsement::default(),
             axt: NexusAxt::default(),
+            atomic_private_settlement: NexusAtomicPrivateSettlement::default(),
             lane_relay_emergency: LaneRelayEmergency::default(),
             lane_catalog: LaneCatalog::default(),
             configured_lane_catalog: LaneCatalog::default(),
@@ -2984,6 +3080,7 @@ struct NexusConsensusPolicyPreimageV1 {
     uploaded_models: NexusConsensusUploadedModelsV1,
     endorsement: NexusConsensusEndorsementV1,
     axt: NexusConsensusAxtV1,
+    atomic_private_settlement: NexusConsensusAtomicPrivateSettlementV1,
     lane_relay_emergency: NexusConsensusLaneRelayEmergencyV1,
     governance: NexusConsensusGovernanceV1,
     compliance_enabled: bool,
@@ -3065,6 +3162,25 @@ struct NexusConsensusAxtV1 {
     max_clock_skew_ms: u64,
     proof_cache_ttl_slots: u64,
     replay_retention_slots: u64,
+}
+#[derive(Encode)]
+struct NexusConsensusAtomicPrivateSettlementV1 {
+    enabled: bool,
+    activation_height: Option<u64>,
+    minimum_activation_notice_blocks: u64,
+    proof_profile_version: u16,
+    max_participants: u16,
+    max_expiry_blocks: u64,
+    audit_timeout_blocks: u64,
+    prepare_timeout_blocks: u64,
+    commit_timeout_blocks: u64,
+    capsule_padding_classes_bytes: Vec<u32>,
+    max_proof_bytes: u64,
+    max_capsule_bytes: u64,
+    max_carrier_bytes: u64,
+    sidecar_retention_blocks: u64,
+    default_min_auditor_approvals: u16,
+    permitted_policy_versions: Vec<u16>,
 }
 #[derive(Encode)]
 struct NexusConsensusLaneRelayEmergencyV1 {
@@ -3336,6 +3452,43 @@ pub fn nexus_consensus_policy_digest_with_runtime_policies(
             max_clock_skew_ms: nexus.axt.max_clock_skew_ms,
             proof_cache_ttl_slots: nexus.axt.proof_cache_ttl_slots.get(),
             replay_retention_slots: nexus.axt.replay_retention_slots.get(),
+        },
+        atomic_private_settlement: NexusConsensusAtomicPrivateSettlementV1 {
+            enabled: nexus.atomic_private_settlement.enabled,
+            activation_height: nexus.atomic_private_settlement.activation_height,
+            minimum_activation_notice_blocks: nexus
+                .atomic_private_settlement
+                .minimum_activation_notice_blocks
+                .get(),
+            proof_profile_version: nexus.atomic_private_settlement.proof_profile_version.get(),
+            max_participants: nexus.atomic_private_settlement.max_participants.get(),
+            max_expiry_blocks: nexus.atomic_private_settlement.max_expiry_blocks.get(),
+            audit_timeout_blocks: nexus.atomic_private_settlement.audit_timeout_blocks.get(),
+            prepare_timeout_blocks: nexus.atomic_private_settlement.prepare_timeout_blocks.get(),
+            commit_timeout_blocks: nexus.atomic_private_settlement.commit_timeout_blocks.get(),
+            capsule_padding_classes_bytes: nexus
+                .atomic_private_settlement
+                .capsule_padding_classes_bytes
+                .iter()
+                .map(|bytes| bytes.get())
+                .collect(),
+            max_proof_bytes: nexus.atomic_private_settlement.max_proof_bytes.get(),
+            max_capsule_bytes: nexus.atomic_private_settlement.max_capsule_bytes.get(),
+            max_carrier_bytes: nexus.atomic_private_settlement.max_carrier_bytes.get(),
+            sidecar_retention_blocks: nexus
+                .atomic_private_settlement
+                .sidecar_retention_blocks
+                .get(),
+            default_min_auditor_approvals: nexus
+                .atomic_private_settlement
+                .default_min_auditor_approvals
+                .get(),
+            permitted_policy_versions: nexus
+                .atomic_private_settlement
+                .permitted_policy_versions
+                .iter()
+                .copied()
+                .collect(),
         },
         lane_relay_emergency: NexusConsensusLaneRelayEmergencyV1 {
             enabled: nexus.lane_relay_emergency.enabled,
@@ -11562,61 +11715,6 @@ impl_default!(Stark => {
             max_proof_bytes: crate::parameters::defaults::zk::stark::MAX_PROOF_BYTES,
         }
 });
-/// Telemetry capability flags derived from a [`TelemetryProfile`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TelemetryCapabilities {
-    metrics: bool,
-    expensive_metrics: bool,
-    developer_outputs: bool,
-}
-impl TelemetryCapabilities {
-    /// Construct a capability set from individual flags.
-    #[must_use]
-    pub const fn new(metrics: bool, expensive_metrics: bool, developer_outputs: bool) -> Self {
-        Self {
-            metrics,
-            expensive_metrics,
-            developer_outputs,
-        }
-    }
-    /// Return a capability set with all flags disabled.
-    #[must_use]
-    pub const fn disabled() -> Self {
-        Self::new(false, false, false)
-    }
-    /// Return whether lightweight metrics instrumentation is enabled.
-    #[inline]
-    #[must_use]
-    pub const fn metrics_enabled(self) -> bool {
-        self.metrics
-    }
-    /// Return whether expensive/prometheus metrics instrumentation is enabled.
-    #[inline]
-    #[must_use]
-    pub const fn expensive_metrics_enabled(self) -> bool {
-        self.expensive_metrics
-    }
-    /// Return whether developer-only telemetry outputs are enabled.
-    #[inline]
-    #[must_use]
-    pub const fn developer_outputs_enabled(self) -> bool {
-        self.developer_outputs
-    }
-    /// Override the metrics-enabled flag while preserving other capabilities.
-    #[must_use]
-    pub const fn with_metrics(self, metrics: bool) -> Self {
-        Self::new(metrics, self.expensive_metrics, self.developer_outputs)
-    }
-    /// Combine two capability sets using logical OR for each flag.
-    #[must_use]
-    pub const fn union(self, other: Self) -> Self {
-        Self {
-            metrics: self.metrics || other.metrics,
-            expensive_metrics: self.expensive_metrics || other.expensive_metrics,
-            developer_outputs: self.developer_outputs || other.developer_outputs,
-        }
-    }
-}
 /// Telemetry profiles describing high-level capability bundles.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TelemetryProfile {
@@ -11624,30 +11722,31 @@ pub enum TelemetryProfile {
     Disabled,
     /// Enable lightweight operator metrics and status endpoints.
     Operator,
-    /// Enable operator metrics plus expensive instrumentation (e.g., Prometheus exporters).
+    /// Enable operator metrics plus costly runtime probes and timings.
     Extended,
-    /// Enable operator metrics plus developer-only sinks (JSON/file outputs, tracing bridges).
+    /// Enable operator metrics plus developer-only JSON/file outputs.
     Developer,
     /// Enable all telemetry capabilities supported by the build.
     Full,
 }
 impl TelemetryProfile {
-    /// Compute the capability set implied by this profile.
-    #[must_use]
-    pub const fn capabilities(self) -> TelemetryCapabilities {
-        match self {
-            Self::Disabled => TelemetryCapabilities::disabled(),
-            Self::Operator => TelemetryCapabilities::new(true, false, false),
-            Self::Extended => TelemetryCapabilities::new(true, true, false),
-            Self::Developer => TelemetryCapabilities::new(true, false, true),
-            Self::Full => TelemetryCapabilities::new(true, true, true),
-        }
-    }
-    /// Return `true` when this profile disables all telemetry outputs.
+    /// Return whether lightweight metrics instrumentation is enabled.
     #[inline]
     #[must_use]
-    pub const fn is_disabled(self) -> bool {
-        matches!(self, Self::Disabled)
+    pub const fn metrics_enabled(self) -> bool {
+        !matches!(self, Self::Disabled)
+    }
+    /// Return whether costly metric probes and timings are enabled.
+    #[inline]
+    #[must_use]
+    pub const fn expensive_metrics_enabled(self) -> bool {
+        matches!(self, Self::Extended | Self::Full)
+    }
+    /// Return whether developer-only telemetry outputs are enabled.
+    #[inline]
+    #[must_use]
+    pub const fn developer_outputs_enabled(self) -> bool {
+        matches!(self, Self::Developer | Self::Full)
     }
 }
 impl From<user::TelemetryProfile> for TelemetryProfile {
@@ -11661,63 +11760,8 @@ impl From<user::TelemetryProfile> for TelemetryProfile {
         }
     }
 }
-impl_default!(TelemetryCapabilities => {
-        Self::disabled()
-});
-impl From<TelemetryProfile> for TelemetryCapabilities {
-    fn from(profile: TelemetryProfile) -> Self {
-        profile.capabilities()
-    }
-}
-/// Telemetry redaction modes (runtime).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TelemetryRedactionMode {
-    /// Redact all sensitive fields; ignore allow-list entries.
-    Strict,
-    /// Redact sensitive fields unless explicitly allow-listed.
-    Allowlist,
-    /// Disable telemetry redaction (developer-only).
-    Disabled,
-}
-impl TelemetryRedactionMode {
-    /// Return whether redaction is disabled.
-    #[inline]
-    #[must_use]
-    pub const fn is_disabled(self) -> bool {
-        matches!(self, Self::Disabled)
-    }
-    /// Return whether allow-list entries may bypass keyword redaction.
-    #[inline]
-    #[must_use]
-    pub const fn allowlist_enabled(self) -> bool {
-        matches!(self, Self::Allowlist)
-    }
-}
-impl From<user::TelemetryRedactionMode> for TelemetryRedactionMode {
-    fn from(mode: user::TelemetryRedactionMode) -> Self {
-        match mode {
-            user::TelemetryRedactionMode::Strict => Self::Strict,
-            user::TelemetryRedactionMode::Allowlist => Self::Allowlist,
-            user::TelemetryRedactionMode::Disabled => Self::Disabled,
-        }
-    }
-}
-/// Telemetry redaction policy.
-#[derive(Debug, Clone)]
-pub struct TelemetryRedaction {
-    /// Redaction mode.
-    pub mode: TelemetryRedactionMode,
-    /// Allow-list of field names exempted from keyword redaction.
-    pub allowlist: Vec<String>,
-}
-impl_default!(TelemetryRedaction => {
-        Self {
-            mode: TelemetryRedactionMode::Strict,
-            allowlist: Vec::new(),
-        }
-});
 /// Telemetry integrity policy (hash chaining + optional signing key).
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct TelemetryIntegrity {
     /// Enable hash-chained telemetry exports.
     pub enabled: bool,
@@ -11728,6 +11772,17 @@ pub struct TelemetryIntegrity {
     /// Optional key identifier for rotation workflows.
     pub signing_key_id: Option<String>,
 }
+impl core::fmt::Debug for TelemetryIntegrity {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("TelemetryIntegrity")
+            .field("enabled", &self.enabled)
+            .field("state_dir_configured", &self.state_dir.is_some())
+            .field("signing_key_configured", &self.signing_key.is_some())
+            .field("signing_key_id_configured", &self.signing_key_id.is_some())
+            .finish()
+    }
+}
 impl_default!(TelemetryIntegrity => {
         Self {
             enabled: defaults::telemetry::integrity::ENABLED,
@@ -11737,10 +11792,8 @@ impl_default!(TelemetryIntegrity => {
         }
 });
 /// Complete configuration needed to start regular telemetry.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Telemetry {
-    /// Telemetry sink name.
-    pub name: String,
     /// Telemetry endpoint URL.
     pub url: Url,
     /// Minimum retry period on failure.
@@ -11759,14 +11812,34 @@ pub struct Telemetry {
     pub telegram_rate_per_minute: Option<NonZeroU32>,
     /// Include a metrics snapshot in alerts.
     pub telegram_include_metrics: bool,
-    /// Optional metrics URL to poll (e.g., http://127.0.0.1:8080/metrics).
-    pub telegram_metrics_url: Option<Url>,
-    /// Optional metrics poll period.
-    pub telegram_metrics_period: Option<Duration>,
     /// Optional allow-list of `msg` kinds to send.
     pub telegram_allow_kinds: Option<Vec<String>>,
     /// Optional deny-list of `msg` kinds to suppress.
     pub telegram_deny_kinds: Option<Vec<String>>,
+}
+impl core::fmt::Debug for Telemetry {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("Telemetry")
+            .field("url", &"<redacted>")
+            .field("min_retry_period", &self.min_retry_period)
+            .field("max_retry_delay_exponent", &self.max_retry_delay_exponent)
+            .field(
+                "telegram_bot_key_configured",
+                &self.telegram_bot_key.is_some(),
+            )
+            .field(
+                "telegram_chat_id_configured",
+                &self.telegram_chat_id.is_some(),
+            )
+            .field("telegram_min_level", &self.telegram_min_level)
+            .field("telegram_targets", &self.telegram_targets)
+            .field("telegram_rate_per_minute", &self.telegram_rate_per_minute)
+            .field("telegram_include_metrics", &self.telegram_include_metrics)
+            .field("telegram_allow_kinds", &self.telegram_allow_kinds)
+            .field("telegram_deny_kinds", &self.telegram_deny_kinds)
+            .finish()
+    }
 }
 /// Network Time Service (NTS) configuration.
 #[derive(Debug, Clone, Copy)]

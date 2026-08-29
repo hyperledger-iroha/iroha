@@ -231,6 +231,19 @@ class HttpClientTransport(
         .defaultHeaders(config.defaultHeaders())
         .observers(config.observers())
         .build()
+    /**
+     * Create the exact-route private-settlement client without inheriting request observers.
+     *
+     * Restricted proof and encrypted-capsule bodies must not enter generic SDK telemetry.
+     */
+    fun newAtomicPrivateSettlementToriiClientV1(): AtomicPrivateSettlementToriiClientV1 =
+        AtomicPrivateSettlementToriiClientV1.builder()
+            .executor(executor)
+            .baseUri(config.baseUri())
+            .localSigningContext(config.requireLocalSigningContext())
+            .timeout(config.requestTimeout())
+            .defaultHeaders(config.defaultHeaders())
+            .build()
     fun sorafsGatewayClient(): SorafsGatewayClient = sorafsGatewayClient
     fun sorafsGatewayFetch(request: GatewayFetchRequest): CompletableFuture<ClientResponse> = sorafsGatewayClient.fetch(request)
     fun sorafsGatewayFetchSummary(request: GatewayFetchRequest): CompletableFuture<GatewayFetchSummary> = sorafsGatewayClient.fetchSummary(request)

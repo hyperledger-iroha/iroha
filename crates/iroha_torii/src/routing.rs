@@ -102,7 +102,7 @@ use iroha_core::{
         WorldReadOnly,
     },
     sumeragi,
-    telemetry::{Telemetry, capability::TelemetryGate},
+    telemetry::Telemetry,
     time,
     torii::zk::proofs::{
         ProofFilters as CoreProofFilters, ProofListItem, ProofListParams as CoreProofListParams,
@@ -155,7 +155,7 @@ use iroha_sccp::{
     sccp_payload_projection,
 };
 #[cfg(feature = "telemetry")]
-use iroha_telemetry::metrics::{MicropaymentCreditSnapshot, MicropaymentTicketCounters, Status};
+use iroha_telemetry::metrics::Status;
 #[cfg(feature = "telemetry")]
 use iroha_telemetry::privacy::{PrivacyBucketConfig, PrivacyEventError, PrivacyShareError};
 use mv::storage::StorageReadOnly;
@@ -272,19 +272,6 @@ derived_items! {
 struct EvidenceListWire {
     total: u64,
     items: Vec<EvidenceRecord>,
-}
-(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)
-struct SumeragiPacemakerResponse {
-    backoff_ms: u64,
-    rtt_floor_ms: u64,
-    jitter_ms: u64,
-    backoff_multiplier: u64,
-    rtt_floor_multiplier: u64,
-    max_backoff_ms: u64,
-    jitter_frac_permille: u64,
-    round_elapsed_ms: u64,
-    view_timeout_target_ms: u64,
-    view_timeout_remaining_ms: u64,
 }
 (Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)
 struct PrfContext {
@@ -1221,46 +1208,36 @@ mod streaming_pager_tests {
     }
 }
 }
-/// Telemetry handle that pairs a runtime [`Telemetry`] instance with capability gating.
+/// Telemetry handle that pairs a runtime [`Telemetry`] instance with its configured profile.
 #[derive(Clone)]
-pub struct MaybeTelemetry<G = TelemetryProfile> {
-    gate: G,
+pub struct MaybeTelemetry {
+    profile: TelemetryProfile,
     telemetry: Option<Telemetry>,
 }
-impl<G> fmt::Debug for MaybeTelemetry<G>
-where
-    G: fmt::Debug,
-{
+impl fmt::Debug for MaybeTelemetry {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("MaybeTelemetry")
-            .field("gate", &self.gate)
+            .field("profile", &self.profile)
             .field("has_telemetry", &self.telemetry.is_some())
             .finish()
     }
 }
-impl<G> MaybeTelemetry<G>
-where
-    G: TelemetryGate + Clone,
-{
-    /// Create a new telemetry handle with the given gate and optional runtime handle.
-    pub fn new(telemetry: Option<Telemetry>, gate: G) -> Self {
-        Self { gate, telemetry }
-    }
+impl MaybeTelemetry {
     /// Return the active telemetry profile.
     pub fn profile(&self) -> TelemetryProfile {
-        self.gate.profile()
+        self.profile
     }
     /// Whether metrics collection/exposure is permitted.
     pub fn allows_metrics(&self) -> bool {
-        self.telemetry.is_some() && self.gate.allows_metrics()
+        self.telemetry.is_some() && self.profile.metrics_enabled()
     }
     /// Whether expensive metrics are permitted.
     pub fn allows_expensive_metrics(&self) -> bool {
-        self.telemetry.is_some() && self.gate.allows_expensive_metrics()
+        self.telemetry.is_some() && self.profile.expensive_metrics_enabled()
     }
     /// Whether developer-only telemetry outputs are permitted.
     pub fn allows_developer_outputs(&self) -> bool {
-        self.telemetry.is_some() && self.gate.allows_developer_outputs()
+        self.telemetry.is_some() && self.profile.developer_outputs_enabled()
     }
     /// Whether telemetry observations are currently enabled.
     pub fn is_enabled(&self) -> bool {
@@ -1269,10 +1246,6 @@ where
     /// Access the underlying telemetry handle if available.
     pub fn telemetry(&self) -> Option<&Telemetry> {
         self.telemetry.as_ref()
-    }
-    /// Clone the underlying telemetry handle if available.
-    pub fn telemetry_cloned(&self) -> Option<Telemetry> {
-        self.telemetry.clone()
     }
     /// Execute the callback when metrics are allowed and telemetry is present.
     pub fn with_metrics<T>(&self, f: impl FnOnce(&Telemetry) -> T) -> Option<T> {
@@ -1329,10 +1302,6 @@ where
             None => Ok(()),
         }
     }
-    /// Whether the handle currently has an underlying telemetry instance.
-    pub fn is_configured(&self) -> bool {
-        self.telemetry.is_some()
-    }
     /// Access metrics after synchronizing with the telemetry worker.
     #[cfg(feature = "telemetry")]
     #[allow(clippy::future_not_send)]
@@ -1358,14 +1327,11 @@ where
             .expect("telemetry metrics requested without handle");
         telemetry.metrics_fresh_checked().await
     }
-    /// Map the handle to another gate value while retaining the telemetry instance.
-    pub fn map_gate<H>(self, gate: H) -> MaybeTelemetry<H>
-    where
-        H: TelemetryGate + Clone,
-    {
+    /// Replace the profile while retaining the telemetry instance.
+    pub fn with_profile(self, profile: TelemetryProfile) -> Self {
         MaybeTelemetry {
             telemetry: self.telemetry,
-            gate,
+            profile,
         }
     }
 }
@@ -3240,18 +3206,10 @@ pub struct IdentifierClaimLookupResponseDto {
 }
 }
 }
-impl<G> TelemetryGate for MaybeTelemetry<G>
-where
-    G: TelemetryGate + Clone,
-{
-    fn profile(&self) -> TelemetryProfile {
-        self.gate.profile()
-    }
-}
 impl MaybeTelemetry {
     /// Construct a handle from a telemetry profile and optional runtime telemetry.
     pub fn from_profile(telemetry: Option<Telemetry>, profile: TelemetryProfile) -> Self {
-        Self::new(telemetry, profile)
+        Self { profile, telemetry }
     }
     /// Disabled handle without telemetry backing.
     pub fn disabled() -> Self {
@@ -5634,38 +5592,6 @@ mod proof_query_envelope_tests {
         );
     }
 }
-}
-/// GET /v1/sumeragi/pacemaker — snapshot of pacemaker timers and config
-#[cfg(feature = "telemetry")]
-#[iroha_futures::telemetry_future]
-pub async fn handle_v1_sumeragi_pacemaker(
-    telemetry: &MaybeTelemetry,
-    accept: Option<axum::http::HeaderValue>,
-) -> Result<Response> {
-    if !telemetry.allows_developer_outputs() {
-        return Err(Error::telemetry_profile_forbidden(
-            "sumeragi_pacemaker",
-            telemetry.profile(),
-        ));
-    }
-    let m = telemetry.metrics().await;
-    let payload = SumeragiPacemakerResponse {
-        backoff_ms: m.sumeragi_pacemaker_backoff_ms.get(),
-        rtt_floor_ms: m.sumeragi_pacemaker_rtt_floor_ms.get(),
-        jitter_ms: m.sumeragi_pacemaker_jitter_ms.get(),
-        backoff_multiplier: m.sumeragi_pacemaker_backoff_multiplier.get(),
-        rtt_floor_multiplier: m.sumeragi_pacemaker_rtt_floor_multiplier.get(),
-        max_backoff_ms: m.sumeragi_pacemaker_max_backoff_ms.get(),
-        jitter_frac_permille: m.sumeragi_pacemaker_jitter_frac_permille.get(),
-        round_elapsed_ms: m.sumeragi_pacemaker_round_elapsed_ms.get(),
-        view_timeout_target_ms: m.sumeragi_pacemaker_view_timeout_target_ms.get(),
-        view_timeout_remaining_ms: m.sumeragi_pacemaker_view_timeout_remaining_ms.get(),
-    };
-    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
-        Ok(fmt) => fmt,
-        Err(resp) => return Ok(resp),
-    };
-    Ok(crate::utils::respond_with_format(payload, format))
 }
 /// GET /v1/sumeragi/qc — authoritative PrepareQC lock and high-certificate references.
 #[iroha_futures::telemetry_future]
@@ -10107,7 +10033,9 @@ fn bind_permanent_asset_alias_for_test(
     .execute(authority, &mut tx)
     .expect("bind permanent asset alias");
     tx.apply();
-    block.commit().expect("commit permanent asset alias");
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit permanent asset alias");
 }
 #[cfg(test)]
 fn insert_account_alias_binding_for_test(
@@ -10223,7 +10151,9 @@ fn bind_account_alias_for_test(
     .execute(account_id, &mut tx)
     .expect("repair account alias binding from active SNS lease");
     tx.apply();
-    block.commit().expect("commit account alias for test");
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit account alias for test");
     let state_view = state.view();
     assert_eq!(
         iroha_core::sns::active_account_alias_owner(state_view.world(), &catalog, &label, 0,)
@@ -10327,7 +10257,7 @@ fn grant_account_alias_resolve_for_test(
         .expect("grant account-alias resolve permission");
     tx.apply();
     block
-        .commit()
+        .commit_world_overlay_for_testing()
         .expect("commit account-alias resolve permission");
 }
 #[cfg(all(test, feature = "app_api"))]
@@ -10411,7 +10341,9 @@ mod zk_roots_selector_tests {
                 .insert(definition_id.clone(), zk_state);
         }
         tx.apply();
-        block.commit().expect("commit zk asset frontier for test");
+        block
+            .commit_empty_block_for_testing()
+            .expect("commit zk asset frontier for test");
         root
     }
     fn seed_zk_frontier_checkpoints_for_test(
@@ -10439,7 +10371,7 @@ mod zk_roots_selector_tests {
         }
         tx.apply();
         block
-            .commit()
+            .commit_empty_block_for_testing()
             .expect("commit frontier checkpoints for test");
     }
     fn assert_query_conversion_contains(err: Error, expected: &str) {
@@ -23912,7 +23844,9 @@ mod multisig_selector_tests {
             .expect("bind contract alias");
         }
         stx.apply();
-        block.commit().expect("commit block");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit block");
     }
     fn expect_not_found(err: Error) {
         match err {
@@ -32257,7 +32191,9 @@ mod soradns_tests {
             *world.soradns_directory_latest_mut_for_testing().get_mut() = Some(record.root_hash);
         }
         tx.apply();
-        block.commit().expect("commit block");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit block");
         let view = state.view();
         assert_eq!(
             *view.world().soradns_directory_latest(),
@@ -46896,6 +46832,7 @@ mod validation_fee_torii_ingress_tests {
                             nay: 1,
                             abstain: 0,
                         },
+                        2,
                         166,
                     )
                     .expect("finalize deterministic aggregate ballot");
@@ -47181,7 +47118,9 @@ mod validation_fee_torii_ingress_tests {
             .get_mut()
             .set_parameter(Parameter::Custom(custom_registry));
         stx.apply();
-        block.commit().expect("commit validation-fee policy");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit validation-fee policy");
     }
     fn metadata_for_policy(
         policy: &ValidationFeePolicyV1,
@@ -64917,7 +64856,7 @@ routing_test! { async public_lane_handlers_hide_future_created_autoscale_stale_r
         );
         stx.apply();
         block
-            .commit()
+            .commit_world_overlay_for_testing()
             .expect("commit stale future-created lane fixture");
     }
     let state = Arc::new(state);
@@ -69444,9 +69383,6 @@ pub async fn handle_status(
         &nexus_routing_policy,
     ));
     status.offline = offline;
-    if let Some(handle) = telemetry.telemetry() {
-        status.sorafs_micropayments = handle.sorafs_micropayment_samples();
-    }
     iroha_logger::debug!(
         blocks = status.blocks,
         blocks_non_empty = status.blocks_non_empty,

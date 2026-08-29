@@ -121,7 +121,6 @@ pub fn base_iroha_config() -> Table {
             SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().to_string(),
         )
         // Enable extended telemetry in test networks so `/metrics` snapshots are available.
-        .write("telemetry_enabled", true)
         .write("telemetry_profile", "extended")
         // There is no need in persistence in tests.
         .write(["snapshot", "mode"], "disabled")
@@ -1354,13 +1353,6 @@ mod tests {
     #[test]
     fn base_config_enables_extended_telemetry() {
         let table = super::base_iroha_config();
-        assert_eq!(
-            table
-                .get("telemetry_enabled")
-                .and_then(|value| value.as_bool()),
-            Some(true),
-            "telemetry must be enabled for test networks"
-        );
         assert_eq!(
             table
                 .get("telemetry_profile")

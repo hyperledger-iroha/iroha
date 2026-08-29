@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Wrap a `fastpq_metal_bench` report with metadata for publication."""
+"""Wrap a current FASTPQ Metal or CUDA report with publication metadata."""
 from __future__ import annotations
 
 import argparse
@@ -13,6 +13,19 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Tuple
+
+try:
+    from .validate_row_usage_snapshot import (
+        COUNT_FIELDS,
+        ValidationError as RowUsageValidationError,
+        validate_row_usage_snapshot,
+    )
+except ImportError:  # Direct `python3 scripts/fastpq/wrap_benchmark.py` execution.
+    from validate_row_usage_snapshot import (  # type: ignore[no-redef]
+        COUNT_FIELDS,
+        ValidationError as RowUsageValidationError,
+        validate_row_usage_snapshot,
+    )
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 ACCEL_HELPERS_DIR = SCRIPT_DIR.parent / "acceleration"
@@ -29,6 +42,19 @@ SYSTEM_PROFILER_TIMEOUT = 5  # seconds
 APPLE_CHIP_PATTERN = re.compile(r"apple\s+(m\d)(?:\s+(.*?))?\s*$", re.IGNORECASE)
 BUILTIN_GPU_BUSES = {"spdisplays_builtin", "spdisplays_internal"}
 POSEIDON_OPERATION = "poseidon_hash_columns"
+CUDA_NESTED_SCHEMA = "cuda_nested"
+METAL_FLAT_SCHEMA = "metal_flat"
+V1_MAX_PADDED_ROWS = 1 << 16
+V1_OPERATION_NAMES = frozenset(
+    {
+        "fft",
+        "ifft",
+        "lde",
+        POSEIDON_OPERATION,
+        "poseidon_merkle_pairs",
+        "bn254_poseidon_words",
+    }
+)
 POSEIDON_PIPELINE_METRIC = "fastpq_poseidon_pipeline_total"
 EXECUTION_MODE_METRIC = "fastpq_execution_mode_total"
 POSEIDON_LABEL_KEYS = (
@@ -57,7 +83,11 @@ METRIC_LABEL_PATTERN = re.compile(r'(?P<key>[a-zA-Z_][a-zA-Z0-9_]*)="(?P<value>(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("input", type=Path, help="Path to fastpq_metal_bench JSON output")
+    parser.add_argument(
+        "input",
+        type=Path,
+        help="Path to current fastpq_metal_bench or fastpq_cuda_bench JSON",
+    )
     parser.add_argument(
         "output",
         type=Path,
@@ -686,23 +716,6 @@ def persist_acceleration_state(
     return accel_json_path, prom_output
 
 
-def _gather_row_usage_batches(blob: Any) -> list[dict[str, Any]]:
-    stack: list[Any] = [blob]
-    batches: list[dict[str, Any]] = []
-    while stack:
-        current = stack.pop()
-        if isinstance(current, dict):
-            if isinstance(current.get("row_usage"), dict):
-                batches.append(current)
-                continue
-            stack.extend(current.values())
-        elif isinstance(current, list):
-            stack.extend(current)
-    if not batches:
-        raise SystemExit("[row_usage] no batches with row_usage were found in the provided blob")
-    return batches
-
-
 def _row_usage_key(batch: dict[str, Any], index: int, seen: dict[str, int]) -> str:
     key = batch.get("entry_hash") or f"batch:{index}"
     if key in seen:
@@ -713,39 +726,24 @@ def _row_usage_key(batch: dict[str, Any], index: int, seen: dict[str, int]) -> s
     return key
 
 
-def _sanitize_row_usage(payload: dict[str, Any]) -> dict[str, Any]:
-    sanitized: dict[str, Any] = {}
-    for key, value in payload.items():
-        if isinstance(value, (int, float)):
-            if key.endswith("_rows") or key in {"total_rows", "transfer_rows", "non_transfer_rows"}:
-                sanitized[key] = int(value)
-            elif key.endswith("_ratio") or key == "transfer_ratio":
-                sanitized[key] = round(float(value), 6)
-            else:
-                sanitized[key] = value
-        else:
-            sanitized[key] = value
-    return sanitized
-
-
 def summarize_row_usage_snapshot(path: Path) -> dict[str, Any]:
     blob = load_json_file(path)
-    batches = _gather_row_usage_batches(blob)
+    try:
+        validate_row_usage_snapshot(blob, path)
+    except RowUsageValidationError as err:
+        raise SystemExit(f"[row_usage] {err}") from err
+    batches = blob["fastpq_batches"]
     seen: dict[str, int] = {}
     summary_batches: list[dict[str, Any]] = []
-    aggregate: dict[str, int] = {}
-
-    def accumulate_counts(usage: dict[str, Any]) -> None:
-        for key, value in usage.items():
-            if key.endswith("_rows") or key in {"total_rows", "transfer_rows", "non_transfer_rows"}:
-                aggregate[key] = aggregate.get(key, 0) + int(value)
+    aggregate: dict[str, int] = {field: 0 for field in COUNT_FIELDS}
 
     for index, batch in enumerate(batches):
         key = _row_usage_key(batch, index, seen)
-        usage = batch.get("row_usage") or {}
-        sanitized_usage = _sanitize_row_usage(usage)
-        total_rows = int(usage.get("total_rows", 0))
-        transfer_rows = int(usage.get("transfer_rows", 0))
+        usage = batch["row_usage"]
+        sanitized_usage = {field: usage[field] for field in COUNT_FIELDS}
+        sanitized_usage["transfer_ratio"] = round(usage["transfer_ratio"], 6)
+        total_rows = usage["total_rows"]
+        transfer_rows = usage["transfer_rows"]
         ratio = 0.0 if total_rows == 0 else transfer_rows / total_rows
         summary_batches.append(
             {
@@ -755,11 +753,12 @@ def summarize_row_usage_snapshot(path: Path) -> dict[str, Any]:
                 "transfer_ratio": round(ratio, 6),
             }
         )
-        accumulate_counts(usage)
+        for field in COUNT_FIELDS:
+            aggregate[field] += usage[field]
 
-    aggregate_summary = {key: value for key, value in aggregate.items()}
-    total_rows = aggregate_summary.get("total_rows", 0)
-    transfer_rows = aggregate_summary.get("transfer_rows", 0)
+    aggregate_summary = dict(aggregate)
+    total_rows = aggregate_summary["total_rows"]
+    transfer_rows = aggregate_summary["transfer_rows"]
     aggregate_summary["transfer_ratio"] = (
         0.0 if not total_rows else round(transfer_rows / total_rows, 6)
     )
@@ -804,24 +803,151 @@ def summarize_zero_fill(entry: dict | None) -> dict | None:
     }
 
 
-def summarize_operations(report: dict) -> Tuple[list[dict], list[dict]]:
+def _operation_mean_ms(
+    entry: dict[str, Any],
+    operation: str,
+    field: str,
+    *,
+    required: bool,
+    require_range: bool,
+) -> float | int | None:
+    sample = entry.get(field)
+    if sample is None and not required:
+        return None
+    if not isinstance(sample, dict):
+        raise SystemExit(f"Benchmark operation {operation!r} must contain `{field}` metrics.")
+    timing_fields = (
+        ("mean_ms", "min_ms", "max_ms") if require_range else ("mean_ms",)
+    )
+    for timing_field in timing_fields:
+        value = sample.get(timing_field)
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+            or value < 0
+        ):
+            raise SystemExit(
+                f"Benchmark operation {operation!r} must contain finite non-negative "
+                f"`{field}.{timing_field}`."
+            )
+    mean_ms = sample["mean_ms"]
+    if require_range and not sample["min_ms"] <= mean_ms <= sample["max_ms"]:
+        raise SystemExit(
+            f"Benchmark operation {operation!r} must satisfy "
+            f"`{field}.min_ms <= {field}.mean_ms <= {field}.max_ms`."
+        )
+    return mean_ms
+
+
+def summarize_operations(
+    report: dict, producer_schema: str
+) -> Tuple[list[dict], list[dict]]:
+    if producer_schema not in {CUDA_NESTED_SCHEMA, METAL_FLAT_SCHEMA}:
+        raise SystemExit(f"Unsupported benchmark producer schema: {producer_schema!r}.")
     operations = []
     hotspots = []
-    for entry in report.get("operations", []):
+    report_operations = report.get("operations")
+    if not isinstance(report_operations, list) or not report_operations:
+        raise SystemExit("Benchmark report must contain a non-empty `operations` array.")
+    for index, entry in enumerate(report_operations):
+        if not isinstance(entry, dict):
+            raise SystemExit(f"Benchmark operation {index} must be an object.")
+        operation = entry.get("operation")
+        if not isinstance(operation, str) or not operation.strip():
+            raise SystemExit(
+                f"Benchmark operation {index} must contain a non-empty `operation` string."
+            )
+        required_counts = ["input_len"]
+        if producer_schema == CUDA_NESTED_SCHEMA:
+            required_counts.extend(
+                (
+                    "output_len",
+                    "input_bytes",
+                    "output_bytes",
+                    "estimated_gpu_transfer_bytes",
+                )
+            )
+        for field in required_counts:
+            value = entry.get(field)
+            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                raise SystemExit(
+                    f"Benchmark operation {operation!r} must contain a non-negative "
+                    f"integer `{field}`."
+                )
+        columns = entry.get("columns")
+        if not isinstance(columns, int) or isinstance(columns, bool) or columns <= 0:
+            raise SystemExit(
+                f"Benchmark operation {operation!r} must contain a positive integer `columns`."
+            )
+        metal_schema = producer_schema == METAL_FLAT_SCHEMA
+        gpu_recorded = entry.get("gpu_recorded") if metal_schema else None
+        if metal_schema and not isinstance(gpu_recorded, bool):
+            raise SystemExit(
+                f"Benchmark operation {operation!r} must contain boolean `gpu_recorded`."
+            )
+        cpu_mean_ms = _operation_mean_ms(
+            entry, operation, "cpu", required=True, require_range=metal_schema
+        )
+        gpu_mean_ms = _operation_mean_ms(
+            entry,
+            operation,
+            "gpu",
+            required=bool(gpu_recorded),
+            require_range=metal_schema,
+        )
+        speedup = entry.get("speedup")
+        if not metal_schema and ((entry.get("gpu") is None) != (speedup is None)):
+            raise SystemExit(
+                f"Benchmark operation {operation!r} must provide `gpu` and `speedup` together."
+            )
+        if metal_schema and not gpu_recorded and ("gpu" in entry or "speedup" in entry):
+            raise SystemExit(
+                f"Benchmark operation {operation!r} with `gpu_recorded=false` "
+                "must omit GPU metrics."
+            )
+        if metal_schema and gpu_recorded and not isinstance(speedup, dict):
+            raise SystemExit(
+                f"Benchmark operation {operation!r} with `gpu_recorded=true` "
+                "must contain `speedup`."
+            )
+        if speedup is not None:
+            if not isinstance(speedup, dict):
+                raise SystemExit(
+                    f"Benchmark operation {operation!r} must contain an object-valued `speedup`."
+                )
+            for field in ("ratio", "delta_ms"):
+                value = speedup.get(field)
+                if field == "delta_ms" and value is None and not metal_schema:
+                    continue
+                if (
+                    isinstance(value, bool)
+                    or not isinstance(value, (int, float))
+                    or not math.isfinite(value)
+                ):
+                    raise SystemExit(
+                        f"Benchmark operation {operation!r} must contain finite numeric "
+                        f"`speedup.{field}`."
+                    )
         zero_fill = summarize_zero_fill(entry.get("zero_fill"))
         summary: dict[str, Any] = {
-            "operation": entry.get("operation"),
-            "columns": entry.get("columns"),
-            "input_len": entry.get("input_len"),
-            "output_len": entry.get("output_len"),
-            "input_bytes": entry.get("input_bytes"),
-            "output_bytes": entry.get("output_bytes"),
-            "estimated_gpu_transfer_bytes": entry.get("estimated_gpu_transfer_bytes"),
-            "cpu_mean_ms": (entry.get("cpu") or {}).get("mean_ms"),
-            "gpu_mean_ms": (entry.get("gpu") or {}).get("mean_ms"),
-            "speedup_ratio": (entry.get("speedup") or {}).get("ratio"),
-            "speedup_delta_ms": (entry.get("speedup") or {}).get("delta_ms"),
+            "operation": operation,
+            "columns": columns,
+            "input_len": entry["input_len"],
+            "cpu_mean_ms": cpu_mean_ms,
+            "gpu_mean_ms": gpu_mean_ms,
+            "speedup_ratio": speedup.get("ratio") if speedup is not None else None,
+            "speedup_delta_ms": speedup.get("delta_ms") if speedup is not None else None,
         }
+        if producer_schema == CUDA_NESTED_SCHEMA:
+            summary.update(
+                {
+                    "output_len": entry["output_len"],
+                    "input_bytes": entry["input_bytes"],
+                    "output_bytes": entry["output_bytes"],
+                    "estimated_gpu_transfer_bytes": entry["estimated_gpu_transfer_bytes"],
+                }
+            )
         if zero_fill:
             summary["zero_fill"] = zero_fill
             hotspots.append(
@@ -841,58 +967,140 @@ def summarize_operations(report: dict) -> Tuple[list[dict], list[dict]]:
     return operations, hotspots
 
 
+def producer_schema_for_payload(payload: dict[str, Any]) -> str:
+    if "report" not in payload:
+        return METAL_FLAT_SCHEMA
+    if not isinstance(payload["report"], dict):
+        raise SystemExit("Nested CUDA benchmark `report` must be a JSON object.")
+    return CUDA_NESTED_SCHEMA
+
+
+def _required_cuda_value(
+    record: dict[str, Any], field: str, section: str
+) -> Any:
+    if field not in record:
+        raise SystemExit(f"Nested CUDA benchmark `{section}.{field}` is required.")
+    return record[field]
+
+
+def _cuda_operation_projection(
+    entry: Any, index: int, *, flattened: bool
+) -> dict[str, Any]:
+    section = f"benchmarks.operations[{index}]" if flattened else f"report.operations[{index}]"
+    if not isinstance(entry, dict):
+        raise SystemExit(f"Nested CUDA benchmark `{section}` must be an object.")
+    projection = {
+        field: _required_cuda_value(entry, field, section)
+        for field in (
+            "operation",
+            "columns",
+            "input_len",
+            "output_len",
+            "input_bytes",
+            "output_bytes",
+            "estimated_gpu_transfer_bytes",
+        )
+    }
+    if flattened:
+        projection["cpu_mean_ms"] = _required_cuda_value(entry, "cpu_mean_ms", section)
+        projection["gpu_mean_ms"] = entry.get("gpu_mean_ms")
+        projection["speedup_ratio"] = entry.get("speedup_ratio")
+        projection["speedup_delta_ms"] = entry.get("speedup_delta_ms")
+        return projection
+
+    cpu = _required_cuda_value(entry, "cpu", section)
+    if not isinstance(cpu, dict):
+        raise SystemExit(f"Nested CUDA benchmark `{section}.cpu` must be an object.")
+    projection["cpu_mean_ms"] = _required_cuda_value(cpu, "mean_ms", f"{section}.cpu")
+
+    gpu = entry.get("gpu")
+    if gpu is not None and not isinstance(gpu, dict):
+        raise SystemExit(f"Nested CUDA benchmark `{section}.gpu` must be an object.")
+    projection["gpu_mean_ms"] = (
+        _required_cuda_value(gpu, "mean_ms", f"{section}.gpu") if gpu is not None else None
+    )
+
+    speedup = entry.get("speedup")
+    if speedup is not None and not isinstance(speedup, dict):
+        raise SystemExit(f"Nested CUDA benchmark `{section}.speedup` must be an object.")
+    projection["speedup_ratio"] = (
+        _required_cuda_value(speedup, "ratio", f"{section}.speedup")
+        if speedup is not None
+        else None
+    )
+    projection["speedup_delta_ms"] = (
+        speedup.get("delta_ms") if speedup is not None else None
+    )
+    return projection
+
+
+def _validate_cuda_copies(
+    report: dict[str, Any], benchmarks: dict[str, Any]
+) -> None:
+    for field in (
+        "rows",
+        "padded_rows",
+        "iterations",
+        "warmups",
+        "execution_mode",
+        "gpu_backend",
+        "gpu_available",
+        "operation_filter",
+    ):
+        report_value = _required_cuda_value(report, field, "report")
+        benchmark_value = _required_cuda_value(benchmarks, field, "benchmarks")
+        if report_value != benchmark_value:
+            raise SystemExit(
+                f"Nested CUDA benchmark disagrees on `{field}` between report and benchmarks."
+            )
+
+    for field in ("bn254_metrics", "bn254_warnings"):
+        if report.get(field) != benchmarks.get(field):
+            raise SystemExit(
+                f"Nested CUDA benchmark disagrees on `{field}` between report and benchmarks."
+            )
+
+    report_operations = _required_cuda_value(report, "operations", "report")
+    benchmark_operations = _required_cuda_value(benchmarks, "operations", "benchmarks")
+    if not isinstance(report_operations, list) or not isinstance(benchmark_operations, list):
+        raise SystemExit(
+            "Nested CUDA benchmark `report.operations` and `benchmarks.operations` "
+            "must be arrays."
+        )
+    if len(report_operations) != len(benchmark_operations):
+        raise SystemExit(
+            "Nested CUDA benchmark operation counts differ between report and benchmarks."
+        )
+    for index, (report_entry, benchmark_entry) in enumerate(
+        zip(report_operations, benchmark_operations)
+    ):
+        if _cuda_operation_projection(
+            report_entry, index, flattened=False
+        ) != _cuda_operation_projection(benchmark_entry, index, flattened=True):
+            raise SystemExit(
+                "Nested CUDA benchmark operation "
+                f"{index} differs between report and benchmarks."
+            )
+
+
 def normalize_report(payload: dict[str, Any]) -> dict[str, Any]:
+    """Return one report view, rejecting divergent CUDA copies."""
+
     nested = payload.get("report")
     if not isinstance(nested, dict):
         return payload
 
     report = dict(nested)
     benchmarks = payload.get("benchmarks")
-    if isinstance(benchmarks, dict):
-        for field in (
-            "rows",
-            "padded_rows",
-            "iterations",
-            "warmups",
-            "column_count",
-            "execution_mode",
-            "gpu_backend",
-            "gpu_available",
-            "operation_filter",
-            "bn254_warnings",
-        ):
-            if report.get(field) is None and field in benchmarks:
-                report[field] = benchmarks.get(field)
-        benchmark_operations = benchmarks.get("operations")
-        report_operations = report.get("operations")
-        if isinstance(report_operations, list) and isinstance(benchmark_operations, list):
-            benchmark_by_name = {
-                entry.get("operation"): entry
-                for entry in benchmark_operations
-                if isinstance(entry, dict) and entry.get("operation") is not None
-            }
-            merged_operations = []
-            for entry in report_operations:
-                if not isinstance(entry, dict):
-                    merged_operations.append(entry)
-                    continue
-                merged_entry = dict(entry)
-                benchmark_entry = benchmark_by_name.get(entry.get("operation"))
-                if isinstance(benchmark_entry, dict):
-                    for field in (
-                        "columns",
-                        "input_len",
-                        "output_len",
-                        "input_bytes",
-                        "output_bytes",
-                        "estimated_gpu_transfer_bytes",
-                    ):
-                        if merged_entry.get(field) is None and field in benchmark_entry:
-                            merged_entry[field] = benchmark_entry.get(field)
-                merged_operations.append(merged_entry)
-            report["operations"] = merged_operations
-        elif "operations" not in report and "operations" in benchmarks:
-            report["operations"] = benchmark_operations
+    if not isinstance(benchmarks, dict):
+        raise SystemExit("Nested CUDA benchmark `benchmarks` must be a JSON object.")
+    _validate_cuda_copies(report, benchmarks)
+    column_count = _required_cuda_value(benchmarks, "column_count", "benchmarks")
+    if "column_count" in report and report["column_count"] != column_count:
+        raise SystemExit(
+            "Nested CUDA benchmark disagrees on `column_count` between report and benchmarks."
+        )
+    report["column_count"] = column_count
 
     metadata = payload.get("metadata")
     if isinstance(metadata, dict):
@@ -906,6 +1114,88 @@ def normalize_report(payload: dict[str, Any]) -> dict[str, Any]:
         elif "metadata" not in report:
             report["metadata"] = metadata
     return report
+
+
+def _required_report_count(
+    report: dict[str, Any], field: str, *, minimum: int
+) -> int:
+    value = report.get(field)
+    if not isinstance(value, int) or isinstance(value, bool) or value < minimum:
+        qualifier = "positive" if minimum == 1 else "non-negative"
+        raise SystemExit(f"Benchmark report `{field}` must be a {qualifier} integer.")
+    return value
+
+
+def validate_report_header(report: dict[str, Any], producer_schema: str) -> None:
+    """Validate the normalized current V1 benchmark header."""
+
+    if producer_schema not in {CUDA_NESTED_SCHEMA, METAL_FLAT_SCHEMA}:
+        raise SystemExit(f"Unsupported benchmark producer schema: {producer_schema!r}.")
+    rows = _required_report_count(report, "rows", minimum=1)
+    padded_rows = _required_report_count(report, "padded_rows", minimum=1)
+    _required_report_count(report, "iterations", minimum=1)
+    _required_report_count(report, "warmups", minimum=0)
+    _required_report_count(report, "column_count", minimum=1)
+    if padded_rows < rows:
+        raise SystemExit("Benchmark report `padded_rows` must be at least `rows`.")
+    if padded_rows & (padded_rows - 1):
+        raise SystemExit("Benchmark report `padded_rows` must be a power of two.")
+    if padded_rows > V1_MAX_PADDED_ROWS:
+        raise SystemExit(
+            "Benchmark report `padded_rows` exceeds the V1 trace bound "
+            f"({padded_rows} > {V1_MAX_PADDED_ROWS})."
+        )
+
+    operation_filter = report.get("operation_filter")
+    if not isinstance(operation_filter, str) or operation_filter not in (
+        V1_OPERATION_NAMES | {"all"}
+    ):
+        raise SystemExit(
+            "Benchmark report `operation_filter` must be `all` or a canonical V1 operation."
+        )
+    execution_mode = report.get("execution_mode")
+    if not isinstance(execution_mode, str) or execution_mode not in {"cpu", "gpu"}:
+        raise SystemExit("Benchmark report `execution_mode` must be `cpu` or `gpu`.")
+    gpu_available = report.get("gpu_available")
+    if not isinstance(gpu_available, bool):
+        raise SystemExit("Benchmark report `gpu_available` must be boolean.")
+    if gpu_available != (execution_mode == "gpu"):
+        raise SystemExit(
+            "Benchmark report `gpu_available` must match the resolved `execution_mode`."
+        )
+    gpu_backend = report.get("gpu_backend")
+    expected_backend = (
+        "cuda" if producer_schema == CUDA_NESTED_SCHEMA else "metal"
+    )
+    if execution_mode == "cpu":
+        expected_backend = "none"
+    if gpu_backend != expected_backend:
+        raise SystemExit(
+            f"Benchmark report `{execution_mode}` execution for {producer_schema} "
+            f"must use gpu_backend={expected_backend!r}."
+        )
+
+    operations = report.get("operations")
+    if not isinstance(operations, list) or not operations:
+        raise SystemExit("Benchmark report must contain a non-empty `operations` array.")
+    operation_names: list[str] = []
+    seen: set[str] = set()
+    for index, entry in enumerate(operations):
+        if not isinstance(entry, dict):
+            raise SystemExit(f"Benchmark operation {index} must be an object.")
+        operation = entry.get("operation")
+        if not isinstance(operation, str) or operation not in V1_OPERATION_NAMES:
+            raise SystemExit(
+                f"Benchmark operation {index} must name a canonical V1 operation."
+            )
+        if operation in seen:
+            raise SystemExit(f"Benchmark operation {operation!r} is duplicated.")
+        seen.add(operation)
+        operation_names.append(operation)
+    if operation_filter != "all" and operation_names != [operation_filter]:
+        raise SystemExit(
+            f"Focused benchmark filter {operation_filter!r} must contain exactly that operation."
+        )
 
 
 def enforce_zero_fill_hotspots(hotspots: list[dict], threshold_ms: float | None) -> None:
@@ -1169,8 +1459,13 @@ def sign_output(output_path: Path, gpg_key: str | None) -> None:
 
 def main() -> None:
     args = parse_args()
-    report = normalize_report(json.loads(args.input.read_text()))
-    operations, zero_fill_hotspots = summarize_operations(report)
+    payload = json.loads(args.input.read_text())
+    if not isinstance(payload, dict):
+        raise SystemExit("Benchmark report root must be a JSON object.")
+    producer_schema = producer_schema_for_payload(payload)
+    report = normalize_report(payload)
+    validate_report_header(report, producer_schema)
+    operations, zero_fill_hotspots = summarize_operations(report, producer_schema)
     enforce_zero_fill_hotspots(zero_fill_hotspots, args.require_zero_fill_max_ms)
     trace_meta = summarize_trace_metadata(report)
     require_poseidon_telemetry(report)

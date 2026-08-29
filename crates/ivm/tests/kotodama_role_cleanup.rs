@@ -4,7 +4,6 @@ use ivm::{
     kotodama::compiler::Compiler as KotodamaCompiler,
     mock_wsv::{MockWorldStateView, PermissionToken, WsvHost},
 };
-use std::collections::HashMap;
 mod common;
 fn load(vm: &mut IVM, program: &[u8], context: &str) {
     vm.load_program(program)
@@ -40,7 +39,7 @@ fn kotodama_revoke_role_denies_mint() {
     let mut wsv = MockWorldStateView::new();
     wsv.grant_permission(&caller, PermissionToken::RegisterAssetDefinition);
     wsv.grant_permission(&caller, PermissionToken::ManageRoles);
-    let host = WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new());
+    let host = WsvHost::new_with_subject(wsv, caller.clone());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
     // 1) Bootstrap + create+grant role + initial mint (should succeed)
@@ -74,7 +73,7 @@ fn kotodama_delete_role_prevents_grant() {
     wsv.grant_permission(&caller, PermissionToken::RegisterAccount);
     wsv.grant_permission(&caller, PermissionToken::RegisterAssetDefinition);
     wsv.grant_permission(&caller, PermissionToken::ManageRoles);
-    let host = WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new());
+    let host = WsvHost::new_with_subject(wsv, caller.clone());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
     // Bootstrap + create role (no grant)
@@ -111,7 +110,7 @@ fn kotodama_delete_role_denied_while_assigned_then_succeeds_after_revoke() {
     wsv.grant_permission(&caller, PermissionToken::RegisterAccount);
     wsv.grant_permission(&caller, PermissionToken::RegisterAssetDefinition);
     wsv.grant_permission(&caller, PermissionToken::ManageRoles);
-    let host = WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new());
+    let host = WsvHost::new_with_subject(wsv, caller.clone());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
     // Bootstrap: create role and grant it
@@ -152,7 +151,7 @@ fn kotodama_combined_revoke_then_delete_blocks_grant_and_mint() {
     wsv.grant_permission(&caller, PermissionToken::RegisterAccount);
     wsv.grant_permission(&caller, PermissionToken::RegisterAssetDefinition);
     wsv.grant_permission(&caller, PermissionToken::ManageRoles);
-    let host = WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new());
+    let host = WsvHost::new_with_subject(wsv, caller.clone());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
     // Bootstrap + create and grant role

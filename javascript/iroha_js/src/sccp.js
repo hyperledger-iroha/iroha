@@ -6,6 +6,7 @@ import { blake2b256 } from "./blake2b.js";
 import { validateNoritoFrame } from "./norito.js";
 import { normalizeAssetDefinitionId } from "./normalizers.js";
 import { NumericV1 } from "./numericV1.js";
+import { parseStrictLosslessIntegerJson } from "./strictLosslessJson.js";
 
 /** First-release SCCP protocol domains. */
 export const SCCP_DOMAIN_SORA = 0;
@@ -324,6 +325,21 @@ function integer(value, label, minimum, maximum = Number.MAX_SAFE_INTEGER) {
     throw new TypeError(`${label} must be a safe integer in ${minimum}..${maximum}`);
   }
   return value;
+}
+
+function positiveUint128(value, label) {
+  let parsed;
+  if (typeof value === "bigint") {
+    parsed = value;
+  } else if (Number.isSafeInteger(value)) {
+    parsed = BigInt(value);
+  } else {
+    throw new TypeError(`${label} must be a losslessly decoded positive u128 integer`);
+  }
+  if (parsed < 1n || parsed > MAX_U128) {
+    throw new TypeError(`${label} must be a losslessly decoded positive u128 integer`);
+  }
+  return parsed;
 }
 
 function protocolDomain(value, label) {
@@ -1358,6 +1374,7 @@ function deriveSolanaNativeVerifierConfigHash({
   values,
   policy,
   multiplier,
+  maxWrappedSupply,
   sourceProgramId,
   label,
 }) {
@@ -1383,6 +1400,11 @@ function deriveSolanaNativeVerifierConfigHash({
           BigInt(multiplier),
           16,
           "SCCP Taira-to-SPL-token multiplier",
+        ),
+        unsignedBigIntLittleEndian(
+          maxWrappedSupply,
+          16,
+          "SCCP maximum wrapped SPL-token supply",
         ),
         values.verifier_key_hash,
         values.native_verifier_program_id,
@@ -1411,6 +1433,7 @@ function deriveDestinationHashes({
   policy,
   routeRevision,
   multiplier,
+  maxWrappedSupply,
 }) {
   const network = lane.source;
   const { chainOrNetworkId, routeId } = externalNetworkParameters(network);
@@ -1474,6 +1497,11 @@ function deriveDestinationHashes({
         keccak_256(new TextEncoder().encode(routeId)),
         abiWordUnsigned(routeRevision, "SCCP route revision"),
         abiWordUnsigned(multiplier, "SCCP Taira-to-token multiplier"),
+        unsignedBigIntBigEndian(
+          maxWrappedSupply,
+          32,
+          "SCCP maximum wrapped-token supply",
+        ),
       ),
     ),
   );
@@ -1524,6 +1552,7 @@ function parseSolanaDestinationDeployment(
     "verifier_key_hash",
     "outbound_proof_policy",
     "taira_to_token_multiplier",
+    "max_wrapped_supply",
   ];
   const deployment = exactFields(deploymentValue, new Set(fields), `${label}.deployment`);
   const addressFields = [
@@ -1589,12 +1618,17 @@ function parseSolanaDestinationDeployment(
     1,
     1,
   );
+  const maxWrappedSupply = positiveUint128(
+    deployment.max_wrapped_supply,
+    `${label}.deployment.max_wrapped_supply`,
+  );
   const nativeVerifierConfigHash = deriveSolanaNativeVerifierConfigHash({
     lane,
     routeRevision,
     values,
     policy,
     multiplier,
+    maxWrappedSupply,
     sourceProgramId,
     label,
   });
@@ -1697,6 +1731,11 @@ function parseSolanaDestinationDeployment(
         new TextEncoder().encode("taira_sol_xor"),
         unsignedLittleEndian(routeRevision, 4, "SCCP route revision"),
         unsignedLittleEndian(multiplier, 8, "SCCP Taira-to-token multiplier"),
+        unsignedBigIntLittleEndian(
+          maxWrappedSupply,
+          16,
+          "SCCP maximum wrapped SPL-token supply",
+        ),
       ),
     ),
   );
@@ -1723,6 +1762,8 @@ function parseSolanaDestinationDeployment(
     deploymentConfigHash,
     routeConfigurationHash,
     nativeVerifierConfigHash,
+    multiplier,
+    maxWrappedSupply,
     proofPolicyRoles: Object.freeze([
       values.verifier_key_hash,
       policy.semanticHash,
@@ -1769,6 +1810,7 @@ function parseTonDestinationDeployment(deploymentValue, lane, routeRevision, lab
     "proof_profile_commitment",
     "outbound_proof_policy",
     "taira_to_token_multiplier",
+    "max_wrapped_supply",
   ];
   const deployment = exactFields(deploymentValue, new Set(fields), `${label}.deployment`);
   const master = parseTonAddress(
@@ -1839,6 +1881,10 @@ function parseTonDestinationDeployment(deploymentValue, lane, routeRevision, lab
     1,
     1,
   );
+  const maxWrappedSupply = positiveUint128(
+    deployment.max_wrapped_supply,
+    `${label}.deployment.max_wrapped_supply`,
+  );
   const network = lane.source;
   if (network.domain !== SCCP_DOMAIN_TON) {
     throw new TypeError(`${label} requires an exact TON source lane`);
@@ -1901,6 +1947,11 @@ function parseTonDestinationDeployment(deploymentValue, lane, routeRevision, lab
         ),
         unsignedLittleEndian(routeRevision, 4, "SCCP TON route revision"),
         unsignedLittleEndian(multiplier, 8, "SCCP Taira-to-TON-token multiplier"),
+        unsignedBigIntLittleEndian(
+          maxWrappedSupply,
+          16,
+          "SCCP maximum wrapped Jetton supply",
+        ),
       ),
     ),
   );
@@ -1926,6 +1977,8 @@ function parseTonDestinationDeployment(deploymentValue, lane, routeRevision, lab
     destinationBindingHash,
     deploymentConfigHash,
     routeConfigurationHash,
+    multiplier,
+    maxWrappedSupply,
     proofPolicyRoles: Object.freeze([
       hashes.verifier_key_hash,
       policy.semanticHash,
@@ -1968,6 +2021,7 @@ function parseDestination(value, lane, routeRevision, source, label) {
     "route_address",
     "route_code_hash",
     "taira_to_token_multiplier",
+    "max_wrapped_supply",
   ];
   const deployment = exactFields(record.deployment, new Set(fields), `${label}.deployment`);
   const addresses = ["token_address", "verifier_address", "route_address"].map((field) =>
@@ -2002,6 +2056,10 @@ function parseDestination(value, lane, routeRevision, source, label) {
     1_000_000_000,
     1_000_000_000,
   );
+  const maxWrappedSupply = positiveUint128(
+    deployment.max_wrapped_supply,
+    `${label}.deployment.max_wrapped_supply`,
+  );
   const derived = deriveDestinationHashes({
     family,
     lane,
@@ -2010,9 +2068,12 @@ function parseDestination(value, lane, routeRevision, source, label) {
     policy,
     routeRevision,
     multiplier,
+    maxWrappedSupply,
   });
   return Object.freeze({
     family,
+    multiplier,
+    maxWrappedSupply,
     routeAddress: addresses[2],
     routeCodeHash: hashes[3],
     proofPolicyRoles: Object.freeze([
@@ -2139,7 +2200,12 @@ export function deriveSccpSolanaSourceIdentityHashesV1(identity) {
 function parseSettlement(value, label) {
   const record = exactFields(
     value,
-    new Set(["asset_definition_id", "custody_owner", "payload_amount_scale"]),
+    new Set([
+      "asset_definition_id",
+      "custody_owner",
+      "payload_amount_scale",
+      "max_outstanding_liability",
+    ]),
     label,
   );
   const assetDefinitionId = canonicalText(
@@ -2158,7 +2224,11 @@ function parseSettlement(value, label) {
     9,
     9,
   );
-  return Object.freeze({ payloadAmountScale });
+  const maxOutstandingLiability = positiveUint128(
+    record.max_outstanding_liability,
+    `${label}.max_outstanding_liability`,
+  );
+  return Object.freeze({ payloadAmountScale, maxOutstandingLiability });
 }
 
 function parseGovernedRoute(value, lane, label) {
@@ -2206,6 +2276,14 @@ function parseGovernedRoute(value, lane, label) {
     source,
     `${label}.destination`,
   );
+  if (
+    destination.maxWrappedSupply !==
+    settlement.maxOutstandingLiability * BigInt(destination.multiplier)
+  ) {
+    throw new TypeError(
+      `${label}.destination.max_wrapped_supply must equal settlement.max_outstanding_liability multiplied by the destination multiplier`,
+    );
+  }
   const executionPolicy = parseSoraOutboundExecutionPolicy(
     record.sora_outbound_execution_policy,
     `${label}.sora_outbound_execution_policy`,
@@ -4405,7 +4483,7 @@ export function parseSccpBridgeSubmitResponseJson(text, expectations = {}) {
   );
 }
 
-/** Parse one strict SCCP JSON object, rejecting duplicate keys and trailing input. */
+/** Parse one strict lossless-integer SCCP JSON object. */
 export function parseSccpJsonObject(text, label = "SCCP response") {
   if (typeof text !== "string" || text.length === 0) {
     throw new TypeError(`${label} must be nonempty UTF-8 JSON text`);
@@ -4414,97 +4492,5 @@ export function parseSccpJsonObject(text, label = "SCCP response") {
   if (new TextDecoder("utf-8", { fatal: true }).decode(encoded) !== text) {
     throw new TypeError(`${label} must be canonical UTF-8 JSON text`);
   }
-  assertNoDuplicateJsonObjectKeys(text, label);
-  let value;
-  try {
-    value = JSON.parse(text);
-  } catch (error) {
-    throw new TypeError(`${label} must be valid JSON`, { cause: error });
-  }
-  return plainObject(value, label);
-}
-
-function assertNoDuplicateJsonObjectKeys(source, label) {
-  let cursor = 0;
-  const whitespace = () => {
-    while (cursor < source.length && /[\x20\t\r\n]/u.test(source[cursor])) cursor += 1;
-  };
-  const string = () => {
-    if (source[cursor] !== '"') throw new TypeError(`${label} contains invalid JSON`);
-    const start = cursor;
-    cursor += 1;
-    while (cursor < source.length) {
-      const character = source[cursor];
-      if (character === "\\") cursor += 2;
-      else if (character === '"') {
-        cursor += 1;
-        return JSON.parse(source.slice(start, cursor));
-      } else cursor += 1;
-    }
-    throw new TypeError(`${label} contains an unterminated JSON string`);
-  };
-  const value = () => {
-    whitespace();
-    if (source[cursor] === "{") return object();
-    if (source[cursor] === "[") return list();
-    if (source[cursor] === '"') {
-      string();
-      return;
-    }
-    // Every numeric field in the closed SCCP V1 JSON surface is an unsigned
-    // integer. Preserve its exact wire meaning by rejecting signs, fractions,
-    // exponents, and leading zeroes before JSON.parse can coerce them.
-    const match = /^(?:(?:0|[1-9][0-9]*)|true|false|null)/u.exec(
-      source.slice(cursor),
-    );
-    if (!match) throw new TypeError(`${label} contains invalid JSON`);
-    cursor += match[0].length;
-  };
-  const object = () => {
-    cursor += 1;
-    whitespace();
-    const keys = new Set();
-    if (source[cursor] === "}") {
-      cursor += 1;
-      return;
-    }
-    for (;;) {
-      whitespace();
-      const key = string();
-      if (keys.has(key)) throw new TypeError(`${label} contains duplicate field \`${key}\``);
-      keys.add(key);
-      whitespace();
-      if (source[cursor] !== ":") throw new TypeError(`${label} contains invalid JSON`);
-      cursor += 1;
-      value();
-      whitespace();
-      if (source[cursor] === "}") {
-        cursor += 1;
-        return;
-      }
-      if (source[cursor] !== ",") throw new TypeError(`${label} contains invalid JSON`);
-      cursor += 1;
-    }
-  };
-  const list = () => {
-    cursor += 1;
-    whitespace();
-    if (source[cursor] === "]") {
-      cursor += 1;
-      return;
-    }
-    for (;;) {
-      value();
-      whitespace();
-      if (source[cursor] === "]") {
-        cursor += 1;
-        return;
-      }
-      if (source[cursor] !== ",") throw new TypeError(`${label} contains invalid JSON`);
-      cursor += 1;
-    }
-  };
-  value();
-  whitespace();
-  if (cursor !== source.length) throw new TypeError(`${label} contains trailing JSON data`);
+  return plainObject(parseStrictLosslessIntegerJson(text, label), label);
 }

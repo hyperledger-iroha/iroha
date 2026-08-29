@@ -1888,15 +1888,10 @@ const diagnostics = await browserTorii.getSumeragiDiagnosticsTyped();
 ## Advanced Sumeragi Observability
 
 Torii exposes additional consensus observability endpoints. The JS SDK mirrors
-them so operators can inspect pacemaker timers, QC snapshots, and on-chain
-parameters without bespoke fetch plumbing:
+them so operators can inspect QC snapshots and on-chain parameters without
+bespoke fetch plumbing:
 
 ```js
-const pacemaker = await torii.getSumeragiPacemaker();
-if (pacemaker) {
-  console.log(`backoff=${pacemaker.backoff_ms}ms jitter=${pacemaker.jitter_ms}ms`);
-}
-
 const qc = await torii.getSumeragiQc();
 if (qc.highest_prepare_qc) {
   console.log(`highest PrepareQC height=${qc.highest_prepare_qc.round.height} subject=${qc.highest_prepare_qc.subject.block_hash}`);
@@ -1917,9 +1912,8 @@ fields into numbers. If Torii returns malformed data (missing fields or invalid
 types) the SDK raises a `TypeError`, ensuring broken responses never flow into
 dashboards unnoticed.
 
-`getSumeragiPacemaker` returns `null` when developer telemetry outputs are
-disabled; the remaining helpers bubble up HTTP errors so dashboards can
-distinguish network failures from gated endpoints.
+The helpers bubble up HTTP errors so dashboards can distinguish network
+failures from gated endpoints.
 
 Gateway telemetry also exposes peer metadata (connectivity, config facts, map
 info) for operators pinning Torii relays. The SDK normalises these payloads via

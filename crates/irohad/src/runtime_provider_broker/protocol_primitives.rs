@@ -111,6 +111,7 @@ pub(super) const OPERATION_BOOTLE_LANTERN_ISSUANCE_VALIDATE_REQUEST_V1: u16 = 12
 pub(super) const OPERATION_BOOTLE_LANTERN_ISSUANCE_ISSUE_VALIDATED_V1: u16 = 122;
 pub(super) const OPERATION_GLOBAL_BEACON_PARTIAL_SIGN_V1: u16 = 123;
 pub(super) const OPERATION_PARLIAMENT_TLE_PARTIAL_RELEASE_SIGN_V1: u16 = 124;
+pub(super) const OPERATION_PARLIAMENT_TLE_CAPABILITY_ATTEST_V1: u16 = 125;
 // A real payload byte avoids relying on zero-sized archive reconstruction;
 // the authenticated slot and operation provide the request-domain binding.
 pub(super) const CHECKPOINT_LOAD_REQUEST_VERSION_V1: u8 = 1;
@@ -145,6 +146,15 @@ define_broker_wire_struct!(owned pub(super) ParliamentTlePartialReleaseSignReque
 });
 define_broker_wire_struct!(owned pub(super) ParliamentTlePartialReleaseSignResultWireV1 {
     pub(super) partial: iroha_core::tle_release::TlePartialReleaseShareV1,
+});
+define_broker_wire_struct!(owned pub(super) ParliamentTleCapabilityAttestRequestWireV1 {
+    pub(super) key_session: iroha_core::tle_release::TleKeySessionPublicStateV1,
+    pub(super) participant_index: u16,
+});
+define_broker_wire_struct!(owned pub(super) ParliamentTleCapabilityAttestResultWireV1 {
+    pub(super) key_session_id: iroha_data_model::governance::types::TleKeySessionId,
+    pub(super) transcript_hash: [u8; 32],
+    pub(super) participant_index: u16,
 });
 pub(super) fn governance_signing_purpose_from_wire(
     value: u8,
@@ -433,6 +443,7 @@ mod operation_ordinal_tests {
             (OPERATION_BOOTLE_LANTERN_ISSUANCE_ISSUE_VALIDATED_V1, 122),
             (OPERATION_GLOBAL_BEACON_PARTIAL_SIGN_V1, 123),
             (OPERATION_PARLIAMENT_TLE_PARTIAL_RELEASE_SIGN_V1, 124),
+            (OPERATION_PARLIAMENT_TLE_CAPABILITY_ATTEST_V1, 125),
         ];
         for (index, (operation, expected)) in exact.into_iter().enumerate() {
             assert_eq!(operation, expected);
@@ -442,7 +453,7 @@ mod operation_ordinal_tests {
         assert!(super::super::operation_is_known(
             OPERATION_POP_RUNTIME_OPEN_V1
         ));
-        assert!(!super::super::operation_is_known(125));
+        assert!(!super::super::operation_is_known(126));
     }
 }
 

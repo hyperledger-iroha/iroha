@@ -1,10 +1,7 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use fastpq_isi::{
-    params::{
-        CANONICAL_PARAMETER_SETS, GOLDILOCKS_BASE, POSEIDON_GOLDILOCKS_X7_BLAKE2B,
-        StarkParameterSet,
-    },
+    params::{CANONICAL_PARAMETER_SETS, StarkParameterSet},
     poseidon::{FIELD_MODULUS, PoseidonSponge},
 };
 use std::{cmp::min, collections::HashSet, fmt::Write as _};
@@ -13,7 +10,7 @@ const PACKED_LIMB_BYTES: usize = 7;
 const GOLDILOCKS_TWO_ADICITY: u32 = 32;
 const FIELD_MODULUS_U128: u128 = FIELD_MODULUS as u128;
 const TWO_ADIC_COMPONENT: u128 = 1u128 << GOLDILOCKS_TWO_ADICITY;
-const CANONICAL_CONST_NAMES: [&str; 2] = ["FASTPQ_CANONICAL_BALANCED", "FASTPQ_CANONICAL_LATENCY"];
+const CANONICAL_CONST_NAMES: [&str; 1] = ["FASTPQ_CANONICAL_BALANCED"];
 #[derive(Parser)]
 #[command(author, version, about = "FASTPQ Poseidon-derived constant generator")]
 struct Cli {
@@ -96,12 +93,6 @@ fn render_rust(
             "pub const {const_name}: StarkParameterSet = StarkParameterSet {{"
         )?;
         writeln!(buffer, "    name: \"{}\",", set.name)?;
-        writeln!(
-            buffer,
-            "    target_security_bits: {},",
-            set.target_security_bits
-        )?;
-        writeln!(buffer, "    grinding_bits: {},", set.grinding_bits)?;
         writeln!(buffer, "    trace_log_size: {},", set.trace_log_size)?;
         writeln!(
             buffer,
@@ -112,22 +103,9 @@ fn render_rust(
         writeln!(buffer, "    lde_root: {},", format_hex(constants.lde_root))?;
         writeln!(
             buffer,
-            "    permutation_size: {},",
-            format_usize(set.permutation_size as usize)
-        )?;
-        match set.lookup_log_size {
-            Some(value) => writeln!(buffer, "    lookup_log_size: Some({value}),")?,
-            None => writeln!(buffer, "    lookup_log_size: None,")?,
-        }
-        writeln!(
-            buffer,
             "    omega_coset: {},",
             format_hex(constants.omega_coset)
         )?;
-        let field_repr = render_field_descriptor(set);
-        let hash_repr = render_hash_descriptor(set);
-        writeln!(buffer, "    field: {},", field_repr)?;
-        writeln!(buffer, "    hash: {},", hash_repr)?;
         writeln!(buffer, "    fri: FriParameters {{")?;
         writeln!(buffer, "        arity: {},", set.fri.arity)?;
         writeln!(buffer, "        blowup_factor: {},", set.fri.blowup_factor)?;
@@ -182,26 +160,6 @@ fn should_emit(
         }
     }
 }
-fn render_field_descriptor(set: &StarkParameterSet) -> String {
-    if set.field == GOLDILOCKS_BASE {
-        "GOLDILOCKS_BASE".to_string()
-    } else {
-        format!(
-            "FieldDescriptor {{ name: \"{}\", modulus_decimal: \"{}\", extension_degree: {} }}",
-            set.field.name, set.field.modulus_decimal, set.field.extension_degree
-        )
-    }
-}
-fn render_hash_descriptor(set: &StarkParameterSet) -> String {
-    if set.hash == POSEIDON_GOLDILOCKS_X7_BLAKE2B {
-        "POSEIDON_GOLDILOCKS_X7_BLAKE2B".to_string()
-    } else {
-        format!(
-            "HashDescriptor {{ trace_commitment: \"{}\", transcript: \"{}\" }}",
-            set.hash.trace_commitment, set.hash.transcript
-        )
-    }
-}
 fn derive_all_constants(seed: &str) -> Result<Vec<(StarkParameterSet, DerivedConstants)>> {
     let mut rng = DomainRng::new(seed);
     CANONICAL_PARAMETER_SETS
@@ -237,24 +195,21 @@ impl DomainRng {
         value
     }
     fn constants_for(&mut self, set: &StarkParameterSet) -> Result<DerivedConstants> {
+        validate_domain_geometry(set)?;
         let mut seeded = self.base.clone();
         absorb_tag(&mut seeded, set.name.as_bytes());
         seeded.absorb(u64::from(set.trace_log_size));
         seeded.absorb(u64::from(set.lde_log_size));
-        let mut trace_sponge = seeded.clone();
-        absorb_tag(&mut trace_sponge, b"trace_root");
-        trace_sponge.absorb(self.next_counter());
-        let trace_root = derive_primitive_root(&mut trace_sponge, set.trace_log_size)
-            .with_context(|| format!("failed to derive trace root for {}", set.name))?;
         let mut lde_sponge = seeded.clone();
         absorb_tag(&mut lde_sponge, b"lde_root");
         lde_sponge.absorb(self.next_counter());
         let lde_root = derive_primitive_root(&mut lde_sponge, set.lde_log_size)
             .with_context(|| format!("failed to derive lde root for {}", set.name))?;
+        let trace_root = pow_mod(lde_root, u128::from(set.fri.blowup_factor));
         let mut coset_sponge = seeded;
         absorb_tag(&mut coset_sponge, b"omega_coset");
         coset_sponge.absorb(self.next_counter());
-        let omega_coset = derive_coset_generator(&mut coset_sponge, set.trace_log_size)
+        let omega_coset = derive_coset_generator(&mut coset_sponge, set.lde_log_size)
             .with_context(|| format!("failed to derive coset generator for {}", set.name))?;
         Ok(DerivedConstants {
             trace_root,
@@ -262,6 +217,36 @@ impl DomainRng {
             omega_coset,
         })
     }
+}
+fn validate_domain_geometry(set: &StarkParameterSet) -> Result<()> {
+    let blowup = set.fri.blowup_factor;
+    if !blowup.is_power_of_two() {
+        anyhow::bail!(
+            "{} blowup factor must be a non-zero power of two, got {blowup}",
+            set.name
+        );
+    }
+    let expected_lde_log = set
+        .trace_log_size
+        .checked_add(blowup.ilog2())
+        .with_context(|| format!("{} domain log size overflow", set.name))?;
+    if set.lde_log_size != expected_lde_log {
+        anyhow::bail!(
+            "{} LDE log size {} does not equal trace log size {} plus log2(blowup) {}",
+            set.name,
+            set.lde_log_size,
+            set.trace_log_size,
+            blowup.ilog2()
+        );
+    }
+    if set.lde_log_size > GOLDILOCKS_TWO_ADICITY {
+        anyhow::bail!(
+            "{} LDE log size {} exceeds the Goldilocks two-adicity {GOLDILOCKS_TWO_ADICITY}",
+            set.name,
+            set.lde_log_size
+        );
+    }
+    Ok(())
 }
 fn absorb_tag(sponge: &mut PoseidonSponge, tag: &[u8]) {
     sponge.absorb(tag.len() as u64 % FIELD_MODULUS);
@@ -310,8 +295,8 @@ fn derive_primitive_root(sponge: &mut PoseidonSponge, log_size: u32) -> Result<u
         }
     }
 }
-fn derive_coset_generator(sponge: &mut PoseidonSponge, trace_log_size: u32) -> Result<u64> {
-    let trace_order = 1u128 << trace_log_size;
+fn derive_coset_generator(sponge: &mut PoseidonSponge, domain_log_size: u32) -> Result<u64> {
+    let domain_order = 1u128 << domain_log_size;
     loop {
         let candidate = sponge.squeeze_element();
         if candidate == 0 {
@@ -321,7 +306,7 @@ fn derive_coset_generator(sponge: &mut PoseidonSponge, trace_log_size: u32) -> R
         if coset == 1 {
             continue;
         }
-        if pow_mod(coset, trace_order) != 1 {
+        if pow_mod(coset, domain_order) != 1 {
             return Ok(coset);
         }
     }
@@ -353,15 +338,52 @@ fn format_hex(value: u64) -> String {
     }
     formatted
 }
-fn format_usize(value: usize) -> String {
-    let digits: Vec<char> = value.to_string().chars().collect();
-    let mut formatted = String::with_capacity(digits.len() + digits.len() / 3);
-    for (idx, ch) in digits.iter().enumerate() {
-        formatted.push(*ch);
-        let remaining = digits.len() - idx - 1;
-        if remaining > 0 && remaining % 3 == 0 {
-            formatted.push('_');
-        }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn derived_trace_root_uses_the_lde_blowup_stride() {
+        let set = CANONICAL_PARAMETER_SETS[0];
+        let constants = DomainRng::new(DOMAIN_TAG)
+            .constants_for(&set)
+            .expect("derive canonical constants");
+
+        assert_eq!(
+            constants.trace_root,
+            pow_mod(constants.lde_root, u128::from(set.fri.blowup_factor))
+        );
+        assert_eq!(
+            pow_mod(constants.trace_root, 1_u128 << set.trace_log_size),
+            1
+        );
+        assert_eq!(pow_mod(constants.lde_root, 1_u128 << set.lde_log_size), 1);
+        assert_ne!(
+            pow_mod(constants.omega_coset, 1_u128 << set.lde_log_size),
+            1
+        );
     }
-    formatted
+
+    #[test]
+    fn inconsistent_domain_geometry_is_rejected() {
+        let mut set = CANONICAL_PARAMETER_SETS[0];
+        set.lde_log_size += 1;
+        let error = DomainRng::new(DOMAIN_TAG)
+            .constants_for(&set)
+            .expect_err("inconsistent domain geometry must fail");
+
+        assert!(error.to_string().contains("LDE log size"));
+    }
+
+    #[test]
+    fn non_power_of_two_blowup_is_rejected() {
+        let mut set = CANONICAL_PARAMETER_SETS[0];
+        set.fri.blowup_factor = 3;
+        let error = DomainRng::new(DOMAIN_TAG)
+            .constants_for(&set)
+            .expect_err("invalid blowup factor must fail");
+
+        assert!(error.to_string().contains("non-zero power of two"));
+    }
 }

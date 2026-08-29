@@ -80,6 +80,8 @@ VARIABLES
     requestHeight,
     sortitionPulseHeight,
     sortitionPulseKnown,
+    sortitionPulseConsumed,
+    sortitionCandidateCount,
     candidateSnapshotFrozen,
     rosterBodies,
     invitationCloseHeight,
@@ -112,6 +114,14 @@ VARIABLES
     openingHeight,
     failureHeight,
     ballotApproved,
+    policyRequiresConfirmation,
+    eligibleConfirmationCandidates,
+    policyResultHeight,
+    policyBindingCommitted,
+    confirmationRequirementCommitted,
+    confirmationRequestCommitted,
+    confirmationRequestHeight,
+    confirmationPulseHeight,
     certifiedAtHeight,
     enactAtHeight,
     certificateHead,
@@ -140,6 +150,8 @@ vars == <<
     requestHeight,
     sortitionPulseHeight,
     sortitionPulseKnown,
+    sortitionPulseConsumed,
+    sortitionCandidateCount,
     candidateSnapshotFrozen,
     rosterBodies,
     invitationCloseHeight,
@@ -172,6 +184,14 @@ vars == <<
     openingHeight,
     failureHeight,
     ballotApproved,
+    policyRequiresConfirmation,
+    eligibleConfirmationCandidates,
+    policyResultHeight,
+    policyBindingCommitted,
+    confirmationRequirementCommitted,
+    confirmationRequestCommitted,
+    confirmationRequestHeight,
+    confirmationPulseHeight,
     certifiedAtHeight,
     enactAtHeight,
     certificateHead,
@@ -197,7 +217,9 @@ AttemptStates == {
 SortitionStates == {
     "None", "AwaitingPulse", "NoRoster", "Drawn", "RosterSealed"
 }
-SortitionFailureKinds == {None, "PulseUnavailable"}
+SortitionFailureKinds == {
+    None, "PulseUnavailable", "HiddenElectorateCapacityUnavailable"
+}
 FindingStates == {
     "None", "AwaitingReflection", "Collecting", "Approved", "NoResult"
 }
@@ -259,6 +281,8 @@ Init ==
     /\ requestHeight = None
     /\ sortitionPulseHeight = None
     /\ sortitionPulseKnown = FALSE
+    /\ sortitionPulseConsumed = FALSE
+    /\ sortitionCandidateCount = None
     /\ candidateSnapshotFrozen = FALSE
     /\ rosterBodies = {}
     /\ invitationCloseHeight = None
@@ -291,6 +315,14 @@ Init ==
     /\ openingHeight = None
     /\ failureHeight = None
     /\ ballotApproved = FALSE
+    /\ policyRequiresConfirmation = FALSE
+    /\ eligibleConfirmationCandidates = None
+    /\ policyResultHeight = None
+    /\ policyBindingCommitted = FALSE
+    /\ confirmationRequirementCommitted = FALSE
+    /\ confirmationRequestCommitted = FALSE
+    /\ confirmationRequestHeight = None
+    /\ confirmationPulseHeight = None
     /\ certifiedAtHeight = None
     /\ enactAtHeight = None
     /\ certificateHead = None
@@ -325,7 +357,16 @@ FindingCertificateFrame ==
         certificateFindingEndorsementCount, certificateFindingQuorum
     >>
 
-FindingFrame == FindingLifecycleFrame /\ FindingCertificateFrame
+PolicyConfirmationFrame ==
+    UNCHANGED <<
+        policyRequiresConfirmation, eligibleConfirmationCandidates,
+        policyResultHeight, policyBindingCommitted,
+        confirmationRequirementCommitted, confirmationRequestCommitted,
+        confirmationRequestHeight, confirmationPulseHeight
+    >>
+
+FindingFrame ==
+    FindingLifecycleFrame /\ FindingCertificateFrame /\ PolicyConfirmationFrame
 
 ReservationFrame ==
     UNCHANGED <<
@@ -339,13 +380,18 @@ CoreFrame ==
         height, attemptStatus, sortitionState, sortitionSequence,
         sortitionFailureKind, sortitionFailureHeight,
         supersededSortitionAttempts, requestHeight,
-        sortitionPulseHeight, sortitionPulseKnown, candidateSnapshotFrozen,
+        sortitionPulseHeight, sortitionPulseKnown, sortitionPulseConsumed,
+        sortitionCandidateCount, candidateSnapshotFrozen,
         rosterBodies, invitationCloseHeight, ballotState, ballotSequence,
         currentTleSession, usedTleSessions, registeredAtHeight,
         registrationCloseHeight, survivorFreezeHeight,
         commitmentCloseHeight, releaseHeight, registrationClosedAt,
         survivorsFrozenAt, commitmentClosedAt, releasePulseKnown,
-        openingHeight, failureHeight, ballotApproved, certifiedAtHeight,
+        openingHeight, failureHeight, ballotApproved,
+        policyRequiresConfirmation, eligibleConfirmationCandidates,
+        policyResultHeight, policyBindingCommitted,
+        confirmationRequirementCommitted, confirmationRequestCommitted,
+        confirmationRequestHeight, confirmationPulseHeight, certifiedAtHeight,
         enactAtHeight, certificateHead, observedHead, effectApplied,
         terminalHeight, plaintextPath, fallbackPath
     >>
@@ -354,13 +400,18 @@ CoreFrameExceptAttemptStatus ==
     UNCHANGED <<
         height, sortitionState, sortitionSequence, sortitionFailureKind,
         sortitionFailureHeight, supersededSortitionAttempts, requestHeight,
-        sortitionPulseHeight, sortitionPulseKnown, candidateSnapshotFrozen,
+        sortitionPulseHeight, sortitionPulseKnown, sortitionPulseConsumed,
+        sortitionCandidateCount, candidateSnapshotFrozen,
         rosterBodies, invitationCloseHeight, ballotState, ballotSequence,
         currentTleSession, usedTleSessions, registeredAtHeight,
         registrationCloseHeight, survivorFreezeHeight,
         commitmentCloseHeight, releaseHeight, registrationClosedAt,
         survivorsFrozenAt, commitmentClosedAt, releasePulseKnown,
-        openingHeight, failureHeight, ballotApproved, certifiedAtHeight,
+        openingHeight, failureHeight, ballotApproved,
+        policyRequiresConfirmation, eligibleConfirmationCandidates,
+        policyResultHeight, policyBindingCommitted,
+        confirmationRequirementCommitted, confirmationRequestCommitted,
+        confirmationRequestHeight, confirmationPulseHeight, certifiedAtHeight,
         enactAtHeight, certificateHead, observedHead, effectApplied,
         terminalHeight, plaintextPath, fallbackPath
     >>
@@ -373,7 +424,8 @@ Tick ==
         attemptStatus, sortitionState, sortitionSequence,
         sortitionFailureKind, sortitionFailureHeight,
         supersededSortitionAttempts, requestHeight, sortitionPulseHeight,
-        sortitionPulseKnown, candidateSnapshotFrozen, rosterBodies,
+        sortitionPulseKnown, sortitionPulseConsumed, sortitionCandidateCount,
+        candidateSnapshotFrozen, rosterBodies,
         invitationCloseHeight, ballotState, ballotSequence, currentTleSession,
         usedTleSessions, registeredAtHeight, registrationCloseHeight,
         survivorFreezeHeight, commitmentCloseHeight, releaseHeight,
@@ -391,11 +443,41 @@ CommitInitialSortitionBatch ==
     /\ sortitionState' = "AwaitingPulse"
     /\ requestHeight' = height
     /\ sortitionPulseHeight' = height + SortitionPulseDelayBlocks
+    /\ sortitionPulseConsumed' = FALSE
+    /\ sortitionCandidateCount' = 2
     /\ candidateSnapshotFrozen' = TRUE
     /\ UNCHANGED <<
         height, attemptStatus, sortitionSequence, sortitionFailureKind,
         sortitionFailureHeight, supersededSortitionAttempts,
         sortitionPulseKnown, rosterBodies,
+        invitationCloseHeight, ballotState, ballotSequence, currentTleSession,
+        usedTleSessions, registeredAtHeight, registrationCloseHeight,
+        survivorFreezeHeight, commitmentCloseHeight, releaseHeight,
+        registrationClosedAt, survivorsFrozenAt, commitmentClosedAt,
+        releasePulseKnown, openingHeight, failureHeight, ballotApproved,
+        certifiedAtHeight, enactAtHeight, certificateHead, observedHead,
+        effectApplied, terminalHeight, plaintextPath, fallbackPath
+        >>
+    /\ FindingFrame
+
+RecordInitialHiddenSortitionCapacityFailure(candidateCount) ==
+    /\ attemptStatus = "Active"
+    /\ sortitionState = "None"
+    /\ candidateCount \in 0..1
+    /\ height + SortitionPulseDelayBlocks <= MaxHeight
+    /\ sortitionState' = "NoRoster"
+    /\ sortitionFailureKind' = "HiddenElectorateCapacityUnavailable"
+    /\ sortitionFailureHeight' = height
+    /\ requestHeight' = height
+    /\ sortitionPulseHeight' = height + SortitionPulseDelayBlocks
+    /\ sortitionPulseKnown' = FALSE
+    /\ sortitionPulseConsumed' = FALSE
+    /\ sortitionCandidateCount' = candidateCount
+    /\ candidateSnapshotFrozen' = TRUE
+    /\ attemptStatus' =
+          IF MaxSortitionRetries = 0 THEN "Rejected" ELSE attemptStatus
+    /\ UNCHANGED <<
+        height, sortitionSequence, supersededSortitionAttempts, rosterBodies,
         invitationCloseHeight, ballotState, ballotSequence, currentTleSession,
         usedTleSessions, registeredAtHeight, registrationCloseHeight,
         survivorFreezeHeight, commitmentCloseHeight, releaseHeight,
@@ -415,7 +497,8 @@ RevealSortitionPulse ==
         height, attemptStatus, sortitionState, sortitionSequence,
         sortitionFailureKind, sortitionFailureHeight,
         supersededSortitionAttempts, requestHeight,
-        sortitionPulseHeight, candidateSnapshotFrozen, rosterBodies,
+        sortitionPulseHeight, sortitionPulseConsumed, sortitionCandidateCount,
+        candidateSnapshotFrozen, rosterBodies,
         invitationCloseHeight, ballotState, ballotSequence, currentTleSession,
         usedTleSessions, registeredAtHeight, registrationCloseHeight,
         survivorFreezeHeight, commitmentCloseHeight, releaseHeight,
@@ -431,12 +514,14 @@ ConsumeInitialSortitionBatch ==
     /\ sortitionState = "AwaitingPulse"
     /\ sortitionPulseKnown
     /\ sortitionState' = "Drawn"
+    /\ sortitionPulseConsumed' = TRUE
     /\ rosterBodies' = Bodies
     /\ UNCHANGED <<
         height, attemptStatus, sortitionSequence, sortitionFailureKind,
         sortitionFailureHeight, supersededSortitionAttempts, requestHeight,
         sortitionPulseHeight,
-        sortitionPulseKnown, candidateSnapshotFrozen, invitationCloseHeight,
+        sortitionPulseKnown, sortitionCandidateCount, candidateSnapshotFrozen,
+        invitationCloseHeight,
         ballotState, ballotSequence, currentTleSession, usedTleSessions,
         registeredAtHeight, registrationCloseHeight, survivorFreezeHeight,
         commitmentCloseHeight, releaseHeight, registrationClosedAt,
@@ -461,6 +546,7 @@ FailSortitionPulseUnavailable ==
     /\ UNCHANGED <<
         height, sortitionSequence, supersededSortitionAttempts,
         requestHeight, sortitionPulseHeight, sortitionPulseKnown,
+        sortitionPulseConsumed, sortitionCandidateCount,
         candidateSnapshotFrozen, rosterBodies, invitationCloseHeight,
         ballotState, ballotSequence, currentTleSession, usedTleSessions,
         registeredAtHeight, registrationCloseHeight, survivorFreezeHeight,
@@ -472,13 +558,20 @@ FailSortitionPulseUnavailable ==
         >>
     /\ FindingFrame
 
+SortitionRetryHeightEligible ==
+    IF sortitionFailureKind = "HiddenElectorateCapacityUnavailable"
+    THEN height > sortitionFailureHeight
+    ELSE height >= sortitionFailureHeight
+
 RetryInitialSortitionBatch ==
     /\ attemptStatus = "Active"
     /\ sortitionState = "NoRoster"
-    /\ sortitionFailureKind = "PulseUnavailable"
+    /\ sortitionFailureKind \in {
+          "PulseUnavailable", "HiddenElectorateCapacityUnavailable"
+       }
     /\ sortitionFailureHeight # None
     /\ sortitionSequence < MaxSortitionRetries
-    /\ height >= sortitionFailureHeight
+    /\ SortitionRetryHeightEligible
     /\ height + SortitionPulseDelayBlocks <= MaxHeight
     /\ sortitionState' = "AwaitingPulse"
     /\ sortitionSequence' = sortitionSequence + 1
@@ -486,11 +579,50 @@ RetryInitialSortitionBatch ==
     /\ requestHeight' = height
     /\ sortitionPulseHeight' = height + SortitionPulseDelayBlocks
     /\ sortitionPulseKnown' = FALSE
+    /\ sortitionPulseConsumed' = FALSE
+    /\ sortitionCandidateCount' = 2
     /\ sortitionFailureKind' = None
     /\ sortitionFailureHeight' = None
     /\ candidateSnapshotFrozen' = TRUE
     /\ UNCHANGED <<
         height, attemptStatus, rosterBodies, invitationCloseHeight,
+        ballotState, ballotSequence, currentTleSession, usedTleSessions,
+        registeredAtHeight, registrationCloseHeight, survivorFreezeHeight,
+        commitmentCloseHeight, releaseHeight, registrationClosedAt,
+        survivorsFrozenAt, commitmentClosedAt, releasePulseKnown,
+        openingHeight, failureHeight, ballotApproved, certifiedAtHeight,
+        enactAtHeight, certificateHead, observedHead, effectApplied,
+        terminalHeight, plaintextPath, fallbackPath
+        >>
+    /\ FindingFrame
+
+RecordRetryHiddenSortitionCapacityFailure(candidateCount) ==
+    /\ attemptStatus = "Active"
+    /\ sortitionState = "NoRoster"
+    /\ sortitionFailureKind \in {
+          "PulseUnavailable", "HiddenElectorateCapacityUnavailable"
+       }
+    /\ sortitionFailureHeight # None
+    /\ sortitionSequence < MaxSortitionRetries
+    /\ SortitionRetryHeightEligible
+    /\ candidateCount \in 0..1
+    /\ height + SortitionPulseDelayBlocks <= MaxHeight
+    /\ sortitionSequence' = sortitionSequence + 1
+    /\ supersededSortitionAttempts' = supersededSortitionAttempts + 1
+    /\ requestHeight' = height
+    /\ sortitionPulseHeight' = height + SortitionPulseDelayBlocks
+    /\ sortitionPulseKnown' = FALSE
+    /\ sortitionPulseConsumed' = FALSE
+    /\ sortitionCandidateCount' = candidateCount
+    /\ candidateSnapshotFrozen' = TRUE
+    /\ sortitionFailureKind' = "HiddenElectorateCapacityUnavailable"
+    /\ sortitionFailureHeight' = height
+    /\ attemptStatus' =
+          IF sortitionSequence + 1 = MaxSortitionRetries
+          THEN "Rejected"
+          ELSE attemptStatus
+    /\ UNCHANGED <<
+        height, sortitionState, rosterBodies, invitationCloseHeight,
         ballotState, ballotSequence, currentTleSession, usedTleSessions,
         registeredAtHeight, registrationCloseHeight, survivorFreezeHeight,
         commitmentCloseHeight, releaseHeight, registrationClosedAt,
@@ -513,7 +645,8 @@ SealInvitationRosters ==
         height, attemptStatus, sortitionSequence, sortitionFailureKind,
         sortitionFailureHeight, supersededSortitionAttempts, requestHeight,
         sortitionPulseHeight,
-        sortitionPulseKnown, candidateSnapshotFrozen, rosterBodies,
+        sortitionPulseKnown, sortitionPulseConsumed, sortitionCandidateCount,
+        candidateSnapshotFrozen, rosterBodies,
         ballotState, ballotSequence, currentTleSession, usedTleSessions,
         registeredAtHeight, registrationCloseHeight, survivorFreezeHeight,
         commitmentCloseHeight, releaseHeight, registrationClosedAt,
@@ -530,6 +663,7 @@ SealInvitationRosters ==
         findingEndorsingAssignments, findingEndorsementCount
         >>
     /\ FindingCertificateFrame
+    /\ PolicyConfirmationFrame
 
 EnterPublicFindingReflection ==
     /\ attemptStatus = "Active"
@@ -685,7 +819,8 @@ RegisterPrivateBallot ==
         height, attemptStatus, sortitionState, sortitionSequence,
         sortitionFailureKind, sortitionFailureHeight,
         supersededSortitionAttempts, requestHeight,
-        sortitionPulseHeight, sortitionPulseKnown, candidateSnapshotFrozen,
+        sortitionPulseHeight, sortitionPulseKnown, sortitionPulseConsumed,
+        sortitionCandidateCount, candidateSnapshotFrozen,
         rosterBodies, invitationCloseHeight, certifiedAtHeight, enactAtHeight,
         certificateHead, observedHead, effectApplied, terminalHeight,
         plaintextPath, fallbackPath
@@ -702,7 +837,8 @@ CloseRegistrationAtBoundary ==
         height, attemptStatus, sortitionState, sortitionSequence,
         sortitionFailureKind, sortitionFailureHeight,
         supersededSortitionAttempts, requestHeight,
-        sortitionPulseHeight, sortitionPulseKnown, candidateSnapshotFrozen,
+        sortitionPulseHeight, sortitionPulseKnown, sortitionPulseConsumed,
+        sortitionCandidateCount, candidateSnapshotFrozen,
         rosterBodies, invitationCloseHeight, ballotSequence,
         currentTleSession, usedTleSessions, registeredAtHeight,
         registrationCloseHeight, survivorFreezeHeight,
@@ -724,7 +860,8 @@ FreezeSurvivorsAtBoundary ==
         height, attemptStatus, sortitionState, sortitionSequence,
         sortitionFailureKind, sortitionFailureHeight,
         supersededSortitionAttempts, requestHeight,
-        sortitionPulseHeight, sortitionPulseKnown, candidateSnapshotFrozen,
+        sortitionPulseHeight, sortitionPulseKnown, sortitionPulseConsumed,
+        sortitionCandidateCount, candidateSnapshotFrozen,
         rosterBodies, invitationCloseHeight, ballotSequence,
         currentTleSession, usedTleSessions, registeredAtHeight,
         registrationCloseHeight, survivorFreezeHeight,
@@ -753,7 +890,8 @@ FreezeCommitmentInWindow ==
         height, attemptStatus, sortitionState, sortitionSequence,
         sortitionFailureKind, sortitionFailureHeight,
         supersededSortitionAttempts, requestHeight,
-        sortitionPulseHeight, sortitionPulseKnown, candidateSnapshotFrozen,
+        sortitionPulseHeight, sortitionPulseKnown, sortitionPulseConsumed,
+        sortitionCandidateCount, candidateSnapshotFrozen,
         rosterBodies, invitationCloseHeight, ballotSequence,
         currentTleSession, usedTleSessions, registeredAtHeight,
         registrationCloseHeight, survivorFreezeHeight,
@@ -775,7 +913,8 @@ ObserveCommittedReleasePulse ==
         height, attemptStatus, sortitionState, sortitionSequence,
         sortitionFailureKind, sortitionFailureHeight,
         supersededSortitionAttempts, requestHeight,
-        sortitionPulseHeight, sortitionPulseKnown, candidateSnapshotFrozen,
+        sortitionPulseHeight, sortitionPulseKnown, sortitionPulseConsumed,
+        sortitionCandidateCount, candidateSnapshotFrozen,
         rosterBodies, invitationCloseHeight, ballotState, ballotSequence,
         currentTleSession, usedTleSessions, registeredAtHeight,
         registrationCloseHeight, survivorFreezeHeight,
@@ -798,7 +937,8 @@ BeginAggregateOpening ==
         height, attemptStatus, sortitionState, sortitionSequence,
         sortitionFailureKind, sortitionFailureHeight,
         supersededSortitionAttempts, requestHeight,
-        sortitionPulseHeight, sortitionPulseKnown, candidateSnapshotFrozen,
+        sortitionPulseHeight, sortitionPulseKnown, sortitionPulseConsumed,
+        sortitionCandidateCount, candidateSnapshotFrozen,
         rosterBodies, invitationCloseHeight, ballotSequence,
         currentTleSession, usedTleSessions, registeredAtHeight,
         registrationCloseHeight, survivorFreezeHeight,
@@ -832,7 +972,8 @@ FailPrivateBallotNoResult ==
     /\ UNCHANGED <<
         height, sortitionState, sortitionSequence, sortitionFailureKind,
         sortitionFailureHeight, supersededSortitionAttempts, requestHeight,
-        sortitionPulseHeight, sortitionPulseKnown, candidateSnapshotFrozen,
+        sortitionPulseHeight, sortitionPulseKnown, sortitionPulseConsumed,
+        sortitionCandidateCount, candidateSnapshotFrozen,
         rosterBodies, invitationCloseHeight, ballotSequence,
         currentTleSession, usedTleSessions, registeredAtHeight,
         registrationCloseHeight, survivorFreezeHeight,
@@ -844,6 +985,7 @@ FailPrivateBallotNoResult ==
         >>
     /\ FindingFrame
 
+\* This branch represents a wide Policy result that needs no Confirmation Jury.
 FinalizeAggregateApprovedAndCertify ==
     /\ attemptStatus = "Active"
     /\ findingState = "Approved"
@@ -853,6 +995,14 @@ FinalizeAggregateApprovedAndCertify ==
     /\ height + EnactDelay <= MaxHeight
     /\ ballotState' = "Approved"
     /\ ballotApproved' = TRUE
+    /\ policyRequiresConfirmation' = FALSE
+    /\ eligibleConfirmationCandidates' = None
+    /\ policyResultHeight' = height
+    /\ policyBindingCommitted' = TRUE
+    /\ confirmationRequirementCommitted' = FALSE
+    /\ confirmationRequestCommitted' = FALSE
+    /\ confirmationRequestHeight' = None
+    /\ confirmationPulseHeight' = None
     /\ attemptStatus' = "Certified"
     /\ certifiedAtHeight' = height
     /\ enactAtHeight' = height + EnactDelay
@@ -865,7 +1015,8 @@ FinalizeAggregateApprovedAndCertify ==
     /\ UNCHANGED <<
         height, sortitionState, sortitionSequence, sortitionFailureKind,
         sortitionFailureHeight, supersededSortitionAttempts, requestHeight,
-        sortitionPulseHeight, sortitionPulseKnown, candidateSnapshotFrozen,
+        sortitionPulseHeight, sortitionPulseKnown, sortitionPulseConsumed,
+        sortitionCandidateCount, candidateSnapshotFrozen,
         rosterBodies, invitationCloseHeight, ballotSequence,
         currentTleSession, usedTleSessions, registeredAtHeight,
         registrationCloseHeight, survivorFreezeHeight,
@@ -875,6 +1026,75 @@ FinalizeAggregateApprovedAndCertify ==
         plaintextPath, fallbackPath
         >>
     /\ FindingLifecycleFrame
+
+FinalizeNarrowPolicyCapacityNoResult(eligibleCount) ==
+    /\ attemptStatus = "Active"
+    /\ findingState = "Approved"
+    /\ ballotState = "Opening"
+    /\ height >= openingHeight
+    /\ height <= releaseHeight + OpeningBlocks
+    /\ eligibleCount \in 0..1
+    /\ ballotState' = "NoResult"
+    /\ ballotApproved' = FALSE
+    /\ failureHeight' = height
+    /\ attemptStatus' = "Rejected"
+    /\ policyRequiresConfirmation' = TRUE
+    /\ eligibleConfirmationCandidates' = eligibleCount
+    /\ policyResultHeight' = height
+    /\ policyBindingCommitted' = FALSE
+    /\ confirmationRequirementCommitted' = FALSE
+    /\ confirmationRequestCommitted' = FALSE
+    /\ confirmationRequestHeight' = None
+    /\ confirmationPulseHeight' = None
+    /\ UNCHANGED <<
+        height, sortitionState, sortitionSequence, sortitionFailureKind,
+        sortitionFailureHeight, supersededSortitionAttempts, requestHeight,
+        sortitionPulseHeight, sortitionPulseKnown, sortitionPulseConsumed,
+        sortitionCandidateCount, candidateSnapshotFrozen, rosterBodies,
+        invitationCloseHeight, ballotSequence, currentTleSession,
+        usedTleSessions, registeredAtHeight, registrationCloseHeight,
+        survivorFreezeHeight, commitmentCloseHeight, releaseHeight,
+        registrationClosedAt, survivorsFrozenAt, commitmentClosedAt,
+        releasePulseKnown, openingHeight, certifiedAtHeight, enactAtHeight,
+        certificateHead, observedHead, effectApplied, terminalHeight,
+        plaintextPath, fallbackPath
+        >>
+    /\ FindingLifecycleFrame
+    /\ FindingCertificateFrame
+
+FinalizeNarrowPolicyAndRegisterConfirmationRequest ==
+    /\ attemptStatus = "Active"
+    /\ findingState = "Approved"
+    /\ ballotState = "Opening"
+    /\ height >= openingHeight
+    /\ height <= releaseHeight + OpeningBlocks
+    /\ height + SortitionPulseDelayBlocks <= MaxHeight
+    /\ ballotState' = "Approved"
+    /\ ballotApproved' = TRUE
+    /\ policyRequiresConfirmation' = TRUE
+    /\ eligibleConfirmationCandidates' = 2
+    /\ policyResultHeight' = height
+    /\ policyBindingCommitted' = TRUE
+    /\ confirmationRequirementCommitted' = TRUE
+    /\ confirmationRequestCommitted' = TRUE
+    /\ confirmationRequestHeight' = height
+    /\ confirmationPulseHeight' = height + SortitionPulseDelayBlocks
+    /\ UNCHANGED <<
+        height, attemptStatus, sortitionState, sortitionSequence,
+        sortitionFailureKind, sortitionFailureHeight,
+        supersededSortitionAttempts, requestHeight, sortitionPulseHeight,
+        sortitionPulseKnown, sortitionPulseConsumed, sortitionCandidateCount,
+        candidateSnapshotFrozen, rosterBodies, invitationCloseHeight,
+        ballotSequence, currentTleSession, usedTleSessions,
+        registeredAtHeight, registrationCloseHeight, survivorFreezeHeight,
+        commitmentCloseHeight, releaseHeight, registrationClosedAt,
+        survivorsFrozenAt, commitmentClosedAt, releasePulseKnown,
+        openingHeight, failureHeight, certifiedAtHeight, enactAtHeight,
+        certificateHead, observedHead, effectApplied, terminalHeight,
+        plaintextPath, fallbackPath
+        >>
+    /\ FindingLifecycleFrame
+    /\ FindingCertificateFrame
 
 FinalizeAggregateRejected ==
     /\ attemptStatus = "Active"
@@ -889,7 +1109,8 @@ FinalizeAggregateRejected ==
         height, sortitionState, sortitionSequence, sortitionFailureKind,
         sortitionFailureHeight, supersededSortitionAttempts, requestHeight,
         sortitionPulseHeight,
-        sortitionPulseKnown, candidateSnapshotFrozen, rosterBodies,
+        sortitionPulseKnown, sortitionPulseConsumed, sortitionCandidateCount,
+        candidateSnapshotFrozen, rosterBodies,
         invitationCloseHeight, ballotSequence, currentTleSession,
         usedTleSessions, registeredAtHeight, registrationCloseHeight,
         survivorFreezeHeight, commitmentCloseHeight, releaseHeight,
@@ -908,7 +1129,8 @@ ChangeGovernedHead ==
         height, attemptStatus, sortitionState, sortitionSequence,
         sortitionFailureKind, sortitionFailureHeight,
         supersededSortitionAttempts, requestHeight,
-        sortitionPulseHeight, sortitionPulseKnown, candidateSnapshotFrozen,
+        sortitionPulseHeight, sortitionPulseKnown, sortitionPulseConsumed,
+        sortitionCandidateCount, candidateSnapshotFrozen,
         rosterBodies, invitationCloseHeight, ballotState, ballotSequence,
         currentTleSession, usedTleSessions, registeredAtHeight,
         registrationCloseHeight, survivorFreezeHeight,
@@ -931,7 +1153,8 @@ EnactAtExactHeight ==
         height, sortitionState, sortitionSequence, sortitionFailureKind,
         sortitionFailureHeight, supersededSortitionAttempts, requestHeight,
         sortitionPulseHeight,
-        sortitionPulseKnown, candidateSnapshotFrozen, rosterBodies,
+        sortitionPulseKnown, sortitionPulseConsumed, sortitionCandidateCount,
+        candidateSnapshotFrozen, rosterBodies,
         invitationCloseHeight, ballotState, ballotSequence,
         currentTleSession, usedTleSessions, registeredAtHeight,
         registrationCloseHeight, survivorFreezeHeight,
@@ -954,7 +1177,8 @@ RecordInternalExecutionFailureAtExactHeight ==
         height, sortitionState, sortitionSequence, sortitionFailureKind,
         sortitionFailureHeight, supersededSortitionAttempts, requestHeight,
         sortitionPulseHeight,
-        sortitionPulseKnown, candidateSnapshotFrozen, rosterBodies,
+        sortitionPulseKnown, sortitionPulseConsumed, sortitionCandidateCount,
+        candidateSnapshotFrozen, rosterBodies,
         invitationCloseHeight, ballotState, ballotSequence,
         currentTleSession, usedTleSessions, registeredAtHeight,
         registrationCloseHeight, survivorFreezeHeight,
@@ -976,7 +1200,8 @@ SupersedeAtExactHeight ==
         height, sortitionState, sortitionSequence, sortitionFailureKind,
         sortitionFailureHeight, supersededSortitionAttempts, requestHeight,
         sortitionPulseHeight,
-        sortitionPulseKnown, candidateSnapshotFrozen, rosterBodies,
+        sortitionPulseKnown, sortitionPulseConsumed, sortitionCandidateCount,
+        candidateSnapshotFrozen, rosterBodies,
         invitationCloseHeight, ballotState, ballotSequence,
         currentTleSession, usedTleSessions, registeredAtHeight,
         registrationCloseHeight, survivorFreezeHeight,
@@ -1025,9 +1250,13 @@ ReleaseTimedOvnResourceReservation(candidate) ==
 ReducerNext ==
     \/ Tick
     \/ CommitInitialSortitionBatch
+    \/ \E candidateCount \in 0..1:
+          RecordInitialHiddenSortitionCapacityFailure(candidateCount)
     \/ RevealSortitionPulse
     \/ FailSortitionPulseUnavailable
     \/ RetryInitialSortitionBatch
+    \/ \E candidateCount \in 0..1:
+          RecordRetryHiddenSortitionCapacityFailure(candidateCount)
     \/ ConsumeInitialSortitionBatch
     \/ SealInvitationRosters
     \/ EnterPublicFindingReflection
@@ -1043,6 +1272,9 @@ ReducerNext ==
     \/ BeginAggregateOpening
     \/ FailPrivateBallotNoResult
     \/ FinalizeAggregateApprovedAndCertify
+    \/ \E eligibleCount \in 0..1:
+          FinalizeNarrowPolicyCapacityNoResult(eligibleCount)
+    \/ FinalizeNarrowPolicyAndRegisterConfirmationRequest
     \/ FinalizeAggregateRejected
     \/ ChangeGovernedHead
     \/ EnactAtExactHeight
@@ -1094,6 +1326,8 @@ TypeOK ==
     /\ requestHeight \in OptionalHeight
     /\ sortitionPulseHeight \in OptionalHeight
     /\ sortitionPulseKnown \in BOOLEAN
+    /\ sortitionPulseConsumed \in BOOLEAN
+    /\ sortitionCandidateCount \in (0..2) \cup {None}
     /\ candidateSnapshotFrozen \in BOOLEAN
     /\ rosterBodies \subseteq Bodies
     /\ invitationCloseHeight \in OptionalHeight
@@ -1129,6 +1363,14 @@ TypeOK ==
     /\ openingHeight \in OptionalHeight
     /\ failureHeight \in OptionalHeight
     /\ ballotApproved \in BOOLEAN
+    /\ policyRequiresConfirmation \in BOOLEAN
+    /\ eligibleConfirmationCandidates \in (0..2) \cup {None}
+    /\ policyResultHeight \in OptionalHeight
+    /\ policyBindingCommitted \in BOOLEAN
+    /\ confirmationRequirementCommitted \in BOOLEAN
+    /\ confirmationRequestCommitted \in BOOLEAN
+    /\ confirmationRequestHeight \in OptionalHeight
+    /\ confirmationPulseHeight \in OptionalHeight
     /\ certifiedAtHeight \in OptionalHeight
     /\ enactAtHeight \in OptionalHeight
     /\ certificateHead \in {ExpectedHead, CompetingHead, None}
@@ -1163,23 +1405,46 @@ ObjectiveBoundedSortitionRetries ==
           /\ sortitionFailureKind = None
           /\ sortitionFailureHeight = None
           /\ ~sortitionPulseKnown
+          /\ ~sortitionPulseConsumed
+          /\ sortitionCandidateCount = None
     /\ sortitionState = "AwaitingPulse" =>
           /\ attemptStatus = "Active"
           /\ sortitionFailureKind = None
           /\ sortitionFailureHeight = None
+          /\ ~sortitionPulseConsumed
+          /\ sortitionCandidateCount = 2
     /\ sortitionState = "NoRoster" =>
-          /\ sortitionFailureKind = "PulseUnavailable"
+          /\ sortitionFailureKind \in {
+                "PulseUnavailable", "HiddenElectorateCapacityUnavailable"
+             }
           /\ sortitionFailureHeight # None
-          /\ sortitionFailureHeight > sortitionPulseHeight
           /\ ~sortitionPulseKnown
+          /\ ~sortitionPulseConsumed
+          /\ IF sortitionFailureKind = "PulseUnavailable"
+                THEN /\ sortitionFailureHeight > sortitionPulseHeight
+                     /\ sortitionCandidateCount = 2
+                ELSE /\ sortitionFailureHeight = requestHeight
+                     /\ sortitionCandidateCount \in 0..1
           /\ attemptStatus =
                 IF sortitionSequence = MaxSortitionRetries
                 THEN "Rejected"
                 ELSE "Active"
     /\ sortitionState \in {"Drawn", "RosterSealed"} =>
           /\ sortitionPulseKnown
+          /\ sortitionPulseConsumed
+          /\ sortitionCandidateCount = 2
           /\ sortitionFailureKind = None
           /\ sortitionFailureHeight = None
+
+HiddenElectorateCapacityConsumesNoPulse ==
+    /\ sortitionFailureKind = "HiddenElectorateCapacityUnavailable" =>
+          /\ sortitionState = "NoRoster"
+          /\ sortitionCandidateCount \in 0..1
+          /\ sortitionFailureHeight = requestHeight
+          /\ ~sortitionPulseKnown
+          /\ ~sortitionPulseConsumed
+    /\ sortitionCandidateCount \in 0..1 =>
+          sortitionFailureKind = "HiddenElectorateCapacityUnavailable"
 
 TimedOvnReservationSafety ==
     /\ Cardinality(timedOvnResourceReservations) <=
@@ -1345,6 +1610,38 @@ FreshRetrySessions ==
               /\ failureHeight # None
               /\ registeredAtHeight <= failureHeight)
 
+AtomicPolicyConfirmationCapacity ==
+    /\ confirmationRequirementCommitted = confirmationRequestCommitted
+    /\ policyRequiresConfirmation =>
+          /\ eligibleConfirmationCandidates \in 0..2
+          /\ policyResultHeight # None
+          /\ IF eligibleConfirmationCandidates \in 0..1
+                THEN /\ attemptStatus = "Rejected"
+                     /\ ballotState = "NoResult"
+                     /\ ~ballotApproved
+                     /\ failureHeight = policyResultHeight
+                     /\ ~policyBindingCommitted
+                     /\ ~confirmationRequirementCommitted
+                     /\ ~confirmationRequestCommitted
+                     /\ confirmationRequestHeight = None
+                     /\ confirmationPulseHeight = None
+                ELSE /\ eligibleConfirmationCandidates = 2
+                     /\ attemptStatus = "Active"
+                     /\ ballotState = "Approved"
+                     /\ ballotApproved
+                     /\ policyBindingCommitted
+                     /\ confirmationRequirementCommitted
+                     /\ confirmationRequestCommitted
+                     /\ confirmationRequestHeight = policyResultHeight
+                     /\ confirmationPulseHeight =
+                           policyResultHeight + SortitionPulseDelayBlocks
+    /\ ~policyRequiresConfirmation =>
+          /\ eligibleConfirmationCandidates = None
+          /\ ~confirmationRequirementCommitted
+          /\ ~confirmationRequestCommitted
+          /\ confirmationRequestHeight = None
+          /\ confirmationPulseHeight = None
+
 NoPlaintextOrFallback == ~plaintextPath /\ ~fallbackPath
 
 CertificateBindsApprovedResult ==
@@ -1388,7 +1685,10 @@ CertifiedCannotPassDueHeight ==
 NoResultTerminalization ==
     /\ ballotState = "NoResult" =>
           attemptStatus =
-              IF ballotSequence = MaxRetries THEN "Rejected" ELSE "Active"
+              IF policyRequiresConfirmation /\
+                    eligibleConfirmationCandidates \in 0..1
+              THEN "Rejected"
+              ELSE IF ballotSequence = MaxRetries THEN "Rejected" ELSE "Active"
     /\ findingState = "NoResult" => attemptStatus = "Rejected"
 
 =============================================================================

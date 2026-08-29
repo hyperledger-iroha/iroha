@@ -137,9 +137,11 @@ document does not claim that integration command passed.
 
 ## Performance and fault evidence
 
-`scripts/run_sumeragi_stress.py` runs the queue-pressure, store-pressure,
-chunk-loss, redundant-send, and pacemaker-jitter cases. The representative soak
-matrix is restricted to admissible 4-, 7-, and 10-validator committees:
+`scripts/run_sumeragi_stress.py` runs the revision-4 cadence baseline and bounded
+transaction-queue pressure cases. Authenticated consensus-message loss and
+healing are exercised by the feature-isolated Sumeragi v2 runner. The
+representative soak matrix is restricted to admissible 4-, 7-, and
+10-validator committees:
 
 ```bash
 python3 scripts/run_sumeragi_soak_matrix.py \

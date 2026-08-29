@@ -73,7 +73,9 @@ outbound lock is created.
 payload and requires the fixed `xor` asset, `taira_tron_xor` route, SORA-to-TRON
 domains, TRON address codec, nonzero recipient, exact payload hash, and exact
 lane-derived message id before verifier dispatch. A verified payload amount is
-multiplied by `10^9`, with an explicit overflow check, before minting.
+multiplied by `10^9`, with an explicit overflow check, before minting. The route
+constructor requires one positive u128-sized `maxWrappedSupply`, stores it
+immutably, and every mint rejects `totalSupply + amount` above that ceiling.
 
 The Groth16 public statement commits a route-specific destination binding:
 
@@ -102,7 +104,9 @@ pretending that a verifier-only hash identifies a value-moving route.
 The route's separate `routeConfigHash` is public signal 9 (the tenth signal), so
 the proof directly commits the governed token, code hashes, lane hashes,
 profile, destination binding, and route revision instead of relying only on a
-post-proof contract check. Public signal 10 (the eleventh signal) separately
+post-proof contract check. The asset-route subhash also commits the exact
+Taira-to-token multiplier and immutable maximum wrapped supply as consecutive
+ABI words; there is no legacy four-word hash path. Public signal 10 (the eleventh signal) separately
 binds the governed SORA finality anchor. Both policy hashes are immutable
 verifier getters, are pinned by the route's typed `VerifierPolicyV1` constructor
 tuple, and are rechecked before every proof dispatch.
@@ -122,7 +126,8 @@ Before activating a route, independently verify all of the following:
    SORA-to-TRON.
 3. `verifierCodeHash`, `verifierKeyHash`, `semanticProofProfileHash`,
    `soraFinalityAnchorHash`, `tokenCodeHash`,
-   `destinationBindingHash`, both lane hashes, and `routeConfigHash` match the
+   `destinationBindingHash`, both lane hashes, `maxWrappedSupply`, and
+   `routeConfigHash` match the
    governed typed deployment record.
 4. Precompute the route address, deploy the token with that exact immutable
    bridge, then deploy the route at the precomputed address with the exact

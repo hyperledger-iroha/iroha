@@ -205,6 +205,37 @@ fn dispatch_server_operation_with_session(
                 MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1,
             )
         }
+        (slot, OPERATION_PARLIAMENT_TLE_CAPABILITY_ATTEST_V1)
+            if slot == parliament_tle_partial_release_signer_slot =>
+        {
+            let (request, session) = decode_parliament_tle_capability_attest_request(
+                &request.payload,
+                &state.network_id,
+            )?;
+            let backend = broker_backend!(state, parliament_tle_partial_release_signer);
+            let attestation = backend
+                .attest_partial_release_capability(&session, request.participant_index)
+                .map_err(|error| match error {
+                    ParliamentTlePartialReleaseSignerBrokerBackendErrorV1::Unavailable => {
+                        BrokerError::Unavailable
+                    }
+                    ParliamentTlePartialReleaseSignerBrokerBackendErrorV1::Rejected => {
+                        BrokerError::Rejected
+                    }
+                })?;
+            if !attestation.matches(&session, request.participant_index) {
+                return Err(BrokerError::StaleOrRevoked);
+            }
+            requalify()?;
+            encode_canonical(
+                &ParliamentTleCapabilityAttestResultWireV1 {
+                    key_session_id: attestation.key_session_id(),
+                    transcript_hash: attestation.transcript_hash(),
+                    participant_index: attestation.participant_index(),
+                },
+                MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1,
+            )
+        }
         (slot, OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_QUALIFY_V1)
             if slot == moderation_panel_notification_archive_slot =>
         {

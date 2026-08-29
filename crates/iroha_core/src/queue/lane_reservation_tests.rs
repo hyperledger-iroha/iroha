@@ -1,5 +1,354 @@
 include!("lane_reservation_core_tests.rs"); // Preserve stable `queue::tests` libtest paths.
 #[test]
+fn committed_cleanup_preserves_losing_globally_bound_reservation_until_kura_terminal_proof() {
+    let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+    let state = lane_reservation_test_state();
+    let dir = tempdir().expect("tempdir");
+    let queue = Arc::new(Queue::test(config_factory(), &time_source));
+    install_globally_certified_test_reservation_journals(&queue, &dir);
+    let transaction = accepted_queue_plan_unique_entrypoint_tx_by_someone(&time_source);
+    let hash = transaction.hash_as_entrypoint();
+    push_globally_bound_lane_reservation_candidate(&queue, &state, &dir, transaction);
+    let (fee_beneficiary, _) = gen_account_in("terminalized_queue_owner_fee");
+    let fee_asset_definition = AssetDefinitionId::derive_from_components(
+        DomainId::try_new("fees", "universal").expect("valid fee domain"),
+        "xor".parse().expect("valid fee asset name"),
+    );
+    let fee_source = FeeReservationAssetSource::Authority(AssetId::new(
+        fee_asset_definition,
+        fee_beneficiary.clone(),
+    ));
+    queue
+        .fee_admission_reservations
+        .lock()
+        .reserve(
+            hash,
+            FeeAdmissionReservation {
+                program_revision: None,
+                beneficiary: fee_beneficiary,
+                asset_charges: BTreeMap::from([(fee_source.clone(), Quantity::from(1_u32))]),
+                window_charges: BTreeMap::new(),
+                relay_lease_charges: BTreeMap::new(),
+                asset_remaining: BTreeMap::from([(fee_source, Quantity::from(1_u32))]),
+                window_remaining: BTreeMap::new(),
+                relay_lease_remaining: BTreeMap::new(),
+            },
+        )
+        .expect("reserve ordinary FIFO fee capacity");
+    let key = *queue
+        .reserve_transactions_for_lane(
+            &state,
+            lane_reservation_scope(
+                &state,
+                b"ordinary-winner-owner",
+                b"losing-autonomous-proposal",
+            ),
+            nonzero!(1_usize),
+        )
+        .expect("reserve losing autonomous transaction")[0]
+        .key();
+    {
+        let mut transactions = state.transactions.block();
+        transactions.insert_block_with_single_tx(hash, nonzero!(1_usize));
+        transactions
+            .commit()
+            .expect("publish the ordinary canonical transaction");
+    }
+
+    assert_eq!(
+        queue.remove_committed_hashes_preserving_globally_bound_owners([hash], None),
+        0,
+        "post-apply cleanup must defer the globally bound lifecycle owner",
+    );
+    assert_eq!(queue.live_lane_reservations(), vec![key]);
+    assert!(queue.has_durable_plan_claim_for_test(hash));
+    assert!(queue.txs.contains_key(&hash));
+    assert!(!queue.removed_hashes.contains_key(&hash));
+    assert!(
+        queue
+            .fee_admission_reservations
+            .lock()
+            .live_by_entrypoint
+            .contains_key(&hash),
+        "pre-terminal cleanup must retain ordinary FIFO fee capacity",
+    );
+
+    assert_eq!(
+        queue
+            .release_lane_reservation(&key)
+            .expect("release the losing autonomous reservation"),
+        LaneQueueReservationOutcome::Finalized,
+    );
+    assert!(queue.live_lane_reservations().is_empty());
+    assert_eq!(queue.fifo_snapshot_for_test(), vec![hash]);
+
+    let (selected, selection_lease) = queue
+        .bounded_pending_snapshot(&state.view(), nonzero!(1_usize))
+        .expect("production candidate snapshot remains available");
+    assert!(
+        selected.is_empty(),
+        "State-committed ordinary work must not be selected twice",
+    );
+    drop(selection_lease);
+    assert_eq!(queue.active_len(), 1);
+    assert_eq!(queue.queued_len(), 1);
+    assert!(queue.has_durable_plan_claim_for_test(hash));
+    let terminal_authorization =
+        crate::kura::AutonomousLifecycleCommittedQueueCleanupAuthorization::for_queue_test(
+            Hash::from(hash),
+            vec![key],
+        );
+    assert_eq!(
+        queue
+            .remove_state_committed_hashes_with_kura_terminal_authorizations(
+                &state,
+                vec![terminal_authorization],
+            )
+            .expect("consume exact Kura terminal cleanup authorization"),
+        1,
+        "post-Kura terminalization must end committed ordinary Queue custody",
+    );
+    assert_eq!(queue.active_len(), 0);
+    assert_eq!(queue.queued_len(), 0);
+    assert!(!queue.has_durable_plan_claim_for_test(hash));
+    assert!(
+        !queue
+            .fee_admission_reservations
+            .lock()
+            .live_by_entrypoint
+            .contains_key(&hash),
+        "terminal committed drain must release fee capacity",
+    );
+    let (selected, selection_lease) = queue
+        .bounded_pending_snapshot(&state.view(), nonzero!(1_usize))
+        .expect("production candidate snapshot drains the terminal tombstone");
+    assert!(selected.is_empty());
+    drop(selection_lease);
+    assert!(queue.fifo_snapshot_for_test().is_empty());
+}
+#[test]
+fn kura_terminalized_cleanup_before_state_commit_is_consumed_after_commit() {
+    let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+    let state = lane_reservation_test_state();
+    let dir = tempdir().expect("tempdir");
+    let queue = Arc::new(Queue::test(config_factory(), &time_source));
+    install_globally_certified_test_reservation_journals(&queue, &dir);
+    let transaction = accepted_queue_plan_unique_entrypoint_tx_by_someone(&time_source);
+    let hash = transaction.hash_as_entrypoint();
+    push_globally_bound_lane_reservation_candidate(&queue, &state, &dir, transaction);
+    let (fee_beneficiary, _) = gen_account_in("terminalized_before_commit_fee");
+    let fee_asset_definition = AssetDefinitionId::derive_from_components(
+        DomainId::try_new("fees", "universal").expect("valid fee domain"),
+        "xor".parse().expect("valid fee asset name"),
+    );
+    let fee_source = FeeReservationAssetSource::Authority(AssetId::new(
+        fee_asset_definition,
+        fee_beneficiary.clone(),
+    ));
+    queue
+        .fee_admission_reservations
+        .lock()
+        .reserve(
+            hash,
+            FeeAdmissionReservation {
+                program_revision: None,
+                beneficiary: fee_beneficiary,
+                asset_charges: BTreeMap::from([(fee_source.clone(), Quantity::from(1_u32))]),
+                window_charges: BTreeMap::new(),
+                relay_lease_charges: BTreeMap::new(),
+                asset_remaining: BTreeMap::from([(fee_source, Quantity::from(1_u32))]),
+                window_remaining: BTreeMap::new(),
+                relay_lease_remaining: BTreeMap::new(),
+            },
+        )
+        .expect("reserve ordinary FIFO fee capacity");
+    let key = *queue
+        .reserve_transactions_for_lane(
+            &state,
+            lane_reservation_scope(
+                &state,
+                b"terminalize-before-commit-owner",
+                b"terminalize-before-commit-proposal",
+            ),
+            nonzero!(1_usize),
+        )
+        .expect("reserve losing autonomous transaction")[0]
+        .key();
+    assert_eq!(
+        queue
+            .release_lane_reservation(&key)
+            .expect("release the terminal autonomous reservation"),
+        LaneQueueReservationOutcome::Finalized,
+    );
+    assert_eq!(queue.fifo_snapshot_for_test(), vec![hash]);
+
+    let precommit_authorization =
+        crate::kura::AutonomousLifecycleCommittedQueueCleanupAuthorization::for_queue_test(
+            Hash::from(hash),
+            vec![key],
+        );
+    assert_eq!(
+        queue
+            .remove_state_committed_hashes_with_kura_terminal_authorizations(
+                &state,
+                vec![precommit_authorization],
+            )
+            .expect("ignore a terminal proof before State commits its target"),
+        0,
+    );
+    assert_eq!(queue.active_len(), 1);
+    assert_eq!(queue.queued_len(), 1);
+    assert!(queue.has_durable_plan_claim_for_test(hash));
+    assert!(
+        queue
+            .fee_admission_reservations
+            .lock()
+            .live_by_entrypoint
+            .contains_key(&hash),
+        "terminality alone must not release fee capacity before State commit",
+    );
+
+    {
+        let mut transactions = state.transactions.block();
+        transactions.insert_block_with_single_tx(hash, nonzero!(1_usize));
+        transactions
+            .commit()
+            .expect("publish the later ordinary canonical transaction");
+    }
+    assert_eq!(
+        queue.remove_committed_hashes_preserving_globally_bound_owners([hash], None),
+        0,
+        "State commit without re-read Kura authority must remain preserved",
+    );
+    let postcommit_authorization =
+        crate::kura::AutonomousLifecycleCommittedQueueCleanupAuthorization::for_queue_test(
+            Hash::from(hash),
+            vec![key],
+        );
+    assert_eq!(
+        queue
+            .remove_committed_hashes_with_kura_terminal_authorizations(
+                [hash],
+                vec![postcommit_authorization],
+                None,
+            )
+            .expect("consume the re-read durable Kura terminal authorization"),
+        1,
+    );
+    assert_eq!(queue.active_len(), 0);
+    assert_eq!(queue.queued_len(), 0);
+    assert!(queue.fifo_snapshot_for_test().is_empty());
+    assert!(!queue.has_durable_plan_claim_for_test(hash));
+    assert!(
+        !queue
+            .fee_admission_reservations
+            .lock()
+            .live_by_entrypoint
+            .contains_key(&hash),
+        "post-commit terminal drain must release fee capacity",
+    );
+}
+#[test]
+fn kura_terminalized_partial_group_cleanup_removes_only_state_committed_member() {
+    let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+    let state = lane_reservation_test_state();
+    let dir = tempdir().expect("tempdir");
+    let queue = Arc::new(Queue::test(config_factory(), &time_source));
+    install_globally_certified_test_reservation_journals(&queue, &dir);
+    let first = accepted_queue_plan_unique_entrypoint_tx_by_someone(&time_source);
+    let first_hash = first.hash_as_entrypoint();
+    push_globally_bound_lane_reservation_candidate(&queue, &state, &dir, first);
+    let second = accepted_queue_plan_unique_entrypoint_tx_by_someone(&time_source);
+    let second_hash = second.hash_as_entrypoint();
+    push_globally_bound_lane_reservation_candidate(&queue, &state, &dir, second);
+    let keys = queue
+        .reserve_transactions_for_lane(
+            &state,
+            lane_reservation_scope(
+                &state,
+                b"partial-terminal-group-owner",
+                b"partial-terminal-group-proposal",
+            ),
+            nonzero!(2_usize),
+        )
+        .expect("reserve the two-member autonomous group")
+        .into_iter()
+        .map(|reserved| *reserved.key())
+        .collect::<Vec<_>>();
+    assert_eq!(keys.len(), 2);
+    let first_key = *keys
+        .iter()
+        .find(|key| key.entrypoint_hash == first_hash)
+        .expect("group contains first transaction");
+    let second_key = *keys
+        .iter()
+        .find(|key| key.entrypoint_hash == second_hash)
+        .expect("group contains second transaction");
+    for key in &keys {
+        assert_eq!(
+            queue
+                .release_lane_reservation(key)
+                .expect("release one terminal group member"),
+            LaneQueueReservationOutcome::Finalized,
+        );
+    }
+    {
+        let mut transactions = state.transactions.block();
+        transactions.insert_block_with_single_tx(first_hash, nonzero!(1_usize));
+        transactions
+            .commit()
+            .expect("commit only the first terminal group member");
+    }
+    let authorizations = [first_key, second_key]
+        .into_iter()
+        .map(|key| {
+            crate::kura::AutonomousLifecycleCommittedQueueCleanupAuthorization::for_queue_test(
+                Hash::from(key.entrypoint_hash),
+                keys.clone(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        queue
+            .remove_state_committed_hashes_with_kura_terminal_authorizations(
+                &state,
+                authorizations,
+            )
+            .expect("consume only State-committed terminal group authority"),
+        1,
+    );
+    assert!(!queue.txs.contains_key(&first_hash));
+    assert!(!queue.has_durable_plan_claim_for_test(first_hash));
+    assert!(queue.txs.contains_key(&second_hash));
+    assert!(queue.has_durable_plan_claim_for_test(second_hash));
+    assert_eq!(queue.fifo_snapshot_for_test(), vec![second_hash]);
+
+    {
+        let mut transactions = state.transactions.block();
+        transactions.insert_block_with_single_tx(second_hash, nonzero!(2_usize));
+        transactions
+            .commit()
+            .expect("commit the later terminal group member");
+    }
+    let second_authorization =
+        crate::kura::AutonomousLifecycleCommittedQueueCleanupAuthorization::for_queue_test(
+            Hash::from(second_hash),
+            keys,
+        );
+    assert_eq!(
+        queue
+            .remove_state_committed_hashes_with_kura_terminal_authorizations(
+                &state,
+                vec![second_authorization],
+            )
+            .expect("re-read Kura authority for the later committed member"),
+        1,
+    );
+    assert_eq!(queue.active_len(), 0);
+    assert_eq!(queue.queued_len(), 0);
+    assert!(queue.fifo_snapshot_for_test().is_empty());
+}
+#[test]
 fn release_recomputes_fifo_after_unrelated_admission_during_append() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let state = lane_reservation_test_state();
@@ -61,6 +410,98 @@ fn release_recomputes_fifo_after_unrelated_admission_during_append() {
     assert_eq!(queue.active_len(), 2);
     assert_eq!(queue.queued_len(), 2);
     assert!(!queue.transaction_selection_durability_faulted());
+
+    let unrelated_plan = queue
+        .routing_plans
+        .get(&unrelated_hash)
+        .expect("unrelated routing plan remains installed")
+        .value()
+        .clone();
+    let unrelated_claim = queue
+        .durable_plan_claims
+        .get(&unrelated_hash)
+        .expect("unrelated durable claim remains installed")
+        .value()
+        .clone();
+    let unrelated_fifo_order = *queue
+        .fifo_order_by_hash
+        .get(&unrelated_hash)
+        .expect("unrelated FIFO order remains installed")
+        .value();
+    let unrelated_queued_at = *queue
+        .queued_tx_enqueued_at_ms
+        .get(&unrelated_hash)
+        .expect("unrelated queued-age membership remains installed")
+        .value();
+    {
+        let mut transactions = state.transactions.block();
+        transactions.insert_block_with_single_tx(reserved_hash, nonzero!(1_usize));
+        transactions
+            .commit()
+            .expect("publish only the terminalized reservation member");
+    }
+    let terminal_authorization =
+        crate::kura::AutonomousLifecycleCommittedQueueCleanupAuthorization::for_queue_test(
+            Hash::from(reserved_hash),
+            vec![key],
+        );
+    assert_eq!(
+        queue
+            .remove_state_committed_hashes_with_kura_terminal_authorizations(
+                &state,
+                vec![terminal_authorization],
+            )
+            .expect("consume exact Kura terminal cleanup authorization"),
+        1,
+        "one terminal authorization must remove exactly its committed member",
+    );
+    assert_eq!(queue.fifo_snapshot_for_test(), vec![unrelated_hash]);
+    assert_eq!(queue.active_len(), 1);
+    assert_eq!(queue.queued_len(), 1);
+    assert!(!queue.removed_hashes.contains_key(&reserved_hash));
+    assert!(queue.txs.contains_key(&unrelated_hash));
+    assert_eq!(
+        queue
+            .routing_plans
+            .get(&unrelated_hash)
+            .map(|entry| entry.value().clone()),
+        Some(unrelated_plan),
+    );
+    assert_eq!(
+        queue
+            .durable_plan_claims
+            .get(&unrelated_hash)
+            .map(|entry| entry.value().clone()),
+        Some(unrelated_claim),
+    );
+    assert_eq!(
+        queue
+            .fifo_order_by_hash
+            .get(&unrelated_hash)
+            .map(|entry| *entry.value()),
+        Some(unrelated_fifo_order),
+    );
+    assert_eq!(
+        queue
+            .queued_tx_enqueued_at_ms
+            .get(&unrelated_hash)
+            .map(|entry| *entry.value()),
+        Some(unrelated_queued_at),
+    );
+    assert_eq!(
+        queue
+            .remove_state_committed_hashes_with_kura_terminal_authorizations(
+                &state,
+                vec![crate::kura::AutonomousLifecycleCommittedQueueCleanupAuthorization::for_queue_test(
+                    Hash::from(reserved_hash),
+                    vec![key],
+                )],
+            )
+            .expect("repeat exact Kura terminal cleanup authorization"),
+        0,
+        "terminalized cleanup must be idempotent",
+    );
+    assert_eq!(queue.fifo_snapshot_for_test(), vec![unrelated_hash]);
 }
 #[test]
 fn release_recomputes_fifo_while_unrelated_pop_is_held() {
@@ -814,17 +1255,16 @@ fn forgotten_release_requires_exact_fifo_membership_and_relative_order() {
     );
     let first = keys[0].entrypoint_hash;
     let second = keys[1].entrypoint_hash;
-    let assert_aggregate_fifo_rejection =
-        |failure: Result<(), LaneQueueReservationError>| {
-            assert!(
-                matches!(
-                    &failure,
-                    Err(LaneQueueReservationError::InvalidIdentity(message))
-                        if message.contains("lacks exact ordinary FIFO ownership")
-                ),
-                "unexpected forgotten-release rejection: {failure:?}"
-            );
-        };
+    let assert_aggregate_fifo_rejection = |failure: Result<(), LaneQueueReservationError>| {
+        assert!(
+            matches!(
+                &failure,
+                Err(LaneQueueReservationError::InvalidIdentity(message))
+                    if message.contains("lacks exact ordinary FIFO ownership")
+            ),
+            "unexpected forgotten-release rejection: {failure:?}"
+        );
+    };
     {
         let _queue_guard = queue.push_remove_lock.lock();
         assert_eq!(
@@ -880,7 +1320,10 @@ fn forgotten_release_requires_exact_fifo_membership_and_relative_order() {
     push_globally_bound_lane_reservation_candidate(&queue, &state, &dir, unrelated);
     {
         let _queue_guard = queue.push_remove_lock.lock();
-        assert_eq!(queue.fifo_snapshot_locked(), vec![first, second, unrelated_hash]);
+        assert_eq!(
+            queue.fifo_snapshot_locked(),
+            vec![first, second, unrelated_hash]
+        );
         queue.replace_fifo_locked(&[unrelated_hash, first, second]);
     }
     for failure in [
@@ -1873,6 +2316,113 @@ fn canonical_cleanup_atomically_consumes_committed_revalidated_ordinary_replica_
     let (retry_finalized, retry_evidence) = retry.into_parts();
     assert_eq!(retry_finalized, 0);
     assert_eq!(retry_evidence.len(), 1);
+}
+#[test]
+fn replica_disposition_observes_exact_fifo_beneath_global_selection_overlay() {
+    let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+    let (state, _kura_dir) = owned_lane_reservation_test_state();
+    let replica = Arc::new(Queue::test(config_factory(), &time_source));
+    let replica_dir = tempdir().expect("replica tempdir");
+    install_globally_certified_test_reservation_journals(&replica, &replica_dir);
+    let transaction = accepted_queue_plan_unique_entrypoint_tx_by_someone(&time_source);
+    let hash = transaction.hash_as_entrypoint();
+    let entrypoint = transaction.entrypoint().clone();
+    let admission_binding =
+        push_globally_bound_lane_reservation_candidate(&replica, &state, &replica_dir, transaction);
+    let signer_a = KeyPair::from_seed(vec![0x39; 32], Algorithm::BlsNormal);
+    let signer_b = KeyPair::from_seed(vec![0xA4; 32], Algorithm::BlsNormal);
+    let peer_a = PeerId::new(signer_a.public_key().clone());
+    let peer_b = PeerId::new(signer_b.public_key().clone());
+    let (producer_signer, local_signer, local_peer) = if peer_a < peer_b {
+        (&signer_a, &signer_b, peer_b)
+    } else {
+        (&signer_b, &signer_a, peer_a)
+    };
+    let fixture = startup_replica_disposition_payload_fixture(
+        &state,
+        entrypoint,
+        admission_binding
+            .routing_plan()
+            .expect("rebuild the replica FIFO routing plan"),
+        admission_binding.canonical_hash(),
+        1,
+        1,
+        b"live-replica-selection-overlay-height-context",
+        producer_signer,
+        &local_peer,
+    );
+    let keys = &fixture.payload.reservation_keys;
+    assert_eq!(keys[0].entrypoint_hash, hash);
+    let kura = state.kura_handle();
+    kura.bind_local_peer_id(local_peer.clone())
+        .expect("bind the live replica peer");
+    let generation = kura
+        .claim_autonomous_lifecycle_process_generation(fixture.payload.network_id, &local_peer)
+        .expect("claim the live replica process generation");
+    let cursor = publish_startup_replica_disposition_cursor(
+        &kura,
+        &generation,
+        &fixture,
+        local_signer,
+        &local_peer,
+    );
+    let (fee_beneficiary, _) = gen_account_in("replica_selection_overlay_fee");
+    let fee_asset_definition = AssetDefinitionId::derive_from_components(
+        DomainId::try_new("fees", "universal").expect("valid fee domain"),
+        "xor".parse().expect("valid fee asset name"),
+    );
+    let fee_source = FeeReservationAssetSource::Authority(AssetId::new(
+        fee_asset_definition,
+        fee_beneficiary.clone(),
+    ));
+    replica
+        .fee_admission_reservations
+        .lock()
+        .reserve(
+            hash,
+            FeeAdmissionReservation {
+                program_revision: None,
+                beneficiary: fee_beneficiary,
+                asset_charges: BTreeMap::from([(fee_source.clone(), Quantity::from(1_u32))]),
+                window_charges: BTreeMap::new(),
+                relay_lease_charges: BTreeMap::new(),
+                asset_remaining: BTreeMap::from([(fee_source, Quantity::from(2_u32))]),
+                window_remaining: BTreeMap::new(),
+                relay_lease_remaining: BTreeMap::new(),
+            },
+        )
+        .expect("reserve ordinary FIFO fee capacity");
+    let (selected, mut global_selection) = replica
+        .bounded_pending_snapshot(&state.view(), nonzero!(1_usize))
+        .expect("acquire process-local global selection overlay");
+    assert_eq!(selected[0].hash_as_entrypoint(), hash);
+    let disposition = replica
+        .authorize_autonomous_lane_replica_queue_disposition(&cursor, keys)
+        .expect("the live signed-cursor path accepts exact FIFO beneath the overlay")
+        .consume_for_kura(&cursor, keys)
+        .expect("Kura consumes the same cursor-bound Queue authorization");
+    assert!(matches!(
+        &disposition,
+        AutonomousLaneReplicaQueueDisposition::ExactOrdinaryFifo(_)
+    ));
+    assert_eq!(replica.fifo_snapshot_for_test(), vec![hash]);
+    assert!(replica.has_durable_plan_claim_for_test(hash));
+    assert!(
+        replica
+            .fee_admission_reservations
+            .lock()
+            .live_by_entrypoint
+            .contains_key(&hash),
+        "read-only replica disposition must retain ordinary FIFO fee capacity",
+    );
+    assert!(
+        global_selection.retain_only(&[hash]),
+        "the pre-existing global-selection lease must retain its exact ownership",
+    );
+    drop(disposition);
+    assert_eq!(replica.fifo_snapshot_for_test(), vec![hash]);
+    assert!(replica.has_durable_plan_claim_for_test(hash));
+    drop(global_selection);
 }
 #[test]
 fn finalized_canonical_group_rejects_dangling_queue_owners_and_metadata() {

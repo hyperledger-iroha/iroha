@@ -1355,10 +1355,8 @@ mod tests {
                 signing_private_key: None,
                 bootstrap: iroha_config::parameters::user::SnapshotBootstrapPolicy::default(),
             },
-            telemetry_enabled: false,
             telemetry_profile: iroha_config::parameters::actual::TelemetryProfile::Disabled,
             telemetry: None,
-            telemetry_redaction: iroha_config::parameters::actual::TelemetryRedaction::default(),
             telemetry_integrity: iroha_config::parameters::actual::TelemetryIntegrity::default(),
             dev_telemetry: iroha_config::parameters::user::DevTelemetry {
                 out_file: None,
@@ -1612,8 +1610,6 @@ mod tests {
                     metal_trace: iroha_config::parameters::defaults::zk::fastpq::METAL_TRACE,
                     metal_debug_enum:
                         iroha_config::parameters::defaults::zk::fastpq::METAL_DEBUG_ENUM,
-                    metal_debug_fused:
-                        iroha_config::parameters::defaults::zk::fastpq::METAL_DEBUG_FUSED,
                 },
                 stark: iroha_config::parameters::actual::Stark::default(),
                 sccp: iroha_config::parameters::actual::Sccp::default(),

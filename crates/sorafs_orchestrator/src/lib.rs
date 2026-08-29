@@ -8,7 +8,7 @@ use iroha_data_model::soranet::privacy_metrics::{
 };
 use iroha_logger::{debug, info, warn};
 use iroha_telemetry::{
-    metrics::{SorafsFetchOtel, global_or_default, global_sorafs_fetch_otel},
+    metrics::global_or_default,
     privacy::{PrivacyBucketConfig, PrivacyConfigError, SoranetSecureAggregator},
 };
 use norito::json;
@@ -294,8 +294,8 @@ async fn resolve_and_validate_host(
     validate_resolved_addresses(host, addresses, policy)
 }
 use crate::proxy::{
-    BrowserExtensionManifest, LocalQuicProxyConfig, LocalQuicProxyHandle, PROXY_MANIFEST_ID,
-    PROXY_PROTOCOL_LABEL, ProxyError, ProxyMode, spawn_local_quic_proxy,
+    BrowserExtensionManifest, LocalQuicProxyConfig, LocalQuicProxyHandle, PROXY_PROTOCOL_LABEL,
+    ProxyError, ProxyMode, spawn_local_quic_proxy,
 };
 use compliance::{CompliancePolicy, ComplianceReason};
 use soranet::{
@@ -2858,15 +2858,6 @@ impl Orchestrator {
 fn record_proxy_metric(region: &str, event: &str, reason: &str) {
     let metrics = global_or_default();
     metrics.inc_sorafs_orchestrator_transport_event(region, PROXY_PROTOCOL_LABEL, event, reason);
-    let otel = global_sorafs_fetch_otel();
-    otel.record_transport_event(
-        PROXY_MANIFEST_ID,
-        region,
-        None::<&str>,
-        PROXY_PROTOCOL_LABEL,
-        event,
-        reason,
-    );
 }
 async fn apply_proxy_mode(
     runtime: &Arc<AsyncMutex<LocalProxyRuntime>>,
@@ -4182,9 +4173,7 @@ fn guard_preference_from_str<'a>(
 struct FetchMetricsCtx {
     manifest_id: String,
     region: String,
-    job_id: String,
     metrics: Arc<iroha_telemetry::metrics::Metrics>,
-    otel: Arc<SorafsFetchOtel>,
     telemetry: FetchTelemetryCtx,
     latency_cap_ms: u32,
     policy_summary: PolicySummary,
@@ -4201,11 +4190,10 @@ impl FetchMetricsCtx {
         write_mode: WriteModeHint,
     ) -> Result<Self, OrchestratorError> {
         let metrics = global_or_default();
-        let otel = global_sorafs_fetch_otel();
         let manifest_id = manifest_id_hex(plan);
         let job_id = generate_job_id().map_err(OrchestratorError::JobIdRandomness)?;
         let provider_count = providers.len();
-        let telemetry = FetchTelemetryCtx::new(job_id.clone(), write_mode);
+        let telemetry = FetchTelemetryCtx::new(job_id, write_mode);
         telemetry.emit_start(
             &manifest_id,
             region,
@@ -4215,7 +4203,6 @@ impl FetchMetricsCtx {
             policy_summary,
         )?;
         metrics.sorafs_orchestrator_fetch_started(&manifest_id, region);
-        otel.fetch_started(&manifest_id, region, &job_id);
         metrics.record_sorafs_orchestrator_policy_event(
             policy_summary.policy.label(),
             region,
@@ -4240,14 +4227,6 @@ impl FetchMetricsCtx {
         for provider in providers {
             let protocol = TransportSupport::from_provider(provider).protocol_label();
             metrics.inc_sorafs_orchestrator_transport_event(region, protocol, "selected", &reason);
-            otel.record_transport_event(
-                &manifest_id,
-                region,
-                Some(&job_id),
-                protocol,
-                "selected",
-                &reason,
-            );
         }
         metrics.record_sorafs_orchestrator_pq_ratio(
             policy_summary.policy.label(),
@@ -4274,61 +4253,17 @@ impl FetchMetricsCtx {
             region,
             policy_summary.selected_classical() as u64,
         );
-        otel.record_policy_event(
-            &manifest_id,
-            region,
-            Some(&job_id),
-            policy_summary.policy.label(),
-            policy_summary.outcome_label(),
-            policy_summary.reason_label(),
-        );
-        otel.record_pq_ratio(
-            &manifest_id,
-            region,
-            Some(&job_id),
-            policy_summary.policy.label(),
-            policy_summary.ratio(),
-        );
-        otel.record_pq_candidate_ratio(
-            &manifest_id,
-            region,
-            Some(&job_id),
-            policy_summary.policy.label(),
-            policy_summary.candidate_ratio(),
-        );
-        otel.record_pq_deficit_ratio(
-            &manifest_id,
-            region,
-            Some(&job_id),
-            policy_summary.policy.label(),
-            policy_summary.deficit_ratio(),
-        );
-        otel.record_classical_ratio(
-            &manifest_id,
-            region,
-            Some(&job_id),
-            policy_summary.policy.label(),
-            policy_summary.classical_ratio(),
-        );
-        otel.record_classical_selected(
-            &manifest_id,
-            region,
-            Some(&job_id),
-            policy_summary.policy.label(),
-            policy_summary.selected_classical() as u64,
-        );
         Ok(Self {
             manifest_id,
             region: region.to_string(),
-            job_id,
             metrics,
-            otel,
             telemetry,
             latency_cap_ms: scoreboard_config.latency_cap_ms,
             policy_summary: *policy_summary,
             start: Instant::now(),
         })
     }
+
     fn on_success(&self, outcome: &FetchOutcome) {
         let duration_ms = self.start.elapsed().as_secs_f64() * 1_000.0;
         self.metrics.record_sorafs_orchestrator_duration(
@@ -4336,8 +4271,6 @@ impl FetchMetricsCtx {
             &self.region,
             duration_ms,
         );
-        self.otel
-            .record_duration(&self.manifest_id, &self.region, &self.job_id, duration_ms);
         let mut retry_counts: HashMap<String, u64> = HashMap::new();
         let mut total_retries = 0;
         for receipt in &outcome.chunk_receipts {
@@ -4359,33 +4292,17 @@ impl FetchMetricsCtx {
                 "retry",
                 count,
             );
-            self.otel.record_retries(
-                &self.manifest_id,
-                &self.region,
-                Some(&self.job_id),
-                &provider,
-                "retry",
-                count,
-            );
             self.telemetry
                 .emit_retry(&self.manifest_id, &self.region, &provider, "retry", count);
             total_retries += count;
         }
         let mut total_provider_failures = 0;
-        for report in outcome.provider_reports.iter() {
+        for report in &outcome.provider_reports {
             let failures = report.failures as u64;
             if failures > 0 {
                 let provider_id = report.provider.id().as_str();
                 self.metrics.inc_sorafs_orchestrator_provider_failures(
                     &self.manifest_id,
-                    provider_id,
-                    "session_failure",
-                    failures,
-                );
-                self.otel.record_provider_failure(
-                    &self.manifest_id,
-                    &self.region,
-                    Some(&self.job_id),
                     provider_id,
                     "session_failure",
                     failures,
@@ -4413,32 +4330,12 @@ impl FetchMetricsCtx {
                 provider_id,
                 latency_ms,
             );
-            self.otel.record_chunk_latency(
-                &self.manifest_id,
-                &self.region,
-                Some(&self.job_id),
-                provider_id,
-                latency_ms,
-            );
             self.metrics
                 .inc_sorafs_orchestrator_bytes(&self.manifest_id, provider_id, chunk_bytes);
-            self.otel.record_bytes(
-                &self.manifest_id,
-                &self.region,
-                Some(&self.job_id),
-                provider_id,
-                chunk_bytes,
-            );
             if latency_ms > f64::from(self.latency_cap_ms) {
                 total_stalls += 1;
                 self.metrics
                     .inc_sorafs_orchestrator_stall(&self.manifest_id, provider_id);
-                self.otel.record_stall(
-                    &self.manifest_id,
-                    &self.region,
-                    Some(&self.job_id),
-                    provider_id,
-                );
                 self.telemetry.emit_stall(
                     &self.manifest_id,
                     &self.region,
@@ -4474,6 +4371,7 @@ impl FetchMetricsCtx {
             &self.policy_summary,
         );
     }
+
     fn on_error(&self, error: &multi_fetch::MultiSourceError) {
         let duration_ms = self.start.elapsed().as_secs_f64() * 1_000.0;
         self.metrics.record_sorafs_orchestrator_duration(
@@ -4481,25 +4379,13 @@ impl FetchMetricsCtx {
             &self.region,
             duration_ms,
         );
-        self.otel
-            .record_duration(&self.manifest_id, &self.region, &self.job_id, duration_ms);
         let reason = error_reason(error);
         self.metrics
             .inc_sorafs_orchestrator_failure(&self.manifest_id, &self.region, reason);
-        self.otel
-            .record_failure(&self.manifest_id, &self.region, Some(&self.job_id), reason);
         let provider_info = provider_from_error(error);
         if let Some((ref provider, ref provider_reason)) = provider_info {
             self.metrics.inc_sorafs_orchestrator_provider_failures(
                 &self.manifest_id,
-                provider,
-                provider_reason,
-                1,
-            );
-            self.otel.record_provider_failure(
-                &self.manifest_id,
-                &self.region,
-                Some(&self.job_id),
                 provider,
                 provider_reason,
                 1,
@@ -4523,11 +4409,10 @@ impl FetchMetricsCtx {
             &self.policy_summary,
         );
     }
+
     fn finish(&self) {
         self.metrics
             .sorafs_orchestrator_fetch_finished(&self.manifest_id, &self.region);
-        self.otel
-            .fetch_finished(&self.manifest_id, &self.region, &self.job_id);
     }
 }
 struct FetchTelemetryCtx {

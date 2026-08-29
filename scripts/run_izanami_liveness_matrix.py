@@ -230,9 +230,6 @@ def collect_result(
         "view_change_install_total": summary.get("view_change_install_total", ""),
         "tx_queue_depth": summary.get("tx_queue_depth", ""),
         "tx_queue_saturated": summary.get("tx_queue_saturated", ""),
-        "pacemaker_backpressure_deferrals_total": summary.get(
-            "pacemaker_backpressure_deferrals_total", ""
-        ),
         "missing_block_fetch_total": summary.get("missing_block_fetch_total", ""),
         "consensus_missing_qc_reacquire_attempt_total": summary.get(
             "consensus_missing_qc_reacquire_attempt_total", ""

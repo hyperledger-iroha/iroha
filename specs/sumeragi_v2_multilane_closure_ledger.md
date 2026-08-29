@@ -819,7 +819,7 @@ Historical same-day isolated Rust 1.93.1 locked/offline slices passed the 18
 exact Kura replica tests and four exact configuration tests. The mutable
 focused inventory still names those tests, but this reconciliation makes no
 immutable-candidate execution claim for them or for a multi-peer body-pruning
-corridor. Those focused runs and source anchors are not the complete 522-test `G-UNIT` receipt,
+corridor. Those focused runs and source anchors are not the complete 518-test `G-UNIT` receipt,
 so this row's evidence remains Open.
 
 **Formal obligation and mutation.** `ML-MUT-KURA-01` now owns the source-bound
@@ -1142,9 +1142,10 @@ after canonical Kura/WSV commit.
 **Closure condition.** Every peer deterministically re-executes the exact
 certified batch on the committed base WSV and atomically commits canonical
 Kura/WSV state. Staging requires no pending block hash or transaction-height
-row; pre-vote validation requires no pending block hash and one exact empty row
-at the carrier height; final application requires that same row plus the exact
-singleton finalized carrier hash. The move-only WSV authorization retains the
+row; pre-vote validation requires no pending block hash and one canonical row
+containing exactly the certified merge entrypoints at the carrier height; final
+application requires that same row plus the exact singleton finalized carrier
+hash. The move-only WSV authorization retains the
 exact encoded autonomous external-event prefix and its event count. Pre-vote
 validation proves that prefix unchanged, reconstructs the certified root from
 only those retained autonomous bytes, and separately binds the complete
@@ -1167,16 +1168,16 @@ result attempt, tampered results/write set/post state, duplicate ordinary/merge
 membership, Kura-before-WSV and WSV-before-queue crash boundaries, each
 Commit/ForgetCommit boundary, repeated reconciliation, losing/future/stale
 proposal, timeout, reconfiguration, retirement, release-order restoration,
-pre-vote absence/wrong-height/non-empty carrier rows, a premature pending
+pre-vote absence/wrong-height/extra carrier membership, a premature pending
 carrier hash, a mismatched finalized carrier hash, and unbound finality-time
 event-surface drift.
 The focused inventory names
 `state::tests::finalized_merge_execution_commit_surface_borrows_exact_carrier_hash`,
 `state::tests::autonomous_execution_commit_rejects_post_publication_event_surface_drift`,
 `state::tests::autonomous_execution_pre_vote_rejects_due_start_of_block_effect`,
-`state::tests::autonomous_execution_pre_vote_requires_exact_empty_carrier_membership`,
+`state::tests::autonomous_execution_pre_vote_requires_exact_merge_carrier_membership`,
 `state::tests::autonomous_execution_pre_vote_rejects_wrong_carrier_membership_height`,
-`state::tests::autonomous_execution_pre_vote_rejects_non_empty_carrier_membership`,
+`state::tests::autonomous_execution_pre_vote_rejects_extra_carrier_membership`,
 `state::tests::autonomous_execution_pre_vote_rejects_premature_pending_carrier_hash`,
 and
 `state::tests::autonomous_execution_finality_rejects_unbound_event_surface_drift`.
@@ -1189,7 +1190,7 @@ Assert exactly one history/query inclusion result.
 that each accepted reservation has one of three terminal outcomes: globally
 applied once, released once in FIFO position, or durably retained by one live
 certified owner. `MLCarrierCommitSurfaceExact` additionally preserves the
-ordered pristine, exact-empty post-block/pre-vote, and exact finalized-carrier
+ordered pristine, exact merge-only post-block/pre-vote, and exact finalized-carrier
 surfaces, including the exact autonomous event prefix, separately bound full
 carrier publication vector, and drained final live buffer. Mutation
 `ML-MUT-AUT-05` advances queue state before
@@ -1274,7 +1275,7 @@ historical namespace/accounting suite (`6/6`), first-merge crash-window repair
 (`1/1`), Native post-WSV retention (`1/1`), and authenticated geometry refresh
 (`1/1`) under isolated Rust 1.93.1 locked/offline execution. The mutable
 focused inventory still names those 12 tests, but this reconciliation makes no
-immutable-candidate execution claim. These 12 focused tests are mapped row evidence, not the complete 522-test `G-UNIT` receipt,
+immutable-candidate execution claim. These 12 focused tests are mapped row evidence, not the complete 518-test `G-UNIT` receipt,
 so this row's evidence remains Open.
 
 The source-bound focused inventory binds the runner startup order directly and
@@ -1743,12 +1744,12 @@ corpus includes
 The harness and source-bound release inventory both require that exact count.
 The source inventories now require OpenAPI 7, Python 63, JavaScript 61, Swift
 5, Kotlin 7, and Java 6 tests. The current recursive mutable-tree closure
-  contains exactly 1,400 grouped and 1,402 diagnostics records. Its grouped and
+  contains exactly 1,442 grouped and 1,444 diagnostics records. Its grouped and
 diagnostics
 suite-source SHA-256 values are
-  `fdc4c3fb9192277bc6a80018ecb62ed096f12cb41a4c40bde0681ee8f6478577`
+  `d7bd6e6aa1f97e267677560226a3d1bb6d8a3983e1802d7081e6a53ab8dbf64e`
 and
-  `f2e7d3b79dd311b93f9ade26a846940dcd12b636c551a70800f63817a10bfa4c`.
+  `ea4417cea240e24420ffd3622055e03cad1b597f117b8313f4b61707e73ac1f7`.
 The checked-in grouped fixture has SHA-256
 `e4fb62addba3c3b8aecdbff55840e21620c770ab96d346ca55b156cf0239942b`.
 The diagnostics closure directly includes the 48-line wire fixture whose
@@ -1826,7 +1827,7 @@ that checkpoint to 857 tests. The retired-attempt, mixed-carrier, and two-link
 cold-restart rows plus the two predecessor-durability handoff rows, followed by
 retirement of the dormant generic persisted-continuation regression, leave the
 current production inventory at 864 tests while
-the G-UNIT inventory contains 522 tests. Source binding is not an execution receipt.
+the G-UNIT inventory contains 518 tests. Source binding is not an execution receipt.
 The finalized predecessor remains active while the shared ordinary/PendingKura
 preflight rehydrates late canonical lane ownership, services bounded
 historical recovery, and persists every winning certificate plus its
@@ -1898,7 +1899,7 @@ fetches, and every persistence crash boundary. Tests that exercise only
 `#[cfg(test)]` producer helpers do not close a live-path obligation.
 
 The mutable source inventory is internally count-consistent. The production
-inventory contains exactly 864 tests across 43 modules, including 446
+inventory contains exactly 863 tests across 44 modules, including 447
 source-sealed ownership/regression names. The duplicate inline V2 core network
 simulations are retired; the standalone `iroha_sumeragi_core` harness remains. The three Kura recovery
 regressions and governance-unlock audit are retained beside the prior source-bound closure.
@@ -1906,22 +1907,22 @@ The seven additional Native AMX regressions bind finality-aware merge
 projection across canonical ordering, multi-height and same-height identity
 conflicts, coordinator-only receipts, route conflicts, duplicate sources, and
 decoded replay. The focused source inventory is now internally consistent. The
-nine arrays in `scripts/run_sumeragi_v2_release_gates.sh` contain exactly 522 unique required
-tests: 316 core, 143 queue-journal, 13 configuration, eight data-model,
+nine arrays in `scripts/run_sumeragi_v2_release_gates.sh` contain exactly 518 unique required
+tests: 313 core, 142 queue-journal, 13 configuration, eight data-model,
 39 Torii, one Torii-shared, and two integration. The runner and
 `ci/check_sumeragi_v2_multilane_release_inventory.sh` both require that exact
-522-row shape, including grouped Native prevote-budget rejection before
+518-row shape, including grouped Native prevote-budget rejection before
 Kura/WSV mutation, historical source-bundle authentication, crash-safe latest-
 index and prune-V2 recovery, cross-route manifest-barrier isolation, durable
 Native signing-boundary drift rejection, atomic grouped reservation commit,
 checked snapshot replay file/owner sealing, exact QueuePlan obligation
 authentication, ApplyCarrier authorization, and canonical historical
-autonomous recovery into exactly-once merge application. The G-UNIT static inventory checks establish exact `522/522` source consistency and also source-
+autonomous recovery into exactly-once merge application. The G-UNIT static inventory checks establish exact `518/518` source consistency and also source-
 bind the synchronized 56-control grouped corpus. The planned-
 association Rust coverage described under `ML-NAT-06` is present in the focused
 source inventory. The 17 merge-manifest cases under `ML-NAT-05` and 12 passive-
 diagnostics/retry cases under `ML-AUT-06` and `ML-API-01` are static Python
-source tests outside the 522 G-UNIT count.
+source tests outside the 518 G-UNIT count.
 
 On 2026-07-31, pinned Rust 1.93.1 locked/offline execution from isolated source
 `/tmp/iroha-kura-final3.dvOYAN` and isolated target
@@ -1932,8 +1933,8 @@ repair, Native post-WSV retention, and authenticated geometry refresh. That
 checkpoint also passed `cargo check -p iroha_core --lib`; later focused reruns
 covered startup binding, B/A/B recovery, the 18 Kura replica tests, and four
 configuration tests. These are historical partial results, not fresh archived
-execution of all 522 required tests. This reconciliation claims no immutable-
-candidate Cargo run or full matrix execution: the 864 production, 522 G-UNIT,
+execution of all 518 required tests. This reconciliation claims no immutable-
+candidate Cargo run or full matrix execution: the 863 production, 518 G-UNIT,
 and 56-control counts are mutable-development source inventory only. `G-UNIT`
 remains Open until the exact no-skip suites run through the compliant isolated
 wrapper and their logs and candidate identity are archived.
@@ -2056,11 +2057,11 @@ browser JavaScript distribution, SoraFS orderbook JavaScript implementation
 and types, the standalone Python orderbook module, Kotlin/Java Native models,
 grouped JSON, and wire TSV. Its record totals and suite-source digests must be
 derived and receipt-bound from the exact immutable candidate. The current
-  mutable-tree closure contains exactly 1,400 grouped and 1,402 diagnostics
+  mutable-tree closure contains exactly 1,442 grouped and 1,444 diagnostics
 records, with grouped and diagnostics suite-source SHA-256 values
-  `fdc4c3fb9192277bc6a80018ecb62ed096f12cb41a4c40bde0681ee8f6478577`
+  `d7bd6e6aa1f97e267677560226a3d1bb6d8a3983e1802d7081e6a53ab8dbf64e`
 and
-  `f2e7d3b79dd311b93f9ade26a846940dcd12b636c551a70800f63817a10bfa4c`.
+  `ea4417cea240e24420ffd3622055e03cad1b597f117b8313f4b61707e73ac1f7`.
 The current grouped JSON and wire TSV SHA-256 values are
 `e4fb62addba3c3b8aecdbff55840e21620c770ab96d346ca55b156cf0239942b`
 and
@@ -2158,12 +2159,12 @@ marker must be classified here before release.
   implementation gaps are resolved and source-bound. Their focused Rust,
   formal-engine, SDK, and multi-peer execution receipts remain open; structural
   source validation alone cannot close those gates.
-- `G-UNIT`, `G-SDK`, and `G-FORMAL` remain Open. The exact 864-production-test,
-  522-G-UNIT-test, and 56-control counts, SDK group counts, recursive closure
+- `G-UNIT`, `G-SDK`, and `G-FORMAL` remain Open. The exact 863-production-test,
+  518-G-UNIT-test, and 56-control counts, SDK group counts, recursive closure
   shapes, and 27-action formal extraction partition are mutable-development
   inventories only. Historical focused Rust and direct SDK subsets do not
   substitute for a complete SDK harness, formal-engine result, or network
-  receipt; no complete 522-test execution from an immutable candidate is
+  receipt; no complete 518-test execution from an immutable candidate is
   claimed by this reconciliation.
 
 ### Explicitly out of scope

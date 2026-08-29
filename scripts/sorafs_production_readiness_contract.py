@@ -133,7 +133,6 @@ from check_sorafs_repair_rollout_evidence import (  # noqa: E402
     HANDOFF_BOUND_KINDS as REPAIR_HANDOFF_BOUND_KINDS,
     KIND_BY_NAME as REPAIR_KIND_BY_NAME,
     POLICY_BOUND_KINDS as REPAIR_POLICY_BOUND_KINDS,
-    REQUIRED_METRICS as REPAIR_REQUIRED_METRICS,
     ROSTER_BOUND_KINDS as REPAIR_ROSTER_BOUND_KINDS,
 )
 from check_sorafs_reputation_rollout_evidence import (  # noqa: E402
@@ -648,8 +647,6 @@ GATE_METADATA_FIELDS: dict[str, frozenset[str]] = {
     ),
     "repair": frozenset(
         {
-            "metric_count_values",
-            "metrics",
             "valid_failure_bundle_digests",
             "valid_handoff_digests",
             "valid_policy_digests",
@@ -1125,7 +1122,6 @@ PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_ARRAY_LIST_SOURCE_KINDS = {
     ("pop_credentials", "metrics"): ("metrics_alerts",),
     ("por", "metrics"): ("observability",),
     ("potr", "metrics"): ("observability",),
-    ("repair", "metrics"): ("observability",),
     ("reputation", "metrics"): ("metrics",),
     ("reserve_rent", "metrics"): ("metrics_alerts",),
 }
@@ -1148,7 +1144,6 @@ PAYLOAD_FREE_SUMMARY_REQUIRED_STRING_LIST_VALUES = {
     ("pop_credentials", "metrics"): POP_CREDENTIALS_REQUIRED_METRICS,
     ("por", "metrics"): POR_REQUIRED_METRICS,
     ("potr", "metrics"): POTR_REQUIRED_METRICS,
-    ("repair", "metrics"): REPAIR_REQUIRED_METRICS,
     ("reputation", "metrics"): REPUTATION_REQUIRED_METRICS,
     ("reserve_rent", "metrics"): RESERVE_RENT_REQUIRED_METRICS,
 }
@@ -1164,7 +1159,6 @@ PAYLOAD_FREE_SUMMARY_STRING_LIST_COUNT_BINDINGS = {
     ("pop_credentials", "metrics"): "metric_count_values",
     ("por", "metrics"): "metric_count_values",
     ("potr", "metrics"): "metric_count_values",
-    ("repair", "metrics"): "metric_count_values",
     ("reputation", "metrics"): "metric_count_values",
     ("reserve_rent", "metrics"): "metric_count_values",
 }
@@ -1184,7 +1178,6 @@ PAYLOAD_FREE_SUMMARY_FINGERPRINT_POSITIVE_INT_LIST_SOURCE_KINDS = {
     ("pop_credentials", "metric_count_values"): ("metrics_alerts",),
     ("por", "metric_count_values"): ("observability",),
     ("potr", "metric_count_values"): ("observability",),
-    ("repair", "metric_count_values"): ("observability",),
     ("reputation", "metric_count_values"): ("metrics",),
     ("reputation", "provider_count_values"): ("publish", "latest"),
     ("reserve_rent", "metric_count_values"): ("metrics_alerts",),

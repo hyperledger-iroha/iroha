@@ -1,31 +1,23 @@
-error: Unsupported shape `no fields`. Expected named fields.
- --> tests/config_base_ui_fail/unsupported_shapes.rs:3:10
+error: [derive(ReadConfig)]: expected a struct with named fields
+ --> tests/config_base_ui_fail/unsupported_shapes.rs:3:8
   |
-3 | #[derive(ReadConfig)]
-  |          ^^^^^^^^^^
-  |
-  = note: this error originates in the derive macro `ReadConfig` (in Nightly builds, run with -Z macro-backtrace for more info)
+3 | struct Test1;
+  |        ^^^^^
 
-error: Unsupported shape `one unnamed field`. Expected named fields.
- --> tests/config_base_ui_fail/unsupported_shapes.rs:6:10
+error: [derive(ReadConfig)]: expected a struct with named fields
+ --> tests/config_base_ui_fail/unsupported_shapes.rs:5:8
   |
-6 | #[derive(ReadConfig)]
-  |          ^^^^^^^^^^
-  |
-  = note: this error originates in the derive macro `ReadConfig` (in Nightly builds, run with -Z macro-backtrace for more info)
+5 | struct Test2(u64); // newtype
+  |        ^^^^^
 
-error: Unsupported shape `unnamed fields`. Expected named fields.
- --> tests/config_base_ui_fail/unsupported_shapes.rs:9:10
+error: [derive(ReadConfig)]: expected a struct with named fields
+ --> tests/config_base_ui_fail/unsupported_shapes.rs:7:8
   |
-9 | #[derive(ReadConfig)]
-  |          ^^^^^^^^^^
-  |
-  = note: this error originates in the derive macro `ReadConfig` (in Nightly builds, run with -Z macro-backtrace for more info)
+7 | struct Test3(u64, u32); // unnamed
+  |        ^^^^^
 
-error: Unsupported shape `enum`. Expected struct with named fields.
-  --> tests/config_base_ui_fail/unsupported_shapes.rs:12:10
-   |
-12 | #[derive(ReadConfig)]
-   |          ^^^^^^^^^^
-   |
-   = note: this error originates in the derive macro `ReadConfig` (in Nightly builds, run with -Z macro-backtrace for more info)
+error: [derive(ReadConfig)]: expected a struct with named fields
+ --> tests/config_base_ui_fail/unsupported_shapes.rs:9:6
+  |
+9 | enum Test4 {
+  |      ^^^^^

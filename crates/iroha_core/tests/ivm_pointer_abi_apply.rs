@@ -169,7 +169,9 @@ fn apply_queued_isis_from_corehost_transfer_asset() {
             .expect("setup should succeed");
     }
     tx.apply();
-    block.commit().expect("commit setup block");
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit setup block");
     {
         let view = state.view();
         let mut host = CoreHostImpl::new(from.clone());
@@ -191,7 +193,9 @@ fn apply_queued_isis_from_corehost_transfer_asset() {
             .expect("apply queued instructions");
         assert_eq!(queued.len(), 1);
         tx.apply();
-        block.commit().expect("commit transfer block");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit transfer block");
     }
     // Assert balances updated: from decreased by 500, to increased by 500
     let from_asset = AssetId::with_scope(

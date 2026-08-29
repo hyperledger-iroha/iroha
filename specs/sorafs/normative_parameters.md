@@ -111,9 +111,11 @@ auditors share a single source of truth.
   4. **Cold archive** (60 days) — archived in low-cost storage; fetches require
      operator approval.
   5. **Tombstone** — metadata retained for audit; data removed.
-- Monitor `sorafs.node.deal_*`, `torii_sorafs_capacity_*`, and the rent/bonus
-  panels in `dashboards/grafana/sorafs_capacity_health.json`. Alert if
-  `deal_outstanding_nano` grows while auto-renew remains enabled.
+- Monitor `sorafs_hedging_billing_runtime_ready`,
+  `sorafs_hedging_billing_finalized_lag_blocks`, `torii_sorafs_capacity_*`, and
+  the rent/bonus panels in `dashboards/grafana/sorafs_capacity_health.json`.
+  Pause auto-renew when the committed billing projection is unready or its
+  finalized lag exceeds the configured bound.
 
 ## 6. SoraNet Transport Defaults
 

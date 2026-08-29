@@ -1197,7 +1197,7 @@ fn build_state_with_triggers(n_time: usize, n_by_call: usize) -> State {
             .expect("register by-call trigger");
     }
     stx.apply();
-    state_block.commit().unwrap();
+    state_block.commit_world_overlay_for_testing().unwrap();
     state
 }
 fn bench_find_triggers_iter(c: &mut Criterion) {

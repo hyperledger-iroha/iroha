@@ -31,10 +31,6 @@ tokio = { workspace = true, features = ["macros", "time", "rt"] }
 
 
 [features]
-# Redaction should be enabled by default for telemetry output.
-default = ["log-obfuscation"]
-# Enables redaction of sensitive telemetry fields.
-log-obfuscation = []
 # When this feature is enabled, tokio console will be started anyway.
 # Configured via ENV:
 #   https://docs.rs/console-subscriber/0.2.0/console_subscriber/struct.Builder.html#method.with_default_env

@@ -3086,6 +3086,63 @@ pub mod nexus {
         /// Maximum allowed replay retention window (slots) to bound in-memory state.
         pub const REPLAY_RETENTION_SLOTS_MAX: u64 = 4_096;
     }
+    /// Atomic private cross-dataspace settlement defaults.
+    pub mod atomic_private_settlement {
+        /// The production path is governed and disabled until explicitly activated.
+        pub const ENABLED: bool = false;
+        /// Minimum governance notice before an activation height becomes effective.
+        pub const MINIMUM_ACTIVATION_NOTICE_BLOCKS: u64 = 7_200;
+        /// Audited fixed-shape private-note proof profile version.
+        pub const PROOF_PROFILE_VERSION: u16 = 1;
+        /// Maximum dataspace legs admitted in one private atomic bundle.
+        pub const MAX_PARTICIPANTS: u16 = 255;
+        /// Protocol minimum dataspace legs in one private atomic bundle.
+        pub const MIN_PARTICIPANTS: u16 = 2;
+        /// Protocol maximum dataspace legs in one private atomic bundle.
+        pub const MAX_PARTICIPANTS_LIMIT: u16 = 255;
+        /// Maximum distance between admission and bundle expiry, in blocks.
+        pub const MAX_EXPIRY_BLOCKS: u64 = 7_200;
+        /// Maximum time allowed to collect auditor approvals, in blocks.
+        pub const AUDIT_TIMEOUT_BLOCKS: u64 = 1_200;
+        /// Maximum time allowed to collect all Prepare QCs, in blocks.
+        pub const PREPARE_TIMEOUT_BLOCKS: u64 = 1_200;
+        /// Maximum time allowed to collect all Commit QCs, in blocks.
+        pub const COMMIT_TIMEOUT_BLOCKS: u64 = 1_200;
+        /// Canonical padded capsule plaintext classes, in bytes.
+        ///
+        /// XChaCha20-Poly1305 adds a 16-byte authentication tag on the wire.
+        pub const CAPSULE_PADDING_CLASSES_BYTES: [u32; 4] = [4_096, 16_384, 65_536, 262_144];
+        /// Return the default padding classes as an owned configuration value.
+        #[must_use]
+        pub fn capsule_padding_classes_bytes() -> Vec<u32> {
+            CAPSULE_PADDING_CLASSES_BYTES.to_vec()
+        }
+        /// Maximum proof sidecar size admitted for one leg.
+        pub const MAX_PROOF_BYTES: u64 = 8 * 1024 * 1024;
+        /// Hard proof-size ceiling implemented by the V1 data model.
+        pub const MAX_PROOF_BYTES_LIMIT: u64 = 8 * 1024 * 1024;
+        /// Maximum encrypted audit capsule size admitted for one leg.
+        pub const MAX_CAPSULE_BYTES: u64 = 1024 * 1024;
+        /// Hard encrypted-capsule ceiling for the V1 path.
+        pub const MAX_CAPSULE_BYTES_LIMIT: u64 = 16 * 1024 * 1024;
+        /// Maximum encoded global carrier size.
+        /// Protocol carrier limit. The worst-case 255-leg V1 fixture is below 1 MiB.
+        pub const MAX_CARRIER_BYTES: u64 = 4 * 1024 * 1024;
+        /// Hard global-carrier ceiling for the V1 path.
+        /// V1 cannot admit a carrier larger than its Norito receipt bound.
+        pub const MAX_CARRIER_BYTES_LIMIT: u64 = 4 * 1024 * 1024;
+        /// Minimum durable sidecar retention after admission, in blocks.
+        pub const SIDECAR_RETENTION_BLOCKS: u64 = 1_000_000;
+        /// Default online auditor threshold for newly governed policies.
+        pub const DEFAULT_MIN_AUDITOR_APPROVALS: u16 = 1;
+        /// Audit-policy schema versions accepted by default.
+        pub const PERMITTED_POLICY_VERSIONS: [u16; 1] = [1];
+        /// Return the default policy versions as an owned configuration value.
+        #[must_use]
+        pub fn permitted_policy_versions() -> Vec<u16> {
+            PERMITTED_POLICY_VERSIONS.to_vec()
+        }
+    }
     /// Storage budget defaults for Nexus nodes.
     pub mod storage {
         use iroha_config_base::util::Bytes;
@@ -3398,17 +3455,8 @@ pub mod telemetry {
     pub const MIN_RETRY_PERIOD: Duration = Duration::from_secs(1);
     /// Default maximum exponent for the retry delay
     pub const MAX_RETRY_DELAY_EXPONENT: u8 = 4;
-    /// Master telemetry enable flag (on by default)
-    pub const ENABLED: bool = true;
-    /// Default telemetry capability profile applied when not overridden.
-    pub const PROFILE: &str = "operator";
     /// Panic on duplicate metric registration (developer diagnostics only).
     pub const PANIC_ON_DUPLICATE_METRICS: bool = false;
-    /// Telemetry redaction defaults.
-    pub mod redaction {
-        /// Default redaction mode for telemetry fields.
-        pub const MODE: &str = "strict";
-    }
     /// Telemetry integrity defaults.
     pub mod integrity {
         /// Enable hash-chained telemetry exports by default.
@@ -3693,8 +3741,6 @@ pub mod zk {
         pub const METAL_TRACE: bool = false;
         /// Whether to log Metal device enumeration details (off by default).
         pub const METAL_DEBUG_ENUM: bool = false;
-        /// Whether to dump fused Poseidon pipeline failures (off by default).
-        pub const METAL_DEBUG_FUSED: bool = false;
     }
     /// Halo2 verifier configuration for host-side proof checking.
     pub mod halo2 {
@@ -4180,9 +4226,9 @@ pub mod governance {
     pub const PARLIAMENT_REVIEW_PANEL_SIZE: usize = 150;
     /// Default Coordination Council size.
     pub const PARLIAMENT_COORDINATION_COUNCIL_SIZE: usize = 150;
-    /// Default Policy Jury size (larger to cover high-impact items).
+    /// Default Policy Jury size (hidden timed-OVN bodies require at least two seats).
     pub const PARLIAMENT_POLICY_JURY_SIZE: usize = 500;
-    /// Maximum Confirmation Jury size. The actual target is twice the first Jury size.
+    /// Configured Confirmation Jury target/cap (hidden timed-OVN bodies require at least two).
     pub const PARLIAMENT_CONFIRMATION_JURY_SIZE: usize = 1_000;
     /// Default Oversight Committee size.
     pub const PARLIAMENT_OVERSIGHT_COMMITTEE_SIZE: usize = 50;

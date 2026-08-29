@@ -1,4 +1,4 @@
-//! Trace commitment regression tests built from Norito fixtures.
+//! Canonical ordering and trace-commitment regression tests.
 use crate::common::{fixture_update_requested, fixture_update_requested_from};
 use fastpq_isi::CANONICAL_PARAMETER_SETS;
 use fastpq_prover::{
@@ -13,34 +13,13 @@ use iroha_data_model::{
 };
 use iroha_primitives::numeric::Quantity;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
-use norito::{decode_from_bytes, json, to_bytes};
-use std::{
-    fmt::Write as _,
-    path::{Path, PathBuf},
-};
+use norito::{json, to_bytes};
+use std::{fmt::Write as _, path::PathBuf};
+
+const FIXTURE_NAMES: [&str; 2] = ["transfer", "metadata"];
+
 fn fixtures_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
-}
-fn fixture_path(name: &str) -> PathBuf {
-    fixtures_dir().join(format!("{name}.norito"))
-}
-fn load_fixture(name: &str) -> TransitionBatch {
-    let path = fixture_path(name);
-    if fixture_update_requested() {
-        let fresh = build_fixture(name);
-        let encoded = norito::core::to_bytes(&fresh).expect("encode fixture");
-        std::fs::write(&path, &encoded).expect("write fixture");
-        return fresh;
-    }
-    let bytes = std::fs::read(&path)
-        .unwrap_or_else(|error| panic!("read FASTPQ fixture {}: {error}", path.display()));
-    decode_from_bytes(&bytes).unwrap_or_else(|error| {
-        panic!(
-            "decode FASTPQ fixture {}: {error}; fixture regeneration is explicit and requires \
-             FASTPQ_UPDATE_FIXTURES=1",
-            path.display()
-        )
-    })
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
 }
 fn build_fixture(name: &str) -> TransitionBatch {
     let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
@@ -66,41 +45,24 @@ fn build_fixture(name: &str) -> TransitionBatch {
                 to_bytes(&vec![transcript]).expect("encode transcripts"),
             );
         }
-        "mint" => {
+        "metadata" => {
             batch.push(StateTransition::new(
-                b"asset/xor/reserve".to_vec(),
-                u64_bytes(4_096),
-                u64_bytes(5_120),
-                OperationKind::Mint,
+                b"metadata/reserve".to_vec(),
+                b"old".to_vec(),
+                b"new".to_vec(),
+                OperationKind::MetaSet,
             ));
             batch.push(StateTransition::new(
-                b"asset/xor/treasury".to_vec(),
-                u64_bytes(64),
-                u64_bytes(1_024),
-                OperationKind::Mint,
-            ));
-        }
-        "burn" => {
-            batch.push(StateTransition::new(
-                b"asset/xor/liability".to_vec(),
-                u64_bytes(8_192),
-                u64_bytes(6_656),
-                OperationKind::Burn,
-            ));
-            batch.push(StateTransition::new(
-                b"asset/xor/supply".to_vec(),
-                u64_bytes(16_384),
-                u64_bytes(14_848),
-                OperationKind::Burn,
+                b"metadata/treasury".to_vec(),
+                b"pending".to_vec(),
+                b"active".to_vec(),
+                OperationKind::MetaSet,
             ));
         }
         other => panic!("unknown fixture {other}"),
     }
     batch.sort();
     batch
-}
-fn u64_bytes(value: u64) -> Vec<u8> {
-    value.to_le_bytes().to_vec()
 }
 fn sample_transfer_transcript() -> TransferTranscript {
     let asset_definition = AssetDefinitionId::derive_from_components(
@@ -164,70 +126,41 @@ fn bytes_to_hex(bytes: &[u8]) -> String {
     }
     result
 }
-fn load_ordering_expectations() -> Vec<(String, String)> {
-    let path = fixtures_dir().join("ordering_hash.json");
-    let update = fixture_update_requested();
-    if update {
-        let mut map = json::native::Map::new();
-        for name in ["transfer", "mint", "burn"] {
-            let batch = load_fixture(name);
-            let hash = ordering_hash(&batch).expect("ordering hash");
-            let digest: [u8; Hash::LENGTH] = hash.into();
-            map.insert(name.to_string(), json::Value::from(bytes_to_hex(&digest)));
-        }
-        let value = json::Value::Object(map);
-        let json_text = json::to_json_pretty(&value).expect("serialize ordering_hash.json");
-        std::fs::write(&path, json_text).expect("write ordering_hash.json");
+fn update_hash_fixture(file_name: &str, hash_batch: impl Fn(&TransitionBatch) -> Hash) {
+    let mut map = json::native::Map::new();
+    for name in FIXTURE_NAMES {
+        let digest: [u8; Hash::LENGTH] = hash_batch(&build_fixture(name)).into();
+        map.insert(name.to_owned(), json::Value::from(bytes_to_hex(&digest)));
     }
-    let bytes = std::fs::read(&path).expect("read ordering_hash.json");
-    let value: json::Value = json::from_slice(&bytes).expect("parse ordering_hash.json");
+    let value = json::Value::Object(map);
+    let json_text = json::to_json_pretty(&value).expect("serialize hash fixture");
+    std::fs::write(fixtures_dir().join(file_name), json_text).expect("write hash fixture");
+}
+
+fn load_hash_expectations(file_name: &str) -> Vec<(&'static str, String)> {
+    let path = fixtures_dir().join(file_name);
+    let bytes = std::fs::read(&path).unwrap_or_else(|err| panic!("read {file_name}: {err}"));
+    let value: json::Value = json::from_slice(&bytes).expect("parse hash fixture");
     let object = value
         .as_object()
-        .expect("ordering_hash.json must contain an object");
-    let mut entries: Vec<(String, String)> = object
-        .iter()
-        .map(|(name, value)| {
+        .unwrap_or_else(|| panic!("{file_name} must contain an object"));
+    assert_eq!(
+        object.len(),
+        FIXTURE_NAMES.len(),
+        "{file_name} must contain exactly the current release fixtures"
+    );
+    FIXTURE_NAMES
+        .into_iter()
+        .map(|name| {
+            let value = object
+                .get(name)
+                .unwrap_or_else(|| panic!("{file_name} is missing {name}"));
             let hex = value
                 .as_str()
-                .unwrap_or_else(|| panic!("ordering hash fixture {name} must be a string"));
-            (name.clone(), hex.to_owned())
+                .unwrap_or_else(|| panic!("{file_name} fixture {name} must be a string"));
+            (name, hex.to_owned())
         })
-        .collect();
-    entries.sort_by(|(a, _), (b, _)| a.cmp(b));
-    entries
-}
-fn assert_fixture_semantics_eq(name: &str, actual: &TransitionBatch, expected: &TransitionBatch) {
-    assert_eq!(actual.parameter, expected.parameter, "{name} parameter");
-    assert_eq!(
-        actual.public_inputs, expected.public_inputs,
-        "{name} public inputs"
-    );
-    assert_eq!(actual.metadata, expected.metadata, "{name} metadata");
-    assert_eq!(
-        actual.transitions.len(),
-        expected.transitions.len(),
-        "{name} transition count"
-    );
-    for (index, (actual, expected)) in actual
-        .transitions
-        .iter()
-        .zip(&expected.transitions)
-        .enumerate()
-    {
-        assert_eq!(actual.key, expected.key, "{name} transition {index} key");
-        assert_eq!(
-            actual.pre_value, expected.pre_value,
-            "{name} transition {index} pre-value"
-        );
-        assert_eq!(
-            actual.post_value, expected.post_value,
-            "{name} transition {index} post-value"
-        );
-        assert_eq!(
-            actual.operation, expected.operation,
-            "{name} transition {index} operation"
-        );
-    }
+        .collect()
 }
 #[test]
 fn fixture_update_gate_requires_exact_one() {
@@ -250,22 +183,14 @@ fn fixture_update_gate_requires_exact_one() {
     }
 }
 #[test]
-fn fixtures_roundtrip_via_norito() {
-    for name in ["transfer", "mint", "burn"] {
-        let batch = load_fixture(name);
-        assert_fixture_semantics_eq(name, &batch, &build_fixture(name));
-        let bytes = std::fs::read(fixture_path(name)).expect("read fixture");
-        let encoded = norito::core::to_bytes(&batch).expect("encode");
-        assert_eq!(
-            bytes, encoded,
-            "{name} fixture is not the canonical Norito encoding of its decoded semantics"
-        );
-    }
-}
-#[test]
 fn ordering_hash_matches_golden_vectors() {
-    for (name, expected_hex) in load_ordering_expectations() {
-        let batch = load_fixture(&name);
+    if fixture_update_requested() {
+        update_hash_fixture("ordering_hash.json", |batch| {
+            ordering_hash(batch).expect("ordering hash")
+        });
+    }
+    for (name, expected_hex) in load_hash_expectations("ordering_hash.json") {
+        let batch = build_fixture(name);
         let hash = ordering_hash(&batch).expect("ordering hash");
         let actual: [u8; Hash::LENGTH] = hash.into();
         let actual_hex = bytes_to_hex(&actual);
@@ -283,26 +208,16 @@ fn trace_commitment_matches_golden_vectors() {
         .find(|set| set.name == "fastpq-lane-balanced")
         .copied()
         .expect("canonical parameter set");
-    let expectations: [(&str, &str); 3] = [
-        (
-            "transfer",
-            "0de30581fa6fb99f778a691f87fe13012cabbb3c41f7569af4b979eaa495d381",
-        ),
-        (
-            "mint",
-            "b5c61b1edd85ea2ca65caf9cc4ced2916d2f331adcc236e0fb7dc07a487ace57",
-        ),
-        (
-            "burn",
-            "4469699692064afa31bc774bcf28f2576473a115f82a4e4d68e80a477ee27b75",
-        ),
-    ];
-    for (name, expected_hex) in expectations {
-        let batch = load_fixture(name);
+    if fixture_update_requested() {
+        update_hash_fixture("trace_commitment.json", |batch| {
+            trace_commitment(&params, batch).expect("trace commitment")
+        });
+    }
+    for (name, expected_hex) in load_hash_expectations("trace_commitment.json") {
+        let batch = build_fixture(name);
         let commitment = trace_commitment(&params, &batch).expect("trace commitment");
         let actual: [u8; Hash::LENGTH] = commitment.into();
         let actual_hex = bytes_to_hex(&actual);
-        println!("{name} => {actual_hex}");
         assert!(
             !expected_hex.is_empty(),
             "missing golden commitment for {name}"

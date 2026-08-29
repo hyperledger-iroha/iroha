@@ -16,8 +16,6 @@ Consensus (Sumeragi)
   - SSE stream (≈1s) of the same payload as `/v1/sumeragi/status` for live dashboards.
 - GET `/v1/sumeragi/qc`
 - Snapshot of highest/locked QCs; includes `subject_block_hash` for the highest QC when known.
-- GET `/v1/sumeragi/pacemaker`
-  - Non-authoritative legacy-labeled gauge snapshot. Backoff, RTT, and jitter fields do not configure revision-4 deadlines and may remain zero.
 - GET `/v1/sumeragi/leader`
   - Leader index snapshot. In NPoS mode, includes PRF context: `{ height, view, epoch_seed }`.
 - GET `/v1/sumeragi/params`

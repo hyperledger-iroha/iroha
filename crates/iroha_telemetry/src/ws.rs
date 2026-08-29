@@ -1,4 +1,4 @@
-//! Telemetry sent to a server
+//! Telemetry sent to a server.
 use crate::integrity::ChainState;
 use crate::retry_period::RetryPeriod;
 use chrono::Utc;
@@ -6,26 +6,115 @@ use eyre::{Result, eyre};
 use futures::{Sink, SinkExt, StreamExt, stream::SplitSink};
 use iroha_config::parameters::actual::{Telemetry as Config, TelemetryIntegrity};
 use iroha_logger::telemetry::Event as Telemetry;
-use norito::json::Map;
+use norito::json::{Map, Value};
+use std::{
+    future::Future,
+    pin::Pin,
+    task::{Context, Poll},
+};
 use tokio::{
     net::TcpStream,
     sync::{broadcast, mpsc},
     task::JoinHandle,
 };
-use tokio_stream::wrappers::{BroadcastStream, ReceiverStream, errors::BroadcastStreamRecvError};
 use tokio_tungstenite::{
     MaybeTlsStream, WebSocketStream,
-    tungstenite::{Error, Message},
+    tungstenite::{Error, Message, protocol::WebSocketConfig},
 };
 use url::Url;
 type WebSocketSplitSink = SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>;
-const INTERNAL_CHANNEL_CAPACITY: usize = 10;
+const RECONNECT_CHANNEL_CAPACITY: usize = 4;
+const INITIAL_CONNECTION_ID: u64 = 0;
+const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const SEND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+const INBOUND_BUFFER_BYTES: usize = 4 * 1024;
+const INBOUND_MESSAGE_MAX_BYTES: usize = 1024;
+
+#[derive(Debug)]
+enum InternalMessage {
+    Reconnect,
+    RetryCheckpoint,
+    Disconnected(u64),
+}
+
+struct WebsocketSink {
+    write: WebSocketSplitSink,
+    read_task: JoinHandle<()>,
+}
+
+impl Drop for WebsocketSink {
+    fn drop(&mut self) {
+        self.read_task.abort();
+    }
+}
+
+impl Sink<Message> for WebsocketSink {
+    type Error = Error;
+
+    fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Pin::new(&mut self.get_mut().write).poll_ready(cx)
+    }
+
+    fn start_send(self: Pin<&mut Self>, item: Message) -> Result<(), Self::Error> {
+        Pin::new(&mut self.get_mut().write).start_send(item)
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Pin::new(&mut self.get_mut().write).poll_flush(cx)
+    }
+
+    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Pin::new(&mut self.get_mut().write).poll_close(cx)
+    }
+}
+
+async fn connect_websocket(
+    url: &Url,
+    internal_sender: mpsc::Sender<InternalMessage>,
+    connection_id: u64,
+) -> Result<WebsocketSink> {
+    let websocket_config = WebSocketConfig::default()
+        .read_buffer_size(INBOUND_BUFFER_BYTES)
+        .max_message_size(Some(INBOUND_MESSAGE_MAX_BYTES))
+        .max_frame_size(Some(INBOUND_MESSAGE_MAX_BYTES));
+    let (ws, _) =
+        tokio_tungstenite::connect_async_with_config(url.as_str(), Some(websocket_config), false)
+            .await?;
+    let (write, mut read) = ws.split();
+    let read_task = tokio::task::spawn(async move {
+        while let Some(message) = read.next().await {
+            match message {
+                Ok(Message::Ping(_) | Message::Pong(_)) => {}
+                Ok(Message::Close(_)) => break,
+                Ok(Message::Text(_) | Message::Binary(_) | Message::Frame(_)) => {
+                    iroha_logger::warn!(
+                        "telemetry collector sent an unsupported WebSocket data frame"
+                    );
+                    break;
+                }
+                Err(error) => {
+                    iroha_logger::debug!(%error, "telemetry WebSocket reader stopped");
+                    break;
+                }
+            }
+        }
+        if internal_sender
+            .send(InternalMessage::Disconnected(connection_id))
+            .await
+            .is_err()
+        {
+            iroha_logger::debug!("telemetry client stopped before disconnect notification");
+        }
+    });
+    Ok(WebsocketSink { write, read_task })
+}
+
 /// Starts telemetry sending data to a server
 /// # Errors
-/// Fails if unable to connect to the server
-pub async fn start(
+/// Fails if the integrity checkpoint cannot be loaded. Collector connections
+/// are attempted by the background task and do not block node startup.
+pub fn start(
     Config {
-        name,
         url,
         max_retry_delay_exponent,
         min_retry_period,
@@ -34,17 +123,16 @@ pub async fn start(
     integrity: TelemetryIntegrity,
     telemetry: broadcast::Receiver<Telemetry>,
 ) -> Result<JoinHandle<()>> {
-    iroha_logger::info!(%url, "Starting telemetry");
-    let (ws, _) = tokio_tungstenite::connect_async(url.as_str()).await?;
-    let (write, _read) = ws.split();
-    let (internal_sender, internal_receiver) = mpsc::channel(INTERNAL_CHANNEL_CAPACITY);
-    let client = Client::new(
-        name,
-        write,
-        WebsocketSinkFactory::new(url),
+    iroha_logger::info!("Starting telemetry exporter");
+    let chain = ChainState::new_with_kind(integrity, "ws", url.as_str().as_bytes())?;
+    let (internal_sender, internal_receiver) = mpsc::channel(RECONNECT_CHANNEL_CAPACITY);
+    let client = Client::<WebsocketSink, _>::new(
+        None,
+        WebsocketSinkFactory::new(url, internal_sender.clone()),
         RetryPeriod::new(min_retry_period, max_retry_delay_exponent),
         internal_sender,
-        ChainState::new_with_kind(integrity, "ws"),
+        chain,
+        INITIAL_CONNECTION_ID,
     );
     let handle = tokio::task::spawn(async move {
         client.run(telemetry, internal_receiver).await;
@@ -52,122 +140,211 @@ pub async fn start(
     Ok(handle)
 }
 struct Client<S, F> {
-    name: String,
     sink_factory: F,
     retry_period: RetryPeriod,
     internal_sender: mpsc::Sender<InternalMessage>,
     sink: Option<S>,
-    init_payload: Option<Map>,
     integrity: ChainState,
+    connection_id: u64,
+    reconnect_scheduled: bool,
+    checkpoint_retry_scheduled: bool,
 }
 impl<S, F> Client<S, F>
 where
-    S: SinkExt<Message> + Sink<Message, Error = Error> + Send + Unpin,
+    S: Sink<Message, Error = Error> + Send + Unpin,
     F: SinkFactory<Sink = S> + Send,
 {
-    pub fn new(
-        name: String,
-        sink: S,
+    fn new(
+        sink: Option<S>,
         sink_factory: F,
         retry_period: RetryPeriod,
         internal_sender: mpsc::Sender<InternalMessage>,
         integrity: ChainState,
+        connection_id: u64,
     ) -> Self {
         Self {
-            name,
             sink_factory,
             retry_period,
             internal_sender,
-            sink: Some(sink),
-            init_payload: None,
+            sink,
             integrity,
+            connection_id,
+            reconnect_scheduled: false,
+            checkpoint_retry_scheduled: false,
         }
     }
     pub async fn run(
         mut self,
-        receiver: broadcast::Receiver<Telemetry>,
-        internal_receiver: mpsc::Receiver<InternalMessage>,
+        mut receiver: broadcast::Receiver<Telemetry>,
+        mut internal_receiver: mpsc::Receiver<InternalMessage>,
     ) {
-        let mut stream = BroadcastStream::new(receiver).fuse();
-        let mut internal_stream = ReceiverStream::new(internal_receiver).fuse();
+        if self.sink.is_none() {
+            self.on_reconnect().await;
+        } else if self.integrity.pending_record().is_some() {
+            self.send_pending().await;
+        }
         loop {
             tokio::select! {
-                msg = stream.next() => {
+                msg = receiver.recv() => {
                     match msg {
-                        Some(Ok(msg)) => self.on_telemetry(msg).await,
-                        Some(Err(error)) => match error {
-                            BroadcastStreamRecvError::Lagged(skipped) => {
-                                iroha_logger::warn!(
-                                    %skipped,
-                                    "telemetry channel lagged; dropped events"
-                                );
-                            }
-                        },
-                        None => break,
+                        Ok(msg) => {
+                            self.on_telemetry(msg).await;
+                        }
+                        Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                            iroha_logger::warn!(
+                                %skipped,
+                                "telemetry channel lagged; dropped events"
+                            );
+                        }
+                        Err(broadcast::error::RecvError::Closed) => break,
                     }
                 }
-                msg = internal_stream.next() => {
-                    if matches!(msg, Some(InternalMessage::Reconnect)) {
-                        self.on_reconnect().await;
+                msg = internal_receiver.recv() => {
+                    match msg {
+                        Some(InternalMessage::Reconnect) => {
+                            self.reconnect_scheduled = false;
+                            if self.sink.is_none() {
+                                self.on_reconnect().await;
+                            }
+                        }
+                        Some(InternalMessage::RetryCheckpoint) => {
+                            self.checkpoint_retry_scheduled = false;
+                            self.on_checkpoint_retry().await;
+                        }
+                        Some(InternalMessage::Disconnected(connection_id)) => {
+                            self.on_disconnected(connection_id);
+                        }
+                        None => break,
                     }
                 }
             }
         }
     }
     async fn on_telemetry(&mut self, telemetry: Telemetry) {
-        match prepare_message(&self.name, telemetry, &mut self.integrity) {
-            Ok((msg, msg_kind, init_payload)) => {
-                if matches!(msg_kind, Some(MessageKind::Initialization)) {
-                    self.init_payload = init_payload;
-                }
-                self.send_message(msg).await;
-            }
-            Err(error) => {
-                iroha_logger::error!(%error, "prepare_message failed");
-            }
+        if self.sink.is_none() {
+            return;
         }
+        if self.integrity.pending_record().is_some() {
+            return;
+        }
+        let map = build_message_map(telemetry);
+        if let Err(error) = self.integrity.stage_record(map, false).await {
+            iroha_logger::error!(%error, "failed to stage telemetry record");
+            if self.integrity.pending_record().is_some() {
+                self.schedule_checkpoint_retry();
+            }
+            return;
+        }
+        self.send_pending().await;
     }
     async fn on_reconnect(&mut self) {
-        if let Ok(sink) = self.sink_factory.create().await {
-            if let Some(payload) = self.init_payload.clone() {
+        let Some(connection_id) = self.connection_id.checked_add(1) else {
+            iroha_logger::error!("telemetry WebSocket connection identifier exhausted");
+            return;
+        };
+        match self.sink_factory.create(connection_id).await {
+            Ok(sink) => {
                 iroha_logger::debug!("Reconnected telemetry");
                 self.sink = Some(sink);
-                match build_message(&payload, &mut self.integrity) {
-                    Ok(msg) => self.send_message(msg).await,
-                    Err(error) => {
-                        iroha_logger::error!(%error, "Failed to rebuild telemetry init payload");
+                self.connection_id = connection_id;
+                if self.integrity.pending_record().is_some() {
+                    if !self.integrity.pending_is_durable()
+                        || self.integrity.pending_output_is_confirmed()
+                    {
+                        self.schedule_checkpoint_retry();
+                    } else {
+                        self.send_pending().await;
                     }
+                } else {
+                    self.retry_period.reset();
                 }
-            } else {
-                // The reconnect is required if sending a message fails.
-                // The first message to be sent is initialization.
-                // The path is assumed to be unreachable.
-                iroha_logger::error!(
-                    "Cannot reconnect telemetry because there is no initialization message"
-                );
             }
-        } else {
-            self.schedule_reconnect();
+            Err(error) => {
+                iroha_logger::warn!(%error, "failed to reconnect telemetry");
+                self.schedule_reconnect();
+            }
         }
     }
-    async fn send_message(&mut self, msg: Message) {
-        if let Some(sink) = self.sink.as_mut() {
-            match sink.send(msg).await {
-                Ok(()) => {}
-                Err(Error::AlreadyClosed | Error::ConnectionClosed) => {
-                    iroha_logger::debug!("Closed connection to telemetry");
-                    self.sink = None;
-                    self.schedule_reconnect();
+    fn on_disconnected(&mut self, connection_id: u64) {
+        if self.connection_id != connection_id || self.sink.is_none() {
+            return;
+        }
+        iroha_logger::debug!("telemetry WebSocket closed by peer");
+        self.sink = None;
+        self.schedule_reconnect();
+    }
+    async fn send_pending(&mut self) {
+        if !self.integrity.pending_is_durable() || self.integrity.pending_output_is_confirmed() {
+            self.schedule_checkpoint_retry();
+            return;
+        }
+        let Some(bytes) = self.integrity.pending_record().map(<[u8]>::to_vec) else {
+            return;
+        };
+        let Some(sink) = self.sink.as_mut() else {
+            return;
+        };
+        match tokio::time::timeout(SEND_TIMEOUT, sink.send(Message::Binary(bytes.into()))).await {
+            Ok(Ok(())) => {
+                if let Err(error) = self.integrity.confirm_pending_output() {
+                    iroha_logger::error!(%error, "failed to confirm telemetry output");
+                    self.schedule_checkpoint_retry();
+                    return;
                 }
-                Err(error) => {
-                    iroha_logger::error!(%error, "send failed");
+                if let Err(error) = self.integrity.commit_pending().await {
+                    iroha_logger::error!(
+                        %error,
+                        "telemetry was sent but its integrity checkpoint could not be committed"
+                    );
+                    self.schedule_checkpoint_retry();
+                } else {
+                    self.retry_period.reset();
                 }
             }
+            Ok(Err(error)) => {
+                if matches!(&error, Error::AlreadyClosed | Error::ConnectionClosed) {
+                    iroha_logger::debug!("Closed connection to telemetry");
+                } else {
+                    iroha_logger::error!(%error, "send failed");
+                }
+                self.sink = None;
+                self.schedule_reconnect();
+            }
+            Err(_) => {
+                iroha_logger::warn!("telemetry send timed out");
+                self.sink = None;
+                self.schedule_reconnect();
+            }
+        }
+    }
+    async fn on_checkpoint_retry(&mut self) {
+        if self.integrity.pending_record().is_none() {
+            return;
+        }
+        if !self.integrity.pending_is_durable() {
+            if let Err(error) = self.integrity.persist_pending().await {
+                iroha_logger::error!(%error, "failed to persist staged telemetry record");
+                self.schedule_checkpoint_retry();
+                return;
+            }
+        }
+        if self.integrity.pending_output_is_confirmed() {
+            if let Err(error) = self.integrity.commit_pending().await {
+                iroha_logger::error!(%error, "failed to commit telemetry integrity checkpoint");
+                self.schedule_checkpoint_retry();
+            } else {
+                self.retry_period.reset();
+            }
+        } else if self.sink.is_some() {
+            self.send_pending().await;
         }
     }
     fn schedule_reconnect(&mut self) {
-        self.retry_period.increase_exponent();
-        let period = self.retry_period.period();
+        if self.reconnect_scheduled {
+            return;
+        }
+        self.reconnect_scheduled = true;
+        let period = self.retry_period.next_period();
         iroha_logger::debug!(
             "Scheduled reconnecting to telemetry in {} seconds",
             period.as_secs()
@@ -180,132 +357,81 @@ where
             }
         });
     }
-}
-#[derive(Debug)]
-enum InternalMessage {
-    Reconnect,
-}
-fn prepare_message(
-    name: &str,
-    telemetry: Telemetry,
-    integrity: &mut ChainState,
-) -> Result<(Message, Option<MessageKind>, Option<Map>)> {
-    let (payload, msg_kind) = build_payload(name, telemetry)?;
-    let msg = build_message(&payload, integrity)?;
-    let init_payload = if matches!(msg_kind, Some(MessageKind::Initialization)) {
-        Some(payload)
-    } else {
-        None
-    };
-    Ok((msg, msg_kind, init_payload))
-}
-fn build_payload(name: &str, telemetry: Telemetry) -> Result<(Map, Option<MessageKind>)> {
-    let mut msg_kind: Option<MessageKind> = None;
-    let mut msg_field_present = false;
-    let mut payload = Map::new();
-    for (field, value) in telemetry.fields.0 {
-        if field == "msg" {
-            msg_field_present = true;
-            let kind = value
-                .as_str()
-                .ok_or_else(|| eyre!("Failed to read 'msg'"))?
-                .trim();
-            msg_kind = match kind {
-                "system.connected" => Some(MessageKind::Initialization),
-                _ => None,
-            };
+    fn schedule_checkpoint_retry(&mut self) {
+        if self.checkpoint_retry_scheduled {
+            return;
         }
-        let processed = match field {
-            "genesis_hash" | "best" | "finalized_hash" => {
-                let hash = value
-                    .as_str()
-                    .ok_or_else(|| eyre!("invalid or missing hash string for `{field}`"))?;
-                let mut prefixed = String::with_capacity(hash.len().saturating_add(2));
-                prefixed.push_str("0x");
-                prefixed.push_str(hash);
-                prefixed.into()
+        self.checkpoint_retry_scheduled = true;
+        let period = self.retry_period.next_period();
+        let sender = self.internal_sender.clone();
+        tokio::task::spawn(async move {
+            tokio::time::sleep(period).await;
+            if sender.send(InternalMessage::RetryCheckpoint).await.is_err() {
+                iroha_logger::debug!("telemetry checkpoint retry task dropped; channel closed");
             }
-            _ => value,
-        };
-        payload.insert(field.to_owned(), processed);
+        });
     }
-    if !msg_field_present {
-        return Err(eyre!("Failed to read 'msg'"));
-    }
-    if matches!(msg_kind, Some(MessageKind::Initialization)) {
-        let now = Utc::now();
-        payload.insert("name".into(), name.into());
-        payload.insert("chain".into(), "Iroha".into());
-        payload.insert("implementation".into(), "".into());
-        let vergen_git_sha = option_env!("VERGEN_GIT_SHA").unwrap_or("unknown");
-        let vergen_target = option_env!("VERGEN_CARGO_TARGET_TRIPLE").unwrap_or("unknown");
-        payload.insert(
-            "version".into(),
-            format!(
-                "{}-{vergen_git_sha}-{vergen_target}",
-                env!("CARGO_PKG_VERSION")
-            )
-            .into(),
-        );
-        payload.insert("config".into(), "".into());
-        payload.insert("authority".into(), false.into());
-        payload.insert(
-            "startup_time".into(),
-            now.timestamp_millis().to_string().into(),
-        );
-        payload.insert("network_id".into(), "".into());
-    }
-    Ok((payload, msg_kind))
 }
-fn build_message(payload: &Map, integrity: &mut ChainState) -> Result<Message> {
+fn build_message_map(telemetry: Telemetry) -> Map {
+    let Telemetry { target, fields } = telemetry;
+    let payload = fields
+        .0
+        .into_iter()
+        .map(|(field, value)| (field.to_owned(), value))
+        .collect();
     let now = Utc::now();
     let mut map = Map::new();
-    map.insert("id".into(), 0_i32.into());
     map.insert("ts".into(), now.to_rfc3339().into());
-    map.insert("payload".into(), payload.clone().into());
-    integrity.attach_chain(&mut map)?;
-    let msg = Message::Binary(norito::json::to_vec(&map)?.into());
-    Ok(msg)
+    map.insert("target".into(), target.into());
+    map.insert("payload".into(), Value::Object(payload));
+    map
 }
-#[derive(Debug, Clone, Copy)]
-enum MessageKind {
-    Initialization,
-}
-#[async_trait::async_trait]
-trait SinkFactory {
-    type Sink: SinkExt<Message> + Sink<Message, Error = Error> + Send + Unpin;
-    async fn create(&mut self) -> Result<Self::Sink>;
+trait SinkFactory: Send {
+    type Sink: Sink<Message, Error = Error> + Send + Unpin;
+    fn create(&mut self, connection_id: u64) -> impl Future<Output = Result<Self::Sink>> + Send;
 }
 struct WebsocketSinkFactory {
     url: Url,
+    internal_sender: mpsc::Sender<InternalMessage>,
 }
 impl WebsocketSinkFactory {
     #[inline]
-    pub const fn new(url: Url) -> Self {
-        Self { url }
+    const fn new(url: Url, internal_sender: mpsc::Sender<InternalMessage>) -> Self {
+        Self {
+            url,
+            internal_sender,
+        }
     }
 }
-#[async_trait::async_trait]
 impl SinkFactory for WebsocketSinkFactory {
-    type Sink = WebSocketSplitSink;
-    async fn create(&mut self) -> Result<Self::Sink> {
-        let (ws, _) = tokio_tungstenite::connect_async(self.url.as_str()).await?;
-        let (write, _) = ws.split();
-        Ok(write)
+    type Sink = WebsocketSink;
+    fn create(&mut self, connection_id: u64) -> impl Future<Output = Result<Self::Sink>> + Send {
+        async move {
+            tokio::time::timeout(
+                CONNECT_TIMEOUT,
+                connect_websocket(&self.url, self.internal_sender.clone(), connection_id),
+            )
+            .await
+            .map_err(|_| eyre!("telemetry WebSocket connection timed out"))?
+        }
     }
 }
 #[cfg(test)]
 mod tests {
     use crate::{
         integrity::ChainState,
-        ws::{Client, RetryPeriod, SinkFactory},
+        ws::{
+            Client, INITIAL_CONNECTION_ID, InternalMessage, RetryPeriod, SinkFactory,
+            connect_websocket,
+        },
     };
     use eyre::{Result, eyre};
-    use futures::{Sink, StreamExt};
-    use iroha_config::parameters::actual::TelemetryIntegrity;
+    use futures::{Sink, SinkExt, StreamExt};
+    use iroha_config::parameters::actual::{Telemetry as TelemetryConfig, TelemetryIntegrity};
     use iroha_logger::telemetry::{Event, Fields};
     use norito::json::{Map, Value};
     use std::{
+        future::Future,
         pin::Pin,
         sync::{
             Arc,
@@ -316,49 +442,202 @@ mod tests {
     };
     use tokio::task::JoinHandle;
     use tokio_tungstenite::tungstenite::{Error, Message};
+    use url::Url;
     #[test]
-    fn prepare_message_fails_on_invalid_hash_fields() {
-        for field in ["genesis_hash", "best", "finalized_hash"] {
-            let telemetry = Event {
-                target: "telemetry::test",
-                fields: Fields(vec![
-                    ("msg", Value::String("system.connected".to_owned())),
-                    (field, Value::Bool(true)),
-                ]),
-            };
-            let mut integrity = ChainState::new_with_state_path(
-                TelemetryIntegrity {
-                    enabled: true,
-                    state_dir: None,
-                    signing_key: None,
-                    signing_key_id: None,
-                },
-                None,
-            );
-            assert!(
-                super::prepare_message("node", telemetry, &mut integrity).is_err(),
-                "expected error for field {field}",
-            );
-        }
+    fn message_map_preserves_events_without_msg_field() {
+        let telemetry = Event {
+            target: "test",
+            fields: Fields(vec![
+                ("event", Value::String("proof.completed".to_owned())),
+                ("duration_ms", Value::Number(7_u64.into())),
+            ]),
+        };
+        let map = super::build_message_map(telemetry);
+        assert_eq!(map.get("target").and_then(Value::as_str), Some("test"));
+        let payload = map
+            .get("payload")
+            .and_then(Value::as_object)
+            .expect("payload");
+        assert_eq!(
+            payload.get("event").and_then(Value::as_str),
+            Some("proof.completed")
+        );
+        assert_eq!(payload.get("duration_ms").and_then(Value::as_u64), Some(7));
+    }
+
+    #[tokio::test]
+    async fn websocket_reader_handles_ping_and_reports_close() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind listener");
+        let address = listener.local_addr().expect("listener address");
+        let server = tokio::task::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept client");
+            let mut websocket = tokio_tungstenite::accept_async(stream)
+                .await
+                .expect("accept WebSocket");
+            websocket
+                .send(Message::Ping(vec![1, 2, 3].into()))
+                .await
+                .expect("send ping");
+            let response = tokio::time::timeout(Duration::from_secs(1), websocket.next())
+                .await
+                .expect("pong timeout")
+                .expect("pong frame")
+                .expect("read pong");
+            assert_eq!(response, Message::Pong(vec![1, 2, 3].into()));
+            websocket
+                .send(Message::Close(None))
+                .await
+                .expect("send close");
+        });
+        let (internal_sender, mut internal_receiver) =
+            tokio::sync::mpsc::channel(super::RECONNECT_CHANNEL_CAPACITY);
+        let url = Url::parse(&format!("ws://{address}")).expect("WebSocket URL");
+        let _sink = connect_websocket(&url, internal_sender, 42)
+            .await
+            .expect("connect client");
+        server.await.expect("server task");
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_secs(1), internal_receiver.recv())
+                .await
+                .expect("disconnect timeout"),
+            Some(InternalMessage::Disconnected(42))
+        ));
+    }
+
+    #[tokio::test]
+    async fn websocket_reader_rejects_collector_data_frames() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind listener");
+        let address = listener.local_addr().expect("listener address");
+        let server = tokio::task::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept client");
+            let mut websocket = tokio_tungstenite::accept_async(stream)
+                .await
+                .expect("accept WebSocket");
+            websocket
+                .send(Message::Text("collector payloads are unsupported".into()))
+                .await
+                .expect("send data frame");
+        });
+        let (internal_sender, mut internal_receiver) =
+            tokio::sync::mpsc::channel(super::RECONNECT_CHANNEL_CAPACITY);
+        let url = Url::parse(&format!("ws://{address}")).expect("WebSocket URL");
+        let _sink = connect_websocket(&url, internal_sender, 43)
+            .await
+            .expect("connect client");
+        server.await.expect("server task");
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_secs(1), internal_receiver.recv())
+                .await
+                .expect("disconnect timeout"),
+            Some(InternalMessage::Disconnected(43))
+        ));
+    }
+
+    #[tokio::test]
+    async fn websocket_reader_bounds_collector_frames() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind listener");
+        let address = listener.local_addr().expect("listener address");
+        let server = tokio::task::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept client");
+            let mut websocket = tokio_tungstenite::accept_async(stream)
+                .await
+                .expect("accept WebSocket");
+            websocket
+                .send(Message::Binary(
+                    vec![0_u8; super::INBOUND_MESSAGE_MAX_BYTES + 1].into(),
+                ))
+                .await
+                .expect("send oversized frame");
+        });
+        let (internal_sender, mut internal_receiver) =
+            tokio::sync::mpsc::channel(super::RECONNECT_CHANNEL_CAPACITY);
+        let url = Url::parse(&format!("ws://{address}")).expect("WebSocket URL");
+        let _sink = connect_websocket(&url, internal_sender, 44)
+            .await
+            .expect("connect client");
+        server.await.expect("server task");
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_secs(1), internal_receiver.recv())
+                .await
+                .expect("disconnect timeout"),
+            Some(InternalMessage::Disconnected(44))
+        ));
+    }
+
+    #[tokio::test]
+    async fn unavailable_collector_does_not_block_exporter_startup() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("reserve address");
+        let address = listener.local_addr().expect("listener address");
+        drop(listener);
+        let config = TelemetryConfig {
+            url: Url::parse(&format!("ws://{address}")).expect("WebSocket URL"),
+            min_retry_period: Duration::from_millis(10),
+            max_retry_delay_exponent: 1,
+            telegram_bot_key: None,
+            telegram_chat_id: None,
+            telegram_min_level: None,
+            telegram_targets: None,
+            telegram_rate_per_minute: None,
+            telegram_include_metrics: false,
+            telegram_allow_kinds: None,
+            telegram_deny_kinds: None,
+        };
+        let (sender, receiver) = tokio::sync::broadcast::channel(1);
+        let started_at = tokio::time::Instant::now();
+        let handle = super::start(
+            config,
+            TelemetryIntegrity {
+                enabled: false,
+                state_dir: None,
+                signing_key: None,
+                signing_key_id: None,
+            },
+            receiver,
+        )
+        .expect("start exporter");
+        assert!(
+            started_at.elapsed() < Duration::from_millis(100),
+            "start must not wait for collector"
+        );
+        drop(sender);
+        tokio::time::timeout(Duration::from_secs(1), handle)
+            .await
+            .expect("exporter shutdown timeout")
+            .expect("exporter task");
     }
     #[derive(Clone)]
-    pub struct FallibleSender<T, F> {
+    struct FallibleSender<T, F> {
         sender: futures::channel::mpsc::Sender<T>,
         before_send: F,
+        fail_flush_once: Arc<AtomicBool>,
     }
     impl<T, F> FallibleSender<T, F> {
-        pub fn new(sender: futures::channel::mpsc::Sender<T>, before_send: F) -> Self {
+        fn new(sender: futures::channel::mpsc::Sender<T>, before_send: F) -> Self {
             Self {
                 sender,
                 before_send,
+                fail_flush_once: Arc::new(AtomicBool::new(false)),
             }
         }
+
+        fn with_flush_failure(mut self, fail_flush_once: Arc<AtomicBool>) -> Self {
+            self.fail_flush_once = fail_flush_once;
+            self
+        }
     }
-    impl<T, E, F> Sink<T> for FallibleSender<T, F>
+    impl<T, F> Sink<T> for FallibleSender<T, F>
     where
-        F: FnMut() -> Result<(), E> + Unpin,
+        F: FnMut() -> Result<(), Error> + Unpin,
     {
-        type Error = E;
+        type Error = Error;
         fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
             let this = Pin::into_inner(self);
             match this.sender.poll_ready(cx) {
@@ -381,6 +660,9 @@ mod tests {
         fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
             let this = Pin::into_inner(self);
             match Pin::new(&mut this.sender).poll_flush(cx) {
+                Poll::Ready(Ok(())) if this.fail_flush_once.swap(false, Ordering::SeqCst) => {
+                    Poll::Ready(Err(Error::ConnectionClosed))
+                }
                 Poll::Ready(Ok(())) => Poll::Ready(Ok(())),
                 Poll::Ready(Err(err)) => panic!(
                     "unexpected inner sink error in poll_flush during telemetry test harness: {err}"
@@ -403,36 +685,42 @@ mod tests {
         fail: Arc<AtomicBool>,
         sender: FallibleSender<Message, F>,
     }
-    #[async_trait::async_trait]
     impl<F> SinkFactory for MockSinkFactory<F>
     where
         F: FnMut() -> Result<(), Error> + Clone + Send + Unpin,
     {
         type Sink = FallibleSender<Message, F>;
-        async fn create(&mut self) -> Result<Self::Sink> {
-            if self.fail.load(Ordering::SeqCst) {
-                Err(eyre!("failed to create"))
-            } else {
-                Ok(self.sender.clone())
+        fn create(
+            &mut self,
+            _connection_id: u64,
+        ) -> impl Future<Output = Result<Self::Sink>> + Send {
+            async move {
+                if self.fail.load(Ordering::SeqCst) {
+                    Err(eyre!("failed to create"))
+                } else {
+                    Ok(self.sender.clone())
+                }
             }
         }
     }
     struct Suite {
         fail_send: Arc<AtomicBool>,
+        fail_flush_once: Arc<AtomicBool>,
         fail_factory_create: Arc<AtomicBool>,
         telemetry_sender: tokio::sync::broadcast::Sender<Event>,
         message_receiver: futures::channel::mpsc::Receiver<Message>,
     }
     impl Suite {
-        pub fn new() -> (Self, JoinHandle<()>) {
+        fn new() -> (Self, JoinHandle<()>) {
             Self::new_with_capacity(100)
         }
-        pub fn new_with_capacity(channel_capacity: usize) -> (Self, JoinHandle<()>) {
+        fn new_with_capacity(channel_capacity: usize) -> (Self, JoinHandle<()>) {
             assert!(channel_capacity > 0, "channel capacity must be positive");
             let (telemetry_sender, telemetry_receiver) =
                 tokio::sync::broadcast::channel(channel_capacity);
             let (message_sender, message_receiver) = futures::channel::mpsc::channel(100);
             let fail_send = Arc::new(AtomicBool::new(false));
+            let fail_flush_once = Arc::new(AtomicBool::new(false));
             let message_sender = {
                 let fail = Arc::clone(&fail_send);
                 FallibleSender::new(message_sender, move || {
@@ -442,13 +730,14 @@ mod tests {
                         Ok(())
                     }
                 })
+                .with_flush_failure(Arc::clone(&fail_flush_once))
             };
             let fail_factory_create = Arc::new(AtomicBool::new(false));
-            let (internal_sender, internal_receiver) = tokio::sync::mpsc::channel(10);
+            let (internal_sender, internal_receiver) =
+                tokio::sync::mpsc::channel(super::RECONNECT_CHANNEL_CAPACITY);
             let run_handle = {
                 let client = Client::new(
-                    "node".to_owned(),
-                    message_sender.clone(),
+                    Some(message_sender.clone()),
                     MockSinkFactory {
                         fail: Arc::clone(&fail_factory_create),
                         sender: message_sender,
@@ -463,7 +752,11 @@ mod tests {
                             signing_key_id: None,
                         },
                         None,
-                    ),
+                        "ws-test",
+                        b"mock-sink",
+                    )
+                    .expect("initialize telemetry integrity chain"),
+                    INITIAL_CONNECTION_ID,
                 );
                 tokio::task::spawn(async move {
                     client.run(telemetry_receiver, internal_receiver).await;
@@ -471,23 +764,12 @@ mod tests {
             };
             let me = Self {
                 fail_send,
+                fail_flush_once,
                 fail_factory_create,
                 telemetry_sender,
                 message_receiver,
             };
             (me, run_handle)
-        }
-    }
-    fn system_connected_telemetry() -> Event {
-        Event {
-            target: "telemetry::test",
-            fields: Fields(vec![
-                ("msg", Value::String("system.connected".to_owned())),
-                (
-                    "genesis_hash",
-                    Value::String("00000000000000000000000000000000".to_owned()),
-                ),
-            ]),
         }
     }
     fn system_interval_telemetry(peers: u64) -> Event {
@@ -505,8 +787,7 @@ mod tests {
             mut message_receiver,
             ..
         } = suite;
-        // The first message is `initialization`
-        telemetry_sender.send(system_connected_telemetry()).unwrap();
+        telemetry_sender.send(system_interval_telemetry(1)).unwrap();
         tokio::time::sleep(Duration::from_millis(100)).await;
         let first_hash = {
             let msg = message_receiver.next().await.unwrap();
@@ -514,7 +795,7 @@ mod tests {
                 panic!("expected binary telemetry frame, got {msg:?}")
             };
             let map: Map = norito::json::from_slice(&bytes).unwrap();
-            assert_eq!(map.get("id"), Some(&Value::Number(0_u64.into())));
+            assert!(!map.contains_key("id"));
             assert!(map.contains_key("ts"));
             let chain = map.get("chain").and_then(Value::as_object).unwrap();
             assert_eq!(chain.get("seq").and_then(Value::as_u64), Some(1));
@@ -530,21 +811,9 @@ mod tests {
             let payload = map.get("payload").unwrap().as_object().unwrap();
             assert_eq!(
                 payload.get("msg"),
-                Some(&Value::String("system.connected".to_owned()))
+                Some(&Value::String("system.interval".to_owned()))
             );
-            assert_eq!(
-                payload.get("genesis_hash"),
-                Some(&Value::String(
-                    "0x00000000000000000000000000000000".to_owned()
-                ))
-            );
-            assert!(payload.contains_key("chain"));
-            assert!(payload.contains_key("implementation"));
-            assert!(payload.contains_key("version"));
-            assert!(payload.contains_key("config"));
-            assert!(payload.contains_key("authority"));
-            assert!(payload.contains_key("startup_time"));
-            assert!(payload.contains_key("network_id"));
+            assert_eq!(payload.get("peers"), Some(&Value::Number(1_u64.into())));
             first_hash
         };
         // The second message is `update`
@@ -556,7 +825,7 @@ mod tests {
                 panic!("expected binary telemetry frame, got {msg:?}")
             };
             let map: Map = norito::json::from_slice(&bytes).unwrap();
-            assert_eq!(map.get("id"), Some(&Value::Number(0_u64.into())));
+            assert!(!map.contains_key("id"));
             assert!(map.contains_key("ts"));
             let chain = map.get("chain").and_then(Value::as_object).unwrap();
             assert_eq!(chain.get("seq").and_then(Value::as_u64), Some(2));
@@ -579,10 +848,11 @@ mod tests {
             fail_factory_create,
             telemetry_sender,
             mut message_receiver,
+            ..
         } = suite;
         // Fail sending the first message
         fail_send.store(true, Ordering::SeqCst);
-        telemetry_sender.send(system_connected_telemetry()).unwrap();
+        telemetry_sender.send(system_interval_telemetry(1)).unwrap();
         message_receiver.try_recv().unwrap_err();
         tokio::time::sleep(Duration::from_millis(100)).await;
         // The second message is not sent because the sink is reset
@@ -606,7 +876,7 @@ mod tests {
         } = suite;
         // Fail sending the first message
         fail_send.store(true, Ordering::SeqCst);
-        telemetry_sender.send(system_connected_telemetry()).unwrap();
+        telemetry_sender.send(system_interval_telemetry(1)).unwrap();
         message_receiver.try_recv().unwrap_err();
         tokio::time::sleep(Duration::from_millis(100)).await;
         // The second message is not sent because the sink is reset
@@ -621,7 +891,55 @@ mod tests {
         // The message is sent
         fail_send.store(false, Ordering::SeqCst);
         tokio::time::sleep(Duration::from_secs(1)).await;
-        message_receiver.try_recv().unwrap();
+        let message = message_receiver.try_recv().unwrap();
+        let Message::Binary(bytes) = message else {
+            panic!("expected binary telemetry frame, got {message:?}")
+        };
+        let map: Map = norito::json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            map.get("chain")
+                .and_then(Value::as_object)
+                .and_then(|chain| chain.get("seq"))
+                .and_then(Value::as_u64),
+            Some(1),
+            "failed sends must not advance the integrity chain"
+        );
+    }
+    async fn ambiguous_flush_failure_retries_identical_record_with_suite(suite: Suite) {
+        let Suite {
+            fail_flush_once,
+            telemetry_sender,
+            mut message_receiver,
+            ..
+        } = suite;
+        fail_flush_once.store(true, Ordering::SeqCst);
+        telemetry_sender.send(system_interval_telemetry(1)).unwrap();
+        let first = tokio::time::timeout(Duration::from_secs(1), message_receiver.next())
+            .await
+            .expect("first frame timeout")
+            .expect("first frame");
+        let retry = tokio::time::timeout(Duration::from_secs(2), message_receiver.next())
+            .await
+            .expect("retry frame timeout")
+            .expect("retry frame");
+        assert_eq!(first, retry, "ambiguous sends must retry identical bytes");
+
+        telemetry_sender.send(system_interval_telemetry(2)).unwrap();
+        let next = tokio::time::timeout(Duration::from_secs(1), message_receiver.next())
+            .await
+            .expect("next frame timeout")
+            .expect("next frame");
+        let Message::Binary(bytes) = next else {
+            panic!("expected binary telemetry frame")
+        };
+        let map: Map = norito::json::from_slice(&bytes).expect("parse next frame");
+        assert_eq!(
+            map.get("chain")
+                .and_then(Value::as_object)
+                .and_then(|chain| chain.get("seq"))
+                .and_then(Value::as_u64),
+            Some(2)
+        );
     }
     async fn broadcast_lag_does_not_stop_client_with_suite(suite: Suite) {
         let Suite {
@@ -629,9 +947,9 @@ mod tests {
             mut message_receiver,
             ..
         } = suite;
-        telemetry_sender.send(system_connected_telemetry()).unwrap();
+        telemetry_sender.send(system_interval_telemetry(1)).unwrap();
         tokio::time::sleep(Duration::from_millis(100)).await;
-        // Drain the initialization message so subsequent assertions focus on interval telemetry.
+        // Drain the first message so subsequent assertions focus on the lag burst.
         let _ = message_receiver.next().await.unwrap();
         // Flood the channel faster than the client can drain it to trigger lag handling.
         for peers in 0..200_u64 {
@@ -684,6 +1002,10 @@ mod tests {
     test_with_suite!(
         send_after_reconnect_fails,
         send_after_reconnect_fails_with_suite
+    );
+    test_with_suite!(
+        ambiguous_flush_failure_retries_identical_record,
+        ambiguous_flush_failure_retries_identical_record_with_suite
     );
     #[tokio::test]
     async fn broadcast_lag_does_not_stop_client() {

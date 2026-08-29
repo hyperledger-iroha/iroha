@@ -170,17 +170,29 @@ locally signed transaction pipeline using two closed Norito instructions:
 - `iroha.governance.parliament.attempt.create.v1` carries only the exact typed
   `ProposalKind` and the zero-based end-to-end attempt sequence. Core derives
   the proposal-content id, attempt id, risk tier, required-body pipeline, policy
-  version, effect hash, and expected compare-and-set head.
+  version, effect hash, and expected compare-and-set head. Both native
+  validation-fee kinds derive a constitutional pipeline containing MPC
+  immediately before FMA, because they govern the network fee schedule or its
+  treasury payout lifecycle. SCCP remains FMA-only at that specialist segment;
+  clients cannot add, remove, or reorder either committee.
 - `iroha.governance.parliament.transition.submit.v1` carries the attempt id and
   one `ParliamentLifecycleTransitionV1`. Containing-block height and order are
   never caller fields. Invitation response, attempt absence, public-finding
   endorsement, timed-OVN registration, and dropout are authority-bound to the
-  affected seated assignment. Deterministic ballot checkpoint, release,
-  failure, and aggregate-finalization variants are permissionless triggers but
+  affected seated assignment. `ConsumeSortitionPulseBatch`,
+  `BeginInvitationAcceptance`, `FailBodyElectionNoRoster`, and `SealBodyRoster`
+  are permissionless election-progress triggers: their payloads identify only
+  precommitted requests, pulse coordinates, or one election. Core verifies the
+  finalized pulse and complete pending request set, derives the draw and
+  configured invitation window, derives whether expiry has no roster, and
+  derives the accepted roster, root, and body-instance identifier. A relayer
+  cannot supply any of those results. Deterministic ballot checkpoint, release,
+  failure, and aggregate-finalization variants are likewise permissionless but
   cannot select their consensus result: Core accepts them only when the exact
-  persisted height, corpus, pulse, proof, and state bindings match. Remaining
-  management transitions require the exact unit `CanManageParliament`
-  permission.
+  persisted height, corpus, pulse, proof, and state bindings match. Attempt
+  creation, risk/qualification intent, sortition-request registration, body
+  phase intent, ballot creation, and the proof-heavy ballot-corpus upload retain
+  the exact unit `CanManageParliament` permission.
 
 Sortition requests must carry `request_height` equal to the containing block,
 the complete Core-derived eligible-citizen snapshot, and a strictly later pulse
@@ -189,8 +201,13 @@ identifier is independent of the threshold key session that will be active at
 the requested height, so a valid key rotation cannot strand an already
 committed request. Initial pulse consumption is a complete, strictly ordered
 batch for all initially required bodies. A Confirmation Jury, when added by a
-narrow Policy Jury approval, uses a later request and excludes every Policy
-Jury member.
+narrow Policy Jury approval, excludes every Policy Jury member. Finalization
+atomically commits its exact Core-derived candidate snapshot, configured target,
+current request height, and deterministic future logical-beacon slot alongside
+the Policy result. Later eligibility changes therefore cannot strand the active
+attempt before its first Confirmation draw. Hidden-ballot sortition requires at
+least two eligible candidates; the Policy and Confirmation Jury configuration
+sizes therefore also have a minimum of two.
 
 The public threshold-key lifecycle instruction carries an exact-roster
 `2f + 1` certificate over the network, ordered roster, threshold, complete
@@ -203,6 +220,11 @@ authorized from `H`'s parent state. This prevents a same-block rotation from
 invalidating or reinterpreting either an optional Parliament pulse or a
 consensus-required NPoS pulse. TLE cutover remains immediate and separately
 retains predecessor public state for ballots already bound to it.
+The fail-safe Initial executor admits this proof-carrying instruction, and the
+validation-fee guard classifies it as balance-neutral control-plane state. This
+does not delegate lifecycle authority to the transaction signer: Core always
+authenticates the exact current-roster certificate before changing either key
+family.
 
 `RecordAttemptAbsence` names one assignment but no member account: Core requires
 the signed transaction authority to own that exact seated assignment. The
@@ -336,11 +358,22 @@ this count-only projection.
 
 `GovernanceParliamentLifecycleTransitionApplied` carries the closed transition
 kind, an optional `no_result_kind`, and an optional typed
-`automatic_outcome`. The eight-variant `ParliamentNoResultKindV1` distinguishes
+`automatic_outcome`. The nine-variant `ParliamentNoResultKindV1` distinguishes
 final sortition retry exhaustion, public-finding quorum impossibility/deadline
-expiry, and the five private-ballot failure classes. Core sets it only when the
-accepted transition terminalizes sortition or a body without a result;
-`SortitionRetriesExhausted` applies before a body instance exists. The
+expiry, the five phase/release private-ballot failures, and
+`ConfirmationJuryCapacityUnavailable`. Before committing a narrow Policy Jury
+approval, Core derives the current eligible citizen snapshot, removes every
+sealed Policy Jury member, and requires at least two remaining candidates. A
+count of zero or one persists with the verified narrow opening and terminally
+rejects the attempt as typed `NoResult`; it does not commit the Policy body
+binding or append an unfillable Confirmation stage. With at least two, the same
+atomic transition freezes and registers the disjoint Confirmation snapshot and
+future pulse request. Its sequence-zero request height must equal the Policy
+result height; restore rejects a missing, backdated, or delayed initial request.
+Ordinary initial-body and retry request intent remains manager-gated. Core sets
+the classification only when the accepted transition
+terminalizes sortition or a body without a result; `SortitionRetriesExhausted`
+applies before a body instance exists. The
 transition digest binds the submitted transition while that separate field
 records the Core-derived classification.
 Consensus-owned enactment,
@@ -393,10 +426,25 @@ registry. It validates imported zeroizing scalar components against the exact
 committed public transcript, selects only the context's key session, and drops
 retired shares only after the session is no longer consensus-selectable and the
 committed height is strictly past the maximum opening deadline across every
-referencing ballot and retry. Consensus stores one active TLE key-session
-pointer: installing a validated public session atomically selects it for new
+referencing ballot and retry. Consensus stores every admitted public session
+with its exact ordered `PeerId` roster and one active TLE key-session pointer.
+Admission and restore require a bijection between sessions and rosters, reject
+empty or duplicate-seat rosters, and rederive both committee size and roster
+hash. Installing a validated public session atomically selects it for new
 ballots, while replacement or explicit retirement makes the predecessor
-ineligible but retains its public transcript for already committed ballots. An opaque Core
+ineligible but retains its public transcript and frozen roster for already
+committed ballots. Validator startup scans the active session plus every
+historical session whose greatest committed opening deadline has not passed,
+using an inclusive deadline boundary. It derives the local one-based seat from
+each session's frozen roster rather than the current topology. A seated local
+validator must obtain a live, non-signing capability attestation from the same
+runtime signer later used for release; the returned key-session id, transcript
+hash, and participant index must all match independently. The authenticated
+external-provider operation requalifies before and after the lookup and poisons
+the session on a substituted result. The active session must additionally match
+the exact startup network and topology. This attestation proves only a
+point-in-time exact custody lookup, not future availability, HSM provenance, or
+secure erasure. An opaque Core
 authorization can produce one bounded Norito broker projection containing the
 complete public transcript and exact fixed release payload, digest, and height
 bindings. The broker revalidates those bindings into a nonserializable projected
@@ -691,8 +739,13 @@ fixed intrinsic proof profile rather than `vk_ballot`/`vk_tally`.
 
 RBAC
 - On-chain execution requires permissions:
-  - Attempt creation and management lifecycle transitions: exact unit
+  - Attempt creation, risk/qualification intent, sortition-request registration,
+    body-phase intent, ballot creation, and timed-OVN corpus upload: exact unit
     `CanManageParliament`.
+  - Sortition-pulse consumption, invitation-window start, objective election
+    failure, and canonical roster sealing are permissionless liveness triggers.
+    Their payloads contain no caller-selected draw, window, failure class,
+    assignment list, roster root, or body id.
   - Invitation response: the authenticated authority must be the exact invited
     primary or alternate; member and assignment ids are Core-derived.
   - Attempt absence and public-finding endorsement: the authenticated authority
@@ -701,10 +754,10 @@ RBAC
     seated member whose attempt-bound participant hash is in the record.
   - Dropout: the authenticated authority must be the exact registered seated
     member being removed, and only before survivor freeze.
-  - Registration close, survivor/corpus freeze, release-pulse consumption,
-    objective ballot failure, and aggregate finalization are permissionless
-    liveness triggers. Core accepts them only when their exact persisted height,
-    corpus, pulse, proof, and state bindings match.
+  - Registration close, survivor freeze, release-pulse consumption, objective
+    ballot failure, and aggregate finalization are permissionless liveness
+    triggers. Core accepts them only when their exact persisted height, corpus,
+    pulse, proof, and state bindings match.
   - The containing finalized block supplies transition height/order. Manager
     authority does not let a caller select roots, results, failure classes,
     execution height, or a compare-and-set head.
@@ -953,7 +1006,7 @@ Any script that rotates <i105-account-id>s or applies slashing **must not** atte
 - Prometheus metrics export governance activity:
   - `governance_parliament_transitions_total{transition}` counts accepted
     Parliament transitions using the closed transition-kind vocabulary.
-  - `governance_parliament_no_result_total{class}` counts the eight bounded
+  - `governance_parliament_no_result_total{class}` counts the nine bounded
     sortition/public-finding/private-ballot `ParliamentNoResultKindV1` classes
     only.
   - `governance_parliament_attempts_by_status{status}` and

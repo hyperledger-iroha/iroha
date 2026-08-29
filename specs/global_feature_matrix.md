@@ -12,7 +12,7 @@ Legend: `◉` fully implemented · `○` mostly implemented · `▲` partially i
 | Availability-certified commit | ◉ | Revision-4 commits require the signed manifest, RS16 availability proof, and a `2f + 1` commit QC before local application. | `sumeragi.md`; `sumeragi_v2.md` |
 | Commit QC state-root binding | ◉ | Commit QCs bind the canonical block and state transition in the signed consensus context. | `sumeragi.md`; `sumeragi_v2.md` |
 | Evidence propagation & audit endpoints | ◉ | Authenticated evidence is governed by `SumeragiNposParameters.reconfig`; Torii exposes read-only evidence and consensus diagnostics. | `sumeragi_evidence_api.md`; `governance_api.md` |
-| Consensus observability | ◉ | `/status` is authoritative. Older collector/RBC and adaptive-pacemaker fields are legacy-labeled, non-authoritative observations and may remain zero. | `telemetry.md`; `references/operator_aids.md` |
+| Consensus observability | ◉ | `/v1/sumeragi/status` is authoritative. First-release telemetry omits retired adaptive-pacemaker fields and exposes only current status plus node-local queue, transport, and DA observations. | `telemetry.md`; `references/operator_aids.md` |
 | Consensus fingerprint verification | ◉ | Peers derive and compare the canonical signed-context fingerprint; obsolete local K/r or DA tables cannot select protocol behavior. | `sumeragi.md`; `references/configuration.md` |
 
 ## Pipeline, Kura & State

@@ -1860,7 +1860,7 @@ pub mod query {
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
             stx.apply();
-            state_block.commit().unwrap();
+            state_block.commit_world_overlay_for_testing().unwrap();
             let view = state.view();
             let predicate = CompoundPredicate::<Rwa>::build(|p| p.equals("metadata.grade", "A"));
             let results: Vec<_> = FindRwas
@@ -1938,7 +1938,7 @@ pub mod query {
                 "recipient-owned lot should be present in the owner index before commit",
             );
             stx.apply();
-            state_block.commit().unwrap();
+            state_block.commit_world_overlay_for_testing().unwrap();
             let view = state.view();
             let predicate =
                 CompoundPredicate::<Rwa>::build(|p| p.equals("owner", recipient.to_string()));
@@ -2059,7 +2059,7 @@ pub mod query {
                 .expect("indexed RWA candidates");
             assert_eq!(candidate_ids, BTreeSet::from([target_id.clone()]));
             stx.apply();
-            state_block.commit().unwrap();
+            state_block.commit_world_overlay_for_testing().unwrap();
             let view = state.view();
             let results: Vec<_> = FindRwas
                 .execute(predicate, &view)

@@ -47,6 +47,10 @@ use std::collections::BTreeSet;
 
 const TEST_MAX_OUTSTANDING_LIABILITY: u128 = 1_000_000_000_000;
 
+const fn test_max_wrapped_supply(multiplier: u64) -> u128 {
+    TEST_MAX_OUTSTANDING_LIABILITY * multiplier as u128
+}
+
 /// Complete exact EVM outbound fixture for downstream SCCP integration tests.
 ///
 /// Every field is reconstructed from the governed route and the returned proof
@@ -425,8 +429,7 @@ pub fn sccp_exact_evm_governed_route_test_fixture_v1(
         route_address: [0x51; 20],
         route_code_hash: [0x61; 32],
         taira_to_token_multiplier: SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER,
-        max_wrapped_supply: TEST_MAX_OUTSTANDING_LIABILITY
-            * u128::from(SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER),
+        max_wrapped_supply: test_max_wrapped_supply(SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER),
     };
     let destination = SccpDestinationDeploymentV1::Evm(deployment);
     let route_configuration_hash = destination
@@ -521,8 +524,7 @@ pub fn sccp_exact_ton_governed_route_test_fixture_v1(
         proof_profile_commitment: sccp_ton_groth16_bls12381_proof_profile_commitment_v1(),
         outbound_proof_policy: ton_outbound_policy(),
         taira_to_token_multiplier: SCCP_V1_TAIRA_TO_TON_TOKEN_MULTIPLIER,
-        max_wrapped_supply: TEST_MAX_OUTSTANDING_LIABILITY
-            * u128::from(SCCP_V1_TAIRA_TO_TON_TOKEN_MULTIPLIER),
+        max_wrapped_supply: test_max_wrapped_supply(SCCP_V1_TAIRA_TO_TON_TOKEN_MULTIPLIER),
     };
     let destination = SccpDestinationDeploymentV1::Ton(deployment);
     let route_configuration_hash = destination

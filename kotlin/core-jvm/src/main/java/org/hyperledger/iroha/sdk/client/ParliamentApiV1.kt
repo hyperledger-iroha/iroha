@@ -459,6 +459,7 @@ object ParliamentApiV1 {
         ParliamentNoResultKindLayoutV1(5, "BallotReleasePulseUnavailable"),
         ParliamentNoResultKindLayoutV1(6, "BallotOpeningDeadlineExpired"),
         ParliamentNoResultKindLayoutV1(7, "SortitionRetriesExhausted"),
+        ParliamentNoResultKindLayoutV1(8, "ConfirmationJuryCapacityUnavailable"),
     )
 
     @JvmField

@@ -500,7 +500,9 @@ fn fee_enabled_single_transfer_with_active_data_trigger_uses_fee_fallback() {
             .execute(&payer_id, &mut setup_tx)
             .expect("register data trigger");
         setup_tx.apply();
-        setup_state_block.commit().expect("commit trigger setup");
+        setup_state_block
+            .commit_world_overlay_for_testing()
+            .expect("commit trigger setup");
     }
     let (max_clock_drift, tx_limits) = {
         let state_view = state.world.view();

@@ -25,6 +25,10 @@ private final class SccpStubURLProtocol: URLProtocol {
 }
 
 final class SccpV1Tests: XCTestCase {
+    private static let registryMaxOutstandingLiability = "1000000000000"
+    private static let evmRegistryMaxWrappedSupply = "1000000000000000000000"
+    private static let tonRegistryMaxWrappedSupply = registryMaxOutstandingLiability
+
     private let hashHex = { (byte: UInt8) in "0x" + String(repeating: String(format: "%02x", byte), count: 32) }
 
     private func validEd25519PublicKey(seed: UInt8) throws -> Data {
@@ -838,6 +842,38 @@ final class SccpV1Tests: XCTestCase {
         let registry = try SccpRegistryV1.parse(valid)
         XCTAssertEqual(registry.lanes.count, 1)
         XCTAssertEqual(registry.lanes[0].routes[0].routeId, "taira_bsc_xor")
+        XCTAssertEqual(
+            registry.lanes[0].routes[0].destination.maxWrappedSupply,
+            Self.evmRegistryMaxWrappedSupply
+        )
+        XCTAssertEqual(
+            registry.lanes[0].routes[0].maxOutstandingLiability,
+            Self.registryMaxOutstandingLiability
+        )
+        XCTAssertTrue(
+            String(decoding: valid, as: UTF8.self).contains(
+                "\"max_wrapped_supply\":\(Self.evmRegistryMaxWrappedSupply)"
+            )
+        )
+        var missingCap = try jsonObject(valid)
+        mutateDeployment(&missingCap) { $0.removeValue(forKey: "max_wrapped_supply") }
+        XCTAssertThrowsError(try SccpRegistryV1.parse(jsonData(missingCap)))
+        var zeroCap = try jsonObject(valid)
+        mutateDeployment(&zeroCap) { $0["max_wrapped_supply"] = 0 }
+        XCTAssertThrowsError(try SccpRegistryV1.parse(jsonData(zeroCap)))
+        var mismatchedLiability = try jsonObject(valid)
+        mutateRoute(&mismatchedLiability) { route in
+            var settlement = route["settlement"] as! [String: Any]
+            settlement["max_outstanding_liability"] = 999_999_999_999
+            route["settlement"] = settlement
+        }
+        XCTAssertThrowsError(try SccpRegistryV1.parse(jsonData(mismatchedLiability)))
+        XCTAssertThrowsError(try SccpRegistryV1.parse(Data(
+            String(decoding: valid, as: UTF8.self).replacingOccurrences(
+                of: Self.evmRegistryMaxWrappedSupply,
+                with: "340282366920938463463374607431768211456"
+            ).utf8
+        )))
         XCTAssertTrue(registry.lanes[0].nativeTrustAnchors.isEmpty)
         XCTAssertNil(registry.lanes[0].currentNativeTrustAnchorHash)
         let outboundProofPolicy = registry.lanes[0].routes[0].destination.outboundProofPolicy
@@ -1076,6 +1112,10 @@ final class SccpV1Tests: XCTestCase {
         XCTAssertEqual(parsed.lanes.count, 1)
         XCTAssertEqual(parsed.lanes[0].lane.source, .tonMainnet)
         XCTAssertEqual(parsed.lanes[0].routes[0].destination.family, .tonGroth16Bls12381)
+        XCTAssertEqual(
+            parsed.lanes[0].routes[0].destination.maxWrappedSupply,
+            Self.tonRegistryMaxWrappedSupply
+        )
 
         let canonicalRoute = parsed.lanes[0].routes[0]
         var changedInitialData = try jsonObject(canonical)
@@ -1131,6 +1171,31 @@ final class SccpV1Tests: XCTestCase {
             deployment["verifying_key"] = key
         }
         XCTAssertThrowsError(try SccpRegistryV1.parse(jsonData(uncompressedKey)))
+    }
+
+    func testTonRegistryPreservesExactUInt128CapAndRejectsRoundedOverflow() throws {
+        let maximum = String(UInt128.max)
+        let exact = try tonRegistryJSON(
+            maxOutstandingLiability: maximum,
+            maxWrappedSupply: maximum
+        )
+        let parsed = try SccpRegistryV1.parse(exact)
+        XCTAssertEqual(parsed.lanes[0].routes[0].maxOutstandingLiability, maximum)
+        XCTAssertEqual(parsed.lanes[0].routes[0].destination.maxWrappedSupply, maximum)
+
+        // Foundation Decimal rounds UInt128.max + 1 down to this value. Pin the
+        // route hash to that rounded value so this fixture would pass if the two
+        // multiplier-1 wire integers were allowed through NSNumber first.
+        let roundedByFoundation = "340282366920938463463374607431768211450"
+        let overflow = "340282366920938463463374607431768211456"
+        let roundedHashFixture = try tonRegistryJSON(
+            maxOutstandingLiability: maximum,
+            maxWrappedSupply: maximum,
+            configurationMaxWrappedSupply: roundedByFoundation
+        )
+        let hostile = String(decoding: roundedHashFixture, as: UTF8.self)
+            .replacingOccurrences(of: maximum, with: overflow)
+        XCTAssertThrowsError(try SccpRegistryV1.parse(Data(hostile.utf8)))
     }
 
     func testProofRequestAndBundleAreClosedAndPolicyBound() throws {
@@ -1681,7 +1746,15 @@ final class SccpV1Tests: XCTestCase {
         ])
     }
 
-    private func tonRegistryJSON() throws -> Data {
+    private func tonRegistryJSON(
+        maxOutstandingLiability requestedLiability: String? = nil,
+        maxWrappedSupply requestedCap: String? = nil,
+        configurationMaxWrappedSupply requestedConfigurationCap: String? = nil
+    ) throws -> Data {
+        let maxOutstandingLiability = requestedLiability
+            ?? Self.registryMaxOutstandingLiability
+        let maxWrappedSupply = requestedCap ?? maxOutstandingLiability
+        let configurationMaxWrappedSupply = requestedConfigurationCap ?? maxWrappedSupply
         let privateKey = try Curve25519.Signing.PrivateKey(rawRepresentation: Data(repeating: 7, count: 32))
         let custody = try AccountAddress.fromAccount(publicKey: privateKey.publicKey.rawRepresentation)
             .toI105(networkPrefix: SccpV1.tairaI105DiscriminantV1)
@@ -1726,7 +1799,8 @@ final class SccpV1Tests: XCTestCase {
             anchorHash: anchorHash,
             binding: binding,
             lane: inbound,
-            revision: 1
+            revision: 1,
+            maxWrappedSupply: configurationMaxWrappedSupply
         )
         let route: [String: Any] = [
             "lane_id": lane("ton-mainnet", "sora-taira"),
@@ -1763,12 +1837,18 @@ final class SccpV1Tests: XCTestCase {
                     "proof_profile_commitment": proofProfile.hexEncodedString().uppercased(),
                     "outbound_proof_policy": policy,
                     "taira_to_token_multiplier": 1,
+                    "max_wrapped_supply": NSDecimalNumber(
+                        string: maxWrappedSupply
+                    ),
                 ],
             ],
             "settlement": [
                 "asset_definition_id": "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
                 "custody_owner": custody,
                 "payload_amount_scale": 9,
+                "max_outstanding_liability": NSDecimalNumber(
+                    string: maxOutstandingLiability
+                ),
             ],
         ]
         return jsonData([
@@ -1833,6 +1913,9 @@ final class SccpV1Tests: XCTestCase {
                 "asset_definition_id": "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
                 "custody_owner": custody,
                 "payload_amount_scale": 9,
+                "max_outstanding_liability": NSDecimalNumber(
+                    string: Self.registryMaxOutstandingLiability
+                ),
             ],
         ]
         return jsonData([
@@ -1990,6 +2073,9 @@ final class SccpV1Tests: XCTestCase {
             "route_address": upper(0x31, bytes: 20),
             "route_code_hash": upper(0x41, bytes: 32),
             "taira_to_token_multiplier": 1_000_000_000,
+            "max_wrapped_supply": NSDecimalNumber(
+                string: Self.evmRegistryMaxWrappedSupply
+            ),
         ]
     }
 
@@ -2154,7 +2240,8 @@ final class SccpV1Tests: XCTestCase {
         anchorHash: Data,
         binding: Data,
         lane: SccpLaneIdV1,
-        revision: UInt32
+        revision: UInt32,
+        maxWrappedSupply: String
     ) -> Data {
         var deployment = masterCode + walletCode
         for value in [
@@ -2166,6 +2253,7 @@ final class SccpV1Tests: XCTestCase {
         appendVector(Data("taira_ton_xor".utf8), to: &assetRoute)
         appendUInt32LE(revision, to: &assetRoute)
         appendUInt64LE(1, to: &assetRoute)
+        assetRoute.append(SccpUInt128.littleEndianData(maxWrappedSupply)!)
         let assetRouteHash = Data(SHA256.hash(data: assetRoute))
         var out = Data("sccp:concrete-route-config:v1".utf8) + Data([1])
         appendUInt32LE(4, to: &out)
@@ -2296,8 +2384,10 @@ final class SccpV1Tests: XCTestCase {
         case .tronShasta: networkValue = 0x94a9_059e
         default: fatalError("test route must be external")
         }
+        let cap = (destination["max_wrapped_supply"] as! NSNumber).stringValue
         let asset = irohaKeccak256(
-            irohaKeccak256(Data("xor".utf8)) + irohaKeccak256(Data(routeId.utf8)) + abiWord(1) + abiWord(1_000_000_000)
+            irohaKeccak256(Data("xor".utf8)) + irohaKeccak256(Data(routeId.utf8))
+                + abiWord(1) + abiWord(1_000_000_000) + SccpUInt128.abiWord(cap)!
         )
         return irohaKeccak256(
             irohaKeccak256(Data("sccp:concrete-route-config:v1".utf8)) +

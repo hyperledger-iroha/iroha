@@ -24798,6 +24798,22 @@ mod tests {
             "broadening the ACL should immediately restore the configured hub dial identity"
         );
     }
+    #[test]
+    fn malformed_runtime_acl_update_preserves_applied_policy() {
+        let_test_network!(network);
+        let denied_key = random_node_key_pair().public_key().clone();
+
+        network.set_reply_source_acl(message::UpdateAcl {
+            allowlist_only: true,
+            deny_keys: vec![denied_key.clone()],
+            allow_cidrs: vec!["10.0.0.0/33".to_owned()],
+            ..message::UpdateAcl::default()
+        });
+
+        assert!(!network.allowlist_only);
+        assert!(!network.deny_keys.contains(&denied_key));
+        assert!(network.pending_reply_source_authority.is_empty());
+    }
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn peer_message_hub_forwards_direct_frame_with_decremented_ttl() {
         let_test_network!(network, DummyMsg);

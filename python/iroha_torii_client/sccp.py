@@ -343,6 +343,7 @@ class _SccpDestinationDeployment:
     route_address: bytes
     route_code_hash: bytes
     taira_to_token_multiplier: int
+    max_wrapped_supply: int
     destination_binding_hash: bytes
     deployment_config_hash: bytes
     deployment_address_roles: Tuple[bytes, ...] = ()
@@ -1447,6 +1448,7 @@ def _ton_destination(value: Any, lane: Any, label: str) -> _SccpDestinationDeplo
             "proof_profile_commitment",
             "outbound_proof_policy",
             "taira_to_token_multiplier",
+            "max_wrapped_supply",
         }
     )
     deployment = _exact_fields(value, fields, label)
@@ -1498,6 +1500,12 @@ def _ton_destination(value: Any, lane: Any, label: str) -> _SccpDestinationDeplo
         f"{label}.taira_to_token_multiplier",
         1,
         1,
+    )
+    max_wrapped_supply = _integer(
+        deployment["max_wrapped_supply"],
+        f"{label}.max_wrapped_supply",
+        1,
+        _MAX_U128,
     )
     profile = lane[0][0]
     if profile not in {"ton-mainnet", "ton-testnet"}:
@@ -1554,6 +1562,7 @@ def _ton_destination(value: Any, lane: Any, label: str) -> _SccpDestinationDeplo
         route_address=route_address,
         route_code_hash=hashes["route_code_hash"],
         taira_to_token_multiplier=multiplier,
+        max_wrapped_supply=max_wrapped_supply,
         destination_binding_hash=destination_binding_hash,
         deployment_config_hash=deployment_config_hash,
         deployment_address_roles=(master_address, route_address),
@@ -1580,6 +1589,7 @@ def _destination(value: Any, lane: Any, label: str) -> _SccpDestinationDeploymen
             "route_address",
             "route_code_hash",
             "taira_to_token_multiplier",
+            "max_wrapped_supply",
         }
     )
     deployment = _exact_fields(record["deployment"], fields, f"{label}.deployment")
@@ -1610,6 +1620,12 @@ def _destination(value: Any, lane: Any, label: str) -> _SccpDestinationDeploymen
         1_000_000_000,
         1_000_000_000,
     )
+    max_wrapped_supply = _integer(
+        deployment["max_wrapped_supply"],
+        f"{label}.deployment.max_wrapped_supply",
+        1,
+        _MAX_U128,
+    )
     partial = _SccpDestinationDeployment(
         family=family,
         token_address=addresses[0],
@@ -1622,6 +1638,7 @@ def _destination(value: Any, lane: Any, label: str) -> _SccpDestinationDeploymen
         route_address=addresses[2],
         route_code_hash=hashes[3],
         taira_to_token_multiplier=multiplier,
+        max_wrapped_supply=max_wrapped_supply,
         destination_binding_hash=b"",
         deployment_config_hash=b"",
     )
@@ -1650,6 +1667,7 @@ def _destination(value: Any, lane: Any, label: str) -> _SccpDestinationDeploymen
         route_address=partial.route_address,
         route_code_hash=partial.route_code_hash,
         taira_to_token_multiplier=partial.taira_to_token_multiplier,
+        max_wrapped_supply=partial.max_wrapped_supply,
         destination_binding_hash=destination_binding_hash,
         deployment_config_hash=_keccak_256(deployment_config),
         deployment_address_roles=addresses,
@@ -1657,10 +1675,17 @@ def _destination(value: Any, lane: Any, label: str) -> _SccpDestinationDeploymen
     )
 
 
-def _settlement(value: Any, label: str) -> None:
+def _settlement(value: Any, label: str) -> int:
     record = _exact_fields(
         value,
-        frozenset({"asset_definition_id", "custody_owner", "payload_amount_scale"}),
+        frozenset(
+            {
+                "asset_definition_id",
+                "custody_owner",
+                "payload_amount_scale",
+                "max_outstanding_liability",
+            }
+        ),
         label,
     )
     asset_definition_id = _text(
@@ -1673,6 +1698,12 @@ def _settlement(value: Any, label: str) -> None:
 
     _decode_canonical_i105_string(authority)
     _integer(record["payload_amount_scale"], f"{label}.payload_amount_scale", 9, 9)
+    return _integer(
+        record["max_outstanding_liability"],
+        f"{label}.max_outstanding_liability",
+        1,
+        _MAX_U128,
+    )
 
 
 def _route_configuration_hash(
@@ -1706,6 +1737,7 @@ def _route_configuration_hash(
                     _length_prefixed(b"taira_ton_xor"),
                     revision.to_bytes(4, "little"),
                     destination.taira_to_token_multiplier.to_bytes(8, "little"),
+                    destination.max_wrapped_supply.to_bytes(16, "little"),
                 )
             )
         ).digest()
@@ -1761,6 +1793,7 @@ def _route_configuration_hash(
                 _keccak_256(route_id.encode("ascii")),
                 _abi_word(revision),
                 _abi_word(destination.taira_to_token_multiplier),
+                _abi_word(destination.max_wrapped_supply),
             )
         )
     )
@@ -1813,6 +1846,17 @@ def _route(
         raise ValueError(f"{label} enables inbound settlement without a native trust anchor")
     source = _source_identity(record["source_identity"], lane, f"{label}.source_identity")
     destination = _destination(record["destination"], lane, f"{label}.destination")
+    max_outstanding_liability = _settlement(
+        record["settlement"], f"{label}.settlement"
+    )
+    if (
+        destination.max_wrapped_supply
+        != max_outstanding_liability * destination.taira_to_token_multiplier
+    ):
+        raise ValueError(
+            f"{label}.destination.max_wrapped_supply must equal "
+            "settlement.max_outstanding_liability multiplied by the destination multiplier"
+        )
     source_roles_match = source[0] == destination.family
     if source[0] == "ton":
         source_roles_match = (
@@ -1835,7 +1879,6 @@ def _route(
         raise ValueError(
             f"{label} source route_config_hash does not match the immutable deployment"
         )
-    _settlement(record["settlement"], f"{label}.settlement")
     lineage = f"{record['route_id']}\x00{record['asset_key']}"
     key = f"{lane[0][0]}\x00{lane[1][0]}\x00{lineage}\x00{revision}"
     return lineage, key, revision, activation, inbound_finality_cutoff

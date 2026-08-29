@@ -11,7 +11,8 @@ mutation boundaries:
      recovery source for an incomplete pointerless carrier at N; only that
      identity or exact terminal/receipt evidence can discharge the source;
   2. READY-bearing autonomous successor admission accepts only the exact WSV
-     frontier or a carrier-revalidated MergeExecution receipt; hash-only lane
+     frontier, a carrier-revalidated MergeExecution receipt, or an exact
+     canonical-block/results-revalidated Current receipt; hash-only lane
      ownership is not economic application evidence;
   3. startup repair cannot consume capacity before carrier envelopes have
      been reconstructed;
@@ -53,7 +54,7 @@ CarrierNSources ==
    "TerminalProofN", "ReceiptProofN"}
 AutonomousPredecessorEvidence ==
   {"None", "HashOnlyOwnership", "ExactWsvFrontier",
-   "MergeReceiptCarrierRevalidated"}
+   "MergeReceiptCarrierRevalidated", "CanonicalReceiptRevalidated"}
 StartupPhases == {"Cold", "EnvelopesReconstructed", "Repairing", "Published"}
 DebugPhases == {"Idle", "CarrierReserved", "Appended", "RestartPending",
                 "RestartAccounted"}
@@ -228,6 +229,12 @@ AdmitAutonomousPredecessorFromExactWsvFrontier ==
 AdmitAutonomousPredecessorFromRevalidatedMergeReceipt ==
   /\ autonomousPredecessorEvidence = "None"
   /\ autonomousPredecessorEvidence' = "MergeReceiptCarrierRevalidated"
+  /\ autonomousPredecessorAdmitted' = TRUE
+  /\ UNCHANGED <<CarrierVars, StartupVars, FrontierVars, PeakVars, DebugVars>>
+
+AdmitAutonomousPredecessorFromRevalidatedCanonicalReceipt ==
+  /\ autonomousPredecessorEvidence = "None"
+  /\ autonomousPredecessorEvidence' = "CanonicalReceiptRevalidated"
   /\ autonomousPredecessorAdmitted' = TRUE
   /\ UNCHANGED <<CarrierVars, StartupVars, FrontierVars, PeakVars, DebugVars>>
 
@@ -423,6 +430,7 @@ Next ==
   \/ ObserveHashOnlyAutonomousPredecessor
   \/ AdmitAutonomousPredecessorFromExactWsvFrontier
   \/ AdmitAutonomousPredecessorFromRevalidatedMergeReceipt
+  \/ AdmitAutonomousPredecessorFromRevalidatedCanonicalReceipt
   \/ ReconstructCarrierEnvelopesOnStartup
   \/ BeginStartupCapacityRepair
   \/ PublishStartupRepair
@@ -489,7 +497,8 @@ MLStartupRepairAfterCarrierEnvelopes ==
 MLAutonomousPredecessorGloballyApplied ==
   /\ autonomousPredecessorAdmitted =>
        autonomousPredecessorEvidence
-         \in {"ExactWsvFrontier", "MergeReceiptCarrierRevalidated"}
+         \in {"ExactWsvFrontier", "MergeReceiptCarrierRevalidated",
+              "CanonicalReceiptRevalidated"}
   /\ (autonomousPredecessorEvidence = "HashOnlyOwnership") =>
        ~autonomousPredecessorAdmitted
 

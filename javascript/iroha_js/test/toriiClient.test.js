@@ -12848,6 +12848,15 @@ test("getSumeragiDiagnosticsTyped rejects adversarial lane evidence", async () =
     () => sumeragiDiagnosticsClientForPayload(mismatchedPayloadFlag).getSumeragiDiagnosticsTyped(),
     /execution_status disagrees with executable_payload_available/,
   );
+  const retiredDirectWsvStatus = createSumeragiDiagnosticsPayload({
+    committed_lane_blocks: [createCommittedLaneBlock({
+      execution_status: "state_applied_by_direct_execution",
+    })],
+  });
+  await assert.rejects(
+    () => sumeragiDiagnosticsClientForPayload(retiredDirectWsvStatus).getSumeragiDiagnosticsTyped(),
+    /execution_status disagrees with executable_payload_available/,
+  );
   const sessionPayload = createSumeragiDiagnosticsPayload({
     lane_block_sessions: [createLaneBlockSession({ prepare_vote_count: 5 })],
   });
@@ -12856,69 +12865,6 @@ test("getSumeragiDiagnosticsTyped rejects adversarial lane evidence", async () =
     /impossible session quorum counts/,
   );
 });
-test("getSumeragiPacemaker returns null when gated and decodes payload otherwise", async () => {
-  const snapshots = [
-    createResponse({ status: 403, jsonData: { ok: false }, headers: { "content-type": "application/json" } }),
-    createResponse({
-      status: 200,
-      jsonData: {
-        backoff_ms: "100",
-        rtt_floor_ms: "25",
-        jitter_ms: "5",
-        backoff_multiplier: "2",
-        rtt_floor_multiplier: "1",
-        max_backoff_ms: "500",
-        jitter_frac_permille: "15",
-        round_elapsed_ms: "42",
-        view_timeout_target_ms: "200",
-        view_timeout_remaining_ms: "150",
-      },
-      headers: { "content-type": "application/json" },
-    }),
-  ];
-  let call = 0;
-  const fetchImpl = async (url, init) => {
-    assert.equal(url, `${BASE_URL}/v1/sumeragi/pacemaker`);
-    assert.equal(init.headers.Accept, "application/json");
-    call += 1;
-    return snapshots[call - 1];
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const forbidden = await client.getSumeragiPacemaker();
-  assert.equal(forbidden, null);
-  const snapshot = await client.getSumeragiPacemaker();
-  assert.deepEqual(snapshot, {
-    backoff_ms: 100,
-    rtt_floor_ms: 25,
-    jitter_ms: 5,
-    backoff_multiplier: 2,
-    rtt_floor_multiplier: 1,
-    max_backoff_ms: 500,
-    jitter_frac_permille: 15,
-    round_elapsed_ms: 42,
-    view_timeout_target_ms: 200,
-    view_timeout_remaining_ms: 150,
-  });
-});
-
-test("getSumeragiPacemaker rejects invalid AbortSignal option", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => createResponse({ status: 403, jsonData: {}, headers: { "content-type": "application/json" } }),
-  });
-  await assert.rejects(
-    () =>
-      client.getSumeragiPacemaker({
-        // @ts-expect-error runtime validation should reject incorrect signal
-        signal: {},
-      }),
-    (error) => {
-      assert(error instanceof TypeError);
-      assert.match(error.message, /getSumeragiPacemaker options\.signal must be an AbortSignal/);
-      return true;
-    },
-  );
-});
-
 test("Sumeragi snapshot endpoints reject unsupported option fields", async () => {
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async () => {
@@ -12926,11 +12872,6 @@ test("Sumeragi snapshot endpoints reject unsupported option fields", async () =>
     },
   });
   const cases = [
-    [
-      "getSumeragiPacemaker",
-      () => client.getSumeragiPacemaker({ extra: true }),
-      "extra",
-    ],
     [
       "getSumeragiQc",
       () => client.getSumeragiQc({ unexpected: "nope" }),

@@ -245,61 +245,20 @@ fn build_faucet_test_context_with_registration(
     let queue = Arc::new(Queue::from_config(queue_cfg, events_sender));
     let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
     let _ = peers_tx;
-    #[cfg(feature = "telemetry")]
-    let telemetry = {
-        use iroha_core::telemetry as core_telemetry;
-        let metrics = fixtures::shared_metrics();
-        let (_mh, ts) =
-            iroha_primitives::time::TimeSource::new_mock(core::time::Duration::default());
-        core_telemetry::start(
-            metrics,
-            state.clone(),
-            kura.clone(),
-            queue.clone(),
-            peers_rx.clone(),
-            local_peer_id,
-            ts,
-            false,
-        )
-        .0
-    };
     let da_receipt_signer = cfg.common.key_pair.clone();
-    let torii = {
-        #[cfg(feature = "telemetry")]
-        {
-            Torii::new(
-                chain_id.clone(),
-                network_id,
-                kiso,
-                cfg.torii.clone(),
-                queue.clone(),
-                tokio::sync::broadcast::channel(1).0,
-                LiveQueryStore::start_test(),
-                kura,
-                state.clone(),
-                da_receipt_signer.clone(),
-                iroha_torii::OnlinePeersProvider::new(peers_rx),
-                telemetry,
-                true,
-            )
-        }
-        #[cfg(not(feature = "telemetry"))]
-        {
-            Torii::new(
-                chain_id.clone(),
-                network_id,
-                kiso,
-                cfg.torii.clone(),
-                queue.clone(),
-                tokio::sync::broadcast::channel(1).0,
-                LiveQueryStore::start_test(),
-                kura,
-                state.clone(),
-                da_receipt_signer,
-                iroha_torii::OnlinePeersProvider::new(peers_rx),
-            )
-        }
-    };
+    let torii = Torii::new(
+        chain_id.clone(),
+        network_id,
+        kiso,
+        cfg.torii.clone(),
+        queue.clone(),
+        tokio::sync::broadcast::channel(1).0,
+        LiveQueryStore::start_test(),
+        kura,
+        state.clone(),
+        da_receipt_signer,
+        iroha_torii::OnlinePeersProvider::new(peers_rx),
+    );
     FaucetTestContext {
         app: torii.api_router_for_tests(),
         state,

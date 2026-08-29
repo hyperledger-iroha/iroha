@@ -40,7 +40,6 @@ fn metal_queue_overrides_parse_from_env() {
         ("FASTPQ_METAL_THREADGROUP".to_string(), "128".to_string()),
         ("FASTPQ_METAL_TRACE".to_string(), "true".to_string()),
         ("FASTPQ_DEBUG_METAL_ENUM".to_string(), "true".to_string()),
-        ("FASTPQ_DEBUG_FUSED".to_string(), "true".to_string()),
     ]));
     let cfg = load_with_env(env);
     assert_eq!(cfg.zk.fastpq.metal_queue_fanout, Some(3));
@@ -52,7 +51,6 @@ fn metal_queue_overrides_parse_from_env() {
     assert_eq!(cfg.zk.fastpq.metal_threadgroup_width, Some(128));
     assert!(cfg.zk.fastpq.metal_trace);
     assert!(cfg.zk.fastpq.metal_debug_enum);
-    assert!(cfg.zk.fastpq.metal_debug_fused);
     assert_eq!(
         cfg.zk.fastpq.execution_mode,
         iroha_config::parameters::actual::FastpqExecutionMode::Cpu

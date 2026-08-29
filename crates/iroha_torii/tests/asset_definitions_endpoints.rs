@@ -89,7 +89,9 @@ fn seeded_state() -> (Arc<State>, dm::AssetDefinitionId, dm::AssetDefinitionId) 
     .execute(&authority, &mut tx)
     .expect("bind permanent asset alias");
     tx.apply();
-    block.commit().expect("commit permanent asset alias");
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit permanent asset alias");
     (state, cbdc_id, usd_id)
 }
 fn build_app(state: Arc<State>) -> axum::Router {
@@ -151,7 +153,9 @@ fn commit_alias_lease(
     .execute(authority, &mut tx)
     .expect("bind leased alias");
     tx.apply();
-    block.commit().expect("commit alias lease");
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit alias lease");
 }
 #[tokio::test]
 async fn asset_definitions_endpoints_return_name_and_alias() {
@@ -302,7 +306,9 @@ async fn asset_definitions_query_supports_alias_binding_sort() {
     .execute(&authority, &mut tx)
     .expect("bind permanent asset alias");
     tx.apply();
-    block.commit().expect("commit permanent asset alias");
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit permanent asset alias");
     commit_alias_lease(&state, &authority, &usd_id, "usd#lease", 5_000, 2, 1_000);
     let app = build_app(state);
     let resp = app

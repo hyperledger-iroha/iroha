@@ -189,7 +189,7 @@ async fn governance_capabilities_expose_one_exact_network_identity() {
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let block = harness.state.block(header);
     block
-        .commit()
+        .commit_empty_block_for_testing()
         .expect("commit genesis-like capabilities fixture");
     let expected_network = *harness.state.network_id_ref();
     let response = handle_gov_capabilities(harness.state)

@@ -170,10 +170,74 @@ fn require_parliament_tle_signer_for_local_seat_v1(
     Ok(())
 }
 
-/// Validate runtime custody for every active threshold session assigned to the local peer.
+fn require_parliament_tle_session_startup_binding_v1(
+    session_network_id: [u8; 32],
+    session_roster_hash: [u8; 32],
+    session_committee_size: u16,
+    startup_network_id: [u8; 32],
+    startup_roster_hash: [u8; 32],
+    startup_committee_size: usize,
+) -> Result<(), &'static str> {
+    if session_network_id != startup_network_id {
+        return Err("active Parliament TLE key session belongs to another network");
+    }
+    if session_roster_hash != startup_roster_hash
+        || usize::from(session_committee_size) != startup_committee_size
+    {
+        return Err("active Parliament TLE key session is not bound to the startup roster");
+    }
+    Ok(())
+}
+
+fn parliament_tle_local_participant_index_v1(
+    frozen_roster: &[PeerId],
+    local_peer: &PeerId,
+) -> Result<Option<u16>, &'static str> {
+    let mut local_index = None;
+    for (index, peer) in frozen_roster.iter().enumerate() {
+        if frozen_roster[..index].contains(peer) {
+            return Err("Parliament TLE key-session roster contains a duplicate peer");
+        }
+        if peer == local_peer {
+            let index = u16::try_from(index + 1)
+                .map_err(|_| "Parliament TLE key-session participant index exceeds u16")?;
+            local_index = Some(index);
+        }
+    }
+    Ok(local_index)
+}
+
+fn require_parliament_tle_capability_for_local_seat_v1(
+    local_participant_index: Option<u16>,
+    signer: Option<&dyn iroha_core::tle_release::TlePartialReleaseSignerV1>,
+    session: &iroha_core::tle_release::ValidatedTleKeySessionV1,
+) -> Result<(), &'static str> {
+    require_parliament_tle_signer_for_local_seat_v1(
+        local_participant_index.is_some(),
+        signer.is_some(),
+    )?;
+    let (Some(participant_index), Some(signer)) = (local_participant_index, signer) else {
+        return Ok(());
+    };
+    let attestation = signer
+        .attest_partial_release_capability(session, participant_index)
+        .map_err(
+            |_| "local Parliament TLE committee seat has no exact runtime custody attestation",
+        )?;
+    if !attestation.matches(session, participant_index) {
+        return Err(
+            "local Parliament TLE committee seat returned a mismatched runtime custody attestation",
+        );
+    }
+    Ok(())
+}
+
+/// Validate runtime custody for every active or deadline-retained threshold session assigned to
+/// the local peer.
 ///
 /// Private timed-OVN ballots have no plaintext or manual-opening fallback, so a local seat in the
-/// active Parliament TLE roster is not operational without its runtime partial-release signer.
+/// frozen roster of any required Parliament TLE session is not operational without an exact live
+/// capability lookup in its runtime partial-release signer.
 fn validate_threshold_signer_startup_readiness_v1(
     state: &iroha_core::state::State,
     local_peer: &PeerId,
@@ -210,25 +274,58 @@ fn validate_threshold_signer_startup_readiness_v1(
         )?;
     }
 
-    let Some(tle_key_session_id) = world.active_tle_key_session() else {
-        return Ok(());
-    };
-    let tle_session = world
-        .tle_key_sessions()
-        .get(&tle_key_session_id)
-        .ok_or("active Parliament TLE key session is absent")?;
-    tle_session
-        .clone()
-        .validate()
-        .map_err(|_| "active Parliament TLE key session is invalid")?;
-    if tle_session.network_id != *state.network_id_ref().as_bytes() {
-        return Err("active Parliament TLE key session belongs to another network");
+    let active_tle_key_session_id = world.active_tle_key_session();
+    let required_tle_key_sessions = world
+        .tle_key_sessions_required_for_runtime_custody_v1(committed_height)
+        .map_err(|_| "committed Parliament state is invalid for TLE custody readiness")?;
+    for tle_key_session_id in required_tle_key_sessions {
+        let public_session = world
+            .tle_key_sessions()
+            .get(&tle_key_session_id)
+            .ok_or("required Parliament TLE key session is absent")?;
+        let session = public_session
+            .clone()
+            .validate()
+            .map_err(|_| "required Parliament TLE key session is invalid")?;
+        if public_session.network_id != *state.network_id_ref().as_bytes() {
+            return Err("required Parliament TLE key session belongs to another network");
+        }
+        let frozen_roster = world
+            .tle_key_session_rosters()
+            .get(&tle_key_session_id)
+            .ok_or("required Parliament TLE key session has no frozen roster binding")?;
+        if usize::from(public_session.committee_size) != frozen_roster.len()
+            || public_session.roster_hash
+                != iroha_core::beacon::global_threshold_beacon_roster_hash_v1(frozen_roster)
+        {
+            return Err("required Parliament TLE key session has an invalid frozen roster binding");
+        }
+        if active_tle_key_session_id == Some(tle_key_session_id) {
+            require_parliament_tle_session_startup_binding_v1(
+                public_session.network_id,
+                public_session.roster_hash,
+                public_session.committee_size,
+                *state.network_id_ref().as_bytes(),
+                topology_roster_hash,
+                topology.len(),
+            )?;
+            if frozen_roster.as_slice() != topology.as_slice() {
+                return Err(
+                    "active Parliament TLE key session frozen roster differs from the startup topology",
+                );
+            }
+        }
+        let local_participant_index =
+            parliament_tle_local_participant_index_v1(frozen_roster, local_peer)?;
+        require_parliament_tle_capability_for_local_seat_v1(
+            local_participant_index,
+            runtime_deps
+                .parliament_tle_partial_release_signer
+                .as_deref(),
+            &session,
+        )?;
     }
-    require_parliament_tle_signer_for_local_seat_v1(
-        tle_session.roster_hash == topology_roster_hash
-            && topology.iter().any(|peer| peer == local_peer),
-        runtime_deps.parliament_tle_partial_release_signer.is_some(),
-    )
+    Ok(())
 }
 macro_rules! define_runtime_dep_setters_v1 {
     (
@@ -675,6 +772,37 @@ impl IrohaRuntimeDeps {
 #[cfg(test)]
 mod parliament_tle_release_tests {
     use super::*;
+    use iroha_core::{
+        smartcontracts::Execute as _,
+        state::{
+            StateTransaction, THRESHOLD_KEY_LIFECYCLE_CERTIFICATE_VERSION_V1,
+            threshold_key_lifecycle_certificate_preimage_v1,
+        },
+        tle_release::{TleKeySessionPublicStateV1, ValidatedTleKeySessionV1},
+    };
+    use iroha_crypto::{
+        Algorithm, Hash, HashOf, KeyPair, Signature,
+        threshold_bls::{
+            AdaptiveThresholdBlsParameters, DasRenDealerSecret, ThresholdBlsSession,
+            TleReleasePurpose,
+        },
+    };
+    use iroha_data_model::{
+        block::BlockHeader,
+        governance::types::{
+            AbiVersion, ContractAbiHash, ContractCodeHash, DeployContractProposal, ProposalKind,
+            TleKeySessionId,
+        },
+        isi::consensus_keys::{
+            ApplyThresholdKeyLifecycleCertificateV1, ThresholdKeyLifecycleActionV1,
+            ThresholdKeyLifecycleCertificateV1, ThresholdKeyLifecycleSignatureV1,
+        },
+    };
+    use rand::{SeedableRng as _, rngs::StdRng};
+    use std::sync::{
+        Mutex,
+        atomic::{AtomicUsize, Ordering},
+    };
 
     struct UnavailableSigner;
 
@@ -684,6 +812,329 @@ mod parliament_tle_release_tests {
             _context: &iroha_core::tle_release::AuthorizedTleReleaseContextV1,
         ) -> Result<iroha_core::tle_release::TlePartialReleaseShareV1, String> {
             Err("unavailable".to_owned())
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    enum CapabilityMode {
+        Exact,
+        MismatchedSeat,
+        Rejected,
+    }
+
+    struct CapabilityProbeSigner {
+        mode: CapabilityMode,
+        attestation_calls: Mutex<Vec<(TleKeySessionId, u16)>>,
+        sign_calls: AtomicUsize,
+    }
+
+    impl CapabilityProbeSigner {
+        fn new(mode: CapabilityMode) -> Self {
+            Self {
+                mode,
+                attestation_calls: Mutex::new(Vec::new()),
+                sign_calls: AtomicUsize::new(0),
+            }
+        }
+
+        fn attestation_calls(&self) -> Vec<(TleKeySessionId, u16)> {
+            self.attestation_calls
+                .lock()
+                .expect("capability call journal lock")
+                .clone()
+        }
+    }
+
+    impl iroha_core::tle_release::TlePartialReleaseSignerV1 for CapabilityProbeSigner {
+        fn attest_partial_release_capability(
+            &self,
+            session: &iroha_core::tle_release::ValidatedTleKeySessionV1,
+            expected_participant_index: u16,
+        ) -> Result<
+            iroha_core::tle_release::TlePartialReleaseCapabilityAttestationV1,
+            iroha_core::tle_release::TlePartialReleaseCapabilityErrorV1,
+        > {
+            self.attestation_calls
+                .lock()
+                .expect("capability call journal lock")
+                .push((
+                    session.public_state().key_session_id,
+                    expected_participant_index,
+                ));
+            match self.mode {
+                CapabilityMode::Exact => {
+                    iroha_core::tle_release::TlePartialReleaseCapabilityAttestationV1::for_validated_session(
+                        session,
+                        expected_participant_index,
+                    )
+                }
+                CapabilityMode::MismatchedSeat => {
+                    let mismatched = if expected_participant_index == 1 { 2 } else { 1 };
+                    iroha_core::tle_release::TlePartialReleaseCapabilityAttestationV1::for_validated_session(
+                        session,
+                        mismatched,
+                    )
+                }
+                CapabilityMode::Rejected => {
+                    Err(iroha_core::tle_release::TlePartialReleaseCapabilityErrorV1::NotOwned)
+                }
+            }
+        }
+
+        fn sign_partial_release(
+            &self,
+            _context: &iroha_core::tle_release::AuthorizedTleReleaseContextV1,
+        ) -> Result<iroha_core::tle_release::TlePartialReleaseShareV1, String> {
+            self.sign_calls.fetch_add(1, Ordering::AcqRel);
+            Err("the readiness path must never invoke signing".to_owned())
+        }
+    }
+
+    fn tle_public_session_fixture_v1(
+        network_id: [u8; 32],
+        session_byte: u8,
+        roster_hash: [u8; 32],
+    ) -> TleKeySessionPublicStateV1 {
+        let session = ThresholdBlsSession::<TleReleasePurpose>::new(
+            network_id,
+            [session_byte; 32],
+            roster_hash,
+            4,
+            2,
+        )
+        .expect("construct TLE session fixture");
+        let parameters =
+            AdaptiveThresholdBlsParameters::derive(&session).expect("derive TLE parameters");
+        let mut rng = StdRng::from_seed([session_byte.wrapping_add(5); 32]);
+        let mut dealers = Vec::new();
+        for participant_index in 1_u16..=3 {
+            let (_, dealer) =
+                DasRenDealerSecret::generate_with_rng(&parameters, participant_index, &mut rng)
+                    .expect("generate TLE dealer fixture");
+            dealers.push(dealer);
+        }
+        ValidatedTleKeySessionV1::from_qualified_dealers(session, &dealers, &[1, 2, 3], [4; 32])
+            .expect("validate TLE session fixture")
+            .public_state()
+            .clone()
+    }
+
+    fn certified_tle_install_v1(
+        state_transaction: &StateTransaction<'_, '_>,
+        validator_keys: &[KeyPair],
+        public_state: &TleKeySessionPublicStateV1,
+    ) -> ApplyThresholdKeyLifecycleCertificateV1 {
+        let ordered_roster = state_transaction.commit_topology().get();
+        assert_eq!(ordered_roster.len(), validator_keys.len());
+        for (peer, key) in ordered_roster.iter().zip(validator_keys) {
+            assert_eq!(peer.public_key(), key.public_key());
+        }
+        let committee_size = u16::try_from(ordered_roster.len()).expect("small test roster");
+        let quorum =
+            u16::try_from((ordered_roster.len() - 1) / 3 * 2 + 1).expect("small test quorum");
+        let mut certificate = ThresholdKeyLifecycleCertificateV1 {
+            version: THRESHOLD_KEY_LIFECYCLE_CERTIFICATE_VERSION_V1,
+            action: ThresholdKeyLifecycleActionV1::InstallParliamentTleKey,
+            expected_active_session_id: state_transaction
+                .world
+                .active_tle_key_session()
+                .map(|session_id| *session_id.as_bytes()),
+            effective_height: state_transaction.block_height(),
+            network_id: state_transaction.network_id,
+            roster_hash: iroha_core::beacon::global_threshold_beacon_roster_hash_v1(ordered_roster),
+            committee_size,
+            quorum,
+            session_id: *public_state.key_session_id.as_bytes(),
+            transcript_hash: public_state.transcript_hash,
+            public_state: norito::encode_canonical(public_state)
+                .expect("encode canonical TLE public state"),
+            signatures: Vec::new(),
+        };
+        let preimage = threshold_key_lifecycle_certificate_preimage_v1(&certificate)
+            .expect("derive threshold-key lifecycle preimage");
+        certificate.signatures = validator_keys
+            .iter()
+            .take(usize::from(quorum))
+            .enumerate()
+            .map(|(index, key)| ThresholdKeyLifecycleSignatureV1 {
+                signer_index: u16::try_from(index).expect("small signer index"),
+                signature: Signature::try_new(key.private_key(), &preimage)
+                    .expect("sign threshold-key lifecycle certificate"),
+            })
+            .collect();
+        ApplyThresholdKeyLifecycleCertificateV1 { certificate }
+    }
+
+    struct ThresholdSignerReadinessFixture {
+        state: State,
+        local_peer: PeerId,
+        retained_key_session_id: TleKeySessionId,
+        active_key_session_id: TleKeySessionId,
+        retained_participant_index: u16,
+        active_participant_index: u16,
+    }
+
+    fn threshold_signer_readiness_fixture_v1(
+        committed_height: u64,
+    ) -> ThresholdSignerReadinessFixture {
+        const RETAINED_SESSION_BYTE: u8 = 0xD1;
+        const ACTIVE_SESSION_BYTE: u8 = 0xE1;
+        const RETENTION_DEADLINE_HEIGHT: u64 = 13;
+
+        let validator_keys = (0_u8..4)
+            .map(|index| {
+                KeyPair::try_from_seed(vec![0x41_u8.saturating_add(index); 32], Algorithm::Ed25519)
+                    .expect("derive deterministic validator key")
+            })
+            .collect::<Vec<_>>();
+        let retained_roster = validator_keys
+            .iter()
+            .map(|key| PeerId::new(key.public_key().clone()))
+            .collect::<Vec<_>>();
+        let local_peer = retained_roster[1].clone();
+        let mut active_validator_keys = validator_keys.clone();
+        active_validator_keys.reverse();
+        let active_roster = active_validator_keys
+            .iter()
+            .map(|key| PeerId::new(key.public_key().clone()))
+            .collect::<Vec<_>>();
+        let retained_participant_index = 2;
+        let active_participant_index = 3;
+        assert_eq!(
+            retained_roster[usize::from(retained_participant_index - 1)],
+            local_peer
+        );
+        assert_eq!(
+            active_roster[usize::from(active_participant_index - 1)],
+            local_peer
+        );
+
+        let network_id = NetworkId::from_genesis_hash(
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x31; Hash::LENGTH])),
+        );
+        let state = State::new_with_chain_and_network_id_for_testing(
+            World::new(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+            "threshold-readiness-test"
+                .parse()
+                .expect("fixture chain id"),
+            network_id,
+        );
+        let header = BlockHeader::new(
+            NonZeroU64::new(1).expect("non-zero fixture height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let mut block = state.block(header);
+        let mut state_transaction = block.transaction();
+        *state_transaction.commit_topology.get_mut() = retained_roster.clone();
+        let retained_public_session = tle_public_session_fixture_v1(
+            *network_id.as_bytes(),
+            RETAINED_SESSION_BYTE,
+            iroha_core::beacon::global_threshold_beacon_roster_hash_v1(&retained_roster),
+        );
+        let retained_key_session_id = retained_public_session.key_session_id;
+        certified_tle_install_v1(
+            &state_transaction,
+            &validator_keys,
+            &retained_public_session,
+        )
+        .execute(
+            &AccountId::new(validator_keys[0].public_key().clone()),
+            &mut state_transaction,
+        )
+        .expect("install deadline-retained TLE session");
+
+        *state_transaction.commit_topology.get_mut() = active_roster.clone();
+        let active_public_session = tle_public_session_fixture_v1(
+            *network_id.as_bytes(),
+            ACTIVE_SESSION_BYTE,
+            iroha_core::beacon::global_threshold_beacon_roster_hash_v1(&active_roster),
+        );
+        let active_key_session_id = active_public_session.key_session_id;
+        certified_tle_install_v1(
+            &state_transaction,
+            &active_validator_keys,
+            &active_public_session,
+        )
+        .execute(
+            &AccountId::new(active_validator_keys[0].public_key().clone()),
+            &mut state_transaction,
+        )
+        .expect("install active TLE session");
+
+        let proposal = ProposalKind::DeployContract(DeployContractProposal {
+            contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
+                .parse()
+                .expect("canonical contract address"),
+            code_hash: ContractCodeHash::new([0x29; 32]),
+            abi_hash: ContractAbiHash::new([0x2A; 32]),
+            abi_version: AbiVersion::new(1),
+            manifest_provenance: None,
+        });
+        let candidates = (0_u8..3)
+            .map(|index| {
+                let key = KeyPair::try_from_seed(
+                    vec![0x61_u8.saturating_add(index); 32],
+                    Algorithm::Ed25519,
+                )
+                .expect("derive deterministic Parliament candidate key");
+                AccountId::new(key.public_key().clone())
+            })
+            .collect();
+        let attempt = iroha_core::governance::parliament::enacted_parliament_attempt_for_testing(
+            &proposal,
+            candidates,
+            &network_id,
+            RETENTION_DEADLINE_HEIGHT,
+        );
+        let attempt_id = attempt.attempt().id;
+        state_transaction
+            .world
+            .put_parliament_attempt_for_testing(attempt_id, attempt)
+            .expect("persist deadline-retaining Parliament attempt");
+        state_transaction.apply();
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit startup-readiness fixture");
+
+        {
+            let mut topology = state.commit_topology.block();
+            *topology.get_mut() = active_roster.clone();
+            topology.commit();
+        }
+
+        let mut block_hashes = state.block_hashes.block();
+        while u64::try_from(block_hashes.len()).unwrap_or(u64::MAX) < committed_height {
+            let marker = u8::try_from(block_hashes.len() + 1).expect("small fixture height");
+            block_hashes.push_for_tests(HashOf::<BlockHeader>::from_untyped_unchecked(
+                Hash::prehashed([marker; Hash::LENGTH]),
+            ));
+        }
+        block_hashes.commit_for_tests();
+
+        assert_eq!(
+            state.commit_topology_snapshot(),
+            active_roster,
+            "startup topology must match the active TLE certificate roster in this fixture",
+        );
+
+        assert_eq!(
+            retained_key_session_id,
+            TleKeySessionId::new([RETAINED_SESSION_BYTE; 32]),
+            "the public Parliament fixture binds hidden ballots to this historical session"
+        );
+        ThresholdSignerReadinessFixture {
+            state,
+            local_peer,
+            retained_key_session_id,
+            active_key_session_id,
+            retained_participant_index,
+            active_participant_index,
         }
     }
 
@@ -725,6 +1176,209 @@ mod parliament_tle_release_tests {
             require_parliament_tle_signer_for_local_seat_v1(false, false),
             Ok(())
         );
+    }
+
+    #[test]
+    fn active_parliament_tle_session_must_match_the_exact_startup_context() {
+        let network_id = [0x11; 32];
+        let roster_hash = [0x22; 32];
+        assert_eq!(
+            require_parliament_tle_session_startup_binding_v1(
+                network_id,
+                roster_hash,
+                4,
+                network_id,
+                roster_hash,
+                4,
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            require_parliament_tle_session_startup_binding_v1(
+                network_id,
+                roster_hash,
+                4,
+                [0x33; 32],
+                roster_hash,
+                4,
+            ),
+            Err("active Parliament TLE key session belongs to another network")
+        );
+        assert_eq!(
+            require_parliament_tle_session_startup_binding_v1(
+                network_id,
+                roster_hash,
+                4,
+                network_id,
+                [0x44; 32],
+                4,
+            ),
+            Err("active Parliament TLE key session is not bound to the startup roster")
+        );
+        assert_eq!(
+            require_parliament_tle_session_startup_binding_v1(
+                network_id,
+                roster_hash,
+                4,
+                network_id,
+                roster_hash,
+                7,
+            ),
+            Err("active Parliament TLE key session is not bound to the startup roster")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn parliament_tle_startup_requires_exact_non_signing_custody_attestation() {
+        let fixture =
+            crate::external_software_signer::consensus_threshold_tle_broker_test_fixture_v1();
+        let session = fixture.session;
+
+        let exact = CapabilityProbeSigner::new(CapabilityMode::Exact);
+        assert_eq!(
+            require_parliament_tle_capability_for_local_seat_v1(Some(1), Some(&exact), &session,),
+            Ok(())
+        );
+        assert_eq!(exact.attestation_calls().len(), 1);
+        assert_eq!(exact.sign_calls.load(Ordering::Acquire), 0);
+
+        let mismatched = CapabilityProbeSigner::new(CapabilityMode::MismatchedSeat);
+        assert_eq!(
+            require_parliament_tle_capability_for_local_seat_v1(
+                Some(1),
+                Some(&mismatched),
+                &session,
+            ),
+            Err(
+                "local Parliament TLE committee seat returned a mismatched runtime custody attestation"
+            )
+        );
+        assert_eq!(mismatched.sign_calls.load(Ordering::Acquire), 0);
+
+        let rejected = CapabilityProbeSigner::new(CapabilityMode::Rejected);
+        assert_eq!(
+            require_parliament_tle_capability_for_local_seat_v1(Some(1), Some(&rejected), &session,),
+            Err("local Parliament TLE committee seat has no exact runtime custody attestation")
+        );
+        assert_eq!(rejected.sign_calls.load(Ordering::Acquire), 0);
+
+        assert_eq!(
+            require_parliament_tle_capability_for_local_seat_v1(
+                Some(1),
+                Some(&UnavailableSigner),
+                &session,
+            ),
+            Err("local Parliament TLE committee seat has no exact runtime custody attestation")
+        );
+        assert_eq!(
+            require_parliament_tle_capability_for_local_seat_v1(None, None, &session),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn frozen_parliament_tle_roster_derives_one_exact_local_seat() {
+        fn peer(tag: u8) -> PeerId {
+            let key = iroha_crypto::KeyPair::try_from_seed(
+                vec![tag; 32],
+                iroha_crypto::Algorithm::Ed25519,
+            )
+            .expect("derive deterministic peer key");
+            PeerId::new(key.public_key().clone())
+        }
+
+        let first = peer(0x41);
+        let second = peer(0x42);
+        assert_eq!(
+            parliament_tle_local_participant_index_v1(&[first.clone(), second.clone()], &second),
+            Ok(Some(2))
+        );
+        assert_eq!(
+            parliament_tle_local_participant_index_v1(&[first.clone()], &second),
+            Ok(None)
+        );
+        assert_eq!(
+            parliament_tle_local_participant_index_v1(&[first.clone(), first], &second),
+            Err("Parliament TLE key-session roster contains a duplicate peer")
+        );
+    }
+
+    #[test]
+    fn threshold_signer_startup_readiness_scans_active_and_deadline_retained_frozen_rosters() {
+        let fixture = threshold_signer_readiness_fixture_v1(13);
+        let signer = Arc::new(CapabilityProbeSigner::new(CapabilityMode::Exact));
+        let runtime_deps =
+            IrohaRuntimeDeps::default().with_parliament_tle_partial_release_signer(signer.clone());
+
+        validate_threshold_signer_startup_readiness_v1(
+            &fixture.state,
+            &fixture.local_peer,
+            &runtime_deps,
+        )
+        .expect("active and deadline-retained frozen seats have exact runtime custody");
+
+        let mut calls = signer.attestation_calls();
+        calls.sort_unstable();
+        let mut expected = vec![
+            (
+                fixture.retained_key_session_id,
+                fixture.retained_participant_index,
+            ),
+            (
+                fixture.active_key_session_id,
+                fixture.active_participant_index,
+            ),
+        ];
+        expected.sort_unstable();
+        assert_eq!(calls, expected);
+        assert_eq!(signer.sign_calls.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn threshold_signer_startup_readiness_skips_expired_history_and_rejects_mismatch() {
+        let fixture = threshold_signer_readiness_fixture_v1(14);
+        let exact_signer = Arc::new(CapabilityProbeSigner::new(CapabilityMode::Exact));
+        let exact_runtime_deps = IrohaRuntimeDeps::default()
+            .with_parliament_tle_partial_release_signer(exact_signer.clone());
+
+        validate_threshold_signer_startup_readiness_v1(
+            &fixture.state,
+            &fixture.local_peer,
+            &exact_runtime_deps,
+        )
+        .expect("expired historical custody is skipped while the active seat remains ready");
+        assert_eq!(
+            exact_signer.attestation_calls(),
+            vec![(
+                fixture.active_key_session_id,
+                fixture.active_participant_index,
+            )]
+        );
+        assert_eq!(exact_signer.sign_calls.load(Ordering::Acquire), 0);
+
+        let mismatched_signer =
+            Arc::new(CapabilityProbeSigner::new(CapabilityMode::MismatchedSeat));
+        let mismatched_runtime_deps = IrohaRuntimeDeps::default()
+            .with_parliament_tle_partial_release_signer(mismatched_signer.clone());
+        assert_eq!(
+            validate_threshold_signer_startup_readiness_v1(
+                &fixture.state,
+                &fixture.local_peer,
+                &mismatched_runtime_deps,
+            ),
+            Err(
+                "local Parliament TLE committee seat returned a mismatched runtime custody attestation"
+            )
+        );
+        assert_eq!(
+            mismatched_signer.attestation_calls(),
+            vec![(
+                fixture.active_key_session_id,
+                fixture.active_participant_index,
+            )]
+        );
+        assert_eq!(mismatched_signer.sign_calls.load(Ordering::Acquire), 0);
     }
 
     #[test]

@@ -336,7 +336,7 @@ fn test_state() -> (
     ));
     state
         .block(block_header(1, 1_700_000_000_000))
-        .commit()
+        .commit_empty_block_for_testing()
         .expect("commit canonical genesis asset-incarnation state");
     (state, user, user_key_pair, recipient, treasury, fee_asset)
 }
@@ -396,6 +396,7 @@ fn validation_fee_parliament_requirements() -> Vec<RequiredParliamentBodyV1> {
         ParliamentBody::InterestPanel,
         ParliamentBody::ReviewPanel,
         ParliamentBody::CoordinationCouncil,
+        ParliamentBody::MpcCommittee,
         ParliamentBody::FmaCommittee,
         ParliamentBody::OversightCommittee,
         ParliamentBody::PolicyJury,
@@ -600,6 +601,7 @@ fn complete_parliament_body_for_authorization(
                         nay: 1,
                         abstain: 0,
                     },
+                    2,
                     43,
                 )
                 .expect("finalize deterministic aggregate ballot");
@@ -956,7 +958,7 @@ fn install_canonical_post_enactment_validation_fee_state(
         .set_parameter(Parameter::Custom(registry.into_custom_parameter()));
     state_transaction.apply();
     block
-        .commit()
+        .commit_world_overlay_for_testing()
         .expect("commit canonical post-enactment validation-fee state");
 }
 fn metadata_for_policy(policy: &ValidationFeePolicyV1, fee_instruction_index: usize) -> Metadata {
@@ -1025,7 +1027,9 @@ fn install_hijiri_state(
             ));
     }
     state_transaction.apply();
-    block.commit().expect("commit Hijiri test state");
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit Hijiri test state");
 }
 fn metadata_for_batch_policy(
     policy: &ValidationFeePolicyV1,
@@ -1706,7 +1710,7 @@ fn active_registry_rejects_missing_enacted_parliament_attempt() {
         );
         stx.apply();
         block
-            .commit()
+            .commit_world_overlay_for_testing()
             .expect("commit adversarial missing-attempt state");
     }
     let error = validate_in_block(
@@ -2008,7 +2012,7 @@ fn principal_and_fee_commit_atomically_under_active_validation_fee_policy() {
     let (_, result) = block.validate_transaction(accepted, &mut ivm_cache);
     assert_eq!(result, Ok(Vec::new()));
     block
-        .commit()
+        .commit_world_overlay_for_testing()
         .expect("commit exact validation-fee transfer");
     let view = state.view();
     assert_eq!(

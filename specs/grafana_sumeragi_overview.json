@@ -26,10 +26,6 @@
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
       "targets": [
         {
-          "expr": "increase(sumeragi_gossip_fallback_total[5m])",
-          "legendFormat": "gossip_fallback_total"
-        },
-        {
           "expr": "increase(sumeragi_block_created_dropped_by_lock_total[5m])",
           "legendFormat": "block_created_dropped_by_lock_total"
         },
@@ -48,10 +44,6 @@
       "title": "Proposal Drop Totals",
       "gridPos": { "h": 8, "w": 24, "x": 0, "y": 8 },
       "targets": [
-        {
-          "expr": "sumeragi_gossip_fallback_total",
-          "legendFormat": "gossip_fallback_total"
-        },
         {
           "expr": "sumeragi_block_created_dropped_by_lock_total",
           "legendFormat": "block_created_dropped_by_lock_total"

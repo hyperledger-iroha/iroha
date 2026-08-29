@@ -2547,15 +2547,6 @@ def test_metric_inventory_gates_require_metric_count_contracts() -> None:
             "test_generated_canaries_pass_full_reserve_rent_gate",
         ),
         (
-            "repair",
-            "check_sorafs_repair_rollout_evidence.py",
-            "build_sorafs_repair_canary.py",
-            "check_sorafs_repair_rollout_evidence_test.py",
-            "build_sorafs_repair_canary_test.py",
-            "test_observability_metrics_must_not_duplicate",
-            "test_generated_canaries_pass_full_repair_gate",
-        ),
-        (
             "hedging",
             "check_sorafs_hedging_rollout_evidence.py",
             "build_sorafs_hedging_canary.py",
@@ -6239,10 +6230,42 @@ def test_sorafs_hedging_billing_observability_pack_is_checked_in() -> None:
     assert missing == []
 
 
-def test_sorafs_hedging_billing_observability_metrics_are_registered() -> None:
+def test_sorafs_hedging_billing_observability_uses_runtime_metrics() -> None:
     source = read(TELEMETRY_METRICS_RS)
     test_source = read(TELEMETRY_METRICS_TEST_RS)
+    rollout_checker = read(SCRIPTS_DIR / "check_sorafs_hedging_rollout_evidence.py")
+    dashboard = read(DASHBOARDS_DIR / "grafana" / "sorafs_hedging_billing.json")
+    metric_inventory = rollout_checker.split("REQUIRED_METRICS = (", 1)[1].split(
+        ")\n", 1
+    )[0]
     expected_names = [
+        "sorafs_hedging_billing_runtime_live",
+        "sorafs_hedging_billing_runtime_ready",
+        "sorafs_hedging_billing_last_tick_fresh",
+        "sorafs_hedging_billing_finalized_projection_ready",
+        "sorafs_hedging_billing_finalized_lag_blocks",
+        "sorafs_hedging_billing_runtime_ticks_total",
+    ]
+    expected_pack_names = [
+        "sorafs_hedging_billing_last_tick_fresh",
+        "sorafs_hedging_billing_finalized_projection_ready",
+        "sorafs_hedging_billing_finalized_lag_blocks",
+        "sorafs_hedging_billing_finalized_head_height",
+        "sorafs_hedging_billing_finalized_height",
+    ]
+    missing_names = [name for name in expected_names if name not in source]
+    missing_inventory_names = [
+        name for name in expected_pack_names if name not in metric_inventory
+    ]
+    missing_dashboard_names = [
+        name for name in expected_pack_names if name not in dashboard
+    ]
+    expected_helpers = [
+        "record_sorafs_hedging_billing_runtime_status",
+        "inc_sorafs_hedging_billing_runtime_tick",
+    ]
+    missing_helpers = [helper for helper in expected_helpers if helper not in source]
+    retired_names = [
         "torii_sorafs_hedging_xor_usd_reference_price_micro_usd",
         "torii_sorafs_hedging_feed_lag_seconds",
         "torii_sorafs_hedging_feed_divergence_bps",
@@ -6252,24 +6275,21 @@ def test_sorafs_hedging_billing_observability_metrics_are_registered() -> None:
         "torii_sorafs_billing_statement_ack_backlog",
         "torii_sorafs_billing_escrow_runway_seconds",
     ]
-    missing_names = [name for name in expected_names if name not in source]
-    expected_helpers = [
-        "set_sorafs_hedging_reference_price_micro_usd",
-        "set_sorafs_hedging_feed_lag_seconds",
-        "set_sorafs_hedging_feed_divergence_bps",
-        "set_sorafs_hedging_exposure_drift_bps",
-        "record_sorafs_billing_statement_generation",
-        "set_sorafs_billing_statement_ack_backlog",
-        "set_sorafs_billing_escrow_runway_seconds",
+    retired_inventory_names = [
+        "xor_usd_reference_price",
+        "feed_lag_seconds",
+        "statement_generation_count",
+        "statement_failure_count",
+        "escrow_runway_seconds",
     ]
-    missing_helpers = [helper for helper in expected_helpers if helper not in source]
 
     assert missing_names == []
+    assert missing_inventory_names == []
+    assert missing_dashboard_names == []
     assert missing_helpers == []
-    assert (
-        "records_hedging_billing_metrics_used_by_dashboard_and_alerts"
-        in test_source
-    )
+    assert not any(name in source for name in retired_names)
+    assert not any(name in metric_inventory for name in retired_inventory_names)
+    assert "records_committed_sorafs_hedging_billing_runtime_metrics" in test_source
 
 
 def test_sorafs_hedging_billing_fixture_generator_is_checked_in() -> None:
@@ -19595,9 +19615,8 @@ def test_repair_docs_keep_rollout_contract_markers() -> None:
         "Signed auditor API, worker lifecycle, and event stream artifacts must also keep `route_count` equal to the unique canonical `routes[].name` inventory and reject duplicate or unknown route entries.",
         "The closed route/status map requires `202 Accepted` for report, slash, appeal, claim, heartbeat, complete, and fail commands, and `200 OK` for status, task list, single-task, and committed-event queries.",
         "Worker lifecycle artifacts require `status_count`, bind it to the unique canonical `statuses_observed` inventory, reject missing, inflated, duplicate, or unknown lifecycle-status evidence, and require finalized task projection, exact live lease execution, durable transaction forwarding, restart reconciliation, and a single terminal outcome.",
-        "Observability artifacts also bind `metric_count` to the unique canonical `metrics` inventory, require the reviewed repair metrics, and reject duplicate or unknown metric labels before promotion can report ready.",
+        "Observability artifacts require reviewed dashboard and alert-rule provisioning without embedding a duplicate repair metric inventory.",
         "Repair payload-safety artifacts must explicitly set `raw_roster_included`, `raw_evidence_included`, `response_bodies_included`, `raw_repair_payloads_included`, `raw_ledger_included`, and `critical_alerts_firing` to `false` before promotion can report ready.",
-        "The summary exports the sorted reviewed `metrics` inventory plus `metric_count_values`, and the aggregate production-readiness gate requires those fields to match the observability artifact fingerprint before final promotion can report ready.",
         "The repair gate fail-closes when more than one valid roster, failure bundle, handoff, or policy anchor appears, and clears the mixed `valid_roster_digests`, `valid_failure_bundle_digests`, `valid_handoff_digests`, or `valid_policy_digests` set before aggregate promotion can report ready.",
         "Aggregate promotion also rechecks the lane-proven repair digest relationships: roster-bound artifact fingerprints must match `valid_roster_digests`, failure-bound artifact fingerprints must match `valid_failure_bundle_digests`, handoff-bound artifact fingerprints must match `valid_handoff_digests`, and policy-bound artifact fingerprints must match `valid_policy_digests` before final promotion can report ready.",
         "Its collection planner exposes those exact required payload fields through `--dry-run` and validates the schema-closed collection plan, required kinds, thresholds, external evidence map, evidence contract, and command steps before touching live repair services.",
@@ -19730,20 +19749,17 @@ def test_repair_docs_keep_rollout_contract_markers() -> None:
     assert "durable_transaction_forwarding_verified" in checker
     assert "restart_reconciliation_verified" in checker
     assert "single_terminal_outcome_verified" in checker
-    assert '"metric_count_values": sorted(metric_counts)' in checker
-    assert '"metrics": sorted(metric_names)' in checker
+    assert '"metric_count_values": sorted(metric_counts)' not in checker
+    assert '"metrics": sorted(metric_names)' not in checker
     assert "def require_single_active_digest(" in checker
     assert 'label="valid_roster_digests"' in checker
     assert 'label="valid_failure_bundle_digests"' in checker
     assert 'label="valid_handoff_digests"' in checker
     assert 'label="valid_policy_digests"' in checker
-    assert "test_observability_metrics_must_not_duplicate" in checker_test
-    assert "test_observability_metrics_must_not_include_unknown_values" in checker_test
-    assert '("repair", "metrics"): ("observability",)' in aggregate_checker
-    assert (
-        '("repair", "metric_count_values"): ("observability",)'
-        in aggregate_checker
-    )
+    assert "test_observability_metrics_must_not_duplicate" not in checker_test
+    assert "test_observability_metrics_must_not_include_unknown_values" not in checker_test
+    assert '("repair", "metrics"): ("observability",)' not in aggregate_checker
+    assert '("repair", "metric_count_values"): ("observability",)' not in aggregate_checker
     assert "validate_repair_bound_artifact_metadata" in aggregate_checker
     assert "REPAIR_ROSTER_BOUND_KINDS" in aggregate_checker
     assert "REPAIR_FAILURE_BOUND_KINDS" in aggregate_checker
@@ -19827,7 +19843,8 @@ def test_repair_canary_builder_is_checked_in() -> None:
     assert "REQUIRED_EVENT_ROUTES" in builder
     assert "--route-body-blake3-hex" in builder
     assert '"body_blake3_hex": args.route_body_blake3_hex' in builder
-    assert "REQUIRED_METRICS" in builder
+    assert "REQUIRED_METRICS" not in builder
+    assert 'parser.add_argument("--metric"' not in builder
     assert "REQUIRED_FAILURE_SOURCES" in builder
     assert "ROSTER_BOUND_KINDS" in builder
     assert "FAILURE_BOUND_KINDS" in builder
@@ -19846,6 +19863,7 @@ def test_repair_canary_builder_is_checked_in() -> None:
     assert '"status_count": len(args.lifecycle_statuses)' in builder
     assert '"handoff_target_count": len(args.handoff_targets)' in builder
     assert "test_generated_canaries_pass_full_repair_gate" in builder_tests
+    assert "test_retired_observability_metric_inventory_is_rejected" in builder_tests
     assert "test_builds_payload_free_worker_lifecycle_canary" in builder_tests
     assert "test_builds_payload_free_governance_handoff_canary" in builder_tests
     assert "test_auditor_roster_inventory_must_match_auditor_count" in builder_tests
@@ -25945,11 +25963,8 @@ def test_gateway_compliance_observability_uses_emitted_bounded_metrics() -> None
     assert "SORAFS_GATEWAY_COMPLIANCE_FAILURE_CLASS_LABELS" in metrics_source
     assert "attacker-controlled" in metrics_source
     metric_constructor = metrics_source[
-        metrics_source.index(
-            "let torii_sorafs_gateway_compliance_requests_total"
-        ) : metrics_source.index(
-            "let torii_sorafs_hedging_xor_usd_reference_price_micro_usd"
-        )
+        metrics_source.index("pub torii_sorafs_gateway_compliance_requests_total")
+        : metrics_source.index("pub torii_sorafs_reserve_lifecycle_stage_providers")
     ]
     for forbidden_label in (
         '"provider_id"',

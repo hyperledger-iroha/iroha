@@ -940,6 +940,7 @@ export interface SccpDestinationDeploymentFieldsV1 {
   readonly route_address: string;
   readonly route_code_hash: string;
   readonly taira_to_token_multiplier: 1000000000;
+  readonly max_wrapped_supply: number | bigint;
 }
 export interface SccpEvmDestinationDeploymentV1 extends SccpDestinationDeploymentFieldsV1 {}
 export interface SccpTronDestinationDeploymentV1 extends SccpDestinationDeploymentFieldsV1 {}
@@ -960,6 +961,7 @@ export interface SccpSolanaDestinationDeploymentV1 {
   readonly verifier_key_hash: string;
   readonly outbound_proof_policy: SccpOutboundProofPolicyV1;
   readonly taira_to_token_multiplier: 1;
+  readonly max_wrapped_supply: number | bigint;
 }
 export interface SccpTonAddressV1 {
   readonly workchain: 0;
@@ -980,6 +982,7 @@ export interface SccpTonDestinationDeploymentV1 {
   readonly proof_profile_commitment: string;
   readonly outbound_proof_policy: SccpOutboundProofPolicyV1;
   readonly taira_to_token_multiplier: 1;
+  readonly max_wrapped_supply: number | bigint;
 }
 export type SccpDestinationDeploymentV1 =
   | Readonly<{ family: "evm"; deployment: SccpEvmDestinationDeploymentV1 }>
@@ -1035,7 +1038,7 @@ export interface SccpInboundFinalityCutoffV1 {
   readonly trust_anchor_hash: string;
   readonly max_anchor_interval_height: number;
 }
-export interface SccpSoraSettlementV1 { readonly asset_definition_id: string; readonly custody_owner: string; readonly payload_amount_scale: 9; }
+export interface SccpSoraSettlementV1 { readonly asset_definition_id: string; readonly custody_owner: string; readonly payload_amount_scale: 9; readonly max_outstanding_liability: number | bigint; }
 export interface SccpGovernedRouteV1 {
   readonly lane_id: SccpLaneIdV1;
   readonly route_id: string;
@@ -5330,7 +5333,8 @@ export type ParliamentNoResultKindTagV1 =
   | "BallotCommitmentDeadlineExpired"
   | "BallotReleasePulseUnavailable"
   | "BallotOpeningDeadlineExpired"
-  | "SortitionRetriesExhausted";
+  | "SortitionRetriesExhausted"
+  | "ConfirmationJuryCapacityUnavailable";
 
 export interface ParliamentNoResultKindLayoutV1 {
   readonly noritoIndex: number;
@@ -6561,8 +6565,7 @@ export type ToriiSumeragiCommittedLaneExecutionStatus =
   | "payload_preflight_rejected_awaiting_state_application"
   | "application_receipt_conflicts_with_preflight"
   | "awaiting_predecessor_application"
-  | "state_applied_by_canonical_block"
-  | "state_applied_by_direct_execution";
+  | "state_applied_by_canonical_block";
 
 export interface ToriiSumeragiCommittedLaneBlock {
   lane_id: number;
@@ -6822,19 +6825,6 @@ export interface ToriiSumeragiCommitQuorumSummary {
   signatures_set_b: number;
   signatures_required: number;
   last_updated_ms: number;
-}
-
-export interface ToriiSumeragiPacemakerResponse {
-  backoff_ms: number;
-  rtt_floor_ms: number;
-  jitter_ms: number;
-  backoff_multiplier: number;
-  rtt_floor_multiplier: number;
-  max_backoff_ms: number;
-  jitter_frac_permille: number;
-  round_elapsed_ms: number;
-  view_timeout_target_ms: number;
-  view_timeout_remaining_ms: number;
 }
 
 export interface ToriiSumeragiV2QcResponse {
@@ -11902,9 +11892,6 @@ export declare class ToriiClient {
   getSumeragiDiagnosticsTyped(options?: {
     signal?: AbortSignal;
   }): Promise<ToriiSumeragiDiagnostics>;
-  getSumeragiPacemaker(options?: {
-    signal?: AbortSignal;
-  }): Promise<ToriiSumeragiPacemakerResponse | null>;
   getSumeragiQc(options?: {
     signal?: AbortSignal;
   }): Promise<ToriiSumeragiV2QcResponse>;

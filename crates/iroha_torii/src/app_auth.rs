@@ -2726,7 +2726,9 @@ mod tests {
             norito::codec::Encode::encode(&record),
         );
         tx.apply();
-        block.commit().expect("commit account alias for test");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit account alias for test");
     }
     #[cfg(test)]
     fn test_guard(config: CanonicalRequestAuthConfig) -> impl Drop {

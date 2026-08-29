@@ -34,7 +34,7 @@ fn build_torii(profile: TelemetryProfile) -> Torii {
         events_sender,
     ));
     let (_peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
-    let telemetry = MaybeTelemetry::for_tests().map_gate(profile);
+    let telemetry = MaybeTelemetry::for_tests().with_profile(profile);
     Torii::new_with_handle(
         ChainId::from("test-chain"),
         iroha_torii::test_utils::signed_query_network_id(),

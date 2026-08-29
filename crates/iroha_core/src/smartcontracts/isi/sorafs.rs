@@ -9054,7 +9054,9 @@ mod sorafs_tests {
             .execute(&alice(), &mut stx)
             .expect("register paid pin fixture");
             stx.apply();
-            block.commit().expect("commit registered pin fixture");
+            block
+                .commit_world_overlay_for_testing()
+                .expect("commit registered pin fixture");
         }
         let previous = state.view().latest_block().map(|block| block.hash());
         {
@@ -9139,7 +9141,9 @@ mod sorafs_tests {
             .execute(&alice(), &mut stx)
             .expect("register paid pin fixture");
             stx.apply();
-            block.commit().expect("commit registered pin fixture");
+            block
+                .commit_world_overlay_for_testing()
+                .expect("commit registered pin fixture");
         }
         let previous = state.view().latest_block().map(|block| block.hash());
         let header = iroha_data_model::block::BlockHeader::new(
@@ -17770,7 +17774,9 @@ mod sorafs_tests {
             .expect_err("second worker cannot claim an unexpired lease");
             assert!(smart_contract_error_message(&competing_claim).contains("lease is held"));
             transaction.apply();
-            block.commit().expect("commit first repair block");
+            block
+                .commit_world_overlay_for_testing()
+                .expect("commit first repair block");
         }
         state.push_block_hash_for_testing(first_hash);
         let second_header = repair_block_header(2, 2_001_000);
@@ -17846,7 +17852,9 @@ mod sorafs_tests {
             .expect_err("a task has exactly one terminal outcome");
             assert!(smart_contract_error_message(&second_terminal).contains("terminal outcome"));
             transaction.apply();
-            block.commit().expect("commit second repair block");
+            block
+                .commit_world_overlay_for_testing()
+                .expect("commit second repair block");
         }
         state.push_block_hash_for_testing(second_hash);
         let view = state.view();

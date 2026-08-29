@@ -3087,7 +3087,9 @@ mod tests {
             iroha_data_model::account::rekey::AccountRekeyRecord::new(label, account_id.clone()),
         );
         tx.apply();
-        block.commit().expect("commit account alias for test");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit account alias for test");
     }
     fn seed_typed_proposal_fingerprint_for_ballot_test(
         state: &Arc<State>,
@@ -3115,7 +3117,7 @@ mod tests {
             .insert(proposal_id, record);
         transaction.apply();
         block
-            .commit()
+            .commit_world_overlay_for_testing()
             .expect("commit typed proposal ballot guard fixture");
         hex::encode(proposal_id)
     }
@@ -3342,7 +3344,9 @@ seiyaku GovernedReadFixture {
         )
         .expect("activate governed contract");
         transaction.apply();
-        block.commit().expect("commit governed contract fixture");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit governed contract fixture");
         (contract_address, code_hash)
     }
     fn sample_sccp_route_governance_action()
@@ -3630,7 +3634,9 @@ seiyaku GovernedReadFixture {
             );
         }
         transaction.apply();
-        block.commit().expect("commit multi-epoch council history");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit multi-epoch council history");
         let response = handle_gov_council_current(state)
             .await
             .expect("current council response")
@@ -4919,7 +4925,9 @@ seiyaku GovernedReadFixture {
                 iroha_crypto::Hash::prehashed([0x44; 32]),
             );
         transaction.apply();
-        block.commit().expect("commit incomplete fixture");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit incomplete fixture");
         let error = handle_gov_contract_get(
             harness.state,
             axum::extract::Path(contract_address.to_string()),
@@ -4949,7 +4957,9 @@ seiyaku GovernedReadFixture {
             .contract_manifests_mut_for_testing()
             .insert(code_hash, manifest);
         transaction.apply();
-        block.commit().expect("commit corrupted manifest fixture");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit corrupted manifest fixture");
         let error = handle_gov_contract_get(
             harness.state,
             axum::extract::Path(contract_address.to_string()),

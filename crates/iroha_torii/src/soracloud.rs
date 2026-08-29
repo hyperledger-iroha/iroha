@@ -10662,7 +10662,7 @@ mod tests {
             }
             .execute(&ALICE_ID, &mut stx)?;
             stx.apply();
-            state_block.commit()?;
+            state_block.commit_world_overlay_for_testing()?;
             let snapshot = control_plane_snapshot(&app, Some("web_portal"), 10)?;
             assert_eq!(snapshot.service_count, 1);
             assert_eq!(snapshot.audit_event_count, 1);

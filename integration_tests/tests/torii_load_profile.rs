@@ -248,7 +248,6 @@ async fn torii_http_hot_path_load_profile() -> eyre::Result<()> {
         .with_peers(4)
         .with_config_layer(|layer| {
             layer
-                .write("telemetry_enabled", true)
                 .write("telemetry_profile", "operator")
                 .write(["torii", "query_rate_per_authority_per_sec"], 10_000i64)
                 .write(["torii", "query_burst_per_authority"], 10_000i64)

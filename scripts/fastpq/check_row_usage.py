@@ -13,10 +13,22 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import sys
 from pathlib import Path
 from typing import Dict, Iterable, List, Tuple
+
+try:
+    from .validate_row_usage_snapshot import (
+        COUNT_FIELDS,
+        ValidationError,
+        validate_row_usage_snapshot,
+    )
+except ImportError:  # Direct `python3 scripts/fastpq/check_row_usage.py` execution.
+    from validate_row_usage_snapshot import (  # type: ignore[no-redef]
+        COUNT_FIELDS,
+        ValidationError,
+        validate_row_usage_snapshot,
+    )
 
 
 RowUsage = Dict[str, int]
@@ -85,29 +97,6 @@ def load_json(path: Path):
         raise SystemExit(f"[error] invalid JSON in {path}: {err}") from err
 
 
-def gather_batches(blob) -> List[dict]:
-    """Return every dict that looks like a transition batch."""
-
-    stack: List[object] = [blob]
-    batches: List[dict] = []
-    while stack:
-        current = stack.pop()
-        if isinstance(current, dict):
-            if "row_usage" in current and (
-                "parameter" in current or "metadata" in current
-            ):
-                batches.append(current)
-                continue
-            stack.extend(current.values())
-        elif isinstance(current, list):
-            stack.extend(current)
-    if not batches:
-        raise SystemExit(
-            "[error] no FASTPQ batches with row_usage were found in the provided blob"
-        )
-    return batches
-
-
 def key_for_batch(batch: dict, index: int, seen: Dict[str, int]) -> str:
     key = batch.get("entry_hash") or f"batch:{index}"
     if key in seen:
@@ -119,7 +108,11 @@ def key_for_batch(batch: dict, index: int, seen: Dict[str, int]) -> str:
 
 
 def build_row_usage_map(blob) -> BatchMap:
-    batches = gather_batches(blob)
+    try:
+        validate_row_usage_snapshot(blob)
+    except ValidationError as err:
+        raise SystemExit(f"[error] {err}") from err
+    batches = blob["fastpq_batches"]
     seen: Dict[str, int] = {}
     mapping: BatchMap = {}
     for idx, batch in enumerate(batches):
@@ -132,8 +125,8 @@ def build_row_usage_map(blob) -> BatchMap:
 
 
 def ratio(usage: RowUsage) -> float:
-    total = max(int(usage.get("total_rows", 0)), 0)
-    transfers = max(int(usage.get("transfer_rows", 0)), 0)
+    total = usage["total_rows"]
+    transfers = usage["transfer_rows"]
     if total == 0:
         return 0.0
     return transfers / total
@@ -142,8 +135,8 @@ def ratio(usage: RowUsage) -> float:
 def summary_line(name: str, baseline: RowUsage, candidate: RowUsage) -> str:
     base_ratio = ratio(baseline)
     cand_ratio = ratio(candidate)
-    base_total = int(baseline.get("total_rows", 0))
-    cand_total = int(candidate.get("total_rows", 0))
+    base_total = baseline["total_rows"]
+    cand_total = candidate["total_rows"]
     delta_ratio = cand_ratio - base_ratio
     delta_rows = cand_total - base_total
     return (
@@ -154,19 +147,10 @@ def summary_line(name: str, baseline: RowUsage, candidate: RowUsage) -> str:
 
 
 def aggregate(usages: Iterable[RowUsage]) -> RowUsage:
-    agg: RowUsage = {
-        "total_rows": 0,
-        "transfer_rows": 0,
-        "mint_rows": 0,
-        "burn_rows": 0,
-        "role_grant_rows": 0,
-        "role_revoke_rows": 0,
-        "meta_set_rows": 0,
-        "permission_rows": 0,
-    }
+    agg: RowUsage = {field: 0 for field in COUNT_FIELDS}
     for usage in usages:
         for key in agg:
-            agg[key] += int(usage.get(key, 0))
+            agg[key] += usage[key]
     return agg
 
 
@@ -204,9 +188,7 @@ def main() -> None:
         cand_usage = candidate[key]
         base_ratio = ratio(base_usage)
         cand_ratio = ratio(cand_usage)
-        total_delta = int(cand_usage.get("total_rows", 0)) - int(
-            base_usage.get("total_rows", 0)
-        )
+        total_delta = cand_usage["total_rows"] - base_usage["total_rows"]
         ratio_delta = cand_ratio - base_ratio
 
         summary_rows.append(
@@ -214,13 +196,13 @@ def main() -> None:
                 "batch": key,
                 "baseline": {
                     "transfer_ratio": base_ratio,
-                    "total_rows": int(base_usage.get("total_rows", 0)),
-                    "transfer_rows": int(base_usage.get("transfer_rows", 0)),
+                    "total_rows": base_usage["total_rows"],
+                    "transfer_rows": base_usage["transfer_rows"],
                 },
                 "candidate": {
                     "transfer_ratio": cand_ratio,
-                    "total_rows": int(cand_usage.get("total_rows", 0)),
-                    "transfer_rows": int(cand_usage.get("transfer_rows", 0)),
+                    "total_rows": cand_usage["total_rows"],
+                    "transfer_rows": cand_usage["transfer_rows"],
                 },
                 "delta": {
                     "transfer_ratio": ratio_delta,
@@ -271,13 +253,13 @@ def main() -> None:
             "aggregate": {
                 "baseline": {
                     "transfer_ratio": ratio(base_agg),
-                    "total_rows": int(base_agg.get("total_rows", 0)),
-                    "transfer_rows": int(base_agg.get("transfer_rows", 0)),
+                    "total_rows": base_agg["total_rows"],
+                    "transfer_rows": base_agg["transfer_rows"],
                 },
                 "candidate": {
                     "transfer_ratio": ratio(cand_agg),
-                    "total_rows": int(cand_agg.get("total_rows", 0)),
-                    "transfer_rows": int(cand_agg.get("transfer_rows", 0)),
+                    "total_rows": cand_agg["total_rows"],
+                    "transfer_rows": cand_agg["transfer_rows"],
                 },
                 "delta": {
                     "transfer_ratio": agg_ratio_delta,

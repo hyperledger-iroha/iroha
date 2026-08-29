@@ -65,7 +65,9 @@ fn selected_kotodama_hello_main_entrypoint_writes_expected_detail() {
             "expected selected `main` to queue exactly one detail write",
         );
         tx.apply();
-        block.commit().expect("commit hello block");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit hello block");
     }
     let key: Name = "example".parse().expect("metadata key");
     let view = state.view();

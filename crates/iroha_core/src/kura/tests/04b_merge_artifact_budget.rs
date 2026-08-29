@@ -271,8 +271,8 @@ fn committed_merge_carrier_reconstructs_only_outstanding_post_wsv_components() {
     );
 }
 #[test]
-fn direct_lane_receipt_preflights_its_exact_unreserved_append_peak() {
-    let temp_dir = TempDir::new().expect("create direct receipt budget temp dir");
+fn canonical_lane_receipt_preflights_its_exact_unreserved_append_peak() {
+    let temp_dir = TempDir::new().expect("create canonical receipt budget temp dir");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let lane_config = two_lane_runtime_config();
     let lane_id = LaneId::from(1);
@@ -296,10 +296,10 @@ fn direct_lane_receipt_preflights_its_exact_unreserved_append_peak() {
     let proposal = lane_block_proposal_from_ownership(&ownership);
     let (mut kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
     kura.store_block(Arc::new(block))
-        .expect("store direct receipt canonical evidence");
+        .expect("store canonical receipt evidence");
     let receipt = kura
         .recover_lane_block_application_receipt_artifact(&proposal)
-        .expect("recover direct receipt fixture");
+        .expect("recover canonical receipt fixture");
     assert_ne!(
         receipt.format,
         LaneBlockApplicationReceiptArtifactFormat::MergeExecution
@@ -307,10 +307,10 @@ fn direct_lane_receipt_preflights_its_exact_unreserved_append_peak() {
     let payload_len = u64::try_from(
         receipt
             .encode_framed()
-            .expect("encode direct receipt fixture")
+            .expect("encode canonical receipt fixture")
             .len(),
     )
-    .expect("direct receipt length fits u64");
+    .expect("canonical receipt length fits u64");
     let append_peak = payload_len
         .checked_add(Kura::maximum_index_growth_for_unresolved_sidecar_write(
             lane_block_height,
@@ -321,25 +321,25 @@ fn direct_lane_receipt_preflights_its_exact_unreserved_append_peak() {
                     .expect("append intent bound fits u64"),
             )
         })
-        .expect("direct receipt append peak fits u64");
+        .expect("canonical receipt append peak fits u64");
     let used = kura
         .kura_disk_usage_bytes()
-        .expect("measure direct receipt physical baseline");
+        .expect("measure canonical receipt physical baseline");
     let terminal = kura
         .autonomous_global_terminal_outcome_reserved_bytes()
-        .expect("measure direct receipt terminal envelope");
+        .expect("measure canonical receipt terminal envelope");
     let (persisted_count, unindexed_bytes) = kura
         .persisted_count_and_unindexed_bytes()
-        .expect("measure direct receipt durable frontier");
+        .expect("measure canonical receipt durable frontier");
     let pending = kura
         .pending_block_bytes(persisted_count, unindexed_bytes)
-        .expect("measure direct receipt pending canonical bytes");
+        .expect("measure canonical receipt pending bytes");
     let post_wsv = kura
         .post_wsv_lane_artifact_budget_reserved_bytes()
-        .expect("measure direct receipt post-WSV reservations");
+        .expect("measure canonical receipt post-WSV reservations");
     let certified = kura
         .certified_bundle_capacity_reserved_bytes()
-        .expect("measure direct receipt certified-bundle reservations");
+        .expect("measure canonical receipt certified-bundle reservations");
     let exact_limit = used
         .checked_add(pending)
         .and_then(|bytes| bytes.checked_add(terminal))
@@ -349,20 +349,20 @@ fn direct_lane_receipt_preflights_its_exact_unreserved_append_peak() {
             bytes.checked_add(Kura::canonical_prune_intent_maintenance_headroom_bytes())
         })
         .and_then(|bytes| bytes.checked_add(append_peak))
-        .expect("direct receipt exact capacity fits u64");
+        .expect("canonical receipt exact capacity fits u64");
     Arc::get_mut(&mut kura)
-        .expect("exclusive Kura before direct receipt capacity check")
+        .expect("exclusive Kura before canonical receipt capacity check")
         .max_disk_usage_bytes = exact_limit - 1;
     kura.persist_lane_block_application_receipt(&proposal)
-        .expect_err("one byte below the unreserved direct receipt peak must reject");
+        .expect_err("one byte below the unreserved canonical receipt peak must reject");
     let (data_path, index_path) =
         Kura::lane_block_application_receipt_paths_for_entry(lane_entry, temp_dir.path());
     assert!(!data_path.exists() && !index_path.exists());
     Arc::get_mut(&mut kura)
-        .expect("exclusive Kura before exact direct receipt capacity check")
+        .expect("exclusive Kura before exact canonical receipt capacity check")
         .max_disk_usage_bytes = exact_limit;
     kura.persist_lane_block_application_receipt(&proposal)
-        .expect("the exact unreserved direct receipt peak must admit");
+        .expect("the exact unreserved canonical receipt peak must admit");
 }
 #[test]
 fn latest_execution_index_rejects_equal_height_forks_on_append_and_rebuild() {

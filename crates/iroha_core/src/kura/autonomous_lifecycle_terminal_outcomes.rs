@@ -1200,6 +1200,114 @@ impl Kura {
         }
         Ok(outcome.is_complete().then_some(outcome.outcome_hash))
     }
+    /// Require the complete release proof which lets a canonical ordinary
+    /// certificate supersede a different retired autonomous attempt.
+    ///
+    /// The caller holds the ordinary certified-session persistence corridor's
+    /// prune, canonical-chain, geometry, and sidecar guards. This check is
+    /// deliberately read-only: a bare retirement is not sufficient because
+    /// producer Queue release and replica claim sealing cross later durability
+    /// barriers.
+    fn require_autonomous_lifecycle_retired_attempt_complete_for_ordinary_certificate_locked(
+        &self,
+        pending_canonical_bytes: u64,
+        entry: &LaneConfigEntry,
+        record: &AutonomousLaneBlockDurableRecord,
+    ) -> Result<()> {
+        let payload = &record.artifact.executable_payload;
+        let retirement = record.retirement.as_ref().ok_or_else(|| {
+            Self::invalid_lane_artifact_error(
+                record.view_state_path.clone(),
+                "ordinary certification cannot replace a live autonomous lane slot",
+            )
+        })?;
+        if !retirement.matches_payload(payload) {
+            return Err(Self::invalid_lane_artifact_error(
+                record.view_state_path.clone(),
+                "retired autonomous lane slot changed its exact payload identity",
+            ));
+        }
+        let descriptor = &payload.origin_proposal.descriptor;
+        let path = Self::autonomous_lifecycle_terminal_outcome_path_for_entry(
+            entry,
+            &self.store_root,
+            descriptor.lane_block_height,
+            descriptor.proposal_height,
+        );
+        let parent = path.parent().ok_or_else(|| {
+            Self::invalid_lane_artifact_error(
+                path.clone(),
+                "autonomous lifecycle terminal outcome path has no parent directory",
+            )
+        })?;
+        let bytes = self
+            .read_regular_sidecar_bytes(
+                &path,
+                parent,
+                AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_MAX_BYTES,
+            )?
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    path.clone(),
+                    "ordinary certification cannot replace an autonomous lane slot without its terminal outcome",
+                )
+            })?;
+        let outcome = Self::decode_autonomous_lifecycle_terminal_outcome(&path, &bytes)?;
+        outcome
+            .validate_for_payload(payload)
+            .map_err(|message| Self::invalid_lane_artifact_error(path.clone(), message))?;
+        if !outcome.is_complete() {
+            return Err(Self::invalid_lane_artifact_error(
+                path,
+                "ordinary certification cannot replace an autonomous lane slot before its Queue terminal outcome is Complete",
+            ));
+        }
+        let cursor =
+            self.read_autonomous_lifecycle_cursor_for_terminal_outcome_locked(entry, payload)?;
+        if cursor.binding() != outcome.binding() {
+            return Err(Self::invalid_lane_artifact_error(
+                path.clone(),
+                "autonomous lifecycle terminal outcome changed its signed cursor binding",
+            ));
+        }
+        match outcome.source() {
+            AutonomousLifecycleTerminalOutcomeSourceV1::CanonicalCarrier { .. } => {
+                return Err(Self::invalid_lane_artifact_error(
+                    path,
+                    "ordinary certification cannot replace a canonically applied autonomous lane slot",
+                ));
+            }
+            source @ AutonomousLifecycleTerminalOutcomeSourceV1::RetiredRelease { .. } => {
+                self.autonomous_lifecycle_terminal_source_matches_release_locked(
+                    Some(pending_canonical_bytes),
+                    entry,
+                    payload,
+                    Some(retirement),
+                    source,
+                )?;
+            }
+            source @ AutonomousLifecycleTerminalOutcomeSourceV1::RetiredReplicaQueueDisposition {
+                ..
+            } => {
+                let queue_disposition = self
+                    .autonomous_lifecycle_terminal_source_matches_replica_queue_disposition_locked(
+                        Some(pending_canonical_bytes),
+                        entry,
+                        payload,
+                        Some(retirement),
+                        source,
+                    )?;
+                self.require_autonomous_lane_entrypoint_claims_replica_complete_locked(
+                    entry,
+                    payload,
+                    retirement,
+                    queue_disposition,
+                    outcome.outcome_hash,
+                )?;
+            }
+        }
+        Ok(())
+    }
     fn read_autonomous_lifecycle_cursor_for_terminal_outcome_locked(
         &self,
         entry: &LaneConfigEntry,
@@ -2310,6 +2418,289 @@ impl Kura {
         }
         Ok(verified)
     }
+    /// Reconstruct exact Complete release authority for committed entrypoints.
+    ///
+    /// The lookup is hash-addressed and bounded by the caller's unique target
+    /// set. A missing, active, or pending-release claim yields no authority, so
+    /// Queue continues preserving its globally bound owner. A strict-absence
+    /// terminal claim is inconsistent with a live globally bound Queue cleanup
+    /// candidate and fails closed. Every other terminal claim is authorized
+    /// only after its retained payload, retirement, signed cursor, and Complete
+    /// source outcome all revalidate.
+    pub(crate) fn authorize_completed_autonomous_queue_cleanup_for_entrypoints(
+        &self,
+        expected_network_id: iroha_data_model::NetworkId,
+        entrypoint_hashes: &[Hash],
+    ) -> Result<Vec<AutonomousLifecycleCommittedQueueCleanupAuthorization>> {
+        if expected_network_id.as_bytes().iter().all(|byte| *byte == 0)
+            || entrypoint_hashes.len() > MAX_AUTONOMOUS_LANE_CLAIM_FILES
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "committed Queue cleanup target batch has a zero chain or exceeds its hard bound",
+            ));
+        }
+        let mut unique = BTreeSet::new();
+        if entrypoint_hashes
+            .iter()
+            .any(|hash| hash.as_ref().iter().all(|byte| *byte == 0) || !unique.insert(*hash))
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "committed Queue cleanup target batch is zero or duplicated",
+            ));
+        }
+        if entrypoint_hashes.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let _prune_guard = self.prune_lock.lock();
+        self.ensure_prune_recovery_not_required()?;
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        let pending_canonical_bytes =
+            self.pending_canonical_capacity_bytes_under_prune_and_canonical_guards()?;
+        let _geometry_guard = self.lane_geometry_lock.lock();
+        let mut candidates = Vec::new();
+        candidates.try_reserve_exact(entrypoint_hashes.len())?;
+        for entrypoint_hash in entrypoint_hashes {
+            let claim_path = Self::autonomous_lane_entrypoint_claim_path(
+                &self.store_root,
+                &expected_network_id,
+                entrypoint_hash,
+            );
+            let claim_temp_path = Self::autonomous_lane_entrypoint_claim_temp_path(&claim_path);
+            if Self::autonomous_lane_entrypoint_claim_file_exists(&claim_temp_path)? {
+                return Err(Self::invalid_lane_artifact_error(
+                    claim_temp_path,
+                    "committed Queue cleanup found an unresolved entrypoint-claim transition",
+                ));
+            }
+            if !Self::autonomous_lane_entrypoint_claim_file_exists(&claim_path)? {
+                continue;
+            }
+            let claim =
+                Self::decode_autonomous_lane_entrypoint_claim(&claim_path).map_err(|message| {
+                    Self::invalid_lane_artifact_error(claim_path.clone(), message)
+                })?;
+            if claim.network_id != expected_network_id
+                || claim.entrypoint_hash != *entrypoint_hash
+                || !self.autonomous_lane_entrypoint_claim_path_matches(&claim, &claim_path)
+            {
+                return Err(Self::invalid_lane_artifact_error(
+                    claim_path,
+                    "committed Queue cleanup entrypoint claim changed its hash-addressed identity",
+                ));
+            }
+            let (retirement_hash, replica_outcome_hash) = match claim.state {
+                AutonomousLaneEntrypointClaimStateV1::Released(retirement_hash) => {
+                    (retirement_hash, None)
+                }
+                AutonomousLaneEntrypointClaimStateV1::ReplicaReleasedComplete(
+                    retirement_hash,
+                    AutonomousLifecycleReplicaQueueDispositionV1::ExactOrdinaryFifo,
+                    outcome_hash,
+                ) => (retirement_hash, Some(outcome_hash)),
+                AutonomousLaneEntrypointClaimStateV1::Active
+                | AutonomousLaneEntrypointClaimStateV1::ReleasePending(_)
+                | AutonomousLaneEntrypointClaimStateV1::ReplicaReleased(_, _) => continue,
+                AutonomousLaneEntrypointClaimStateV1::ReplicaReleasedComplete(
+                    _,
+                    AutonomousLifecycleReplicaQueueDispositionV1::StrictQueueAbsent,
+                    _,
+                ) => {
+                    return Err(Self::invalid_lane_artifact_error(
+                        claim_path,
+                        "globally bound Queue cleanup candidate conflicts with a sealed strict-absence claim",
+                    ));
+                }
+            };
+            let entry = self.lane_storage_entry(claim.lane_id)?;
+            let (active_incarnation, activation_height) =
+                self.active_lane_incarnation_marker(&entry)?;
+            if entry.dataspace_id != claim.dataspace_id
+                || active_incarnation != claim.lane_incarnation
+                || claim.proposal_height <= activation_height
+            {
+                return Err(Self::invalid_lane_artifact_error(
+                    claim_path,
+                    "committed Queue cleanup terminal claim targets stale lane geometry",
+                ));
+            }
+            candidates.push((
+                *entrypoint_hash,
+                claim,
+                retirement_hash,
+                replica_outcome_hash,
+                entry,
+            ));
+        }
+
+        let _sidecar_guard = self.sidecar_lock.lock();
+        let mut authorizations = Vec::new();
+        authorizations.try_reserve_exact(candidates.len())?;
+        for (target_entrypoint_hash, claim, retirement_hash, replica_outcome_hash, entry) in
+            candidates
+        {
+            let Some(record) = self.read_autonomous_lane_block_attempt_record_locked(
+                &entry,
+                claim.lane_id,
+                claim.lane_block_height,
+                claim.proposal_height,
+                claim.network_id,
+                claim.epoch,
+                None,
+            )?
+            else {
+                return Err(Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "committed Queue cleanup terminal claim lost its retained payload attempt",
+                ));
+            };
+            let payload = &record.artifact.executable_payload;
+            if !claim.owns_payload(payload) {
+                return Err(Self::invalid_lane_artifact_error(
+                    record.view_state_path,
+                    "committed Queue cleanup terminal claim changed its retained payload",
+                ));
+            }
+            let retirement = record.retirement.as_ref().ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    record.view_state_path.clone(),
+                    "committed Queue cleanup terminal claim lost its exact retirement",
+                )
+            })?;
+            if retirement.digest()? != retirement_hash || !retirement.matches_payload(payload) {
+                return Err(Self::invalid_lane_artifact_error(
+                    record.view_state_path,
+                    "committed Queue cleanup retirement differs from its claim or payload",
+                ));
+            }
+            let outcome_path = Self::autonomous_lifecycle_terminal_outcome_path_for_entry(
+                &entry,
+                &self.store_root,
+                claim.lane_block_height,
+                claim.proposal_height,
+            );
+            let outcome_parent = outcome_path.parent().ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    outcome_path.clone(),
+                    "committed Queue cleanup terminal outcome path has no parent",
+                )
+            })?;
+            let Some(outcome_bytes) = self.read_regular_sidecar_bytes(
+                &outcome_path,
+                outcome_parent,
+                AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_MAX_BYTES,
+            )?
+            else {
+                if replica_outcome_hash.is_some() {
+                    return Err(Self::invalid_lane_artifact_error(
+                        outcome_path,
+                        "sealed replica Queue cleanup claim lost its Complete terminal outcome",
+                    ));
+                }
+                continue;
+            };
+            let outcome =
+                Self::decode_autonomous_lifecycle_terminal_outcome(&outcome_path, &outcome_bytes)?;
+            outcome.validate_for_payload(payload).map_err(|message| {
+                Self::invalid_lane_artifact_error(outcome_path.clone(), message)
+            })?;
+            if !outcome.is_complete() {
+                if replica_outcome_hash.is_some() {
+                    return Err(Self::invalid_lane_artifact_error(
+                        outcome_path,
+                        "sealed replica Queue cleanup claim points to a Pending terminal outcome",
+                    ));
+                }
+                continue;
+            }
+            let cursor =
+                self.read_autonomous_lifecycle_cursor_for_terminal_outcome_locked(&entry, payload)?;
+            if cursor.binding() != outcome.binding() {
+                return Err(Self::invalid_lane_artifact_error(
+                    outcome_path,
+                    "committed Queue cleanup terminal outcome changed its signed cursor binding",
+                ));
+            }
+            let source = outcome.source();
+            match replica_outcome_hash {
+                None => {
+                    let expected = AutonomousLifecycleTerminalOutcomeSourceV1::RetiredRelease {
+                        retirement_hash,
+                    };
+                    if source != expected {
+                        return Err(Self::invalid_lane_artifact_error(
+                            outcome_path,
+                            "committed Queue cleanup release claim names another terminal source",
+                        ));
+                    }
+                    self.autonomous_lifecycle_terminal_source_matches_release_locked(
+                        Some(pending_canonical_bytes),
+                        &entry,
+                        payload,
+                        Some(retirement),
+                        source,
+                    )?;
+                }
+                Some(expected_outcome_hash) => {
+                    let expected =
+                        AutonomousLifecycleTerminalOutcomeSourceV1::RetiredReplicaQueueDisposition {
+                            retirement_hash,
+                            queue_disposition:
+                                AutonomousLifecycleReplicaQueueDispositionV1::ExactOrdinaryFifo,
+                        };
+                    if source != expected || outcome.outcome_hash != expected_outcome_hash {
+                        return Err(Self::invalid_lane_artifact_error(
+                            outcome_path,
+                            "committed Queue cleanup replica claim names another Complete source",
+                        ));
+                    }
+                    let disposition = self
+                        .autonomous_lifecycle_terminal_source_matches_replica_queue_disposition_locked(
+                            Some(pending_canonical_bytes),
+                            &entry,
+                            payload,
+                            Some(retirement),
+                            source,
+                        )?;
+                    if disposition
+                        != AutonomousLifecycleReplicaQueueDispositionV1::ExactOrdinaryFifo
+                    {
+                        return Err(Self::invalid_lane_artifact_error(
+                            outcome_path,
+                            "committed Queue cleanup replica source is not exact ordinary FIFO",
+                        ));
+                    }
+                }
+            }
+            let reservation_group = lane_queue_reservation_group_binding_from_ordered_keys(
+                payload.reservation_keys.iter(),
+            )
+            .map_err(|message| Self::invalid_lane_artifact_error(outcome_path.clone(), message))?;
+            if outcome.binding().reservation_group_binding() != reservation_group
+                || payload
+                    .reservation_keys
+                    .iter()
+                    .filter(|key| Hash::from(key.entrypoint_hash) == target_entrypoint_hash)
+                    .count()
+                    != 1
+            {
+                return Err(Self::invalid_lane_artifact_error(
+                    outcome_path,
+                    "committed Queue cleanup outcome changed its exact target reservation group",
+                ));
+            }
+            authorizations.push(AutonomousLifecycleCommittedQueueCleanupAuthorization {
+                target_entrypoint_hash,
+                retirement_hash,
+                terminal_outcome_hash: outcome.outcome_hash,
+                reservation_group,
+                ordered_keys: payload.reservation_keys.clone(),
+            });
+        }
+        Ok(authorizations)
+    }
     /// Return every source-revalidated Pending outcome across active lane
     /// segments in deterministic carrier/route order.
     ///
@@ -2978,7 +3369,9 @@ impl Kura {
     }
     /// Seal every source-authenticated Complete replica outcome before startup
     /// performs any unrelated capacity-consuming repair.
-    fn seal_completed_autonomous_lifecycle_replica_claims_on_startup(&self) -> Result<()> {
+    pub(crate) fn seal_completed_autonomous_lifecycle_replica_claims_on_startup(
+        &self,
+    ) -> Result<()> {
         let _prune_guard = self.prune_lock.lock();
         self.ensure_prune_recovery_not_required()?;
         self.durable_mutation_authorized()?;

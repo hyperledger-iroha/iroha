@@ -2137,6 +2137,7 @@ pub(crate) fn apply_lane_reservation_reconciliation_plan(
     summary.finalized_committed = summary
         .finalized_committed
         .saturating_add(finalized_committed);
+    let mut terminalized_retirement_keys = Vec::new();
     for action in remaining_actions {
         match action {
             ReservationReconciliationAction::Commit { .. } => {}
@@ -2179,6 +2180,8 @@ pub(crate) fn apply_lane_reservation_reconciliation_plan(
                     network_id,
                     epoch,
                 )?;
+                let barrier = retirement.queue_release_barrier()?;
+                terminalized_retirement_keys.extend_from_slice(&barrier.ordered_keys);
                 if resumed {
                     summary.resumed_retirement =
                         summary.resumed_retirement.saturating_add(released);
@@ -2189,6 +2192,21 @@ pub(crate) fn apply_lane_reservation_reconciliation_plan(
             }
         }
     }
+    let terminalized_entrypoint_hashes = terminalized_retirement_keys
+        .iter()
+        .map(|key| Hash::from(key.entrypoint_hash))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let terminalized_authorizations = kura
+        .authorize_completed_autonomous_queue_cleanup_for_entrypoints(
+            network_id,
+            &terminalized_entrypoint_hashes,
+        )?;
+    queue.remove_state_committed_hashes_with_kura_terminal_authorizations(
+        state,
+        terminalized_authorizations,
+    )?;
     summary.released_strictly_absent = queue.release_strictly_absent_lane_reservations_in_order(
         &direct_release,
         authorized_direct_release_groups,
@@ -5000,16 +5018,46 @@ impl V2ApplyService {
                 );
             }
         }
-        self.queue.remove_committed_hashes(
-            committed_block
-                .as_ref()
-                .external_entrypoints_cloned()
-                .map(|entrypoint| entrypoint.hash())
-                .filter(|entrypoint_hash| {
-                    !staged_merge_queue_reservation_hashes.contains(entrypoint_hash)
-                }),
-            None,
-        );
+        let committed_queue_hashes = committed_block
+            .as_ref()
+            .external_entrypoints_cloned()
+            .map(|entrypoint| entrypoint.hash())
+            .filter(|entrypoint_hash| {
+                !staged_merge_queue_reservation_hashes.contains(entrypoint_hash)
+            })
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let terminal_candidates = self
+            .queue
+            .globally_bound_durable_claim_hashes(committed_queue_hashes.iter().copied())
+            .into_iter()
+            .map(Hash::from)
+            .collect::<Vec<_>>();
+        let terminal_authorizations = self
+            .kura
+            .authorize_completed_autonomous_queue_cleanup_for_entrypoints(
+                self.network_id,
+                &terminal_candidates,
+            )
+            .map_err(|error| {
+                V2ApplyError::committed_recovery_required(
+                    "Kura terminal proof for committed Queue cleanup",
+                    &error,
+                )
+            })?;
+        self.queue
+            .remove_committed_hashes_with_kura_terminal_authorizations(
+                committed_queue_hashes,
+                terminal_authorizations,
+                None,
+            )
+            .map_err(|error| {
+                V2ApplyError::committed_recovery_required(
+                    "Kura-authorized committed Queue cleanup",
+                    &error,
+                )
+            })?;
         let nexus = self.state.nexus_snapshot();
         let compliance = self.queue.lane_compliance_engine();
         let queue_reconfiguration_started = Instant::now();

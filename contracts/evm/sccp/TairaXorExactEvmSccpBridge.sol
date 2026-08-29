@@ -38,6 +38,7 @@ abstract contract TairaXorExactEvmSccpBridge {
         uint32 externalDomain;
         uint8 networkProfile;
         uint32 routeRevision;
+        uint256 maxWrappedSupply;
         uint256 externalChainId;
         bytes32 sourceLaneHash;
         bytes32 destinationLaneHash;
@@ -65,6 +66,7 @@ abstract contract TairaXorExactEvmSccpBridge {
     uint32 public immutable externalDomain;
     uint8 public immutable networkProfile;
     uint32 public immutable routeRevision;
+    uint256 public immutable maxWrappedSupply;
     uint256 public immutable externalChainId;
     bytes32 public immutable tokenCodeHash;
     bytes32 public immutable verifierCodeHash;
@@ -114,7 +116,8 @@ abstract contract TairaXorExactEvmSccpBridge {
         VerifierPolicyV1 memory configuredVerifierPolicy,
         uint32 configuredExternalDomain,
         uint8 configuredNetworkProfile,
-        uint32 configuredRouteRevision
+        uint32 configuredRouteRevision,
+        uint256 configuredMaxWrappedSupply
     ) {
         require(
             tokenAddress != address(0) && configuredVerifierPolicy.verifierAddress != address(0),
@@ -125,6 +128,10 @@ abstract contract TairaXorExactEvmSccpBridge {
         require(_profileDomain(configuredNetworkProfile) == configuredExternalDomain,
             "Profile/domain mismatch");
         require(configuredRouteRevision != 0, "Route revision is required");
+        require(
+            configuredMaxWrappedSupply != 0 && configuredMaxWrappedSupply <= MAX_U128,
+            "Invalid wrapped supply cap"
+        );
         require(
             configuredVerifierPolicy.semanticProofProfileHash != bytes32(0),
             "Semantic proof profile hash is required"
@@ -170,6 +177,7 @@ abstract contract TairaXorExactEvmSccpBridge {
         deployment.externalDomain = configuredExternalDomain;
         deployment.networkProfile = configuredNetworkProfile;
         deployment.routeRevision = configuredRouteRevision;
+        deployment.maxWrappedSupply = configuredMaxWrappedSupply;
         deployment.externalChainId = expectedChainId;
         deployment.sourceLaneHash = inboundLaneHash;
         deployment.destinationLaneHash = outboundLaneHash;
@@ -179,6 +187,7 @@ abstract contract TairaXorExactEvmSccpBridge {
         externalDomain = configuredExternalDomain;
         networkProfile = configuredNetworkProfile;
         routeRevision = configuredRouteRevision;
+        maxWrappedSupply = configuredMaxWrappedSupply;
         externalChainId = expectedChainId;
         tokenCodeHash = actualTokenCodeHash;
         verifierCodeHash = configuredVerifierPolicy.verifierCodeHash;
@@ -209,7 +218,8 @@ abstract contract TairaXorExactEvmSccpBridge {
             keccak256(ASSET_ID),
             keccak256(_routeIdForDomain(deployment.externalDomain)),
             deployment.routeRevision,
-            TAIRA_TO_TOKEN_SCALE
+            TAIRA_TO_TOKEN_SCALE,
+            deployment.maxWrappedSupply
         ));
         return keccak256(abi.encode(
             ROUTE_CONFIG_SEPARATOR,
@@ -316,6 +326,11 @@ abstract contract TairaXorExactEvmSccpBridge {
         uint256 expectedSupply = token.totalSupply();
         uint256 expectedBalance = token.balanceOf(account);
         if (minting) {
+            require(
+                amount <= maxWrappedSupply
+                    && expectedSupply <= maxWrappedSupply - amount,
+                "Wrapped supply cap exceeded"
+            );
             require(
                 expectedSupply <= type(uint256).max - amount
                     && expectedBalance <= type(uint256).max - amount

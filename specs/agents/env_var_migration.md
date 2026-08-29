@@ -42,8 +42,8 @@ set; document intentional additions here before using the override.
   preview now respects only the config flag.
   Izanami already requires `--allow-net`/persisted config, and tests now rely on
   that knob rather than ambient env toggles.
-- **FastPQ GPU tuning** — Added `fastpq.metal.{max_in_flight,threadgroup_width,metal_trace,metal_debug_enum,metal_debug_fused}`
-  config knobs (defaults: `None`/`None`/`false`/`false`/`false`) and thread them through CLI parsing
+- **FastPQ GPU tuning** — Added `fastpq.metal.{max_in_flight,threadgroup_width,metal_trace,metal_debug_enum}`
+  config knobs (defaults: `None`/`None`/`false`/`false`) and thread them through CLI parsing
   `FASTPQ_METAL_*` / `FASTPQ_DEBUG_*` shims now behave as dev/test fallbacks and
   are ignored once configuration loads (even when the config leaves them unset); docs/inventory were
   refreshed to flag the migration.【crates/irohad/src/main.rs:2609】【crates/iroha_core/src/fastpq/lane.rs:109】【crates/fastpq_prover/src/overrides.rs:11】

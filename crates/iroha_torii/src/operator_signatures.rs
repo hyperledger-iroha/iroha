@@ -315,7 +315,10 @@ impl fmt::Display for OperatorSignatureConfigError {
     }
 }
 impl std::error::Error for OperatorSignatureConfigError {}
-/// Public key whose request signature was authenticated by the operator middleware.
+/// Public key whose request signature was authenticated by an operator-format middleware.
+///
+/// Identity-bound routes receive this extension without receiving operator
+/// admission; their handler must still bind the key to its governed role.
 #[derive(Clone, Debug)]
 pub(crate) struct AuthenticatedOperatorPublicKey(pub PublicKey);
 /// Route-local operator authentication state with an exact body limit.
@@ -983,13 +986,19 @@ pub async fn enforce_identity_bound_signature(
         Ok(bytes) => bytes,
         Err(error) => return error.into_response(),
     };
-    let req = axum::http::Request::from_parts(parts, Body::from(body_bytes.clone()));
+    let mut req = axum::http::Request::from_parts(parts, Body::from(body_bytes.clone()));
     if let Err(error) = app
         .operator_signatures
         .authorize_request_for_bound_key(&req, &body_bytes)
     {
         return error.into_response();
     }
+    let authenticated_public_key = match OperatorSignatures::request_public_key(req.headers()) {
+        Ok(public_key) => public_key,
+        Err(error) => return error.into_response(),
+    };
+    req.extensions_mut()
+        .insert(AuthenticatedOperatorPublicKey(authenticated_public_key));
     next.run(req).await
 }
 fn torii_proxy_receiver_peer_id(app: &SharedAppState) -> Option<PeerId> {

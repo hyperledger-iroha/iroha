@@ -165,11 +165,19 @@ fun initialStateFixtureConfig(): Cell<BridgeConfig> {
         tail: routeTail.toCell(),
     };
     val verifyingKey = beginCell().storeUint(12, 8).endCell();
+    val guardianTail: MintBreakerGuardiansTail = { guardian3: 4, guardian4: 5 };
+    val guardians: MintBreakerGuardians = {
+        guardian0: 1,
+        guardian1: 2,
+        guardian2: 3,
+        tail: guardianTail.toCell(),
+    };
     val finalityTail: FinalityHashesTail = {
         proofProfileCommitment: 9,
         embeddedVerifierCodeHash: 10,
         verifyingKeyCellHash: verifyingKey.hash(),
         verifyingKey,
+        mintBreakerGuardians: guardians.toCell(),
     };
     val finalityHashes: FinalityHashes = {
         soraFinalityAnchorHash: 6,
@@ -181,6 +189,7 @@ fun initialStateFixtureConfig(): Cell<BridgeConfig> {
         expectedGlobalId: -239,
         routeRevision: 1,
         tairaToTonMultiplier: SCCP_TAIRA_TO_TON_MULTIPLIER,
+        maxWrappedSupply: 100,
         sourceLaneBytes: beginCell().storeUint(14, 8).endCell(),
         destinationLaneBytes: beginCell().storeUint(1, 8).endCell(),
         routeHashes: routeHashes.toCell(),
@@ -299,6 +308,14 @@ get fun `test finalize version and retry funding policies fail closed`() {
     expect(isCanonicalSccpMessageVersion(SCCP_MESSAGE_SCHEMA_VERSION + 1)).toEqual(false);
     expect(sccpRetryValueIsSufficient(2 * SCCP_OPERATION_VALUE - 1)).toEqual(false);
     expect(sccpRetryValueIsSufficient(2 * SCCP_OPERATION_VALUE)).toEqual(true);
+}
+
+get fun `test master mint supply cap admits the boundary and rejects overruns`() {
+    expect(sccpMintFitsSupplyCap(90, 10, 100)).toEqual(true);
+    expect(sccpMintFitsSupplyCap(90, 11, 100)).toEqual(false);
+    expect(sccpMintFitsSupplyCap(100, 1, 100)).toEqual(false);
+    expect(sccpMintFitsSupplyCap(101, 1, 100)).toEqual(false);
+    expect(sccpMintFitsSupplyCap(0, 0, 0)).toEqual(false);
 }
 
 get fun `test transfer funding and recoverable nonce policies fail closed`() {

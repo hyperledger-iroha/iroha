@@ -15,7 +15,7 @@ use iroha_logger::info;
 #[cfg(feature = "local-quic-proxy")]
 use iroha_logger::warn;
 #[cfg(feature = "local-quic-proxy")]
-use iroha_telemetry::metrics::{global_or_default, global_sorafs_fetch_otel};
+use iroha_telemetry::metrics::global_or_default;
 use norito::{NoritoDeserialize, NoritoSerialize, core::DecodeFromSlice};
 #[cfg(feature = "local-quic-proxy")]
 use norito::{decode_from_bytes, to_bytes};
@@ -59,7 +59,6 @@ const PROXY_HANDSHAKE_VERSION: u8 = 1;
 #[cfg(feature = "local-quic-proxy")]
 const PROXY_ALPN_LABEL: &str = "sorafs-proxy/1";
 pub(crate) const PROXY_PROTOCOL_LABEL: &str = "local_quic_proxy";
-pub(crate) const PROXY_MANIFEST_ID: &str = "local_quic_proxy";
 #[cfg(feature = "local-quic-proxy")]
 const PROXY_CAPABILITIES: &[&str] = &[
     "raw-stream",
@@ -2005,15 +2004,6 @@ fn valid_control_field(value: &str) -> bool {
 fn record_transport_event(label: &str, event: &str, reason: &str) {
     let metrics = global_or_default();
     metrics.inc_sorafs_orchestrator_transport_event(label, PROXY_PROTOCOL_LABEL, event, reason);
-    let otel = global_sorafs_fetch_otel();
-    otel.record_transport_event(
-        PROXY_MANIFEST_ID,
-        label,
-        None::<&str>,
-        PROXY_PROTOCOL_LABEL,
-        event,
-        reason,
-    );
 }
 #[cfg(feature = "local-quic-proxy")]
 async fn send_failure_ack(

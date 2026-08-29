@@ -586,9 +586,7 @@ const LOCALNET_TORII_MAX_CONTENT_LEN: u64 =
 const LOCALNET_PREAUTH_ALLOW_CIDRS: [&str; 2] = ["127.0.0.0/8", "::1/128"];
 /// Exact Torii transport sources trusted for internal localnet reads and routing.
 const LOCALNET_INTERNAL_API_TRUSTED_CIDRS: [&str; 2] = ["127.0.0.1/32", "::1/128"];
-/// Default localnet telemetry toggle (mirrors config defaults).
-const LOCALNET_TELEMETRY_ENABLED: bool = true;
-/// Default localnet telemetry profile (mirrors config defaults).
+/// Telemetry profile generated for localnet peers.
 const LOCALNET_TELEMETRY_PROFILE: &str = "extended";
 /// Minimum peer count for generated localnets.
 const LOCALNET_MIN_PEERS: u16 = 4;
@@ -2364,10 +2362,6 @@ fn render_peer_config(
     );
     root.insert("trusted_peers".into(), Value::Array(trusted_list));
     root.insert("trusted_peers_pop".into(), Value::Array(pops));
-    root.insert(
-        "telemetry_enabled".into(),
-        Value::Boolean(LOCALNET_TELEMETRY_ENABLED),
-    );
     root.insert(
         "telemetry_profile".into(),
         Value::String(LOCALNET_TELEMETRY_PROFILE.to_owned()),
@@ -7315,11 +7309,6 @@ mod tests {
             ),
             "localnet configs should pin the resolved Torii body-cap default explicitly"
         );
-        let telemetry_enabled = peer_cfg
-            .get("telemetry_enabled")
-            .and_then(toml::Value::as_bool)
-            .expect("telemetry_enabled boolean");
-        assert!(telemetry_enabled);
         let telemetry_profile = peer_cfg
             .get("telemetry_profile")
             .and_then(toml::Value::as_str)

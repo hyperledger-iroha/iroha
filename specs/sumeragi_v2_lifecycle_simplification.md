@@ -552,23 +552,29 @@ its lifecycle-owned no-clock state and transfers its verified successor into
 the same lifecycle loop. No second batch or post-dequeue implementation
 remains.
 
-The queue-only final CAS is private to the consuming Phase-B transaction and is
-not exposed from `PreparedLifecycleIngressSelector`.
+The queue-only final publication lock is private to the consuming Phase-B
+transaction and is not exposed from `PreparedLifecycleIngressSelector`.
 The cut binds an unforgeable process-local queue identity and its move-only
 witness must agree with the enclosing expected lifecycle context and selected
-physical ordinal. Commit reacquires `service_lock`, snapshots the exact
+physical ordinal. Before LedgerV1, the transaction reacquires `service_lock`
+and `producer_publication_lock`, snapshots the exact
 cut-aware geometry and both barrier projections, releases the state lock for
 carrier re-encoding and ownership-hash validation, then reacquires state for
-the final cached geometry/barrier/context comparison immediately before
-mutation. The Certified-Serve reservation lifecycle id already binds its exact
+the final cached geometry/barrier/context comparison. A mismatch at this lock
+boundary is retryable because no durable publication has begun. The two guards
+remain held across LedgerV1 fsync and the assertion-only physical dequeue, so a
+relay retransmit cannot coalesce new ownership history into the selected row
+inside the durable publication window. The Certified-Serve reservation
+lifecycle id already binds its exact
 request hash, so this final lock compares the reservation, carrier ordinal,
 payload shape, and any dependency round/subject without hashing the request.
 That final cached comparison performs no body encoding or ownership hashing;
 after it succeeds, the shared production tail still performs its existing
 durable ownership validation while holding the state lock.
-Post-cut appends remain outside the comparison and survive source
-rotation; any pre-cut reorder, removal, coalescence, ownership change, barrier
-change, or queue substitution rejects without dequeuing. Exact success uses a
+Post-cut appends remain outside the comparison and, when blocked by the producer
+fence, resume after dequeue and survive source rotation; any pre-lock reorder,
+removal, coalescence, ownership change, barrier change, or queue substitution
+rejects without dequeuing. Exact success uses a
 single factored production tail for durable leader-wire binding, Certified-Serve
 physical drain, lane/global counters and indexes, source rotation, and the
 runtime physical cut. Consuming the witness makes this queue transition
@@ -588,7 +594,7 @@ enter it. A request-fenced response which is not the lowest authenticated
 physical winner of its exact signed-request family is rejected; it cannot
 borrow the winner's candidate. The borrowed preparation retains the complete
 selected queue-minted context, digest, and physical ordinal for the final
-queue CAS; the readiness join first proves that exact identity is the family
+queue lock; the readiness join first proves that exact identity is the family
 winner, then binds the exact request hash, executor-authenticated response
 candidate, its sealed
 `PendingRuntimeEffectBinding`, and the active context. Certified-Fetch
@@ -668,15 +674,28 @@ failure before the LedgerV1 call returns the complete opaque completion for a
 fresh-selector retry; no response, receipt, acknowledgement, or queue parts are
 exposed.
 
-After those checks the transaction begins one fail-stop output operation and
-invokes `persist_exact_staged_successor` for the staged Ready successor. The
-persistence call itself is the status cut: any error from it is restart-only,
-because atomic replacement may already have crossed rename or fsync. A
-successful return is followed by the fresh witness's checked queue CAS. A CAS
-error retains that exact witness and completion in a restart-only result. Exact
-success must return a dequeued owner carrying the exact leader-wire runtime
-receipt installed by that CAS; before dequeue the selected queued owner must
-instead carry its productive leader-wire token and no runtime receipt. The
+An exact retransmission may extend process-local ownership history while the
+body fsync is in flight without replacing its fair-ingress row. Phase B
+therefore joins Phase A by height context plus physical admission ordinal, not
+by the stale ownership-history digest. This refresh is coordinate-only: the
+fresh selector must still bind the byte-identical signed response and
+authenticated responder to the same ordinary `EffectWorkId`, or the same
+recovered dispatch key, and rejects any response or owner drift before
+LedgerV1.
+
+After those checks the transaction converts the fresh witness into one final
+locked dequeue. Pre-lock queue drift returns the complete opaque completion for
+fresh-selector retry. With service and producer guards retained, the
+transaction begins one fail-stop output operation and invokes
+`persist_exact_staged_successor` for the staged Ready successor. The persistence
+call itself is the status cut: any error from it is restart-only, because atomic
+replacement may already have crossed rename or fsync. That failure releases the
+locks only by recovering the sealed witness for restart diagnostics. A
+successful return is followed by assertion-only dequeue; no post-Ledger queue
+CAS remains. Exact success must return a dequeued owner carrying the exact
+leader-wire runtime receipt installed by that dequeue; before dequeue the
+selected queued owner must instead carry its productive leader-wire token and
+no runtime receipt. The
 assertion-only tail installs the closed durable completion at the same registry
 address, publishes the staged coordinator, commits the executor response claim
 and retires its Fetch/body-pipeline owners, removes the exact service owner
@@ -797,9 +816,11 @@ files are safe and idempotent; ledger-first Store publication is forbidden.
 
 After obtaining that receipt, the transaction freshly recaptures the complete
 selector/queue cut, prepares the drop-inert registry preflight, consumes it with
-the receipt, performs the exact checked dequeue, and only then installs the
-closed same-address completion carrier. No selector or queue witness retained
-across the blocking persistence call is admissible. The resulting borrow-bound
+the receipt, and prelocks the exact dequeue before LedgerV1. It retains both
+queue guards through that publication, performs the assertion-only dequeue, and
+only then installs the closed same-address completion carrier. No selector or
+queue witness retained across the blocking body-persistence call is admissible.
+The resulting borrow-bound
 registry execution token checks the claimed Fetch lease, owner, ordinal,
 consumed slot, installed response digest, retained Fetch effect, retained
 pending causal binding, and nested durable body receipt. While that token keeps
@@ -1899,6 +1920,15 @@ worker completion advances the same row through the existing atomic Proposal
 Broadcast, canonical chunks, and Prepare-Sign transaction. Direct Proposal
 output remains invalid, and restart reconstructs the same standalone WAL owner
 rather than synthesizing the inherited local pending binding.
+Once that durable local `SignProposal` is Ready, an otherwise eligible height
+may mint one sealed Completion-rank exception. If the physical Completion head
+is ordinary, classification retains it unacknowledged in its exact slot and
+dispatches the authenticated local Proposal Sign first. Dedicated lifecycle
+completion heads retain FIFO priority, and any existing non-Producer claim
+cannot mint the exception. This closes the one-for-one livelock in which an
+ordinary candidate completion was drained, Runtime reproduced the already-
+durable `ProposalIntent`, and the rebound Sign admission yielded before the
+Ready row could ever cross worker I/O.
 Retries reuse the installed sidecar, failed consuming projections return the
 original seal, and validation rejection, superseding view/lock, and Decision
 detach retire it explicitly. Detached worker tasks therefore carry no local

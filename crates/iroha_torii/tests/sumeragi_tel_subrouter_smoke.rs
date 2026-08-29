@@ -1,5 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Smoke test that Torii exposes telemetry-gated Sumeragi routes via the merged sub-router.
+//! Smoke test that Torii does not expose retired Sumeragi telemetry routes.
 #![cfg(feature = "telemetry")]
 use axum::{extract::ConnectInfo, http::Request};
 use http::StatusCode;
@@ -29,7 +29,7 @@ fn signed_loopback_get(
     request
 }
 #[tokio::test]
-async fn sumeragi_tel_subrouter_exposes_endpoints() {
+async fn sumeragi_tel_subrouter_rejects_retired_endpoints() {
     // Minimal Torii setup with telemetry enabled
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let (kiso, _child) = KisoHandle::start(cfg.clone());
@@ -48,7 +48,7 @@ async fn sumeragi_tel_subrouter_exposes_endpoints() {
     ));
     let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
     let _ = peers_tx;
-    let telemetry_handle = MaybeTelemetry::for_tests().map_gate(TelemetryProfile::Full);
+    let telemetry_handle = MaybeTelemetry::for_tests().with_profile(TelemetryProfile::Full);
     let torii = Torii::new_with_handle(
         iroha_data_model::ChainId::from("test-chain"),
         iroha_torii::test_utils::signed_query_network_id(),
@@ -65,18 +65,8 @@ async fn sumeragi_tel_subrouter_exposes_endpoints() {
         telemetry_handle,
     );
     let app = torii.api_router_for_tests();
-    for uri in ["/v1/sumeragi/pacemaker"] {
-        let resp = app
-            .clone()
-            .oneshot(signed_loopback_get(&cfg, uri))
-            .await
-            .unwrap();
-        assert!(matches!(
-            resp.status(),
-            StatusCode::OK | StatusCode::TOO_MANY_REQUESTS
-        ));
-    }
     for retired in [
+        "/v1/sumeragi/pacemaker",
         "/v1/sumeragi/rbc",
         "/v1/sumeragi/phases",
         "/v1/sumeragi/telemetry",

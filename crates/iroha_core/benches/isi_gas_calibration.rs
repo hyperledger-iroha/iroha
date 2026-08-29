@@ -54,7 +54,9 @@ impl BenchState {
                 .expect("setup instruction execution");
         }
         tx.apply();
-        block.commit().expect("setup block commit");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("setup block commit");
     }
 }
 fn bench_block_header() -> BlockHeader {
@@ -94,7 +96,9 @@ fn setup_role_exists(state: &mut BenchState) {
         .execute(&state.ctx.authority, &mut tx)
         .expect("setup role registration");
     tx.apply();
-    block.commit().expect("setup block commit");
+    block
+        .commit_world_overlay_for_testing()
+        .expect("setup block commit");
 }
 fn setup_role_assigned(state: &mut BenchState) {
     setup_role_exists(state);

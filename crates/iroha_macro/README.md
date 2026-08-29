@@ -9,13 +9,13 @@ This crate contains macros and attributes for Iroha projects:
 Add the following to the manifest file of your Rust project:
 
 ```toml
-iroha_derive = { path = "path/to/iroha_derive" }
+iroha_macro = { path = "path/to/iroha_macro" }
 ```
 
 ## Examples
 
 ```rust
-use iroha_derive::FromVariant;
+use iroha_macro::FromVariant;
 
 trait MyTrait {}
 
@@ -27,8 +27,8 @@ enum Obj {
     String(String),
     // You can also skip implementing `From`
     Vec(#[skip_from] Vec<Obj>),
-    // You can also skip implementing `From` for item inside containers such as `Box`
-    Box(#[skip_container] Box<dyn MyTrait>)
+    // Conversions always use the exact field type; no container is allocated implicitly.
+    Box(Box<dyn MyTrait>)
 }
 
 // That would help you avoid doing this:

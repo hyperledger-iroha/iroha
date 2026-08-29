@@ -494,14 +494,11 @@ pub const COMMITTED_LANE_STATUS_AWAITING_PREDECESSOR_APPLICATION: &str =
 /// Execution status for a certified lane block with committed canonical application results.
 pub const COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK: &str =
     "state_applied_by_canonical_block";
-/// Execution status for a certified lane block directly applied to the local WSV.
-pub const COMMITTED_LANE_STATUS_STATE_APPLIED_BY_DIRECT_EXECUTION: &str =
-    "state_applied_by_direct_execution";
 /// Whether a committed lane-block status may count as rollout progress evidence.
 ///
 /// Rejected preflight evidence is an execution blocker, not progress: it proves
 /// the payload was recoverable, but it must not satisfy autoscale/localnet
-/// expansion evidence until direct application or a canonical receipt resolves it.
+/// expansion evidence until a canonical receipt resolves it.
 #[must_use]
 pub fn committed_lane_block_status_counts_as_progress(
     execution_status: &str,
@@ -512,8 +509,7 @@ pub fn committed_lane_block_status_counts_as_progress(
         COMMITTED_LANE_STATUS_PAYLOAD_AVAILABLE_AWAITING_EXECUTOR
         | COMMITTED_LANE_STATUS_PAYLOAD_RECOVERED_AWAITING_STATE_APPLICATION
         | COMMITTED_LANE_STATUS_PAYLOAD_PREFLIGHTED_AWAITING_STATE_APPLICATION
-        | COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK
-        | COMMITTED_LANE_STATUS_STATE_APPLIED_BY_DIRECT_EXECUTION => executable_payload_available,
+        | COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK => executable_payload_available,
         // Rejected preflight, predecessor waits, conflicts, and unknown future
         // status labels all fail closed.
         _ => false,

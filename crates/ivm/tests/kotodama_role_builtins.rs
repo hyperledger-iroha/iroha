@@ -4,7 +4,6 @@ use ivm::{
     kotodama::compiler::Compiler as KotodamaCompiler,
     mock_wsv::{MockWorldStateView, PermissionToken, WsvHost},
 };
-use std::collections::HashMap;
 mod common;
 const TEST_ACCOUNT_LITERAL: &str = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
 const TEST_CALLER_PUBLIC_KEY: &str =
@@ -41,7 +40,7 @@ fn kotodama_create_and_grant_role_enables_mint() {
     let mut wsv = MockWorldStateView::new();
     wsv.grant_permission(&caller, PermissionToken::RegisterAssetDefinition);
     wsv.grant_permission(&caller, PermissionToken::ManageRoles);
-    let host = WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new());
+    let host = WsvHost::new_with_subject(wsv, caller.clone());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
     vm.load_program(&prog).expect("load");
@@ -73,7 +72,7 @@ fn kotodama_grant_role_accepts_runtime_account_argument() {
     wsv.grant_permission(&caller, PermissionToken::RegisterAccount);
     wsv.grant_permission(&caller, PermissionToken::RegisterAssetDefinition);
     wsv.grant_permission(&caller, PermissionToken::ManageRoles);
-    let host = WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new());
+    let host = WsvHost::new_with_subject(wsv, caller.clone());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
     vm.load_program(&prog).expect("load");
@@ -101,7 +100,7 @@ fn kotodama_grant_permission_accepts_runtime_account_argument() {
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(caller.clone());
     wsv.grant_permission(&caller, PermissionToken::ManagePermissions);
-    let host = WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new());
+    let host = WsvHost::new_with_subject(wsv, caller.clone());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
     vm.load_program(&prog).expect("load");
@@ -130,7 +129,7 @@ fn kotodama_runtime_account_argument_survives_syscall_before_grant_permission() 
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(caller.clone());
     wsv.grant_permission(&caller, PermissionToken::ManagePermissions);
-    let mut host = WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new());
+    let mut host = WsvHost::new_with_subject(wsv, caller.clone());
     host.set_current_time_ms(1_717_171_717_000);
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
@@ -153,7 +152,7 @@ fn kotodama_authority_matches_domainless_account_literal() {
     let prog = compiler.compile_source(src).expect("compile");
     let caller = literal_account();
     let wsv = MockWorldStateView::new();
-    let host = WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new());
+    let host = WsvHost::new_with_subject(wsv, caller.clone());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
     vm.load_program(&prog).expect("load");

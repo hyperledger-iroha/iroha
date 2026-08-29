@@ -910,7 +910,7 @@ mod tests {
             .execute(&ALICE_ID, &mut stx)
             .expect("register domain");
         stx.apply();
-        let _ = sblock.commit();
+        let _ = sblock.commit_world_overlay_for_testing();
         while let Some(cur) = cursor.take() {
             let next = store
                 .handle_iter_continue(cur, &ALICE_ID)
@@ -1444,7 +1444,7 @@ mod tests {
             .execute(&ALICE_ID, &mut stx)
             .expect("register domain");
         stx.apply();
-        let _ = sblock.commit();
+        let _ = sblock.commit_world_overlay_for_testing();
         let iroha_data_model::query::QueryResponse::Iterable(next) = run_on_snapshot_with_mode_arc(
             &state,
             &store,
@@ -1544,7 +1544,9 @@ mod tests {
             .execute(&BOB_ID, &mut transaction)
             .expect("revoke exact direct reader grant");
         transaction.apply();
-        let _ = block.commit();
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit explicit test world overlay");
         let denied = run_on_snapshot_with_mode(
             &state,
             &store,
@@ -1571,7 +1573,9 @@ mod tests {
             .execute(&ALICE_ID, &mut transaction)
             .expect("restore the exact reader through an assigned role");
         transaction.apply();
-        let _ = block.commit();
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit explicit test world overlay");
         let QueryResponse::Iterable(second) = run_on_snapshot_with_mode(
             &state,
             &store,
@@ -1609,7 +1613,9 @@ mod tests {
             .execute(&BOB_ID, &mut transaction)
             .expect("unregister the account whose private data was delegated");
         transaction.apply();
-        let _ = block.commit();
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit explicit test world overlay");
         let view = state.view();
         let role = view.world.roles.get(&role_id).expect("reader role remains");
         assert!(!role.permissions().any(|permission| permission == &exact));

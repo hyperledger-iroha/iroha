@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
+#include <atomic>
 #include <chrono>
 #include <mutex>
 #include <new>
@@ -19,6 +20,28 @@
 #endif
 
 static constexpr auto FASTPQ_CUDA_COMMAND_TIMEOUT = std::chrono::seconds(120);
+static constexpr size_t FASTPQ_CUDA_MAX_GRID_X = 0x7fffffffull;
+
+// A failed CUDA completion may still own device and pinned-host buffers.
+// Releasing those buffers would race the device, so every uncertain completion
+// deliberately abandons them. Quarantine the backend after the first such
+// event so no new dispatch can add another unreclaimable allocation; work that
+// was already in flight remains subject to the same fail-closed handling.
+static std::atomic<bool>& cuda_backend_quarantined() {
+    static std::atomic<bool> quarantined{false};
+    return quarantined;
+}
+static void quarantine_cuda_backend() {
+    cuda_backend_quarantined().store(true, std::memory_order_release);
+}
+
+static bool cuda_backend_is_quarantined() {
+    return cuda_backend_quarantined().load(std::memory_order_acquire);
+}
+
+static bool async_status_requires_abandon(cudaError_t status) {
+    return status != cudaSuccess;
+}
 
 #if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ < FASTPQ_CUDA_ARCH_MIN)
 #error "fastpq_cuda requires SM80+ (compute capability 8.0 or newer)."
@@ -29,7 +52,6 @@ static constexpr auto FASTPQ_CUDA_COMMAND_TIMEOUT = std::chrono::seconds(120);
 // -----------------------------------------------------------------------------.
 static __device__ __constant__ uint64_t FIELD_MODULUS = 18446744069414584321ull;
 static __device__ __constant__ uint64_t FOLD_CONST = 0x00000000FFFFFFFFull; // 2^32 - 1
-static __device__ __constant__ uint64_t TRACE_NODE_DOMAIN_SEED = 6068040151459020611ull;
 
 #define POSEIDON_STATE_WIDTH 3u
 #define POSEIDON_RATE 2u
@@ -418,13 +440,26 @@ static cudaError_t wait_until_cuda_ready(QueryFn query) {
 
 static cudaError_t wait_for_event(cudaEvent_t event) {
     if (event == nullptr) {
+        quarantine_cuda_backend();
         return cudaErrorInvalidValue;
     }
-    return wait_until_cuda_ready([event]() { return cudaEventQuery(event); });
+    cudaError_t status = wait_until_cuda_ready([event]() { return cudaEventQuery(event); });
+    if (async_status_requires_abandon(status)) {
+        quarantine_cuda_backend();
+    }
+    return status;
 }
 
 static cudaError_t wait_for_stream(cudaStream_t stream) {
-    return wait_until_cuda_ready([stream]() { return cudaStreamQuery(stream); });
+    if (stream == nullptr) {
+        quarantine_cuda_backend();
+        return cudaErrorInvalidValue;
+    }
+    cudaError_t status = wait_until_cuda_ready([stream]() { return cudaStreamQuery(stream); });
+    if (async_status_requires_abandon(status)) {
+        quarantine_cuda_backend();
+    }
+    return status;
 }
 
 static void abandon_transform_workspace(TransformWorkspace* workspace) {
@@ -491,31 +526,71 @@ static void abandon_poseidon_workspace(PoseidonWorkspace* workspace) {
     workspace->event_ready = false;
 }
 
+static cudaError_t fail_transform_dispatch(
+    TransformWorkspace* workspace,
+    cudaError_t status
+) {
+    if (status != cudaSuccess) {
+        // Once work has been submitted, even an immediately reported failure
+        // does not prove that earlier commands stopped using the workspace.
+        quarantine_cuda_backend();
+        abandon_transform_workspace(workspace);
+    }
+    return status;
+}
+
+static cudaError_t fail_poseidon_dispatch(
+    PoseidonWorkspace* workspace,
+    cudaError_t status
+) {
+    if (status != cudaSuccess) {
+        quarantine_cuda_backend();
+        abandon_poseidon_workspace(workspace);
+    }
+    return status;
+}
+
 static cudaError_t wait_for_transform_event_after_copy(TransformWorkspace* workspace) {
-    if (workspace == nullptr || !workspace->event_ready || !workspace->stream_ready) {
+    if (workspace == nullptr) {
+        quarantine_cuda_backend();
+        return cudaErrorInvalidValue;
+    }
+    if (!workspace->event_ready || !workspace->stream_ready) {
+        quarantine_cuda_backend();
+        abandon_transform_workspace(workspace);
         return cudaErrorInvalidValue;
     }
     cudaError_t status = cudaEventRecord(workspace->event, workspace->stream);
-    if (status != cudaSuccess) {
+    if (async_status_requires_abandon(status)) {
+        quarantine_cuda_backend();
+        abandon_transform_workspace(workspace);
         return status;
     }
     status = wait_for_event(workspace->event);
-    if (status == cudaErrorLaunchTimeout) {
+    if (async_status_requires_abandon(status)) {
         abandon_transform_workspace(workspace);
     }
     return status;
 }
 
 static cudaError_t wait_for_poseidon_event_after_copy(PoseidonWorkspace* workspace) {
-    if (workspace == nullptr || !workspace->event_ready || !workspace->stream_ready) {
+    if (workspace == nullptr) {
+        quarantine_cuda_backend();
+        return cudaErrorInvalidValue;
+    }
+    if (!workspace->event_ready || !workspace->stream_ready) {
+        quarantine_cuda_backend();
+        abandon_poseidon_workspace(workspace);
         return cudaErrorInvalidValue;
     }
     cudaError_t status = cudaEventRecord(workspace->event, workspace->stream);
-    if (status != cudaSuccess) {
+    if (async_status_requires_abandon(status)) {
+        quarantine_cuda_backend();
+        abandon_poseidon_workspace(workspace);
         return status;
     }
     status = wait_for_event(workspace->event);
-    if (status == cudaErrorLaunchTimeout) {
+    if (async_status_requires_abandon(status)) {
         abandon_poseidon_workspace(workspace);
     }
     return status;
@@ -575,6 +650,23 @@ static bool checked_size_mul(size_t lhs, size_t rhs, size_t* out) {
         return false;
     }
     *out = lhs * rhs;
+    return true;
+}
+
+static bool checked_grid_size(
+    size_t item_count,
+    unsigned int threads_per_block,
+    unsigned int* grid_size
+) {
+    if (item_count == 0 || threads_per_block == 0 || grid_size == nullptr) {
+        return false;
+    }
+    const size_t block_count = item_count / threads_per_block
+        + (item_count % threads_per_block != 0 ? 1u : 0u);
+    if (block_count == 0 || block_count > FASTPQ_CUDA_MAX_GRID_X) {
+        return false;
+    }
+    *grid_size = (unsigned int)block_count;
     return true;
 }
 
@@ -666,6 +758,9 @@ static bool validate_poseidon_word_slices(
 }
 
 static TransformWorkspace* current_transform_workspace() {
+    if (cuda_backend_is_quarantined()) {
+        return nullptr;
+    }
     int device = 0;
     if (cudaGetDevice(&device) != cudaSuccess) {
         return nullptr;
@@ -674,7 +769,15 @@ static TransformWorkspace* current_transform_workspace() {
 }
 
 static AsyncDispatchBuffers* acquire_async_dispatch_buffers(int device) {
+    if (cuda_backend_is_quarantined()) {
+        return nullptr;
+    }
     std::lock_guard<std::mutex> guard(async_dispatch_pool_mutex());
+    // A failure can race a caller that was waiting for the pool lock. Recheck
+    // after acquiring the lock so that waiter cannot start another allocation.
+    if (cuda_backend_is_quarantined()) {
+        return nullptr;
+    }
     std::vector<AsyncDispatchBuffers*>& pool = async_dispatch_pools()[device];
     if (!pool.empty()) {
         AsyncDispatchBuffers* buffers = pool.back();
@@ -692,30 +795,48 @@ static void release_async_dispatch_buffers(AsyncDispatchBuffers* buffers) {
     async_dispatch_pools()[buffers->device].push_back(buffers);
 }
 
+static void abandon_pending_transform(PendingTransform* pending) {
+    if (pending == nullptr) {
+        return;
+    }
+    // The event and pooled workspace can still be owned by CUDA. Delete only
+    // the small host-side handle and deliberately lose every CUDA resource
+    // pointer so neither a destructor nor a later dispatch can reclaim it.
+    pending->event = nullptr;
+    pending->buffers = nullptr;
+    pending->staging_output = nullptr;
+    pending->output_byte_len = 0;
+    delete pending;
+}
+
 static cudaError_t destroy_pending_transform(PendingTransform* pending) {
     if (pending == nullptr) {
         return cudaSuccess;
     }
-    (void)cudaSetDevice(pending->device);
-    cudaError_t status = cudaSuccess;
-    bool release_buffers = true;
+    cudaError_t status = cudaSetDevice(pending->device);
+    if (async_status_requires_abandon(status)) {
+        quarantine_cuda_backend();
+        abandon_pending_transform(pending);
+        return status;
+    }
     if (pending->buffers != nullptr && pending->buffers->stream_ready) {
         status = wait_for_stream(pending->buffers->stream);
-        if (status == cudaErrorLaunchTimeout) {
-            release_buffers = false;
+        if (async_status_requires_abandon(status)) {
+            abandon_pending_transform(pending);
+            return status;
         }
     }
-    if (pending->event != nullptr && status != cudaErrorLaunchTimeout) {
-        cudaError_t destroy_status = cudaEventDestroy(pending->event);
-        if (status == cudaSuccess) {
-            status = destroy_status;
+    if (pending->event != nullptr) {
+        status = cudaEventDestroy(pending->event);
+        if (async_status_requires_abandon(status)) {
+            quarantine_cuda_backend();
+            abandon_pending_transform(pending);
+            return status;
         }
     }
-    if (release_buffers) {
-        release_async_dispatch_buffers(pending->buffers);
-    }
+    release_async_dispatch_buffers(pending->buffers);
     delete pending;
-    return status;
+    return cudaSuccess;
 }
 
 static cudaError_t create_pending_transform(
@@ -751,6 +872,9 @@ static cudaError_t create_pending_transform(
 }
 
 static PoseidonWorkspace* current_poseidon_workspace() {
+    if (cuda_backend_is_quarantined()) {
+        return nullptr;
+    }
     int device = 0;
     if (cudaGetDevice(&device) != cudaSuccess) {
         return nullptr;
@@ -1259,7 +1383,7 @@ __global__ void fastpq_fft_kernel(
     uint32_t log_len,
     uint64_t root
 ) {
-    uint64_t col = blockIdx.x * blockDim.x + threadIdx.x;
+    uint64_t col = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
     if ((size_t)col >= column_count) {
         return;
     }
@@ -1274,7 +1398,7 @@ __global__ void fastpq_ifft_kernel(
     uint32_t log_len,
     uint64_t root
 ) {
-    uint64_t col = blockIdx.x * blockDim.x + threadIdx.x;
+    uint64_t col = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
     if ((size_t)col >= column_count) {
         return;
     }
@@ -1442,7 +1566,7 @@ __global__ void fastpq_bn254_lde_kernel(
 }
 
 __global__ void fastpq_poseidon_permute_kernel(uint64_t* states, size_t state_count) {
-    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    size_t idx = (size_t)blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= state_count) {
         return;
     }
@@ -1464,7 +1588,7 @@ __global__ void fastpq_poseidon_hash_columns_kernel(
     size_t column_count,
     uint64_t* out_states
 ) {
-    size_t col = blockIdx.x * blockDim.x + threadIdx.x;
+    size_t col = (size_t)blockIdx.x * blockDim.x + threadIdx.x;
     if (col >= column_count) {
         return;
     }
@@ -1482,43 +1606,6 @@ __global__ void fastpq_poseidon_hash_columns_kernel(
     for (unsigned int lane = 0; lane < POSEIDON_STATE_WIDTH; ++lane) {
         out[lane] = local_state[lane];
     }
-}
-
-__global__ void fastpq_poseidon_leaf_extract_kernel(
-    const uint64_t* states,
-    size_t column_count,
-    uint64_t* out_hashes
-) {
-    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx >= column_count) {
-        return;
-    }
-    out_hashes[idx] = states[idx * POSEIDON_STATE_WIDTH];
-}
-
-__global__ void fastpq_poseidon_parent_kernel(
-    const uint64_t* leaf_hashes,
-    size_t column_count,
-    uint64_t* parent_hashes
-) {
-    size_t parent_idx = blockIdx.x * blockDim.x + threadIdx.x;
-    size_t parent_count = column_count / 2 + column_count % 2;
-    if (parent_idx >= parent_count) {
-        return;
-    }
-    size_t left = parent_idx * 2;
-    size_t right = left + 1;
-    if (right >= column_count) {
-        right = column_count - 1;
-    }
-    uint64_t state[POSEIDON_STATE_WIDTH] = {0ull, 0ull, 0ull};
-    state[0] = f_add(state[0], TRACE_NODE_DOMAIN_SEED);
-    state[1] = f_add(state[1], leaf_hashes[left]);
-    poseidon_permute(state);
-    state[0] = f_add(state[0], leaf_hashes[right]);
-    state[1] = f_add(state[1], 1ull);
-    poseidon_permute(state);
-    parent_hashes[parent_idx] = state[0];
 }
 
 static constexpr unsigned int BN254_POSEIDON_WIDTH = 3u;
@@ -1652,7 +1739,7 @@ __global__ void fastpq_bn254_poseidon_hash_words_kernel(
     const uint64_t* mds,
     uint64_t* out_hashes
 ) {
-    size_t index = blockIdx.x * blockDim.x + threadIdx.x;
+    size_t index = (size_t)blockIdx.x * blockDim.x + threadIdx.x;
     if (index >= batch_count) {
         return;
     }
@@ -1668,6 +1755,10 @@ __global__ void fastpq_bn254_poseidon_hash_words_kernel(
 // -----------------------------------------------------------------------------.
 // Public C interface.
 // -----------------------------------------------------------------------------
+extern "C" int fastpq_cuda_backend_quarantined_cuda() {
+    return cuda_backend_is_quarantined() ? 1 : 0;
+}
+
 extern "C" cudaError_t fastpq_test_wait_timeout_cuda(uint32_t timeout_ms) {
     if (timeout_ms == 0) {
         return cudaErrorInvalidValue;
@@ -1689,12 +1780,20 @@ extern "C" cudaError_t fastpq_pending_wait_cuda(
     }
 
     cudaError_t status = cudaSetDevice(pending->device);
-    if (status != cudaSuccess) {
-        (void)destroy_pending_transform(pending);
+    if (async_status_requires_abandon(status)) {
+        quarantine_cuda_backend();
+        abandon_pending_transform(pending);
         return status;
     }
 
     status = wait_for_event(pending->event);
+    if (async_status_requires_abandon(status)) {
+        // The event, stream, device buffers, and pinned host buffers may still
+        // be in use. Drop only the host handle; intentionally abandon every
+        // CUDA resource and avoid a second stream wait.
+        abandon_pending_transform(pending);
+        return status;
+    }
     if (status == cudaSuccess && output != nullptr) {
         size_t output_byte_len = 0;
         if (
@@ -1736,6 +1835,11 @@ extern "C" cudaError_t fastpq_fft_async_submit_cuda(
     if (status != cudaSuccess) {
         return status;
     }
+    const unsigned int threads_per_block = 128u;
+    unsigned int grid_size = 0;
+    if (!checked_grid_size(column_count, threads_per_block, &grid_size)) {
+        return cudaErrorInvalidValue;
+    }
 
     int device = 0;
     status = cudaGetDevice(&device);
@@ -1797,16 +1901,7 @@ extern "C" cudaError_t fastpq_fft_async_submit_cuda(
         destroy_pending_transform(pending);
         return status;
     }
-    const unsigned int threads_per_block = 128u;
-    size_t grid_size_host = (column_count + threads_per_block - 1u) / threads_per_block;
-    if (grid_size_host == 0) {
-        grid_size_host = 1;
-    }
-    if (grid_size_host > (size_t)UINT32_MAX) {
-        destroy_pending_transform(pending);
-        return cudaErrorInvalidValue;
-    }
-    fastpq_fft_kernel<<<(unsigned int)grid_size_host, threads_per_block, 0, buffers->stream>>>(
+    fastpq_fft_kernel<<<grid_size, threads_per_block, 0, buffers->stream>>>(
         buffers->dense,
         column_count,
         n,
@@ -1830,8 +1925,9 @@ extern "C" cudaError_t fastpq_fft_async_submit_cuda(
         return status;
     }
     status = cudaEventRecord(pending->event, buffers->stream);
-    if (status != cudaSuccess) {
-        destroy_pending_transform(pending);
+    if (async_status_requires_abandon(status)) {
+        quarantine_cuda_backend();
+        abandon_pending_transform(pending);
         return status;
     }
     *out_handle = pending;
@@ -1858,6 +1954,11 @@ extern "C" cudaError_t fastpq_ifft_async_submit_cuda(
     if (status != cudaSuccess) {
         return status;
     }
+    const unsigned int threads_per_block = 128u;
+    unsigned int grid_size = 0;
+    if (!checked_grid_size(column_count, threads_per_block, &grid_size)) {
+        return cudaErrorInvalidValue;
+    }
 
     int device = 0;
     status = cudaGetDevice(&device);
@@ -1919,16 +2020,7 @@ extern "C" cudaError_t fastpq_ifft_async_submit_cuda(
         destroy_pending_transform(pending);
         return status;
     }
-    const unsigned int threads_per_block = 128u;
-    size_t grid_size_host = (column_count + threads_per_block - 1u) / threads_per_block;
-    if (grid_size_host == 0) {
-        grid_size_host = 1;
-    }
-    if (grid_size_host > (size_t)UINT32_MAX) {
-        destroy_pending_transform(pending);
-        return cudaErrorInvalidValue;
-    }
-    fastpq_ifft_kernel<<<(unsigned int)grid_size_host, threads_per_block, 0, buffers->stream>>>(
+    fastpq_ifft_kernel<<<grid_size, threads_per_block, 0, buffers->stream>>>(
         buffers->dense,
         column_count,
         n,
@@ -1952,8 +2044,9 @@ extern "C" cudaError_t fastpq_ifft_async_submit_cuda(
         return status;
     }
     status = cudaEventRecord(pending->event, buffers->stream);
-    if (status != cudaSuccess) {
-        destroy_pending_transform(pending);
+    if (async_status_requires_abandon(status)) {
+        quarantine_cuda_backend();
+        abandon_pending_transform(pending);
         return status;
     }
     *out_handle = pending;
@@ -1997,6 +2090,10 @@ extern "C" cudaError_t fastpq_lde_async_submit_cuda(
     status = dense_buffer_bytes(column_count, eval_len, &eval_byte_len);
     if (status != cudaSuccess) {
         return status;
+    }
+    unsigned int grid_size = 0;
+    if (!checked_grid_size(column_count, 1u, &grid_size)) {
+        return cudaErrorInvalidValue;
     }
 
     int device = 0;
@@ -2078,11 +2175,7 @@ extern "C" cudaError_t fastpq_lde_async_submit_cuda(
         destroy_pending_transform(pending);
         return status;
     }
-    if (column_count > (size_t)UINT32_MAX) {
-        destroy_pending_transform(pending);
-        return cudaErrorInvalidValue;
-    }
-    fastpq_lde_kernel<<<(unsigned int)column_count, 1, 0, buffers->stream>>>(
+    fastpq_lde_kernel<<<grid_size, 1, 0, buffers->stream>>>(
         buffers->coeffs,
         buffers->evals,
         trace_len,
@@ -2108,326 +2201,12 @@ extern "C" cudaError_t fastpq_lde_async_submit_cuda(
         return status;
     }
     status = cudaEventRecord(pending->event, buffers->stream);
-    if (status != cudaSuccess) {
-        destroy_pending_transform(pending);
+    if (async_status_requires_abandon(status)) {
+        quarantine_cuda_backend();
+        abandon_pending_transform(pending);
         return status;
     }
     *out_handle = pending;
-    return cudaSuccess;
-}
-
-extern "C" cudaError_t fastpq_fft_cuda(
-    uint64_t* elements,
-    size_t column_count,
-    uint32_t log_size,
-    uint64_t root
-) {
-    if (elements == nullptr || column_count == 0) {
-        return cudaErrorInvalidValue;
-    }
-    uint64_t n = 0;
-    if (!checked_domain_len(log_size, GOLDILOCKS_TWO_ADICITY, &n)) {
-        return cudaErrorInvalidValue;
-    }
-    size_t byte_len = 0;
-    cudaError_t status = dense_buffer_bytes(column_count, n, &byte_len);
-    if (status != cudaSuccess) {
-        return status;
-    }
-    std::lock_guard<std::mutex> guard(transform_workspace_mutex());
-    TransformWorkspace* workspace = current_transform_workspace();
-    if (workspace == nullptr) {
-        return cudaErrorInvalidValue;
-    }
-    status = ensure_workspace_buffer(
-        &workspace->dense,
-        &workspace->dense_capacity_bytes,
-        byte_len
-    );
-    if (status != cudaSuccess) {
-        return status;
-    }
-    status = ensure_pinned_workspace_buffer(
-        &workspace->host_dense,
-        &workspace->host_dense_capacity_bytes,
-        byte_len
-    );
-    if (status != cudaSuccess) {
-        return status;
-    }
-    status = ensure_transform_stream(workspace);
-    if (status != cudaSuccess) {
-        return status;
-    }
-    status = ensure_transform_event(workspace);
-    if (status != cudaSuccess) {
-        return status;
-    }
-    memcpy(workspace->host_dense, elements, byte_len);
-    status = cudaMemcpyAsync(
-        workspace->dense,
-        workspace->host_dense,
-        byte_len,
-        cudaMemcpyHostToDevice,
-        workspace->stream
-    );
-    if (status != cudaSuccess) {
-        return status;
-    }
-    const unsigned int threads_per_block = 128u;
-    size_t grid_size_host = (column_count + threads_per_block - 1u) / threads_per_block;
-    if (grid_size_host == 0) {
-        grid_size_host = 1;
-    }
-    if (grid_size_host > (size_t)UINT32_MAX) {
-        return cudaErrorInvalidValue;
-    }
-    fastpq_fft_kernel<<<(unsigned int)grid_size_host, threads_per_block, 0, workspace->stream>>>(
-        workspace->dense,
-        column_count,
-        n,
-        log_size,
-        root
-    );
-    status = cudaGetLastError();
-    if (status != cudaSuccess) {
-        return status;
-    }
-    status = cudaMemcpyAsync(
-        workspace->host_dense,
-        workspace->dense,
-        byte_len,
-        cudaMemcpyDeviceToHost,
-        workspace->stream
-    );
-    if (status != cudaSuccess) {
-        return status;
-    }
-    status = wait_for_transform_event_after_copy(workspace);
-    if (status != cudaSuccess) {
-        return status;
-    }
-    memcpy(elements, workspace->host_dense, byte_len);
-    return cudaSuccess;
-}
-
-extern "C" cudaError_t fastpq_ifft_cuda(
-    uint64_t* elements,
-    size_t column_count,
-    uint32_t log_size,
-    uint64_t root
-) {
-    if (elements == nullptr || column_count == 0) {
-        return cudaErrorInvalidValue;
-    }
-    uint64_t n = 0;
-    if (!checked_domain_len(log_size, GOLDILOCKS_TWO_ADICITY, &n)) {
-        return cudaErrorInvalidValue;
-    }
-    size_t byte_len = 0;
-    cudaError_t status = dense_buffer_bytes(column_count, n, &byte_len);
-    if (status != cudaSuccess) {
-        return status;
-    }
-    std::lock_guard<std::mutex> guard(transform_workspace_mutex());
-    TransformWorkspace* workspace = current_transform_workspace();
-    if (workspace == nullptr) {
-        return cudaErrorInvalidValue;
-    }
-    status = ensure_workspace_buffer(
-        &workspace->dense,
-        &workspace->dense_capacity_bytes,
-        byte_len
-    );
-    if (status != cudaSuccess) {
-        return status;
-    }
-    status = ensure_pinned_workspace_buffer(
-        &workspace->host_dense,
-        &workspace->host_dense_capacity_bytes,
-        byte_len
-    );
-    if (status != cudaSuccess) {
-        return status;
-    }
-    status = ensure_transform_stream(workspace);
-    if (status != cudaSuccess) {
-        return status;
-    }
-    status = ensure_transform_event(workspace);
-    if (status != cudaSuccess) {
-        return status;
-    }
-    memcpy(workspace->host_dense, elements, byte_len);
-    status = cudaMemcpyAsync(
-        workspace->dense,
-        workspace->host_dense,
-        byte_len,
-        cudaMemcpyHostToDevice,
-        workspace->stream
-    );
-    if (status != cudaSuccess) {
-        return status;
-    }
-    const unsigned int threads_per_block = 128u;
-    size_t grid_size_host = (column_count + threads_per_block - 1u) / threads_per_block;
-    if (grid_size_host == 0) {
-        grid_size_host = 1;
-    }
-    if (grid_size_host > (size_t)UINT32_MAX) {
-        return cudaErrorInvalidValue;
-    }
-    fastpq_ifft_kernel<<<(unsigned int)grid_size_host, threads_per_block, 0, workspace->stream>>>(
-        workspace->dense,
-        column_count,
-        n,
-        log_size,
-        root
-    );
-    status = cudaGetLastError();
-    if (status != cudaSuccess) {
-        return status;
-    }
-    status = cudaMemcpyAsync(
-        workspace->host_dense,
-        workspace->dense,
-        byte_len,
-        cudaMemcpyDeviceToHost,
-        workspace->stream
-    );
-    if (status != cudaSuccess) {
-        return status;
-    }
-    status = wait_for_transform_event_after_copy(workspace);
-    if (status != cudaSuccess) {
-        return status;
-    }
-    memcpy(elements, workspace->host_dense, byte_len);
-    return cudaSuccess;
-}
-
-extern "C" cudaError_t fastpq_lde_cuda(
-    const uint64_t* coeffs,
-    size_t column_count,
-    uint32_t trace_log,
-    uint32_t blowup_log,
-    uint64_t lde_root,
-    uint64_t coset,
-    uint64_t* out
-) {
-    if (coeffs == nullptr || out == nullptr || column_count == 0) {
-        return cudaErrorInvalidValue;
-    }
-    uint64_t trace_len = 0;
-    uint64_t eval_len = 0;
-    uint32_t eval_log = 0;
-    if (!checked_eval_domain_lengths(
-            trace_log,
-            blowup_log,
-            GOLDILOCKS_TWO_ADICITY,
-            &trace_len,
-            &eval_len,
-            &eval_log
-        )) {
-        return cudaErrorInvalidValue;
-    }
-    size_t coeff_byte_len = 0;
-    cudaError_t status = dense_buffer_bytes(column_count, trace_len, &coeff_byte_len);
-    if (status != cudaSuccess) {
-        return status;
-    }
-    size_t eval_byte_len = 0;
-    status = dense_buffer_bytes(column_count, eval_len, &eval_byte_len);
-    if (status != cudaSuccess) {
-        return status;
-    }
-    std::lock_guard<std::mutex> guard(transform_workspace_mutex());
-    TransformWorkspace* workspace = current_transform_workspace();
-    if (workspace == nullptr) {
-        return cudaErrorInvalidValue;
-    }
-    status = ensure_workspace_buffer(
-        &workspace->coeffs,
-        &workspace->coeff_capacity_bytes,
-        coeff_byte_len
-    );
-    if (status != cudaSuccess) {
-        return status;
-    }
-    status = ensure_workspace_buffer(
-        &workspace->evals,
-        &workspace->eval_capacity_bytes,
-        eval_byte_len
-    );
-    if (status != cudaSuccess) {
-        return status;
-    }
-    status = ensure_pinned_workspace_buffer(
-        &workspace->host_coeffs,
-        &workspace->host_coeff_capacity_bytes,
-        coeff_byte_len
-    );
-    if (status != cudaSuccess) {
-        return status;
-    }
-    status = ensure_pinned_workspace_buffer(
-        &workspace->host_evals,
-        &workspace->host_eval_capacity_bytes,
-        eval_byte_len
-    );
-    if (status != cudaSuccess) {
-        return status;
-    }
-    status = ensure_transform_stream(workspace);
-    if (status != cudaSuccess) {
-        return status;
-    }
-    status = ensure_transform_event(workspace);
-    if (status != cudaSuccess) {
-        return status;
-    }
-    memcpy(workspace->host_coeffs, coeffs, coeff_byte_len);
-    status = cudaMemcpyAsync(
-        workspace->coeffs,
-        workspace->host_coeffs,
-        coeff_byte_len,
-        cudaMemcpyHostToDevice,
-        workspace->stream
-    );
-    if (status != cudaSuccess) {
-        return status;
-    }
-    if (column_count > (size_t)UINT32_MAX) {
-        return cudaErrorInvalidValue;
-    }
-    fastpq_lde_kernel<<<(unsigned int)column_count, 1, 0, workspace->stream>>>(
-        workspace->coeffs,
-        workspace->evals,
-        trace_len,
-        eval_len,
-        eval_log,
-        lde_root,
-        coset
-    );
-    status = cudaGetLastError();
-    if (status != cudaSuccess) {
-        return status;
-    }
-    status = cudaMemcpyAsync(
-        workspace->host_evals,
-        workspace->evals,
-        eval_byte_len,
-        cudaMemcpyDeviceToHost,
-        workspace->stream
-    );
-    if (status != cudaSuccess) {
-        return status;
-    }
-    status = wait_for_transform_event_after_copy(workspace);
-    if (status != cudaSuccess) {
-        return status;
-    }
-    memcpy(out, workspace->host_evals, eval_byte_len);
     return cudaSuccess;
 }
 
@@ -2461,6 +2240,10 @@ extern "C" cudaError_t fastpq_bn254_fft_cuda(
     status = limb_buffer_bytes(stage_twiddle_len, &twiddle_byte_len);
     if (status != cudaSuccess) {
         return status;
+    }
+    unsigned int grid_size = 0;
+    if (!checked_grid_size(column_count, 1u, &grid_size)) {
+        return cudaErrorInvalidValue;
     }
     std::lock_guard<std::mutex> guard(transform_workspace_mutex());
     TransformWorkspace* workspace = current_transform_workspace();
@@ -2517,7 +2300,7 @@ extern "C" cudaError_t fastpq_bn254_fft_cuda(
         workspace->stream
     );
     if (status != cudaSuccess) {
-        return status;
+        return fail_transform_dispatch(workspace, status);
     }
     status = cudaMemcpyAsync(
         workspace->bn254_twiddles,
@@ -2527,13 +2310,10 @@ extern "C" cudaError_t fastpq_bn254_fft_cuda(
         workspace->stream
     );
     if (status != cudaSuccess) {
-        return status;
-    }
-    if (column_count > (size_t)UINT32_MAX) {
-        return cudaErrorInvalidValue;
+        return fail_transform_dispatch(workspace, status);
     }
     const unsigned int threads_per_block = 128u;
-    fastpq_bn254_fft_kernel<<<(unsigned int)column_count, threads_per_block, 0, workspace->stream>>>(
+    fastpq_bn254_fft_kernel<<<grid_size, threads_per_block, 0, workspace->stream>>>(
         workspace->dense,
         column_count,
         n,
@@ -2542,7 +2322,7 @@ extern "C" cudaError_t fastpq_bn254_fft_cuda(
     );
     status = cudaGetLastError();
     if (status != cudaSuccess) {
-        return status;
+        return fail_transform_dispatch(workspace, status);
     }
     status = cudaMemcpyAsync(
         workspace->host_dense,
@@ -2552,7 +2332,7 @@ extern "C" cudaError_t fastpq_bn254_fft_cuda(
         workspace->stream
     );
     if (status != cudaSuccess) {
-        return status;
+        return fail_transform_dispatch(workspace, status);
     }
     status = wait_for_transform_event_after_copy(workspace);
     if (status != cudaSuccess) {
@@ -2620,6 +2400,10 @@ extern "C" cudaError_t fastpq_bn254_lde_cuda(
     status = limb_buffer_bytes(BN254_LIMBS, &coset_byte_len);
     if (status != cudaSuccess) {
         return status;
+    }
+    unsigned int grid_size = 0;
+    if (!checked_grid_size(column_count, 1u, &grid_size)) {
+        return cudaErrorInvalidValue;
     }
     std::lock_guard<std::mutex> guard(transform_workspace_mutex());
     TransformWorkspace* workspace = current_transform_workspace();
@@ -2709,7 +2493,7 @@ extern "C" cudaError_t fastpq_bn254_lde_cuda(
         workspace->stream
     );
     if (status != cudaSuccess) {
-        return status;
+        return fail_transform_dispatch(workspace, status);
     }
     status = cudaMemcpyAsync(
         workspace->bn254_twiddles,
@@ -2719,7 +2503,7 @@ extern "C" cudaError_t fastpq_bn254_lde_cuda(
         workspace->stream
     );
     if (status != cudaSuccess) {
-        return status;
+        return fail_transform_dispatch(workspace, status);
     }
     status = cudaMemcpyAsync(
         workspace->bn254_coset,
@@ -2729,13 +2513,10 @@ extern "C" cudaError_t fastpq_bn254_lde_cuda(
         workspace->stream
     );
     if (status != cudaSuccess) {
-        return status;
-    }
-    if (column_count > (size_t)UINT32_MAX) {
-        return cudaErrorInvalidValue;
+        return fail_transform_dispatch(workspace, status);
     }
     const unsigned int threads_per_block = 128u;
-    fastpq_bn254_lde_kernel<<<(unsigned int)column_count, threads_per_block, 0, workspace->stream>>>(
+    fastpq_bn254_lde_kernel<<<grid_size, threads_per_block, 0, workspace->stream>>>(
         workspace->coeffs,
         workspace->evals,
         trace_len,
@@ -2747,7 +2528,7 @@ extern "C" cudaError_t fastpq_bn254_lde_cuda(
     );
     status = cudaGetLastError();
     if (status != cudaSuccess) {
-        return status;
+        return fail_transform_dispatch(workspace, status);
     }
     status = cudaMemcpyAsync(
         workspace->host_evals,
@@ -2757,7 +2538,7 @@ extern "C" cudaError_t fastpq_bn254_lde_cuda(
         workspace->stream
     );
     if (status != cudaSuccess) {
-        return status;
+        return fail_transform_dispatch(workspace, status);
     }
     status = wait_for_transform_event_after_copy(workspace);
     if (status != cudaSuccess) {
@@ -2776,6 +2557,11 @@ extern "C" cudaError_t fastpq_poseidon_permute_cuda(uint64_t* states, size_t sta
     cudaError_t status = dense_buffer_bytes(state_count, POSEIDON_STATE_WIDTH, &byte_len);
     if (status != cudaSuccess) {
         return status;
+    }
+    const unsigned int threads_per_block = 128u;
+    unsigned int grid_size = 0;
+    if (!checked_grid_size(state_count, threads_per_block, &grid_size)) {
+        return cudaErrorInvalidValue;
     }
 
     std::lock_guard<std::mutex> guard(poseidon_workspace_mutex());
@@ -2818,39 +2604,33 @@ extern "C" cudaError_t fastpq_poseidon_permute_cuda(uint64_t* states, size_t sta
         workspace->stream
     );
     if (status != cudaSuccess) {
-        return status;
+        return fail_poseidon_dispatch(workspace, status);
     }
 
-    const unsigned int threads_per_block = 128u;
-    size_t grid_size_host = (state_count + threads_per_block - 1u) / threads_per_block;
-    if (grid_size_host == 0) {
-        grid_size_host = 1;
-    }
-    if (grid_size_host > (size_t)UINT32_MAX) {
-        return cudaErrorInvalidValue;
-    }
-
-    fastpq_poseidon_permute_kernel<<<(unsigned int)grid_size_host, threads_per_block, 0, workspace->stream>>>(
+    fastpq_poseidon_permute_kernel<<<grid_size, threads_per_block, 0, workspace->stream>>>(
         device_states,
         state_count
     );
     status = cudaGetLastError();
-    if (status == cudaSuccess) {
-        status = cudaMemcpyAsync(
-            workspace->host_states,
-            device_states,
-            byte_len,
-            cudaMemcpyDeviceToHost,
-            workspace->stream
-        );
+    if (status != cudaSuccess) {
+        return fail_poseidon_dispatch(workspace, status);
     }
-    if (status == cudaSuccess) {
-        status = wait_for_poseidon_event_after_copy(workspace);
+    status = cudaMemcpyAsync(
+        workspace->host_states,
+        device_states,
+        byte_len,
+        cudaMemcpyDeviceToHost,
+        workspace->stream
+    );
+    if (status != cudaSuccess) {
+        return fail_poseidon_dispatch(workspace, status);
     }
-    if (status == cudaSuccess) {
-        memcpy(states, workspace->host_states, byte_len);
+    status = wait_for_poseidon_event_after_copy(workspace);
+    if (status != cudaSuccess) {
+        return status;
     }
-    return status;
+    memcpy(states, workspace->host_states, byte_len);
+    return cudaSuccess;
 }
 
 extern "C" cudaError_t fastpq_poseidon_hash_columns_cuda(
@@ -2877,6 +2657,11 @@ extern "C" cudaError_t fastpq_poseidon_hash_columns_cuda(
     }
     size_t slice_bytes = 0;
     if (!checked_size_mul(column_count, sizeof(PoseidonSlice), &slice_bytes)) {
+        return cudaErrorInvalidValue;
+    }
+    const unsigned int threads_per_block = 128u;
+    unsigned int grid_size = 0;
+    if (!checked_grid_size(column_count, threads_per_block, &grid_size)) {
         return cudaErrorInvalidValue;
     }
 
@@ -2955,7 +2740,7 @@ extern "C" cudaError_t fastpq_poseidon_hash_columns_cuda(
         workspace->stream
     );
     if (status != cudaSuccess) {
-        return status;
+        return fail_poseidon_dispatch(workspace, status);
     }
     status = cudaMemcpyAsync(
         device_slices,
@@ -2965,19 +2750,10 @@ extern "C" cudaError_t fastpq_poseidon_hash_columns_cuda(
         workspace->stream
     );
     if (status != cudaSuccess) {
-        return status;
+        return fail_poseidon_dispatch(workspace, status);
     }
 
-    const unsigned int threads_per_block = 128u;
-    size_t grid_size_host = (column_count + threads_per_block - 1u) / threads_per_block;
-    if (grid_size_host == 0) {
-        grid_size_host = 1;
-    }
-    if (grid_size_host > (size_t)UINT32_MAX) {
-        return cudaErrorInvalidValue;
-    }
-
-    fastpq_poseidon_hash_columns_kernel<<<(unsigned int)grid_size_host, threads_per_block, 0, workspace->stream>>>(
+    fastpq_poseidon_hash_columns_kernel<<<grid_size, threads_per_block, 0, workspace->stream>>>(
         device_payloads,
         device_slices,
         block_count,
@@ -2985,22 +2761,25 @@ extern "C" cudaError_t fastpq_poseidon_hash_columns_cuda(
         device_states
     );
     status = cudaGetLastError();
-    if (status == cudaSuccess) {
-        status = cudaMemcpyAsync(
-            workspace->host_states,
-            device_states,
-            state_bytes,
-            cudaMemcpyDeviceToHost,
-            workspace->stream
-        );
+    if (status != cudaSuccess) {
+        return fail_poseidon_dispatch(workspace, status);
     }
-    if (status == cudaSuccess) {
-        status = wait_for_poseidon_event_after_copy(workspace);
+    status = cudaMemcpyAsync(
+        workspace->host_states,
+        device_states,
+        state_bytes,
+        cudaMemcpyDeviceToHost,
+        workspace->stream
+    );
+    if (status != cudaSuccess) {
+        return fail_poseidon_dispatch(workspace, status);
     }
-    if (status == cudaSuccess) {
-        memcpy(out_states, workspace->host_states, state_bytes);
+    status = wait_for_poseidon_event_after_copy(workspace);
+    if (status != cudaSuccess) {
+        return status;
     }
-    return status;
+    memcpy(out_states, workspace->host_states, state_bytes);
+    return cudaSuccess;
 }
 
 extern "C" cudaError_t fastpq_bn254_poseidon_hash_words_cuda(
@@ -3040,6 +2819,11 @@ extern "C" cudaError_t fastpq_bn254_poseidon_hash_words_cuda(
         || !checked_size_mul(batch_count, (size_t)BN254_LIMBS, &output_elements)
         || !checked_size_mul(output_elements, sizeof(uint64_t), &output_bytes)
     ) {
+        return cudaErrorInvalidValue;
+    }
+    const unsigned int threads_per_block = 128u;
+    unsigned int grid_size = 0;
+    if (!checked_grid_size(batch_count, threads_per_block, &grid_size)) {
         return cudaErrorInvalidValue;
     }
 
@@ -3150,7 +2934,7 @@ extern "C" cudaError_t fastpq_bn254_poseidon_hash_words_cuda(
         workspace->stream
     );
     if (status != cudaSuccess) {
-        return status;
+        return fail_poseidon_dispatch(workspace, status);
     }
     status = cudaMemcpyAsync(
         workspace->slices,
@@ -3160,7 +2944,7 @@ extern "C" cudaError_t fastpq_bn254_poseidon_hash_words_cuda(
         workspace->stream
     );
     if (status != cudaSuccess) {
-        return status;
+        return fail_poseidon_dispatch(workspace, status);
     }
     status = cudaMemcpyAsync(
         workspace->bn254_round_constants,
@@ -3170,7 +2954,7 @@ extern "C" cudaError_t fastpq_bn254_poseidon_hash_words_cuda(
         workspace->stream
     );
     if (status != cudaSuccess) {
-        return status;
+        return fail_poseidon_dispatch(workspace, status);
     }
     status = cudaMemcpyAsync(
         workspace->bn254_mds,
@@ -3180,18 +2964,9 @@ extern "C" cudaError_t fastpq_bn254_poseidon_hash_words_cuda(
         workspace->stream
     );
     if (status != cudaSuccess) {
-        return status;
+        return fail_poseidon_dispatch(workspace, status);
     }
-
-    const unsigned int threads_per_block = 128u;
-    size_t grid_size_host = (batch_count + threads_per_block - 1u) / threads_per_block;
-    if (grid_size_host == 0) {
-        grid_size_host = 1;
-    }
-    if (grid_size_host > (size_t)UINT32_MAX) {
-        return cudaErrorInvalidValue;
-    }
-    fastpq_bn254_poseidon_hash_words_kernel<<<(unsigned int)grid_size_host, threads_per_block, 0, workspace->stream>>>(
+    fastpq_bn254_poseidon_hash_words_kernel<<<grid_size, threads_per_block, 0, workspace->stream>>>(
         workspace->payloads,
         workspace->slices,
         batch_count,
@@ -3200,220 +2975,23 @@ extern "C" cudaError_t fastpq_bn254_poseidon_hash_words_cuda(
         workspace->hashes
     );
     status = cudaGetLastError();
-    if (status == cudaSuccess) {
-        status = cudaMemcpyAsync(
-            workspace->host_hashes,
-            workspace->hashes,
-            output_bytes,
-            cudaMemcpyDeviceToHost,
-            workspace->stream
-        );
-    }
-    if (status == cudaSuccess) {
-        status = wait_for_poseidon_event_after_copy(workspace);
-    }
-    if (status == cudaSuccess) {
-        memcpy(out_hashes, workspace->host_hashes, output_bytes);
-    }
-    return status;
-}
-
-extern "C" cudaError_t fastpq_poseidon_hash_columns_fused_cuda(
-    const uint64_t* payloads,
-    const PoseidonSlice* slices,
-    size_t column_count,
-    size_t block_count,
-    uint64_t* out_hashes
-) {
-    if (
-        payloads == nullptr || slices == nullptr || out_hashes == nullptr || column_count == 0
-        || block_count == 0
-    ) {
-        return cudaErrorInvalidValue;
-    }
-    size_t parents = column_count / 2 + column_count % 2;
-    size_t payload_bytes = 0;
-    if (!validate_poseidon_column_slices(slices, column_count, block_count, &payload_bytes)) {
-        return cudaErrorInvalidValue;
-    }
-    size_t state_bytes = 0;
-    cudaError_t status = dense_buffer_bytes(column_count, POSEIDON_STATE_WIDTH, &state_bytes);
     if (status != cudaSuccess) {
-        return status;
-    }
-    size_t slice_bytes = 0;
-    size_t hash_words = 0;
-    size_t hash_bytes = 0;
-    if (
-        !checked_size_mul(column_count, sizeof(PoseidonSlice), &slice_bytes)
-        || !checked_size_add(column_count, parents, &hash_words)
-        || !checked_size_mul(hash_words, sizeof(uint64_t), &hash_bytes)
-    ) {
-        return cudaErrorInvalidValue;
-    }
-
-    const unsigned int threads_per_block = 128u;
-    size_t grid_size_host = 0;
-    size_t parent_grid = 0;
-    std::lock_guard<std::mutex> guard(poseidon_workspace_mutex());
-    PoseidonWorkspace* workspace = current_poseidon_workspace();
-    if (workspace == nullptr) {
-        return cudaErrorInvalidValue;
-    }
-    status = ensure_workspace_buffer(
-        &workspace->payloads,
-        &workspace->payload_capacity_bytes,
-        payload_bytes
-    );
-    if (status != cudaSuccess) {
-        return status;
-    }
-    status = ensure_workspace_buffer(
-        &workspace->slices,
-        &workspace->slice_capacity_bytes,
-        slice_bytes
-    );
-    if (status != cudaSuccess) {
-        return status;
-    }
-    status = ensure_workspace_buffer(
-        &workspace->states,
-        &workspace->state_capacity_bytes,
-        state_bytes
-    );
-    if (status != cudaSuccess) {
-        return status;
-    }
-    status = ensure_workspace_buffer(
-        &workspace->hashes,
-        &workspace->hash_capacity_bytes,
-        hash_bytes
-    );
-    if (status != cudaSuccess) {
-        return status;
-    }
-    uint64_t* device_payloads = workspace->payloads;
-    PoseidonSlice* device_slices = workspace->slices;
-    uint64_t* device_states = workspace->states;
-    uint64_t* device_hashes = workspace->hashes;
-
-    status = ensure_pinned_workspace_buffer(
-        &workspace->host_payloads,
-        &workspace->host_payload_capacity_bytes,
-        payload_bytes
-    );
-    if (status != cudaSuccess) {
-        goto fused_cleanup;
-    }
-    status = ensure_pinned_workspace_buffer(
-        &workspace->host_slices,
-        &workspace->host_slice_capacity_bytes,
-        slice_bytes
-    );
-    if (status != cudaSuccess) {
-        goto fused_cleanup;
-    }
-    status = ensure_pinned_workspace_buffer(
-        &workspace->host_hashes,
-        &workspace->host_hash_capacity_bytes,
-        hash_bytes
-    );
-    if (status != cudaSuccess) {
-        goto fused_cleanup;
-    }
-    status = ensure_poseidon_stream(workspace);
-    if (status != cudaSuccess) {
-        goto fused_cleanup;
-    }
-    status = ensure_poseidon_event(workspace);
-    if (status != cudaSuccess) {
-        goto fused_cleanup;
-    }
-    memcpy(workspace->host_payloads, payloads, payload_bytes);
-    memcpy(workspace->host_slices, slices, slice_bytes);
-    status = cudaMemcpyAsync(
-        device_payloads,
-        workspace->host_payloads,
-        payload_bytes,
-        cudaMemcpyHostToDevice,
-        workspace->stream
-    );
-    if (status != cudaSuccess) {
-        goto fused_cleanup;
-    }
-    status = cudaMemcpyAsync(
-        device_slices,
-        workspace->host_slices,
-        slice_bytes,
-        cudaMemcpyHostToDevice,
-        workspace->stream
-    );
-    if (status != cudaSuccess) {
-        goto fused_cleanup;
-    }
-
-    grid_size_host = (column_count + threads_per_block - 1u) / threads_per_block;
-    if (grid_size_host == 0) {
-        grid_size_host = 1;
-    }
-    if (grid_size_host > (size_t)UINT32_MAX) {
-        status = cudaErrorInvalidValue;
-        goto fused_cleanup;
-    }
-    fastpq_poseidon_hash_columns_kernel<<<(unsigned int)grid_size_host, threads_per_block, 0, workspace->stream>>>(
-        device_payloads,
-        device_slices,
-        block_count,
-        column_count,
-        device_states
-    );
-    status = cudaGetLastError();
-    if (status != cudaSuccess) {
-        goto fused_cleanup;
-    }
-
-    fastpq_poseidon_leaf_extract_kernel<<<(unsigned int)grid_size_host, threads_per_block, 0, workspace->stream>>>(
-        device_states,
-        column_count,
-        device_hashes
-    );
-    status = cudaGetLastError();
-    if (status != cudaSuccess) {
-        goto fused_cleanup;
-    }
-
-    parent_grid = (parents + threads_per_block - 1u) / threads_per_block;
-    if (parent_grid == 0) {
-        parent_grid = 1;
-    }
-    if (parent_grid > (size_t)UINT32_MAX) {
-        status = cudaErrorInvalidValue;
-        goto fused_cleanup;
-    }
-    fastpq_poseidon_parent_kernel<<<(unsigned int)parent_grid, threads_per_block, 0, workspace->stream>>>(
-        device_hashes,
-        column_count,
-        device_hashes + column_count
-    );
-    status = cudaGetLastError();
-    if (status != cudaSuccess) {
-        goto fused_cleanup;
+        return fail_poseidon_dispatch(workspace, status);
     }
     status = cudaMemcpyAsync(
         workspace->host_hashes,
-        device_hashes,
-        hash_bytes,
+        workspace->hashes,
+        output_bytes,
         cudaMemcpyDeviceToHost,
         workspace->stream
     );
     if (status != cudaSuccess) {
-        goto fused_cleanup;
+        return fail_poseidon_dispatch(workspace, status);
     }
     status = wait_for_poseidon_event_after_copy(workspace);
-    if (status == cudaSuccess) {
-        memcpy(out_hashes, workspace->host_hashes, hash_bytes);
+    if (status != cudaSuccess) {
+        return status;
     }
-
-fused_cleanup:
-    return status;
+    memcpy(out_hashes, workspace->host_hashes, output_bytes);
+    return cudaSuccess;
 }

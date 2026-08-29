@@ -22,7 +22,6 @@ fn commits_via_vote_qc_pipeline() -> Result<()> {
         .with_auto_populated_trusted_peers()
         .with_config_layer(|layer| {
             layer
-                .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
                 .write(
                     ["nexus", "storage", "local_budget_bytes"],

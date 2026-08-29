@@ -322,7 +322,7 @@
       "paths": [
         {
           "context": "let target_os = env::var(\"CARGO_CFG_TARGET_OS\").unwrap_or_default();",
-          "line": 33,
+          "line": 30,
           "path": "crates/fastpq_prover/build.rs",
           "scope": "build"
         },
@@ -372,15 +372,9 @@
     },
     "CARGO_FEATURE_CUDA": {
       "counts": {
-        "build": 2
+        "build": 1
       },
       "paths": [
-        {
-          "context": "let cuda_feature = env::var_os(\"CARGO_FEATURE_CUDA\").is_some();",
-          "line": 31,
-          "path": "crates/fastpq_prover/build.rs",
-          "scope": "build"
-        },
         {
           "context": "if env::var_os(\"CARGO_FEATURE_CUDA\").is_some()",
           "line": 36,
@@ -415,7 +409,7 @@
       "paths": [
         {
           "context": "let fastpq_gpu_feature = env::var_os(\"CARGO_FEATURE_FASTPQ_GPU\").is_some();",
-          "line": 32,
+          "line": 29,
           "path": "crates/fastpq_prover/build.rs",
           "scope": "build"
         }
@@ -453,7 +447,7 @@
         "build": 5,
         "example": 1,
         "prod": 44,
-        "test": 307,
+        "test": 308,
         "tool": 6
       },
       "paths": [
@@ -494,19 +488,31 @@
           "scope": "test"
         },
         {
+          "context": "let path = Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 1834,
+          "path": "crates/fastpq_prover/src/bin/fastpq_cuda_bench.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let path = Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"Cargo.toml\");",
+          "line": 1841,
+          "path": "crates/fastpq_prover/src/bin/fastpq_cuda_bench.rs",
+          "scope": "test"
+        },
+        {
           "context": "env!(\"CARGO_MANIFEST_DIR\"),",
           "line": 9,
           "path": "crates/fastpq_prover/src/poseidon_manifest.rs",
           "scope": "prod"
         },
         {
-          "context": "Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
-          "line": 13,
-          "path": "crates/fastpq_prover/tests/packing.rs",
+          "context": "PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
+          "line": 9,
+          "path": "crates/fastpq_prover/tests/backend_regression.rs",
           "scope": "test"
         },
         {
-          "context": "let metal_path = concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/metal/kernels/poseidon2.metal\");",
+          "context": "let metal_path = concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/metal/kernels/poseidon.metal\");",
           "line": 22,
           "path": "crates/fastpq_prover/tests/poseidon_manifest_consistency.rs",
           "scope": "test"
@@ -518,7 +524,7 @@
           "scope": "test"
         },
         {
-          "context": "let metal_path = concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/metal/kernels/poseidon2.metal\");",
+          "context": "let metal_path = concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/metal/kernels/poseidon.metal\");",
           "line": 59,
           "path": "crates/fastpq_prover/tests/poseidon_manifest_consistency.rs",
           "scope": "test"
@@ -536,20 +542,14 @@
           "scope": "test"
         },
         {
-          "context": "PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
-          "line": 19,
-          "path": "crates/fastpq_prover/tests/proof_fixture.rs",
-          "scope": "test"
-        },
-        {
-          "context": "Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"tests/fixtures\")",
+          "context": "PathBuf::from(env!(\"CARGO_MANIFEST_DIR\")).join(\"tests/fixtures\")",
           "line": 22,
           "path": "crates/fastpq_prover/tests/trace_commitment.rs",
           "scope": "test"
         },
         {
           "context": "Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
-          "line": 90,
+          "line": 10,
           "path": "crates/fastpq_prover/tests/transcript_replay.rs",
           "scope": "test"
         },
@@ -927,7 +927,7 @@
         },
         {
           "context": "let crates_dir = Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
-          "line": 34,
+          "line": 32,
           "path": "crates/iroha_core/tests/default_domain_independence.rs",
           "scope": "test"
         },
@@ -2967,7 +2967,7 @@
       "paths": [
         {
           "context": "env::var_os(\"CUDA_HOME\")",
-          "line": 375,
+          "line": 328,
           "path": "crates/fastpq_prover/build.rs",
           "scope": "build"
         },
@@ -3004,7 +3004,7 @@
       "paths": [
         {
           "context": ".or_else(|| env::var_os(\"CUDA_PATH\"))",
-          "line": 376,
+          "line": 329,
           "path": "crates/fastpq_prover/build.rs",
           "scope": "build"
         },
@@ -3041,7 +3041,7 @@
       "paths": [
         {
           "context": "env::var_os(\"CXX\").is_some()",
-          "line": 419,
+          "line": 372,
           "path": "crates/fastpq_prover/build.rs",
           "scope": "build"
         },
@@ -3111,13 +3111,13 @@
       "paths": [
         {
           "context": "option_env!(\"FASTPQ_METAL_LIB\")",
-          "line": 965,
+          "line": 995,
           "path": "crates/fastpq_prover/src/backend.rs",
           "scope": "prod"
         },
         {
           "context": "option_env!(\"FASTPQ_METAL_LIB\"),",
-          "line": 2816,
+          "line": 2776,
           "path": "crates/fastpq_prover/src/metal.rs",
           "scope": "prod"
         }
@@ -3130,7 +3130,7 @@
       "paths": [
         {
           "context": "let skip_gpu_build = env::var_os(\"FASTPQ_SKIP_GPU_BUILD\").is_some();",
-          "line": 34,
+          "line": 31,
           "path": "crates/fastpq_prover/build.rs",
           "scope": "build"
         }
@@ -3143,7 +3143,7 @@
       "paths": [
         {
           "context": "fixture_update_requested_from(std::env::var_os(\"FASTPQ_UPDATE_FIXTURES\").as_deref())",
-          "line": 11,
+          "line": 30,
           "path": "crates/fastpq_prover/tests/common/mod.rs",
           "scope": "test"
         }
@@ -3327,7 +3327,7 @@
       "paths": [
         {
           "context": "|| env::var_os(\"HOST_CXX\").is_some()",
-          "line": 420,
+          "line": 373,
           "path": "crates/fastpq_prover/build.rs",
           "scope": "build"
         },
@@ -5193,7 +5193,7 @@
         },
         {
           "context": "let out_dir = PathBuf::from(env::var(\"OUT_DIR\").map_err(|err| err.to_string())?);",
-          "line": 187,
+          "line": 140,
           "path": "crates/fastpq_prover/build.rs",
           "scope": "build"
         },
@@ -5690,7 +5690,7 @@
       "paths": [
         {
           "context": "env::var_os(\"SystemRoot\").map(PathBuf::from)",
-          "line": 577,
+          "line": 595,
           "path": "crates/fastpq_prover/src/backend.rs",
           "scope": "prod"
         },

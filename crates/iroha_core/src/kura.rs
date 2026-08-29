@@ -23064,36 +23064,6 @@ impl Kura {
                     return Err("canonical block receipt carries merge-only evidence");
                 }
             }
-            LaneBlockApplicationReceiptArtifactFormat::DirectExecution => {
-                if let LaneBlockExecutionSourceV1::GlobalBlock {
-                    artifact: global_artifact,
-                } = &artifact.source
-                    && !Self::lane_block_artifact_matches_descriptor(
-                        &global_artifact.ownership,
-                        descriptor,
-                    )
-                {
-                    return Err(
-                        "direct application receipt global artifact does not match proposal descriptor",
-                    );
-                }
-                // Direct receipts are tied to the committed WSV base used for
-                // preflight. A fresh chain can have a valid WSV hash at height 0.
-                if artifact.merge_epoch_id.is_some()
-                    || artifact.merge_entry_hash.is_some()
-                    || artifact.merge_carrier_block_height.is_some()
-                    || artifact.merge_carrier_block_hash.is_some()
-                    || artifact.merge_source_bundle_hash.is_some()
-                    || artifact.merge_batch_identity_hash.is_some()
-                    || artifact.merge_batch_hash.is_some()
-                    || artifact.merge_base_state_hash.is_some()
-                    || artifact.merge_write_set_root.is_some()
-                    || artifact.merge_expected_post_state_hash.is_some()
-                    || artifact.merge_settlement_hash.is_some()
-                {
-                    return Err("direct receipt carries merge-only evidence");
-                }
-            }
             LaneBlockApplicationReceiptArtifactFormat::MergeExecution => {
                 if !matches!(
                     &artifact.source,
@@ -25089,21 +25059,50 @@ impl Kura {
                 Some(pending_canonical_bytes),
             )?
         {
-            if autonomous.artifact.executable_payload.origin_proposal != artifact.proposal {
+            let same_proposal =
+                autonomous.artifact.executable_payload.origin_proposal == artifact.proposal;
+            if autonomous_certificate && !same_proposal {
                 return Err(Self::invalid_lane_artifact_error(
                     Self::autonomous_lane_block_latest_attempt_path_for_entry(
                         &entry,
                         &self.store_root,
                         lane_block_height,
                     ),
-                    "certification proposal conflicts with the durable autonomous lane slot",
+                    "autonomous certification proposal conflicts with the durable autonomous lane slot",
                 ));
             }
-            if autonomous.retirement.is_some() {
+            if same_proposal && autonomous.retirement.is_some() {
                 return Err(Self::invalid_lane_artifact_error(
                     autonomous.view_state_path,
                     "durably retired autonomous lane slot cannot be certified",
                 ));
+            }
+            if !autonomous_certificate && !same_proposal {
+                if autonomous.retirement.is_none() {
+                    return Err(Self::invalid_lane_artifact_error(
+                        Self::autonomous_lane_block_latest_attempt_path_for_entry(
+                            &entry,
+                            &self.store_root,
+                            lane_block_height,
+                        ),
+                        "ordinary certification conflicts with a live durable autonomous lane slot",
+                    ));
+                }
+                if authority.is_none() {
+                    return Err(Self::invalid_lane_artifact_error(
+                        autonomous.view_state_path,
+                        "ordinary certification replacing a retired autonomous lane slot lacks State lifecycle authority",
+                    ));
+                }
+                // Retirement is only the first half of losing-attempt
+                // terminalization. Reopen the source-authenticated Complete
+                // outcome and its released claims before allowing the
+                // State-authorized ordinary winner to occupy this lane height.
+                self.require_autonomous_lifecycle_retired_attempt_complete_for_ordinary_certificate_locked(
+                    pending_canonical_bytes,
+                    &entry,
+                    &autonomous,
+                )?;
             }
         }
         if !self.recover_bound_progress_sidecar_artifacts(
@@ -34877,7 +34876,7 @@ impl Kura {
             Some(artifact)
         })
     }
-    /// Persist direct-execution preflight results for a recovered standalone lane block.
+    /// Persist execution preflight results for a recovered standalone lane block.
     ///
     /// # Errors
     ///
@@ -35062,7 +35061,7 @@ impl Kura {
         self.note_committed_lane_status_change();
         Ok(())
     }
-    /// Read a durable lane-block direct-execution preflight result.
+    /// Read a durable lane-block execution preflight result.
     ///
     /// Returns `None` when the artifact is absent, malformed, belongs to a
     /// different lane/height or active geometry incarnation, fails structural
@@ -35340,8 +35339,8 @@ impl Kura {
     ///
     /// The receipt records the committed transaction results from the canonical
     /// block that anchored the lane payload ownership. It does not re-execute
-    /// transactions; it provides an idempotent boundary for the standalone
-    /// executor to replace with direct lane-local state application.
+    /// transactions; it provides an idempotent record that the canonical
+    /// carrier applied the lane payload's exact committed results.
     ///
     /// # Errors
     ///
@@ -38035,75 +38034,6 @@ impl Kura {
         }
         Ok(rebuilt)
     }
-    /// Persist a direct standalone execution receipt for a certified lane block.
-    ///
-    /// The receipt is accepted only when `input` is the canonical recovered
-    /// input, `preflight` is the canonical clean direct-execution preflight for
-    /// that input, and the preflight is tied to a concrete committed state hash.
-    /// The caller should invoke this only after the corresponding direct
-    /// lane-state effects have committed.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the input or preflight is malformed, stale,
-    /// rejected, missing its committed state hash, no longer matches Kura's
-    /// canonical sidecars, or the receipt sidecar cannot be written.
-    pub fn persist_direct_lane_block_application_receipt(
-        &self,
-        input: &LaneBlockExecutionInputArtifact,
-        preflight: &LaneBlockExecutionPreflightArtifact,
-    ) -> Result<()> {
-        Self::validate_lane_block_execution_input_artifact(input).map_err(|message| {
-            Self::invalid_lane_artifact_error(self.store_root.clone(), message.to_string())
-        })?;
-        Self::validate_lane_block_execution_preflight_artifact(preflight).map_err(|message| {
-            Self::invalid_lane_artifact_error(self.store_root.clone(), message.to_string())
-        })?;
-        let descriptor = &input.proposal.descriptor;
-        let Some(canonical_input) = self.read_lane_block_execution_input_with_repair_policy(
-            descriptor.lane_id,
-            descriptor.lane_block_height,
-            false,
-        ) else {
-            return Err(Self::invalid_lane_artifact_error(
-                self.store_root.clone(),
-                "canonical lane execution input unavailable for direct receipt",
-            ));
-        };
-        if canonical_input != *input {
-            return Err(Self::invalid_lane_artifact_error(
-                self.store_root.clone(),
-                "direct receipt input does not match canonical recovered input",
-            ));
-        }
-        let Some(canonical_preflight) = self
-            .read_lane_block_execution_preflight_with_repair_policy(
-                descriptor.lane_id,
-                descriptor.lane_block_height,
-                false,
-            )
-        else {
-            return Err(Self::invalid_lane_artifact_error(
-                self.store_root.clone(),
-                "canonical lane execution preflight unavailable for direct receipt",
-            ));
-        };
-        if canonical_preflight != *preflight {
-            return Err(Self::invalid_lane_artifact_error(
-                self.store_root.clone(),
-                "direct receipt preflight does not match canonical preflight",
-            ));
-        }
-        let Some(artifact) =
-            LaneBlockApplicationReceiptArtifact::new_direct_execution(input, preflight)
-        else {
-            return Err(Self::invalid_lane_artifact_error(
-                self.store_root.clone(),
-                "direct receipt requires clean preflight evidence with a committed state hash",
-            ));
-        };
-        self.write_lane_block_application_receipt_artifact(&artifact)
-    }
     fn merge_lane_block_execution_source(
         execution: &MergeLaneExecution,
     ) -> LaneBlockExecutionSourceV1 {
@@ -38926,53 +38856,7 @@ impl Kura {
         }
         Some(artifact)
     }
-    /// Return all valid direct-execution lane-block application receipts.
-    #[must_use]
-    pub fn direct_lane_block_application_receipts_snapshot(
-        &self,
-    ) -> Vec<LaneBlockApplicationReceiptArtifact> {
-        if self.emergency_fast_startup_enabled() || self.prune_recovery_is_required() {
-            return Vec::new();
-        }
-        let Some(candidates) = self.active_lane_block_application_receipts_structural_snapshot()
-        else {
-            return Vec::new();
-        };
-        let direct_candidates = candidates
-            .iter()
-            .filter(|receipt| {
-                receipt.format == LaneBlockApplicationReceiptArtifactFormat::DirectExecution
-            })
-            .cloned()
-            .collect::<Vec<_>>();
-        let mut receipts = direct_candidates
-            .iter()
-            .cloned()
-            .filter(|receipt| {
-                self.lane_block_application_receipt_matches_available_evidence(receipt, true)
-            })
-            .collect::<Vec<_>>();
-        if receipts.len() != direct_candidates.len()
-            || self.active_lane_block_application_receipts_structural_snapshot() != Some(candidates)
-        {
-            iroha_logger::warn!(
-                "direct lane application receipt snapshot changed or lost evidence while it was validated"
-            );
-            return Vec::new();
-        }
-        receipts.sort_by_key(|receipt| {
-            (
-                receipt.application_block_height,
-                receipt.proposal.descriptor.lane_id,
-                receipt.proposal.descriptor.lane_block_height,
-            )
-        });
-        if self.prune_recovery_is_required() {
-            Vec::new()
-        } else {
-            receipts
-        }
-    }
+    #[cfg(test)]
     fn active_lane_block_application_receipts_structural_snapshot(
         &self,
     ) -> Option<Vec<LaneBlockApplicationReceiptArtifact>> {
@@ -39070,25 +38954,6 @@ impl Kura {
         }
         Some(receipts)
     }
-    #[cfg(test)]
-    fn active_direct_lane_block_application_receipts_structural_snapshot(
-        &self,
-    ) -> Vec<LaneBlockApplicationReceiptArtifact> {
-        self.active_lane_block_application_receipts_structural_snapshot()
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|receipt| {
-                receipt.format == LaneBlockApplicationReceiptArtifactFormat::DirectExecution
-            })
-            .collect()
-    }
-    #[cfg(test)]
-    fn active_direct_lane_block_application_receipts_match_structural_snapshot(
-        &self,
-        receipts: &[LaneBlockApplicationReceiptArtifact],
-    ) -> bool {
-        self.active_direct_lane_block_application_receipts_structural_snapshot() == receipts
-    }
     pub(crate) fn lane_block_application_receipt_available(
         &self,
         proposal: &LaneBlockProposalV1,
@@ -39124,29 +38989,12 @@ impl Kura {
         if artifact.proposal != *proposal {
             return false;
         }
-        if artifact.format == LaneBlockApplicationReceiptArtifactFormat::Current {
-            return true;
+        match artifact.format {
+            LaneBlockApplicationReceiptArtifactFormat::Current
+            | LaneBlockApplicationReceiptArtifactFormat::MergeExecution => true,
         }
-        if artifact.format == LaneBlockApplicationReceiptArtifactFormat::MergeExecution {
-            return true;
-        }
-        let conflicts = if repair_sidecars {
-            self.lane_block_application_receipt_conflicts_with_preflight(proposal)
-        } else {
-            self.lane_block_application_receipt_conflicts_with_preflight_without_sidecar_repair(
-                proposal,
-            )
-        };
-        if conflicts {
-            iroha_logger::warn!(
-                lane = %proposal.descriptor.lane_id.as_u32(),
-                lane_block_height = proposal.descriptor.lane_block_height,
-                "lane application receipt conflicts with durable direct-execution preflight"
-            );
-            return false;
-        }
-        true
     }
+    #[cfg(test)]
     pub(crate) fn lane_block_application_receipt_conflicts_with_preflight(
         &self,
         proposal: &LaneBlockProposalV1,
@@ -39529,29 +39377,6 @@ impl Kura {
                 false
             }
         }
-    }
-    fn lane_block_application_receipt_matches_direct_preflight(
-        &self,
-        artifact: &LaneBlockApplicationReceiptArtifact,
-        repair_missing_sidecars: bool,
-    ) -> bool {
-        let descriptor = &artifact.proposal.descriptor;
-        let Some(preflight) = self.read_lane_block_execution_preflight_with_repair_policy(
-            descriptor.lane_id,
-            descriptor.lane_block_height,
-            repair_missing_sidecars,
-        ) else {
-            return false;
-        };
-        preflight.proposal == artifact.proposal
-            && preflight.source == artifact.source
-            && preflight.preflight_state_height == artifact.application_block_height
-            && preflight.preflight_state_hash == Some(artifact.application_block_hash)
-            && preflight.entrypoint_indices == artifact.entrypoint_indices
-            && preflight.entrypoint_hashes == artifact.entrypoint_hashes
-            && preflight.result_hashes == artifact.result_hashes
-            && preflight.results == artifact.results
-            && !preflight.has_rejections()
     }
     #[cfg(test)]
     fn read_lane_block_application_receipt_from_paths_locked(
