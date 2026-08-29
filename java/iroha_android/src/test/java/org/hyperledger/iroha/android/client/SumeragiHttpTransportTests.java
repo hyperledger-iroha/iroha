@@ -104,7 +104,8 @@ public final class SumeragiHttpTransportTests {
             Map.of(
                 "content-type",
                 List.of("application/json; charset=\"UTF-8\"; profile=exact")))) {
-      final TransportResponse statusResponse = new TransportResponse(200, body, "", headers);
+      final TransportResponse statusResponse =
+          new TransportResponse(200, body, "", headers, null, false);
       assertEquals(
           4,
           transport(new OneResponseExecutor(statusResponse))
@@ -112,7 +113,7 @@ public final class SumeragiHttpTransportTests {
               .join()
               .protocolVersion());
       final TransportResponse diagnosticsResponse =
-          new TransportResponse(200, diagnosticsBody, "", headers);
+          new TransportResponse(200, diagnosticsBody, "", headers, null, false);
       assertEquals(
           BigInteger.ONE,
           transport(new OneResponseExecutor(diagnosticsResponse))
@@ -130,12 +131,13 @@ public final class SumeragiHttpTransportTests {
             Map.of("Content-Type", List.of("application/json;")),
             Map.of("Content-Type", List.of("application/json; charset")),
             Map.of("Content-Type", List.of("application/json; profile=\"a,b\"")))) {
-      final TransportResponse statusResponse = new TransportResponse(200, body, "", headers);
+      final TransportResponse statusResponse =
+          new TransportResponse(200, body, "", headers, null, false);
       assertThrows(
           RuntimeException.class,
           () -> transport(new OneResponseExecutor(statusResponse)).getSumeragiStatus().join());
       final TransportResponse diagnosticsResponse =
-          new TransportResponse(200, diagnosticsBody, "", headers);
+          new TransportResponse(200, diagnosticsBody, "", headers, null, false);
       assertThrows(
           RuntimeException.class,
           () ->
@@ -155,13 +157,22 @@ public final class SumeragiHttpTransportTests {
               200,
               body,
               "",
-              Map.of("Content-Type", List.of("application/json"), "Content-Length", lengths));
-      assertThrows(RuntimeException.class, () -> transport(new OneResponseExecutor(response)).getSumeragiStatus().join());
+              Map.of("Content-Type", List.of("application/json"), "Content-Length", lengths),
+              null,
+              false);
+      assertThrows(
+          RuntimeException.class,
+          () -> transport(new OneResponseExecutor(response)).getSumeragiStatus().join());
     }
     final byte[] oversized = new byte[(int) SumeragiStatusModels.STATUS_JSON_MAX_BYTES + 1];
     final TransportResponse oversizedResponse =
         new TransportResponse(
-            200, oversized, "", Map.of("Content-Type", List.of("application/json")));
+            200,
+            oversized,
+            "",
+            Map.of("Content-Type", List.of("application/json")),
+            null,
+            false);
     assertThrows(
         RuntimeException.class,
         () -> transport(new OneResponseExecutor(oversizedResponse)).getSumeragiStatus().join());
@@ -329,7 +340,9 @@ public final class SumeragiHttpTransportTests {
         "ok",
         Map.of(
             "Content-Type", List.of("application/json"),
-            "Content-Length", List.of(Integer.toString(body.length))));
+            "Content-Length", List.of(Integer.toString(body.length))),
+        null,
+        false);
   }
 
   private static String statusJson() {

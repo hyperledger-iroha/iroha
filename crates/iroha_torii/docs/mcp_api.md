@@ -353,14 +353,9 @@ does not burn the claim, while distinct bindings, peers, generic transaction
 ingress, and restarts cannot make the same faucet authority consume it twice.
 Both tools are classified as writes. Submit only the unmodified envelope
 returned by prepare and keep all runtime authentication material outside tool
-arguments.
-
-The consume-once marker is intentionally activated only by the new
-signature-bound marker-version metadata so historical block replay remains
-unchanged. When upgrading an already-running chain, quiesce the legacy prepare
-endpoint, wait until every legacy prepared transaction has expired, and advance
-past the configured faucet PoW anchor-age window before exposing either MCP
-tool. A fresh/reset chain needs no drain window.
+arguments. The marker is mandatory for every prepared faucet transaction;
+Core rejects prepared-faucet metadata without the complete marker instead of
+admitting an untracked claim.
 
 For public Codex-facing deployments, prefer publishing only `iroha.*` tools.
 Those names are curated for live account, asset, contract, governance, and

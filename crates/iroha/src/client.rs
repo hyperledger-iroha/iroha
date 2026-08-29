@@ -541,25 +541,25 @@ struct ContractCallOperationReceipt {
     status: String,
     transport: String,
     dataspace: String,
-    #[norito(default)]
+    #[norito(required)]
     contract_alias: Option<String>,
-    #[norito(default)]
+    #[norito(required)]
     contract_address: Option<String>,
-    #[norito(default)]
+    #[norito(required)]
     code_hash_hex: Option<String>,
-    #[norito(default)]
+    #[norito(required)]
     abi_hash_hex: Option<String>,
-    #[norito(default)]
+    #[norito(required)]
     tx_hash_hex: Option<String>,
-    #[norito(default)]
+    #[norito(required)]
     entrypoint: Option<String>,
-    #[norito(default)]
+    #[norito(required)]
     entrypoint_hash_hex: Option<String>,
-    #[norito(default)]
+    #[norito(required)]
     gas_limit: Option<u64>,
-    #[norito(default)]
+    #[norito(required)]
     gas_used: Option<u64>,
-    #[norito(default)]
+    #[norito(required)]
     fee_payment: Option<FeePaymentIntent>,
     payload_digest_hex: String,
 }
@@ -572,7 +572,7 @@ fn contract_call_payload_digest_hex(payload: Option<&JsonValue>) -> Result<Strin
     Ok(hex::encode(blake3::hash(canonical.as_bytes()).as_bytes()))
 }
 fn validate_contract_call_prepare_response_fields(response: &JsonValue) -> Result<()> {
-    const ALLOWED_FIELDS: &[&str] = &[
+    const REQUIRED_FIELDS: &[&str] = &[
         "ok",
         "submitted",
         "dataspace",
@@ -592,9 +592,17 @@ fn validate_contract_call_prepare_response_fields(response: &JsonValue) -> Resul
     let response = response
         .as_object()
         .ok_or_else(|| eyre!("contract call prepare response must be a JSON object"))?;
+    if let Some(field) = REQUIRED_FIELDS
+        .iter()
+        .find(|field| !response.contains_key(**field))
+    {
+        return Err(eyre!(
+            "contract call prepare response omitted required root field `{field}`"
+        ));
+    }
     if let Some(field) = response
         .keys()
-        .find(|field| !ALLOWED_FIELDS.contains(&field.as_str()))
+        .find(|field| !REQUIRED_FIELDS.contains(&field.as_str()))
     {
         return Err(eyre!(
             "contract call prepare response contains unsupported root field `{field}`"
@@ -11587,6 +11595,76 @@ mod evidence_http_tests {
         }
     }
     #[test]
+    fn post_contract_call_rejects_omitted_operation_receipt_fields() {
+        let client = client_with_base_url(base_url());
+        let (contract_address, intent, fee_payment, builder) = contract_call_fixture(&client);
+        let canonical = prepared_contract_call_response(&intent, &builder);
+        let receipt = canonical
+            .get("operation_receipt")
+            .expect("operation receipt fixture");
+        for field in [
+            "contract_alias",
+            "tx_hash_hex",
+            "entrypoint_hash_hex",
+            "gas_used",
+        ] {
+            assert!(
+                receipt.get(field).is_some_and(JsonValue::is_null),
+                "nullable operation receipt field `{field}` must be explicit null"
+            );
+        }
+        norito::json::from_value::<ContractCallOperationReceipt>(receipt.clone())
+            .expect("operation receipt accepts required explicit-null fields");
+
+        for field in [
+            "contract_alias",
+            "contract_address",
+            "code_hash_hex",
+            "abi_hash_hex",
+            "tx_hash_hex",
+            "entrypoint",
+            "entrypoint_hash_hex",
+            "gas_limit",
+            "gas_used",
+            "fee_payment",
+        ] {
+            let mut response_value = canonical.clone();
+            response_value
+                .get_mut("operation_receipt")
+                .and_then(JsonValue::as_object_mut)
+                .expect("operation receipt")
+                .remove(field);
+            let response = json_response(
+                StatusCode::OK,
+                &norito::json::to_json(&response_value)
+                    .expect("encode incomplete contract response"),
+            );
+            let (result, _) = capture_request(response, || {
+                client.post_contract_call_json(
+                    &client.account,
+                    None,
+                    Some(&contract_address),
+                    None,
+                    "ping",
+                    None,
+                    None,
+                    Some(123),
+                    None,
+                    &fee_payment,
+                    &intent,
+                )
+            });
+            let error = match result {
+                Ok(_) => panic!("omitted operation receipt field `{field}` must fail closed"),
+                Err(error) => error,
+            };
+            assert!(
+                format!("{error:#}").contains("decode closed contract call operation_receipt"),
+                "unexpected omitted `{field}` error: {error:#}"
+            );
+        }
+    }
+    #[test]
     fn post_contract_call_rejects_unsupported_response_root_fields() {
         let client = client_with_base_url(base_url());
         let (contract_address, intent, fee_payment, builder) = contract_call_fixture(&client);
@@ -11619,6 +11697,63 @@ mod evidence_http_tests {
             format!("{error:#}").contains("unsupported root field `ignored`"),
             "unexpected error: {error:#}"
         );
+    }
+    #[test]
+    fn post_contract_call_rejects_omitted_response_root_fields() {
+        let client = client_with_base_url(base_url());
+        let (contract_address, intent, fee_payment, builder) = contract_call_fixture(&client);
+        let canonical = prepared_contract_call_response(&intent, &builder);
+        for field in [
+            "ok",
+            "submitted",
+            "dataspace",
+            "contract_address",
+            "code_hash_hex",
+            "abi_hash_hex",
+            "creation_time_ms",
+            "transaction_ttl_ms",
+            "tx_hash_hex",
+            "pipeline_status",
+            "entrypoint_hash_hex",
+            "transaction_payload_b64",
+            "signing_message_b64",
+            "entrypoint",
+            "operation_receipt",
+        ] {
+            let mut response_value = canonical.clone();
+            response_value
+                .as_object_mut()
+                .expect("contract call response object")
+                .remove(field);
+            let response = json_response(
+                StatusCode::OK,
+                &norito::json::to_json(&response_value)
+                    .expect("encode incomplete contract response"),
+            );
+            let (result, _) = capture_request(response, || {
+                client.post_contract_call_json(
+                    &client.account,
+                    None,
+                    Some(&contract_address),
+                    None,
+                    "ping",
+                    None,
+                    None,
+                    Some(123),
+                    None,
+                    &fee_payment,
+                    &intent,
+                )
+            });
+            let error = match result {
+                Ok(_) => panic!("omitted contract call root field `{field}` must fail closed"),
+                Err(error) => error,
+            };
+            assert!(
+                format!("{error:#}").contains(&format!("omitted required root field `{field}`")),
+                "unexpected omitted `{field}` error: {error:#}"
+            );
+        }
     }
     #[test]
     fn post_zk_ivm_prove_json_builds_request() {

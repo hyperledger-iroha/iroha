@@ -13,6 +13,10 @@ fn norito_value_to_serde(value: &Value) -> SerdeValue {
         Value::Bool(value) => SerdeValue::Bool(*value),
         Value::Number(Number::I64(value)) => SerdeValue::Number(SerdeNumber::from(*value)),
         Value::Number(Number::U64(value)) => SerdeValue::Number(SerdeNumber::from(*value)),
+        Value::Number(Number::U128(value)) => SerdeValue::Number(
+            SerdeNumber::from_u128(*value)
+                .expect("serde parity corpus keeps u128 values in serde_json's integer range"),
+        ),
         Value::Number(Number::F64(value)) => {
             if value.is_finite() {
                 SerdeValue::Number(SerdeNumber::from_f64(*value).expect("finite f64"))
@@ -117,6 +121,7 @@ fn explicit_cases() -> Vec<Value> {
         Value::Bool(true),
         Value::Number(Number::I64(-7)),
         Value::Number(Number::U64(7)),
+        Value::Number(Number::U128(u128::from(u64::MAX))),
         Value::Number(Number::F64(-0.0)),
         Value::Number(Number::F64(f64::NAN)),
         Value::Number(Number::F64(f64::INFINITY)),

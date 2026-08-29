@@ -2099,7 +2099,7 @@ mod tests {
                 .expect_err("descriptor-less bubblewrap must fail closed");
             assert!(error.to_string().contains(omitted));
         }
-        require_inrou_bubblewrap_help("--bind --ro-bind")
+        let _legacy_binding_flags_error = require_inrou_bubblewrap_help("--bind --ro-bind")
             .expect_err("legacy path-binding flags must not satisfy the fd-binding contract");
         Ok(())
     }
@@ -2198,8 +2198,9 @@ mod tests {
             .map(OsString::from)
             .collect::<Vec<_>>()
         );
-        append_inrou_binding_arguments(&mut Vec::new(), &bindings, &[66])
-            .expect_err("an incomplete inherited descriptor map must fail closed");
+        let _incomplete_binding_arguments_error =
+            append_inrou_binding_arguments(&mut Vec::new(), &bindings, &[66])
+                .expect_err("an incomplete inherited descriptor map must fail closed");
         assert_eq!(
             build_inrou_launcher_binding_map(&bindings, &[66, 67])?,
             [
@@ -2215,7 +2216,7 @@ mod tests {
                 },
             ]
         );
-        build_inrou_launcher_binding_map(&bindings, &[66])
+        let _incomplete_binding_map_error = build_inrou_launcher_binding_map(&bindings, &[66])
             .expect_err("typed launcher bindings require one exact descriptor per binding");
         Ok(())
     }
@@ -2233,11 +2234,12 @@ mod tests {
         fs::rename(&path, &displaced)?;
         fs::write(&path, b"replacement")?;
 
-        require_opened_file_matches_name(&path, &opened, "test binding")
+        let _replaced_name_error = require_opened_file_matches_name(&path, &opened, "test binding")
             .expect_err("a replaced host name must fail pre-launch validation");
         validate_opened_file_identity(&opened, identity, "test binding")?;
-        validate_exact_file_identity(&path, identity, "replaced test binding")
-            .expect_err("the replacement name must not impersonate the retained file");
+        let _replacement_identity_error =
+            validate_exact_file_identity(&path, identity, "replaced test binding")
+                .expect_err("the replacement name must not impersonate the retained file");
         Ok(())
     }
 

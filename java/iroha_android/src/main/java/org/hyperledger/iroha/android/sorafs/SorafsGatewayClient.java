@@ -232,7 +232,9 @@ public final class SorafsGatewayClient {
                       response.statusCode(),
                       output.toByteArray(),
                       response.message(),
-                      response.headers());
+                      response.headers(),
+                      null,
+                      false);
                 }
               } catch (final IOException ex) {
                 throw new CompletionException(ex);

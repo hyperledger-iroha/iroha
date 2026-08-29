@@ -7172,6 +7172,13 @@ mod tests {
         proof::ProofBox,
     };
     use std::{cell::Cell, sync::OnceLock};
+
+    const TEST_MAX_OUTSTANDING_LIABILITY: u128 = 1_000_000_000_000;
+
+    const fn test_max_wrapped_supply(multiplier: u64) -> u128 {
+        TEST_MAX_OUTSTANDING_LIABILITY * multiplier as u128
+    }
+
     struct OutboundFixture {
         route: SccpGovernedRouteV1,
         bundle: TairaSccpMessageProofV1,

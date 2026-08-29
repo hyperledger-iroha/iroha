@@ -216,13 +216,11 @@ pub(super) struct ProverProcessingReceipt {
     pub(super) id: String,
     pub(super) processed_ms: u64,
     pub(super) terminal: bool,
+    #[norito(required)]
     pub(super) retry_not_before_ms: Option<u64>,
     pub(super) retry_count: u32,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Vec::is_empty")]
     pub(super) completed_proof_indices: Vec<u16>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub(super) processing_context_hash: Option<String>,
 }
 impl ProverProcessingReceipt {
@@ -3668,6 +3666,64 @@ mod tests {
             super::AttachmentTenant::from_account(&alice),
             super::AttachmentTenant::from_account(&bob)
         );
+    }
+    #[test]
+    fn prover_processing_receipt_json_requires_complete_v1_schema() {
+        let receipt = super::ProverProcessingReceipt {
+            version: super::ZK_PROVER_PROCESSING_STATE_VERSION,
+            id: "a".repeat(super::ATTACHMENT_ID_HEX_LEN),
+            processed_ms: 1,
+            terminal: true,
+            retry_not_before_ms: None,
+            retry_count: 0,
+            completed_proof_indices: Vec::new(),
+            processing_context_hash: None,
+        };
+        let canonical = json::to_value(&receipt).expect("encode exact processing receipt");
+        assert!(
+            canonical
+                .get("retry_not_before_ms")
+                .is_some_and(norito::json::Value::is_null),
+            "terminal retry deadline must be present as explicit null"
+        );
+        assert!(
+            canonical
+                .get("completed_proof_indices")
+                .and_then(norito::json::Value::as_array)
+                .is_some_and(Vec::is_empty),
+            "terminal completed-proof cache must be present as an empty array"
+        );
+        assert!(
+            canonical
+                .get("processing_context_hash")
+                .is_some_and(norito::json::Value::is_null),
+            "terminal processing-context hash must be present as explicit null"
+        );
+        assert_eq!(
+            json::from_value::<super::ProverProcessingReceipt>(canonical.clone())
+                .expect("decode exact processing receipt"),
+            receipt
+        );
+        for field in [
+            "version",
+            "id",
+            "processed_ms",
+            "terminal",
+            "retry_not_before_ms",
+            "retry_count",
+            "completed_proof_indices",
+            "processing_context_hash",
+        ] {
+            let mut omitted = canonical.clone();
+            omitted
+                .as_object_mut()
+                .expect("processing receipt object")
+                .remove(field);
+            assert!(
+                json::from_value::<super::ProverProcessingReceipt>(omitted).is_err(),
+                "omitted processing receipt field `{field}` must not default"
+            );
+        }
     }
     #[test]
     fn prover_processing_receipt_lives_until_the_last_attachment_reference_is_deleted() {

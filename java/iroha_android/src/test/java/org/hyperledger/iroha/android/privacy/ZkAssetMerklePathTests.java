@@ -415,7 +415,9 @@ public final class ZkAssetMerklePathTests {
       this.lastBody = new String(request.body(), StandardCharsets.UTF_8);
       return CompletableFuture.completedFuture(
           new TransportResponse(
-              200, responseBody.getBytes(StandardCharsets.UTF_8), "", java.util.Map.of()));
+              200, responseBody.getBytes(StandardCharsets.UTF_8), "", java.util.Map.of(),
+              null,
+              false));
     }
   }
 

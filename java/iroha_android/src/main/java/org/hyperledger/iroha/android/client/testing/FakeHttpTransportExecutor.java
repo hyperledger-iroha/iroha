@@ -21,7 +21,7 @@ public final class FakeHttpTransportExecutor implements HttpTransportExecutor {
       new ConcurrentHashMap<>();
 
   private volatile TransportResponse defaultResponse =
-      new TransportResponse(200, new byte[0], "", Collections.emptyMap());
+      new TransportResponse(200, new byte[0], "", Collections.emptyMap(), null, false);
 
   /** Enqueue a response that will be returned for any request when no path-specific response exists. */
   public void enqueueResponse(final TransportResponse response) {

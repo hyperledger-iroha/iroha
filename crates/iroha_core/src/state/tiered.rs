@@ -5328,7 +5328,7 @@ mod tests {
         block::BlockHeader,
         bridge::{
             BridgeNativeProofBackendV1, SccpNativeTrustAnchorV1, SccpOutboundMessageKeyV1,
-            SccpOutboundProofRecordV1,
+            SccpOutboundProofRecordV1, SccpRouteActivationV1, SccpRouteKeyV1, SccpRouteLiabilityV1,
             sccp::{
                 SccpInboundMessageKeyV1, SccpInboundMessageRecordV1, SccpLaneIdV1, SccpNetworkV1,
             },
@@ -5769,6 +5769,60 @@ mod tests {
             .expect("second state entry present");
         assert_eq!(entry1.last_mutated_snapshot, manifest.snapshot_index);
         assert_eq!(entry2.last_mutated_snapshot, snapshot1);
+    }
+    #[test]
+    fn sccp_route_liability_roundtrips_through_cold_tier_with_governed_key() {
+        let temp = tempdir().expect("tmpdir");
+        let root = temp.path().to_path_buf();
+        let mut backend = TieredStateBackend::new(true, 0, 1, 0, Some(root.clone()), None, 0, 0);
+        let route = iroha_sccp::sccp_exact_evm_governed_route_test_fixture_v1(
+            SccpNetworkV1::EthereumMainnet,
+            SccpRouteActivationV1::Staged,
+        );
+        let route_key = route.key();
+        let liability = SccpRouteLiabilityV1::new(7).expect("nonzero route liability");
+        let mut world = World::default();
+        world
+            .sccp_route_liabilities
+            .insert(route_key.clone(), liability);
+        backend
+            .record_world_snapshot(&world)
+            .expect("persist SCCP route liability snapshot");
+        let snapshot_index = backend
+            .last_manifest()
+            .expect("snapshot manifest recorded")
+            .snapshot_index;
+        drop(backend);
+
+        let manifest_bytes = fs::read(
+            root.join(format!("{snapshot_index:020}"))
+                .join("manifest.json"),
+        )
+        .expect("read SCCP liability tiered manifest");
+        let manifest: TieredSnapshotManifest =
+            json::from_slice(&manifest_bytes).expect("decode SCCP liability tiered manifest");
+        let entry = manifest
+            .cold_entries
+            .iter()
+            .find(|entry| entry.segment == TieredSegment::SccpRouteLiabilities)
+            .expect("SCCP route liability is persisted in the cold tier");
+        let mut encoded_key = entry.key_payload.as_slice();
+        let restored_key = <SccpRouteKeyV1 as norito::codec::Decode>::decode(&mut encoded_key)
+            .expect("decode persisted governed SCCP route key");
+        assert!(
+            encoded_key.is_empty(),
+            "route key must consume its exact payload"
+        );
+        assert_eq!(restored_key, route_key);
+
+        let reader = TieredStateBackend::new(true, 0, 1, 0, Some(root), None, 0, 0);
+        let restored_bytes = reader
+            .read_cold_payload(snapshot_index, entry)
+            .expect("read SCCP route liability cold payload")
+            .expect("SCCP route liability cold payload exists");
+        let restored_liability: SccpRouteLiabilityV1 =
+            json::from_slice(&restored_bytes).expect("decode persisted SCCP route liability");
+        assert_eq!(restored_liability, liability);
     }
     #[test]
     fn record_world_snapshot_includes_sccp_outbound_pending_messages() {

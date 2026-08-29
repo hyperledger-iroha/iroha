@@ -700,6 +700,7 @@ fn nexus_config_diff_counter_and_event_emitted() {
         uploaded_models: Default::default(),
         endorsement: NexusEndorsement::default(),
         axt: NexusAxt::default(),
+        atomic_private_settlement: Default::default(),
         lane_relay_emergency: LaneRelayEmergency::default(),
         lane_config: RuntimeLaneConfig::from_catalog(&lane_catalog),
         configured_lane_catalog: lane_catalog.clone(),

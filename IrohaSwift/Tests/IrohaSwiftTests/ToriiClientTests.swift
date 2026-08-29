@@ -9507,8 +9507,28 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertEqual(page.items.first?.id, "lot-001$commodities.sora")
     }
 
+    func testQueryEnvelopeEncodesMixedSelectEntries() throws {
+        let envelope = ToriiQueryEnvelope(
+            select: [
+                .fieldPath(" account.id "),
+                .object(["metadata": .bool(true)]),
+            ]
+        )
+
+        let encoded = try JSONEncoder().encode(envelope)
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+        )
+        let select = try XCTUnwrap(object["select"] as? [Any])
+        XCTAssertEqual(select[0] as? String, "account.id")
+        XCTAssertEqual(
+            (select[1] as? [String: Any])?["metadata"] as? Bool,
+            true
+        )
+    }
+
     func testQueryEnvelopeRejectsBlankSelectFieldPaths() throws {
-        let envelope = ToriiQueryEnvelope(selectEntries: [.fieldPath(" ")])
+        let envelope = ToriiQueryEnvelope(select: [.fieldPath(" ")])
         XCTAssertThrowsError(try JSONEncoder().encode(envelope)) { error in
             let description = String(describing: error)
             XCTAssertTrue(description.contains("select field path must not be empty"))
@@ -9516,7 +9536,7 @@ final class ToriiClientTests: XCTestCase {
     }
 
     func testQueryEnvelopeRejectsBlankQueryName() throws {
-        let envelope = ToriiQueryEnvelope(query: " ", select: Optional<[String]>.none)
+        let envelope = ToriiQueryEnvelope(query: " ")
         XCTAssertThrowsError(try JSONEncoder().encode(envelope)) { error in
             let description = String(describing: error)
             XCTAssertTrue(description.contains("query must be a non-empty string"))
@@ -9524,7 +9544,7 @@ final class ToriiClientTests: XCTestCase {
     }
 
     func testQueryEnvelopeRejectsInvalidCountMode() throws {
-        let envelope = ToriiQueryEnvelope(select: Optional<[String]>.none, countMode: "full")
+        let envelope = ToriiQueryEnvelope(countMode: "full")
         XCTAssertThrowsError(try JSONEncoder().encode(envelope)) { error in
             let description = String(describing: error)
             XCTAssertTrue(description.contains("countMode must be bounded or exact"))

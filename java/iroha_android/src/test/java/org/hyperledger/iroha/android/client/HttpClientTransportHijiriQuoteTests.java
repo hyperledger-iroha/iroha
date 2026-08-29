@@ -36,10 +36,10 @@ public final class HttpClientTransportHijiriQuoteTests {
     assert finalUri.equals(response.finalUri()) : "final response URI provenance was lost";
     assert response.redirected() : "redirect provenance was lost";
 
-    final TransportResponse legacy =
-        new TransportResponse(200, new byte[0], "ok", Map.of());
-    assert legacy.finalUri() == null : "legacy responses must expose absent provenance";
-    assert !legacy.redirected() : "legacy responses must not invent redirect provenance";
+    final TransportResponse withoutProvenance =
+        new TransportResponse(200, new byte[0], "ok", Map.of(), null, false);
+    assert withoutProvenance.finalUri() == null : "absent provenance must remain explicit";
+    assert !withoutProvenance.redirected() : "absent provenance must not imply a redirect";
   }
 
   private static void exactUnredirectedProvenanceReachesNativeVerification() {
@@ -228,7 +228,7 @@ public final class HttpClientTransportHijiriQuoteTests {
     public CompletableFuture<TransportResponse> execute(final TransportRequest request) {
       if (!includeProvenance) {
         return CompletableFuture.completedFuture(
-            new TransportResponse(200, new byte[] {9}, "ok", headers));
+            new TransportResponse(200, new byte[] {9}, "ok", headers, null, false));
       }
       return CompletableFuture.completedFuture(
           new TransportResponse(

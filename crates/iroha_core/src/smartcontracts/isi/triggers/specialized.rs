@@ -98,6 +98,13 @@ fn parse_repeats(value: JsonValue) -> Result<Repeats, json::Error> {
                                         .to_owned(),
                                 })?
                             }
+                            JsonNumber::U128(v) => {
+                                u32::try_from(v).map_err(|_| json::Error::InvalidField {
+                                    field: "repeats".to_owned(),
+                                    message: "Exactly variant requires value within u32 range"
+                                        .to_owned(),
+                                })?
+                            }
                             JsonNumber::F64(_) => {
                                 return Err(json::Error::InvalidField {
                                     field: "repeats".to_owned(),
@@ -546,6 +553,28 @@ mod tests {
     #[test]
     fn checked_keypair_preserves_default_algorithm() {
         assert_eq!(checked_keypair().algorithm(), Algorithm::default());
+    }
+    #[cfg(feature = "json")]
+    #[test]
+    fn repeats_json_checks_u128_against_u32_domain() {
+        let mut exactly = norito::json::Map::new();
+        exactly.insert(
+            "Exactly".to_owned(),
+            JsonValue::Number(JsonNumber::U128(u128::from(u32::MAX))),
+        );
+        assert_eq!(
+            parse_repeats(JsonValue::Object(exactly)).expect("u32 maximum must be accepted"),
+            Repeats::Exactly(u32::MAX)
+        );
+
+        let mut exactly = norito::json::Map::new();
+        exactly.insert(
+            "Exactly".to_owned(),
+            JsonValue::Number(JsonNumber::U128(u128::from(u32::MAX) + 1)),
+        );
+        let error = parse_repeats(JsonValue::Object(exactly))
+            .expect_err("values above the repeat-count domain must be rejected");
+        assert!(error.to_string().contains("within u32 range"));
     }
     #[cfg(feature = "json")]
     fn test_executable() -> Executable {

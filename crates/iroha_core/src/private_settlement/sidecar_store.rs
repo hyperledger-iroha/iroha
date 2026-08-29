@@ -5,6 +5,8 @@
 //! to the exact four-validator committee and to governed auditors. No plaintext
 //! audit material is accepted or persisted by this module.
 
+#[cfg(test)]
+use super::state::private_settlement_approvals_digest_v1;
 use super::{
     protocol::{
         private_settlement_phase_body_v1, private_settlement_reserved_prepared_bundle_digest_v1,
@@ -13,7 +15,7 @@ use super::{
     },
     state::{
         PrivateSettlementDurableAvailabilityV1, PrivateSettlementStateErrorV1,
-        ValidatedPrivateSettlementLegV1, private_settlement_approvals_digest_v1,
+        ValidatedPrivateSettlementLegV1,
     },
 };
 
@@ -1203,11 +1205,12 @@ impl PrivateSettlementFileSidecarStoreV1 {
         Ok(PrivateSettlementSidecarStoreOutcomeV1::Stored)
     }
 
-    /// Re-open an immutable, fsync-committed sidecar and mint Prepare evidence.
+    /// Test-only direct access to fsync-backed Prepare evidence.
     ///
     /// This capability is crate-private: callers cannot manufacture it from a
     /// digest, byte count, or claimed filesystem write.  The full persisted
     /// immutable record is decoded and validated before evidence is returned.
+    #[cfg(test)]
     pub(crate) fn durable_availability_evidence(
         &self,
         digest: Hash,
@@ -1737,10 +1740,11 @@ impl PrivateSettlementFileSidecarStoreV1 {
         })
     }
 
-    /// Persist the exact canonical auditor threshold before any Prepare work.
+    /// Test-only bulk persistence of the exact canonical auditor threshold.
     ///
     /// The approvals are signature-verified against the stored policy and
     /// immutable sidecar. Exact retries are idempotent; substitutions fail.
+    #[cfg(test)]
     pub(crate) fn record_audited(
         &self,
         digest: Hash,
@@ -2332,7 +2336,7 @@ impl PrivateSettlementFileSidecarStoreV1 {
         Ok(true)
     }
 
-    /// Durably record marker-free authoritative height expiry.
+    /// Test-only compatibility seam for marker-free authoritative height expiry.
     ///
     /// This crate-private compatibility entry point deliberately rejects every
     /// other lifecycle, including abort. Production reconciliation supplies an
@@ -2342,6 +2346,7 @@ impl PrivateSettlementFileSidecarStoreV1 {
     /// # Errors
     ///
     /// Returns unavailable, invalid-transition, corruption, or backend errors.
+    #[cfg(test)]
     pub(crate) fn transition(
         &self,
         digest: Hash,

@@ -74,6 +74,10 @@ public final class TransportExecutorParityTests {
         assert okHttpResponse.statusCode() == jdkResponse.statusCode() : "status codes should match";
         assert Arrays.equals(okHttpResponse.body(), jdkResponse.body()) : "bodies should match";
         assert "pong".equals(new String(okHttpResponse.body(), StandardCharsets.UTF_8));
+        assert uri.equals(okHttpResponse.finalUri()) : "OkHttp final URI should match the request";
+        assert uri.equals(jdkResponse.finalUri()) : "JDK final URI should match the request";
+        assert !okHttpResponse.redirected() : "OkHttp response should be unredirected";
+        assert !jdkResponse.redirected() : "JDK response should be unredirected";
       } finally {
         okHttp.shutdown();
       }
@@ -231,7 +235,9 @@ public final class TransportExecutorParityTests {
                         response.code(),
                         responseBody,
                         response.message(),
-                        response.headers().toMultimap()));
+                        response.headers().toMultimap(),
+                        response.request().url().uri(),
+                        response.priorResponse() != null));
               } catch (final IOException e) {
                 future.completeExceptionally(e);
               }

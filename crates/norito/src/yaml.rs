@@ -248,6 +248,7 @@ fn number_to_string(number: &json::Number) -> String {
     match number {
         json::Number::I64(v) => v.to_string(),
         json::Number::U64(v) => v.to_string(),
+        json::Number::U128(v) => v.to_string(),
         json::Number::F64(v) => {
             // Use `ryu` formatting via `to_string` for f64 preserving finite values.
             let mut s = v.to_string();
@@ -276,5 +277,13 @@ mod tests {
             "items:\n  -\n    key: value\n  -\n    - nested\n  - scalar\n"
         );
         assert!(rendered.lines().all(|line| line.trim_end() == line));
+    }
+
+    #[test]
+    fn u128_scalar_is_rendered_exactly() {
+        let rendered =
+            to_string_from_value(&Value::from(u128::MAX)).expect("serialize maximum u128 as YAML");
+
+        assert_eq!(rendered.trim_end_matches('\n'), u128::MAX.to_string());
     }
 }

@@ -128,6 +128,9 @@ impl ExactJsonRpcId {
             Value::String(value) => ExactJsonRpcIdKind::String(value.clone()),
             Value::Number(json::native::Number::I64(value)) => ExactJsonRpcIdKind::I64(*value),
             Value::Number(json::native::Number::U64(value)) => ExactJsonRpcIdKind::U64(*value),
+            Value::Number(json::native::Number::U128(value)) => {
+                ExactJsonRpcIdKind::U64(u64::try_from(*value).ok()?)
+            }
             _ => return None,
         };
         Some(Self { kind })
@@ -1658,7 +1661,12 @@ pub(crate) fn is_jsonrpc_response(response: &Value) -> bool {
 }
 
 fn is_jsonrpc_id(id: &Value) -> bool {
-    id.is_string() || id.is_number()
+    match id {
+        Value::String(_) => true,
+        Value::Number(json::native::Number::U128(value)) => u64::try_from(*value).is_ok(),
+        Value::Number(_) => true,
+        _ => false,
+    }
 }
 fn is_jsonrpc_integer(value: &Value) -> bool {
     value.as_f64().is_some_and(|number| number.fract() == 0.0)
@@ -10487,6 +10495,22 @@ mod tests {
     include!("mcp/iso20022_operator_auth_tests.rs");
     include!("mcp/body_builder_tests.rs");
     include!("mcp/bounds_tests.rs");
+
+    #[test]
+    fn jsonrpc_numeric_ids_reject_u128_above_u64() {
+        let largest_supported = Value::Number(json::native::Number::U128(u64::MAX.into()));
+        assert!(is_jsonrpc_id(&largest_supported));
+        assert_eq!(
+            ExactJsonRpcId::from_value(&largest_supported),
+            Some(ExactJsonRpcId {
+                kind: ExactJsonRpcIdKind::U64(u64::MAX),
+            })
+        );
+
+        let too_large = Value::Number(json::native::Number::U128(u128::from(u64::MAX) + 1));
+        assert!(!is_jsonrpc_id(&too_large));
+        assert_eq!(ExactJsonRpcId::from_value(&too_large), None);
+    }
 
     #[test]
     fn parliament_attempt_draft_tool_caps_attempt_sequence_at_retry_limit() {

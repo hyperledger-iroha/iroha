@@ -137,6 +137,19 @@ pub(crate) fn faucet_claim_consumption_marker(
         .metadata()
         .get(iroha_data_model::transaction::FAUCET_CLAIM_MARKER_VERSION_METADATA_KEY)
     else {
+        let prepared_faucet_without_marker = tx
+            .metadata()
+            .get(iroha_data_model::transaction::PREPARED_OPERATION_METADATA_KEY)
+            .and_then(|operation| operation.clone().try_into_any_norito::<String>().ok())
+            .is_some_and(|operation| {
+                operation == iroha_data_model::transaction::PREPARED_FAUCET_OPERATION
+            });
+        if prepared_faucet_without_marker {
+            return Err(ValidationFail::NotPermitted(
+                "prepared faucet operation requires faucet claim marker version metadata"
+                    .to_owned(),
+            ));
+        }
         return Ok(None);
     };
     let version = version.clone().try_into_any_norito::<u64>().map_err(|_| {
@@ -12457,6 +12470,39 @@ pub mod tests {
             faucet_claim_consumption_marker(&tx),
             Err(ValidationFail::NotPermitted(message))
                 if message.contains("canonical lowercase hexadecimal")
+        ));
+    }
+
+    #[test]
+    fn prepared_faucet_operation_requires_claim_marker() {
+        let (authority, keypair) = gen_account_in("faucet");
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            iroha_data_model::transaction::PREPARED_OPERATION_METADATA_KEY
+                .parse()
+                .expect("operation metadata key"),
+            Json::new(iroha_data_model::transaction::PREPARED_FAUCET_OPERATION.to_owned()),
+        );
+        metadata.insert(
+            iroha_data_model::transaction::PREPARED_SEMANTIC_HASH_METADATA_KEY
+                .parse()
+                .expect("semantic hash metadata key"),
+            Json::new("ab".repeat(Hash::LENGTH)),
+        );
+        let tx = TransactionBuilder::new(
+            test_network_id(),
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_metadata(metadata)
+        .with_instructions([Log::new(Level::INFO, "unmarked faucet claim".to_owned())])
+        .sign(keypair.private_key());
+
+        assert!(matches!(
+            faucet_claim_consumption_marker(&tx),
+            Err(ValidationFail::NotPermitted(message))
+                if message
+                    == "prepared faucet operation requires faucet claim marker version metadata"
         ));
     }
 

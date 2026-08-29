@@ -911,7 +911,7 @@ public final class ContractManifestTests {
       requestCount++;
       lastRequest = request;
       return CompletableFuture.completedFuture(
-          new TransportResponse(200, payload, "ok", Collections.emptyMap()));
+          new TransportResponse(200, payload, "ok", Collections.emptyMap(), null, false));
     }
   }
 }

@@ -114,7 +114,9 @@ public final class HttpClientTransportSubmissionContractTests {
                 + "\"7ab5ff9c572efb316deac478f19209c5\"}")
             .getBytes(StandardCharsets.UTF_8),
         "",
-        Map.of());
+        Map.of(),
+        null,
+        false);
   }
 
   private static final class CapturingExecutor implements HttpTransportExecutor {
@@ -127,7 +129,7 @@ public final class HttpClientTransportSubmissionContractTests {
         return CompletableFuture.completedFuture(compatibleCapabilitiesResponse());
       }
       return CompletableFuture.completedFuture(
-          new TransportResponse(202, new byte[0], "accepted", Map.of()));
+          new TransportResponse(202, new byte[0], "accepted", Map.of(), null, false));
     }
   }
 
@@ -158,7 +160,8 @@ public final class HttpClientTransportSubmissionContractTests {
       if (failure != null) {
         future.completeExceptionally(failure);
       } else {
-        future.complete(new TransportResponse(status, new byte[0], "failure", Map.of()));
+        future.complete(
+            new TransportResponse(status, new byte[0], "failure", Map.of(), null, false));
       }
       return future;
     }
