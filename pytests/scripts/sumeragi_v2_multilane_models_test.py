@@ -626,6 +626,12 @@ def copy_native_prepublication_fixture(
         relative
         for relative, _, _ in module.native_merge_manifest.NATIVE_MERGE_MANIFEST_RAW_TEST_CHECKS
     )
+    relatives.update(
+        Path(relative)
+        for relative, _, _, _ in (
+            module.native_merge_manifest.NATIVE_MERGE_MANIFEST_NORMALIZED_RELATIONS
+        )
+    )
     copy_reviewed_source_fixture_with_includes(tmp_path, module, relatives)
     return models
 
@@ -1441,17 +1447,30 @@ def test_inflight_layout_contract_rejects_early_autonomous_queue_plan_cleanup(
     contract = canonical_contract()
     copy_layout_fixture(tmp_path, module, contract)
     path = tmp_path / "crates/iroha_core/src/sumeragi/v2_apply.rs"
-    replace_once(
+    replace_once_after(
         path,
-        "                .filter(|entrypoint_hash| {\n"
-        "                    !staged_merge_queue_reservation_hashes.contains(entrypoint_hash)\n"
-        "                }),\n",
-        "                ,\n",
+        "let committed_queue_hashes = committed_block",
+        "!staged_merge_queue_reservation_hashes.contains(entrypoint_hash)",
+        "true",
     )
     errors = validate_fixture(tmp_path, module, contract)
     assert any(
         "V2ApplyService::validate_and_apply" in error
-        and ".filter(|entrypoint_hash|" in error
+        and "!staged_merge_queue_reservation_hashes.contains(entrypoint_hash)"
+        in error
+        for error in errors
+    ), errors
+
+    replace_once_after(
+        path,
+        "let terminal_authorizations = self",
+        "authorize_completed_autonomous_queue_cleanup_for_entrypoints(",
+        "authorize_autonomous_queue_cleanup_without_terminal_proof(",
+    )
+    errors = validate_fixture(tmp_path, module, contract)
+    assert any(
+        "V2ApplyService::validate_and_apply" in error
+        and "authorize_completed_autonomous_queue_cleanup_for_entrypoints" in error
         for error in errors
     ), errors
 

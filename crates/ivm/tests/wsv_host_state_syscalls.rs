@@ -49,7 +49,7 @@ fn wsv_host_state_set_get_del_roundtrip() {
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
     );
     let mut vm = IVM::new(u64::MAX);
-    let host = WsvHost::new_with_subject(wsv, caller.clone(), Default::default());
+    let host = WsvHost::new_with_subject(wsv, caller.clone());
     vm.set_host(host);
     let path_tlv = state_path_tlv("bar");
     let expected = vec![9u8, 8, 7];
@@ -132,7 +132,7 @@ fn wsv_host_state_get_returns_canonical_record_in_input_when_space_is_available(
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
     );
     let mut vm = IVM::new(u64::MAX);
-    let host = WsvHost::new_with_subject(wsv, caller, Default::default());
+    let host = WsvHost::new_with_subject(wsv, caller);
     vm.set_host(host);
     let path_tlv = state_path_tlv("inline_value");
     let p_path = vm.alloc_input_tlv(&path_tlv).expect("alloc path");
@@ -161,7 +161,7 @@ fn wsv_host_state_get_spills_to_heap_when_input_bump_is_full() {
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
     );
     let mut vm = IVM::new(u64::MAX);
-    let host = WsvHost::new_with_subject(wsv, caller, Default::default());
+    let host = WsvHost::new_with_subject(wsv, caller);
     vm.set_host(host);
     let path_tlv = state_path_tlv("spill");
     let expected = vec![0xCD; 64];
@@ -201,7 +201,7 @@ fn wsv_host_state_get_spills_canonical_record_when_input_bump_is_full() {
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
     );
     let mut vm = IVM::new(u64::MAX);
-    let host = WsvHost::new_with_subject(wsv, caller, Default::default());
+    let host = WsvHost::new_with_subject(wsv, caller);
     vm.set_host(host);
     let path_tlv = state_path_tlv("spilled_value");
     let p_path = vm.alloc_input_tlv(&path_tlv).expect("alloc path");
@@ -226,7 +226,7 @@ fn wsv_host_overlay_state_get_spills_to_heap_when_input_bump_is_full() {
         "wonderland",
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
     );
-    let mut host = WsvHost::new_with_subject(MockWorldStateView::new(), caller, Default::default());
+    let mut host = WsvHost::new_with_subject(MockWorldStateView::new(), caller);
     let mut vm = IVM::new(u64::MAX);
     let path_tlv = state_path_tlv("overlay");
     let expected = vec![0x5A; 48];
@@ -272,7 +272,7 @@ fn wsv_host_overlay_delete_shadows_base_value_during_tx() {
         "wonderland",
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
     );
-    let mut host = WsvHost::new_with_subject(wsv, caller, Default::default());
+    let mut host = WsvHost::new_with_subject(wsv, caller);
     let mut vm = IVM::new(u64::MAX);
     let path_tlv = state_path_tlv("shadowed");
     let p_path = vm.alloc_input_tlv(&path_tlv).expect("alloc path");
@@ -298,7 +298,7 @@ fn wsv_host_overlay_delete_persists_base_removal_after_finish_tx() {
         "wonderland",
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
     );
-    let mut host = WsvHost::new_with_subject(wsv, caller, Default::default());
+    let mut host = WsvHost::new_with_subject(wsv, caller);
     let mut vm = IVM::new(u64::MAX);
     let path_tlv = state_path_tlv("shadowed");
     let p_path = vm.alloc_input_tlv(&path_tlv).expect("alloc path");
@@ -324,7 +324,7 @@ fn wsv_host_overlay_set_overrides_and_persists_base_value() {
         "wonderland",
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
     );
-    let mut host = WsvHost::new_with_subject(wsv, caller, Default::default());
+    let mut host = WsvHost::new_with_subject(wsv, caller);
     let mut vm = IVM::new(u64::MAX);
     let path_tlv = state_path_tlv("shadowed");
     let value_tlv = make_tlv(PointerType::NoritoBytes, b"overlay");
@@ -367,7 +367,7 @@ fn wsv_host_state_count_uses_overlay_and_tombstones() {
         "wonderland",
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
     );
-    let mut host = WsvHost::new_with_subject(wsv, caller, Default::default());
+    let mut host = WsvHost::new_with_subject(wsv, caller);
     let mut vm = IVM::new(u64::MAX);
     let deleted_tlv = state_path_tlv("orders/1");
     let added_tlv = state_path_tlv("orders/3");
@@ -407,7 +407,7 @@ fn wsv_host_pointer_helpers_charge_envelope_bytes() {
         "wonderland",
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
     );
-    let mut host = WsvHost::new_with_subject(MockWorldStateView::new(), caller, Default::default());
+    let mut host = WsvHost::new_with_subject(MockWorldStateView::new(), caller);
     let mut vm = IVM::new(u64::MAX);
     let payload = b"deterministic";
     let ptr = vm
@@ -453,7 +453,7 @@ fn wsv_host_tlv_eq_charges_payload_bytes() {
         "wonderland",
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
     );
-    let mut host = WsvHost::new_with_subject(MockWorldStateView::new(), caller, Default::default());
+    let mut host = WsvHost::new_with_subject(MockWorldStateView::new(), caller);
     let mut vm = IVM::new(u64::MAX);
     let left = vm
         .alloc_input_tlv(&make_tlv(PointerType::Blob, b"same"))
@@ -475,7 +475,7 @@ fn wsv_host_tlv_len_charges_payload_bytes() {
         "wonderland",
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
     );
-    let mut host = WsvHost::new_with_subject(MockWorldStateView::new(), caller, Default::default());
+    let mut host = WsvHost::new_with_subject(MockWorldStateView::new(), caller);
     let mut vm = IVM::new(u64::MAX);
     let ptr = vm
         .alloc_input_tlv(&make_tlv(PointerType::Blob, b"length"))

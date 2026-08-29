@@ -17,8 +17,7 @@ fi
 
 export DOC_PATH="specs/telemetry.md"
 export SRC_PATH="crates/iroha_logger/src/telemetry.rs"
-export DEFAULTS_PATH="crates/iroha_config/src/parameters/defaults.rs"
-export LOGGER_TOML="crates/iroha_logger/Cargo.toml"
+export CONFIG_PATH="crates/iroha_config/src/parameters/user.rs"
 
 python3 - <<'PY'
 import os
@@ -28,8 +27,7 @@ from pathlib import Path
 
 doc_path = Path(os.environ["DOC_PATH"])
 src_path = Path(os.environ["SRC_PATH"])
-defaults_path = Path(os.environ["DEFAULTS_PATH"])
-logger_toml_path = Path(os.environ["LOGGER_TOML"])
+config_path = Path(os.environ["CONFIG_PATH"])
 
 errors = []
 
@@ -44,8 +42,7 @@ def read(path: Path) -> str:
 
 src_text = read(src_path)
 doc_text = read(doc_path)
-defaults_text = read(defaults_path)
-logger_toml = read(logger_toml_path)
+config_text = read(config_path)
 
 
 def parse_list_src(text: str, name: str) -> list[str]:
@@ -82,14 +79,6 @@ def parse_doc_block(text: str, start: str, end: str, label: str) -> list[str]:
     return items
 
 
-allowlist_src = parse_list_src(src_text, "REDACTION_ALLOWLIST_POLICY")
-allowlist_doc = parse_doc_block(
-    doc_text,
-    "<!-- TELEMETRY_REDACTION_ALLOWLIST_START -->",
-    "<!-- TELEMETRY_REDACTION_ALLOWLIST_END -->",
-    "allowlist",
-)
-
 prefixes_src = parse_list_src(src_text, "EXPLICIT_REDACTION_PREFIXES")
 prefixes_doc = parse_doc_block(
     doc_text,
@@ -106,18 +95,6 @@ keywords_doc = parse_doc_block(
     "keyword taxonomy",
 )
 
-if allowlist_doc != sorted(allowlist_doc):
-    errors.append(
-        "telemetry-redaction guard: allowlist in specs/telemetry.md must be sorted."
-    )
-
-if allowlist_src != allowlist_doc:
-    errors.append(
-        "telemetry-redaction guard: allowlist mismatch between telemetry.rs and specs/telemetry.md."
-    )
-    errors.append(f"  src: {allowlist_src!r}")
-    errors.append(f"  doc: {allowlist_doc!r}")
-
 if prefixes_src != prefixes_doc:
     errors.append(
         "telemetry-redaction guard: prefix taxonomy mismatch between telemetry.rs and specs/telemetry.md."
@@ -132,41 +109,20 @@ if keywords_src != keywords_doc:
     errors.append(f"  src: {keywords_src!r}")
     errors.append(f"  doc: {keywords_doc!r}")
 
-mode_match = re.search(r'pub const MODE: &str = "([^"]+)";', defaults_text)
-if not mode_match:
-    errors.append(
-        "telemetry-redaction guard: telemetry.redaction.MODE not found in defaults.rs."
-    )
-else:
-    mode = mode_match.group(1)
-    if mode != "strict":
+for removed_surface in [
+    "set_redaction_policy",
+    "set_redaction_audit_hook",
+    "REDACTION_ALLOWLIST_POLICY",
+    "REDACTION_SUPPORTED",
+]:
+    if removed_surface in src_text:
         errors.append(
-            f"telemetry-redaction guard: telemetry.redaction.MODE must be \"strict\" (found {mode!r})."
+            f"telemetry-redaction guard: removed policy surface {removed_surface} reappeared."
         )
 
-
-def parse_default_features(text: str) -> list[str]:
-    try:
-        import tomllib  # type: ignore
-
-        data = tomllib.loads(text)
-        return list(data.get("features", {}).get("default", []))
-    except Exception:
-        pass
-
-    match = re.search(r"^\[features\](.*?)^\[", text, re.S | re.M)
-    block = match.group(1) if match else text
-    match = re.search(r"default\s*=\s*\[(.*?)\]", block, re.S)
-    if not match:
-        return []
-    entries = match.group(1)
-    return [item.strip().strip('"') for item in entries.split(",") if item.strip()]
-
-
-default_features = parse_default_features(logger_toml)
-if "log-obfuscation" not in default_features:
+if "telemetry_redaction" in config_text:
     errors.append(
-        "telemetry-redaction guard: iroha_logger default features must include log-obfuscation."
+        "telemetry-redaction guard: configurable redaction is forbidden; redaction must remain unconditional."
     )
 
 if errors:

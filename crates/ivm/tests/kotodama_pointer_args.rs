@@ -8,7 +8,7 @@ use ivm::{
     validate_tlv_bytes,
 };
 use ivm_abi::state_value::StateValueKindV1;
-use std::{collections::HashMap, str::FromStr};
+use std::str::FromStr;
 mod common;
 fn account_from_public_key(public_key: &str) -> AccountId {
     AccountId::new(public_key.parse().expect("public key must be valid"))
@@ -49,7 +49,7 @@ fn pointer_map_default_roundtrip() {
     common::select_kotodama_entrypoint(&mut vm, &bytecode, "hajimari");
     let wsv = MockWorldStateView::new();
     let authority = account_from_public_key(AUTHORITY_PUBLIC_KEY);
-    let host = WsvHost::new_with_subject(wsv, authority, HashMap::new());
+    let host = WsvHost::new_with_subject(wsv, authority);
     vm.set_host(host);
     vm.run().expect("execute init");
     let host_ref = vm.host_mut_any().expect("host access");
@@ -97,7 +97,7 @@ fn pointer_asset_state_storage_wraps_inner_pointer() {
     let authority = account_from_public_key(
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
     );
-    let host = WsvHost::new_with_subject(MockWorldStateView::new(), authority, HashMap::new());
+    let host = WsvHost::new_with_subject(MockWorldStateView::new(), authority);
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
     vm.load_program(&bytecode).expect("load program");

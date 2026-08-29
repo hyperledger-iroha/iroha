@@ -266,7 +266,7 @@ Roadmap item **PY6-P5** also calls for parity across the core admin endpoints so
 operators can triage peers, network time, and Sumeragi health without switching to curl
 or bespoke scripts. The Python client now exposes typed wrappers for `/v1/peers`,
 `/v1/time/{now,status}`, and the Sumeragi inspection endpoints
-(`/v1/sumeragi/{qc,pacemaker,phases,leader,telemetry,params,bls_keys,evidence/count}`);
+(`/v1/sumeragi/{status,diagnostics,qc,leader,params,bls-keys,evidence/count}`);
 include them in integration tests and runbooks so the resulting artefacts satisfy the
 telemetry-readiness portion of PY6.
 

@@ -149,7 +149,7 @@ fn host_bridges_nft_mint_and_transfer() {
             CoreHost::with_host(&mut vm, |host| host.apply_queued(&mut tx, &owner)).unwrap();
         assert_eq!(queued.len(), 1);
         tx.apply();
-        block.commit().unwrap();
+        block.commit_world_overlay_for_testing().unwrap();
     }
     // NFT exists and is owned by owner
     {
@@ -188,7 +188,7 @@ fn host_bridges_nft_mint_and_transfer() {
             CoreHost::with_host(&mut vm2, |host| host.apply_queued(&mut tx, &owner)).unwrap();
         assert_eq!(queued2.len(), 1);
         tx.apply();
-        block.commit().unwrap();
+        block.commit_world_overlay_for_testing().unwrap();
     }
     // Owner changed to recipient
     let view = state.view();
@@ -255,7 +255,7 @@ fn host_rejects_insufficient_asset_transfer() {
         executor.execute_instruction(&mut tx, &from, instr).unwrap();
     }
     tx.apply();
-    block.commit().unwrap();
+    block.commit_world_overlay_for_testing().unwrap();
     let mut vm = IVM::new(AMPLE_TEST_GAS_LIMIT);
     let mut cursor = 0;
     let ptr_from = load_input_blob(&mut vm, &mut cursor, &from_tlv);
@@ -520,7 +520,7 @@ fn host_bridges_set_account_detail() {
             with_core_host(&mut vm, |host| host.apply_queued(&mut tx, &authority)).unwrap();
         assert_eq!(queued.len(), 1);
         tx.apply();
-        block.commit().unwrap();
+        block.commit_world_overlay_for_testing().unwrap();
     } // drop block + tx before taking a read-only view
     // Check metadata present
     let view = state.view();
@@ -596,7 +596,7 @@ fn host_bridges_mint_asset() {
             with_core_host(&mut vm, |host| host.apply_queued(&mut tx, &authority)).unwrap();
         assert_eq!(queued.len(), 1);
         tx.apply();
-        block.commit().unwrap();
+        block.commit_world_overlay_for_testing().unwrap();
     }
     let balance = state
         .view()
@@ -668,7 +668,7 @@ fn host_bridges_nft_set_metadata_and_burn() {
         let queued = with_core_host(&mut vm, |host| host.apply_queued(&mut tx, &owner)).unwrap();
         assert_eq!(queued.len(), 3);
         tx.apply();
-        block.commit().unwrap();
+        block.commit_world_overlay_for_testing().unwrap();
     }
     // NFT should not exist after burn; before burn, metadata should have been set correctly
     let view = state.view();

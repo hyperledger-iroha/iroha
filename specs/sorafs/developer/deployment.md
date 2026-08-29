@@ -30,8 +30,8 @@ rolling the tooling out to real gateways and storage providers.
 - Configure `sorafs_alias_cache` policy using the defaults in
   `iroha_config` or the CLI helper (`sorafs_cli manifest submit --alias-*`).
 - Provide stream tokens (or Torii credentials) via a secure secret manager.
-- Enable telemetry exporters (`torii_sorafs_proof_stream_*`,
-  `torii_sorafs_chunk_range_*`) and ship them to your Prometheus/OTel stack.
+- Expose the Prometheus families (`torii_sorafs_proof_stream_*`,
+  `torii_sorafs_chunk_range_*`) and scrape them into your metrics stack.
 
 ## Rollout strategy
 

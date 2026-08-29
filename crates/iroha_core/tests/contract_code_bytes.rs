@@ -127,7 +127,9 @@ fn register_contract_code_bytes_stores_and_idempotent() {
     // Verify stored (uncommitted block scope)
     let got = block.world.contract_code().get(&code_hash).cloned();
     assert_eq!(got.as_deref(), Some(prog.as_slice()));
-    block.commit().expect("commit initial block");
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit initial block");
     // Idempotent re-register
     let mut block2 = state.block(iroha_data_model::block::BlockHeader::new(
         nonzero_ext::nonzero!(2_u64),

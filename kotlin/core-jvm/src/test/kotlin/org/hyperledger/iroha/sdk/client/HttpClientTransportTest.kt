@@ -1392,16 +1392,42 @@ class HttpClientTransportTest {
             boundary["fee_payment"],
             "torii_boundary.fee_payment",
         )
-        val request = HttpClientTransport.buildContractCallDraftPayload(
-            authority = string(boundary, "authority"),
-            feePayment = boundaryFeePayment,
-            contractAddress = null,
-            contractAlias = string(boundary, "contract_alias"),
-            entrypoint = string(boundary, "entrypoint"),
-            payload = boundaryPayload,
+        val trustedInvocation = ContractInvocation(
+            "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
+            ByteArray(32) { 0x11 },
+            string(boundary, "entrypoint"),
+            hexToBytes(string(record, "norito_hex")),
+        )
+        val executor = StubResponseExecutor(
+            statusCode = 503,
+            body = "fixture boundary reached".toByteArray(StandardCharsets.UTF_8),
+        )
+        val transport = HttpClientTransport.withExecutor(
+            executor,
+            signedClientConfig("https://fixture.invalid"),
         )
 
-        assertEquals(string(boundary, "authority"), request["authority"])
+        assertFailsWith<CompletionException> {
+            transport.prepareContractCall(
+                authority = string(boundary, "authority"),
+                feePayment = boundaryFeePayment,
+                contractAlias = string(boundary, "contract_alias"),
+                entrypoint = string(boundary, "entrypoint"),
+                payload = boundaryPayload,
+                draftIntent = ContractCallDraftIntent(trustedInvocation, emptyMap()),
+            ).join()
+        }
+
+        val captured = executor.lastRequest
+        assertEquals("POST", captured.method)
+        assertEquals("https://fixture.invalid/v1/contracts/call", captured.uri.toString())
+        @Suppress("UNCHECKED_CAST")
+        val request = JsonParser.parse(readBody(captured)) as Map<String, Any?>
+
+        assertEquals(
+            expected = string(boundary, "authority"),
+            actual = request["authority"],
+        )
         assertFalse(request.containsKey("private_key"))
         assertEquals(string(boundary, "contract_alias"), request["contract_alias"])
         assertFalse(request.containsKey("contract_address"))

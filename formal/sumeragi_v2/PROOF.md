@@ -361,9 +361,8 @@ work assumptions are the trusted contracts stated in the protocol document.
 The local-work contract is quantified only over validator hosts admitted by
 the first-release storage-platform gate. An unsupported-platform failure is
 not successful termination and cannot discharge application or
-successor-activation fairness. Revision 4 has no legacy decoder premise: a
-Vote, QC, status record, or finality artifact without its canonical signed
-proposal origin is rejected.
+successor-activation fairness. Revision 4 requires every Vote, QC, status
+record, and finality artifact to carry its canonical signed proposal origin.
 
 ### Quorum lemmas
 
@@ -1744,7 +1743,6 @@ or directories, fail closed. Native atomic replacement is required on Unix and
 Windows, and unsupported directory-sync platforms fail closed. The root marker
 is the local trust anchor, so marker replacement/rollback—including restoration
 of the bootstrap sentinel—and whole-store rollback are outside the guarantee.
-V1/V2 are unsupported.
 
 Ordinary generation advance requires a certified changed roster and
 authenticated terminality. A sealed durable handoff or semantically validated
@@ -1753,11 +1751,11 @@ empty successor projection, without forging close prefixes. Same-roster
 rehydration preserves generation and responder ownership; a new requester
 against a full same-roster table rejects without mutation.
 The canonical module/test TSV inventory SHA-256 is
-`39d0b3083847ad0ad8bcf5c67469b20b9a056148fad90679d753a9e63b07455b`.
+`44784c79c489d83ab142bb0db84e89138c3a54b1349926a80597e2c5b21a83df`.
 The separate source-sealed G-UNIT inventory contains 522 focused tests,
 including 316 core and 143 queue-journal `iroha_core` tests. Its 523-line
 canonical TSV has SHA-256
-`a19753ab7879a95094d8f1ee968e2e44d9a36453f2814acdadffaaead1ab4a97`;
+`5e8b82b400b438eabb7733adbccae15b5aa212a98a89161a586cbce686e2f6e9`;
 the sealed Native rows cover exact per-route prevote-byte accounting,
 empty/hard-cap/overflow pair geometry, and precommit error classification.
 The added boundaries preserve the frozen predecessor CommitQC through

@@ -2,30 +2,22 @@
 
 import json
 
+import pytest
+
 from scripts.fastpq import update_benchmark_history
 
 
 def test_format_operation_filter_prefers_explicit_filter():
     bench = {"operation_filter": "lde"}
-    operations = {
-        "fft": {"operation": "fft"},
-        "lde": {"operation": "lde"},
-    }
-
-    result = update_benchmark_history.format_operation_filter(bench, operations)
+    result = update_benchmark_history.format_operation_filter(bench)
 
     assert result == "lde"
 
 
-def test_format_operation_filter_falls_back_to_single_operation():
+def test_format_operation_filter_rejects_missing_field():
     bench = {}
-    operations = {
-        "ifft": {"operation": "ifft"},
-    }
-
-    result = update_benchmark_history.format_operation_filter(bench, operations)
-
-    assert result == "ifft"
+    with pytest.raises(ValueError, match="operation_filter"):
+        update_benchmark_history.format_operation_filter(bench)
 
 
 def test_collect_benchmark_rows_carries_operation_filter(tmp_path):
@@ -107,12 +99,12 @@ def test_poseidon_table_mentions_filter_and_columns(tmp_path):
     assert "| `benchmarks/poseidon/poseidon_microbench_cuda.json` | `fastpq_cuda_bench_poseidon.json` | 2026-03-27T12:00:00Z | poseidon_hash_columns | 16 | 1.0 | 2.0 | 2.00 |" in table
 
 
-def test_poseidon_table_falls_back_to_all_and_blank_columns(tmp_path):
+def test_poseidon_table_rejects_missing_filter(tmp_path):
     manifest = {
         "entries": [
             {
-                "file": "benchmarks/poseidon/poseidon_microbench_legacy.json",
-                "bundle": "fastpq_metal_bench_legacy.json",
+                "file": "benchmarks/poseidon/poseidon_microbench_incomplete.json",
+                "bundle": "fastpq_metal_bench_incomplete.json",
                 "capture_timestamp": "2025-11-09T06:11:01Z",
                 "default_mean_ms": 2.0,
                 "scalar_mean_ms": 3.0,
@@ -123,6 +115,26 @@ def test_poseidon_table_falls_back_to_all_and_blank_columns(tmp_path):
     path = tmp_path / "manifest.json"
     path.write_text(json.dumps(manifest), encoding="utf-8")
 
-    table = update_benchmark_history.poseidon_table(path)
+    with pytest.raises(ValueError, match="operation_filter"):
+        update_benchmark_history.poseidon_table(path)
 
-    assert "| `benchmarks/poseidon/poseidon_microbench_legacy.json` | `fastpq_metal_bench_legacy.json` | 2025-11-09T06:11:01Z | all | — | 2.0 | 3.0 | 1.50 |" in table
+
+def test_poseidon_table_rejects_missing_column_count(tmp_path):
+    manifest = {
+        "entries": [
+            {
+                "file": "benchmarks/poseidon/poseidon_microbench_incomplete.json",
+                "bundle": "fastpq_metal_bench_incomplete.json",
+                "capture_timestamp": "2025-11-09T06:11:01Z",
+                "operation_filter": "poseidon_hash_columns",
+                "default_mean_ms": 2.0,
+                "scalar_mean_ms": 3.0,
+                "speedup_vs_scalar": 1.5,
+            }
+        ]
+    }
+    path = tmp_path / "manifest.json"
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="column_count"):
+        update_benchmark_history.poseidon_table(path)

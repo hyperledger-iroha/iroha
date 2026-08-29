@@ -63,6 +63,9 @@ mod app_routed_read_config;
 type Result<T, E> = core::result::Result<T, Report<[E]>>;
 type KyberKeyInputs = (Vec<u8>, ParameterOrigin, Vec<u8>, ParameterOrigin);
 const MIN_TIMER_INTERVAL: Duration = Duration::from_millis(100);
+const MAX_TELEMETRY_RETRY_DELAY_EXPONENT: u8 = 16;
+const MAX_TELEMETRY_SIGNING_KEY_ID_LENGTH: usize = 128;
+const MAX_TELEGRAM_CREDENTIAL_LENGTH: usize = 256;
 const MAX_PRIVATE_KEY_FILE_BYTES: u64 = 4 * 1024;
 const MAX_PUBLIC_IDENTITY_FILE_BYTES: u64 = 512;
 fn normalize_jdg_signature_schemes(raw: Vec<String>) -> BTreeSet<JdgSignatureScheme> {
@@ -864,16 +867,10 @@ pub struct Root {
     nexus: Nexus,
     #[config(nested)]
     snapshot: Snapshot,
-    /// Master telemetry on/off switch. Defaults to on.
-    #[config(env = "TELEMETRY_ENABLED", default = "defaults::telemetry::ENABLED")]
-    telemetry_enabled: bool,
     /// High-level telemetry profile controlling capability bundles.
     #[config(env = "TELEMETRY_PROFILE", default = "TelemetryProfile::Operator")]
     telemetry_profile: TelemetryProfile,
     telemetry: Option<Telemetry>,
-    /// Telemetry redaction policy.
-    #[config(nested)]
-    telemetry_redaction: TelemetryRedaction,
     /// Telemetry integrity policy (hash chaining + optional signing key).
     #[config(nested)]
     telemetry_integrity: TelemetryIntegrity,
@@ -1217,12 +1214,7 @@ impl Root {
         let (torii, live_query_store) = self.torii.parse(&mut emitter, parsed_sorafs);
         let soracloud_runtime = self.soracloud_runtime.parse(&mut emitter);
         let telemetry = self.telemetry.map(actual::Telemetry::from);
-        let telemetry_profile = if self.telemetry_enabled {
-            actual::TelemetryProfile::from(self.telemetry_profile)
-        } else {
-            actual::TelemetryProfile::Disabled
-        };
-        let telemetry_redaction = self.telemetry_redaction.parse(&mut emitter);
+        let telemetry_profile = actual::TelemetryProfile::from(self.telemetry_profile);
         let telemetry_integrity = self.telemetry_integrity.parse(&mut emitter);
         let sumeragi = self.sumeragi.parse(&mut emitter);
         if let Some(sumeragi) = sumeragi.as_ref() {
@@ -1460,10 +1452,8 @@ impl Root {
             queue: queue.parse(),
             nexus,
             snapshot,
-            telemetry_enabled: self.telemetry_enabled,
             telemetry_profile,
             telemetry,
-            telemetry_redaction,
             telemetry_integrity,
             dev_telemetry,
             pipeline,
@@ -1498,9 +1488,9 @@ pub enum TelemetryProfile {
     /// Enable lightweight operator metrics and status endpoints.
     #[default]
     Operator,
-    /// Enable operator metrics plus expensive exporters (e.g., Prometheus scraping).
+    /// Enable operator metrics plus costly runtime probes and timings.
     Extended,
-    /// Enable operator metrics plus developer sinks (JSON/file dumps, tracing bridges).
+    /// Enable operator metrics plus developer-only JSON/file outputs.
     Developer,
     /// Enable all telemetry features supported by the build.
     Full,
@@ -1521,70 +1511,8 @@ impl json::JsonDeserialize for TelemetryProfile {
         })
     }
 }
-/// Telemetry redaction modes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, strum::EnumString, strum::Display)]
-#[strum(serialize_all = "snake_case")]
-pub enum TelemetryRedactionMode {
-    /// Redact all sensitive fields; ignore allow-list entries.
-    #[default]
-    Strict,
-    /// Redact sensitive fields unless explicitly allow-listed.
-    Allowlist,
-    /// Disable telemetry redaction (developer-only).
-    Disabled,
-}
-impl json::JsonSerialize for TelemetryRedactionMode {
-    fn json_serialize(&self, out: &mut String) {
-        json::write_json_string(&self.to_string(), out);
-    }
-}
-impl json::JsonDeserialize for TelemetryRedactionMode {
-    fn json_deserialize(
-        parser: &mut json::Parser<'_>,
-    ) -> ::core::result::Result<Self, json::Error> {
-        let text = parser.parse_string()?;
-        Self::from_str(&text).map_err(|err| json::Error::InvalidField {
-            field: "telemetry_redaction.mode".into(),
-            message: err.to_string(),
-        })
-    }
-}
-fn default_telemetry_redaction_mode() -> TelemetryRedactionMode {
-    TelemetryRedactionMode::from_str(defaults::telemetry::redaction::MODE)
-        .expect("invalid telemetry redaction default")
-}
-/// User-level configuration container for telemetry redaction.
-#[derive(Debug, Clone, ReadConfig)]
-pub struct TelemetryRedaction {
-    /// Redaction mode (default: `strict`).
-    #[config(default = "default_telemetry_redaction_mode()")]
-    pub mode: TelemetryRedactionMode,
-    /// Optional allow-list of field names that may bypass keyword redaction.
-    #[config(default)]
-    pub allowlist: Vec<String>,
-}
-impl TelemetryRedaction {
-    fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::TelemetryRedaction {
-        let mut allowlist = Vec::with_capacity(self.allowlist.len());
-        for entry in self.allowlist {
-            let trimmed = entry.trim();
-            if trimmed.is_empty() {
-                emitter.emit(
-                    Report::new(ParseError::InvalidTelemetryConfig)
-                        .attach("telemetry_redaction.allowlist entry cannot be empty"),
-                );
-                continue;
-            }
-            allowlist.push(trimmed.to_string());
-        }
-        actual::TelemetryRedaction {
-            mode: self.mode.into(),
-            allowlist,
-        }
-    }
-}
 /// User-level configuration container for telemetry integrity.
-#[derive(Debug, Clone, ReadConfig)]
+#[derive(Clone, ReadConfig)]
 pub struct TelemetryIntegrity {
     /// Enable hash-chained telemetry exports.
     #[config(default = "defaults::telemetry::integrity::ENABLED")]
@@ -1596,8 +1524,33 @@ pub struct TelemetryIntegrity {
     /// Optional key identifier for rotation workflows.
     pub signing_key_id: Option<String>,
 }
+impl core::fmt::Debug for TelemetryIntegrity {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("TelemetryIntegrity")
+            .field("enabled", &self.enabled)
+            .field("state_dir_configured", &self.state_dir.is_some())
+            .field(
+                "signing_key_hex_configured",
+                &self.signing_key_hex.is_some(),
+            )
+            .field("signing_key_id_configured", &self.signing_key_id.is_some())
+            .finish()
+    }
+}
 impl TelemetryIntegrity {
     fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::TelemetryIntegrity {
+        if !self.enabled
+            && (self.state_dir.is_some()
+                || self.signing_key_hex.is_some()
+                || self.signing_key_id.is_some())
+        {
+            emitter.emit(
+                Report::new(ParseError::InvalidTelemetryConfig).attach(
+                    "telemetry_integrity state and signing settings require enabled = true",
+                ),
+            );
+        }
         let signing_key =
             self.signing_key_hex
                 .and_then(|raw| match parse_telemetry_signing_key(&raw) {
@@ -1608,6 +1561,23 @@ impl TelemetryIntegrity {
                         None
                     }
                 });
+        if self.signing_key_id.is_some() && signing_key.is_none() {
+            emitter.emit(
+                Report::new(ParseError::InvalidTelemetryConfig)
+                    .attach("telemetry_integrity.signing_key_id requires signing_key_hex"),
+            );
+        }
+        if self.signing_key_id.as_ref().is_some_and(|key_id| {
+            key_id.is_empty()
+                || key_id.len() > MAX_TELEMETRY_SIGNING_KEY_ID_LENGTH
+                || !key_id.bytes().all(|byte| byte.is_ascii_graphic())
+        }) {
+            emitter.emit(
+                Report::new(ParseError::InvalidTelemetryConfig).attach(
+                    "telemetry_integrity.signing_key_id must be a non-empty ASCII identifier of at most 128 bytes",
+                ),
+            );
+        }
         let state_dir = self.state_dir.map(|path| path.resolve_relative_path());
         actual::TelemetryIntegrity {
             enabled: self.enabled,
@@ -1618,9 +1588,7 @@ impl TelemetryIntegrity {
     }
 }
 fn parse_telemetry_signing_key(raw: &str) -> core::result::Result<[u8; 32], String> {
-    let trimmed = raw.trim();
-    let trimmed = trimmed.strip_prefix("0x").unwrap_or(trimmed);
-    let bytes = hex::decode(trimmed)
+    let bytes = hex::decode(raw)
         .map_err(|err| format!("telemetry_integrity.signing_key_hex must be hex-encoded: {err}"))?;
     if bytes.len() != 32 {
         return Err(format!(
@@ -4654,11 +4622,8 @@ impl Zk {
 )]
 pub struct Sccp {
     /// Maximum payload-bearing outbound messages awaiting destination proof acceptance.
-    #[config(
-        default = "defaults::zk::sccp::MAX_PENDING_OUTBOUND_MESSAGES",
-        key = "max_pending_outbound_messages"
-    )]
-    pub pending_outbound_messages: NonZeroU64,
+    #[config(default = "defaults::zk::sccp::MAX_PENDING_OUTBOUND_MESSAGES")]
+    pub max_pending_outbound_messages: NonZeroU64,
     /// Maximum canonical outbound payload bytes awaiting destination proof acceptance.
     #[config(default = "defaults::zk::sccp::MAX_PENDING_OUTBOUND_PAYLOAD_BYTES")]
     pub max_pending_outbound_payload_bytes: NonZeroU64,
@@ -4741,7 +4706,7 @@ pub struct Sccp {
 impl Default for Sccp {
     fn default() -> Self {
         Self {
-            pending_outbound_messages: defaults::zk::sccp::MAX_PENDING_OUTBOUND_MESSAGES,
+            max_pending_outbound_messages: defaults::zk::sccp::MAX_PENDING_OUTBOUND_MESSAGES,
             max_pending_outbound_payload_bytes:
                 defaults::zk::sccp::MAX_PENDING_OUTBOUND_PAYLOAD_BYTES,
             max_proofs_per_transaction: defaults::zk::sccp::MAX_PROOFS_PER_TRANSACTION,
@@ -4811,7 +4776,7 @@ impl Sccp {
             );
         }
         require_json_safe(
-            self.pending_outbound_messages,
+            self.max_pending_outbound_messages,
             "max_pending_outbound_messages",
         );
         require_json_safe(
@@ -4909,7 +4874,7 @@ impl Sccp {
             "max_bls12_381_pairing_checks_per_block",
         );
         actual::Sccp {
-            max_pending_outbound_messages: self.pending_outbound_messages,
+            max_pending_outbound_messages: self.max_pending_outbound_messages,
             max_pending_outbound_payload_bytes: self.max_pending_outbound_payload_bytes,
             max_proofs_per_transaction: self.max_proofs_per_transaction,
             max_proofs_per_block: self.max_proofs_per_block,
@@ -4951,25 +4916,14 @@ mod sccp_limit_tests {
     use super::*;
     use iroha_config_base::{read::ConfigReader, toml::TomlSource};
     #[test]
-    fn canonical_pending_outbound_key_is_required() {
+    fn canonical_pending_outbound_key_reads() {
         let canonical: toml::Table =
             toml::from_str("max_pending_outbound_messages = 17").expect("parse canonical SCCP key");
         let decoded = ConfigReader::new()
             .with_toml_source(TomlSource::inline(canonical))
             .read_and_complete::<Sccp>()
             .expect("read canonical SCCP key");
-        assert_eq!(decoded.pending_outbound_messages.get(), 17);
-        let rust_field_name: toml::Table = toml::from_str("pending_outbound_messages = 17")
-            .expect("parse noncanonical Rust field name");
-        let diagnostic = format!(
-            "{:?}",
-            ConfigReader::new()
-                .with_toml_source(TomlSource::inline(rust_field_name))
-                .read_and_complete::<Sccp>()
-                .expect_err("Rust field name must not become a configuration alias")
-        );
-        assert!(diagnostic.contains("pending_outbound_messages"));
-        assert!(diagnostic.contains("unknown parameter"));
+        assert_eq!(decoded.max_pending_outbound_messages.get(), 17);
     }
     #[test]
     fn defaults_are_nonzero_ordered_and_preserved() {
@@ -5002,7 +4956,7 @@ mod sccp_limit_tests {
         let exact = NonZeroU64::new(maximum).expect("JSON-safe maximum is nonzero");
         let over = NonZeroU64::new(maximum + 1).expect("one above maximum is nonzero");
         let mut boundary = Sccp::default();
-        boundary.pending_outbound_messages = exact;
+        boundary.max_pending_outbound_messages = exact;
         boundary.max_pending_outbound_payload_bytes = exact;
         boundary.max_proof_bytes_per_proof = exact;
         boundary.max_proof_bytes_per_transaction = exact;
@@ -5011,7 +4965,7 @@ mod sccp_limit_tests {
         boundary.max_native_header_bytes_per_block = exact;
         let _ = boundary.parse();
         let mutations: [fn(&mut Sccp, NonZeroU64); 7] = [
-            |value, limit| value.pending_outbound_messages = limit,
+            |value, limit| value.max_pending_outbound_messages = limit,
             |value, limit| value.max_pending_outbound_payload_bytes = limit,
             |value, limit| value.max_proof_bytes_per_proof = limit,
             |value, limit| value.max_proof_bytes_per_transaction = limit,
@@ -5172,12 +5126,6 @@ pub struct Fastpq {
         default = "defaults::zk::fastpq::METAL_DEBUG_ENUM"
     )]
     pub metal_debug_enum: bool,
-    /// Emit verbose fused Poseidon failure diagnostics (developer diagnostic; defaults off).
-    #[config(
-        env = "FASTPQ_DEBUG_FUSED",
-        default = "defaults::zk::fastpq::METAL_DEBUG_FUSED"
-    )]
-    pub metal_debug_fused: bool,
 }
 impl Fastpq {
     fn parse(self) -> actual::Fastpq {
@@ -5230,7 +5178,6 @@ impl Fastpq {
             }),
             metal_trace: self.metal_trace,
             metal_debug_enum: self.metal_debug_enum,
-            metal_debug_fused: self.metal_debug_fused,
         }
     }
 }
@@ -9815,6 +9762,9 @@ pub struct Nexus {
     /// AXT execution and expiry policy configuration.
     #[config(nested)]
     pub axt: NexusAxt,
+    /// Governed atomic private cross-dataspace settlement policy.
+    #[config(nested)]
+    pub atomic_private_settlement: NexusAtomicPrivateSettlement,
     /// Lane-relay emergency override configuration.
     #[config(nested)]
     pub lane_relay_emergency: LaneRelayEmergency,
@@ -9871,6 +9821,7 @@ impl_default!(Nexus {
     uploaded_models: NexusUploadedModels::default(),
     endorsement: NexusEndorsement::default(),
     axt: NexusAxt::default(),
+    atomic_private_settlement: NexusAtomicPrivateSettlement::default(),
     lane_relay_emergency: LaneRelayEmergency::default(),
     routing_policy: RoutingPolicy::default(),
     registry: LaneRegistryConfig::default(),
@@ -11446,6 +11397,88 @@ impl_default!(NexusAxt {
     proof_cache_ttl_slots: defaults::nexus::axt::PROOF_CACHE_TTL_SLOTS,
     replay_retention_slots: defaults::nexus::axt::REPLAY_RETENTION_SLOTS,
 });
+/// User-level governed atomic private cross-dataspace settlement policy.
+#[derive(Debug, Clone, ReadConfig, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+pub struct NexusAtomicPrivateSettlement {
+    /// Whether admission is enabled, subject to the governed activation height.
+    #[config(default = "defaults::nexus::atomic_private_settlement::ENABLED")]
+    pub enabled: bool,
+    /// First block height at which the path may be admitted.
+    pub activation_height: Option<u64>,
+    /// Minimum governance notice before activation, in blocks.
+    #[config(
+        default = "defaults::nexus::atomic_private_settlement::MINIMUM_ACTIVATION_NOTICE_BLOCKS"
+    )]
+    pub minimum_activation_notice_blocks: u64,
+    /// Audited fixed-shape private-note proof profile version.
+    #[config(default = "defaults::nexus::atomic_private_settlement::PROOF_PROFILE_VERSION")]
+    pub proof_profile_version: u16,
+    /// Maximum ordered dataspace legs in one bundle.
+    #[config(default = "defaults::nexus::atomic_private_settlement::MAX_PARTICIPANTS")]
+    pub max_participants: u16,
+    /// Maximum admission-to-expiry distance, in blocks.
+    #[config(default = "defaults::nexus::atomic_private_settlement::MAX_EXPIRY_BLOCKS")]
+    pub max_expiry_blocks: u64,
+    /// Maximum auditor-approval phase duration, in blocks.
+    #[config(default = "defaults::nexus::atomic_private_settlement::AUDIT_TIMEOUT_BLOCKS")]
+    pub audit_timeout_blocks: u64,
+    /// Maximum Prepare-QC phase duration, in blocks.
+    #[config(default = "defaults::nexus::atomic_private_settlement::PREPARE_TIMEOUT_BLOCKS")]
+    pub prepare_timeout_blocks: u64,
+    /// Maximum Commit-QC phase duration, in blocks.
+    #[config(default = "defaults::nexus::atomic_private_settlement::COMMIT_TIMEOUT_BLOCKS")]
+    pub commit_timeout_blocks: u64,
+    /// Strictly increasing canonical padded-plaintext classes, in bytes.
+    ///
+    /// The authenticated ciphertext is exactly 16 bytes larger.
+    #[config(
+        default = "defaults::nexus::atomic_private_settlement::capsule_padding_classes_bytes()"
+    )]
+    pub capsule_padding_classes_bytes: Vec<u32>,
+    /// Maximum proof sidecar size per leg.
+    #[config(default = "defaults::nexus::atomic_private_settlement::MAX_PROOF_BYTES")]
+    pub max_proof_bytes: u64,
+    /// Maximum encrypted audit capsule size per leg.
+    #[config(default = "defaults::nexus::atomic_private_settlement::MAX_CAPSULE_BYTES")]
+    pub max_capsule_bytes: u64,
+    /// Maximum encoded global carrier size.
+    #[config(default = "defaults::nexus::atomic_private_settlement::MAX_CARRIER_BYTES")]
+    pub max_carrier_bytes: u64,
+    /// Minimum durable sidecar retention after admission, in blocks.
+    #[config(default = "defaults::nexus::atomic_private_settlement::SIDECAR_RETENTION_BLOCKS")]
+    pub sidecar_retention_blocks: u64,
+    /// Default online auditor threshold for new governed policies.
+    #[config(
+        default = "defaults::nexus::atomic_private_settlement::DEFAULT_MIN_AUDITOR_APPROVALS"
+    )]
+    pub default_min_auditor_approvals: u16,
+    /// Audit-policy schema versions accepted by this deployment.
+    #[config(default = "defaults::nexus::atomic_private_settlement::permitted_policy_versions()")]
+    pub permitted_policy_versions: Vec<u16>,
+}
+impl_default!(NexusAtomicPrivateSettlement {
+    enabled: defaults::nexus::atomic_private_settlement::ENABLED,
+    activation_height: None,
+    minimum_activation_notice_blocks:
+        defaults::nexus::atomic_private_settlement::MINIMUM_ACTIVATION_NOTICE_BLOCKS,
+    proof_profile_version: defaults::nexus::atomic_private_settlement::PROOF_PROFILE_VERSION,
+    max_participants: defaults::nexus::atomic_private_settlement::MAX_PARTICIPANTS,
+    max_expiry_blocks: defaults::nexus::atomic_private_settlement::MAX_EXPIRY_BLOCKS,
+    audit_timeout_blocks: defaults::nexus::atomic_private_settlement::AUDIT_TIMEOUT_BLOCKS,
+    prepare_timeout_blocks: defaults::nexus::atomic_private_settlement::PREPARE_TIMEOUT_BLOCKS,
+    commit_timeout_blocks: defaults::nexus::atomic_private_settlement::COMMIT_TIMEOUT_BLOCKS,
+    capsule_padding_classes_bytes:
+        defaults::nexus::atomic_private_settlement::capsule_padding_classes_bytes(),
+    max_proof_bytes: defaults::nexus::atomic_private_settlement::MAX_PROOF_BYTES,
+    max_capsule_bytes: defaults::nexus::atomic_private_settlement::MAX_CAPSULE_BYTES,
+    max_carrier_bytes: defaults::nexus::atomic_private_settlement::MAX_CARRIER_BYTES,
+    sidecar_retention_blocks: defaults::nexus::atomic_private_settlement::SIDECAR_RETENTION_BLOCKS,
+    default_min_auditor_approvals:
+        defaults::nexus::atomic_private_settlement::DEFAULT_MIN_AUDITOR_APPROVALS,
+    permitted_policy_versions:
+        defaults::nexus::atomic_private_settlement::permitted_policy_versions(),
+});
 /// Lane-relay emergency override configuration.
 #[derive(Debug, Clone, Copy, ReadConfig, norito::JsonDeserialize)]
 pub struct LaneRelayEmergency {
@@ -11511,6 +11544,239 @@ impl LaneRelayEmergency {
             multisig_threshold: threshold.expect("validated"),
             multisig_members: members.expect("validated"),
             max_ttl_blocks: max_ttl_blocks.expect("validated"),
+        })
+    }
+}
+impl NexusAtomicPrivateSettlement {
+    fn parse(
+        self,
+        emitter: &mut Emitter<ParseError>,
+    ) -> Option<actual::NexusAtomicPrivateSettlement> {
+        let mut invalid = false;
+        if self.enabled && self.activation_height.is_none() {
+            invalid = true;
+            emitter.emit(
+                Report::new(ParseError::InvalidNexusConfig)
+                    .attach("nexus.atomic_private_settlement.enabled requires activation_height"),
+            );
+        }
+        macro_rules! nonzero_u64 {
+            ($value:expr, $field:literal) => {{
+                NonZeroU64::new($value).unwrap_or_else(|| {
+                    invalid = true;
+                    emitter.emit(
+                        Report::new(ParseError::InvalidNexusConfig)
+                            .attach(concat!($field, " must be > 0")),
+                    );
+                    NonZeroU64::new(1).expect("private-settlement placeholder is non-zero")
+                })
+            }};
+        }
+        let minimum_activation_notice_blocks = nonzero_u64!(
+            self.minimum_activation_notice_blocks,
+            "nexus.atomic_private_settlement.minimum_activation_notice_blocks"
+        );
+        let max_expiry_blocks = nonzero_u64!(
+            self.max_expiry_blocks,
+            "nexus.atomic_private_settlement.max_expiry_blocks"
+        );
+        let audit_timeout_blocks = nonzero_u64!(
+            self.audit_timeout_blocks,
+            "nexus.atomic_private_settlement.audit_timeout_blocks"
+        );
+        let prepare_timeout_blocks = nonzero_u64!(
+            self.prepare_timeout_blocks,
+            "nexus.atomic_private_settlement.prepare_timeout_blocks"
+        );
+        let commit_timeout_blocks = nonzero_u64!(
+            self.commit_timeout_blocks,
+            "nexus.atomic_private_settlement.commit_timeout_blocks"
+        );
+        let max_proof_bytes = nonzero_u64!(
+            self.max_proof_bytes,
+            "nexus.atomic_private_settlement.max_proof_bytes"
+        );
+        let max_capsule_bytes = nonzero_u64!(
+            self.max_capsule_bytes,
+            "nexus.atomic_private_settlement.max_capsule_bytes"
+        );
+        let max_carrier_bytes = nonzero_u64!(
+            self.max_carrier_bytes,
+            "nexus.atomic_private_settlement.max_carrier_bytes"
+        );
+        let sidecar_retention_blocks = nonzero_u64!(
+            self.sidecar_retention_blocks,
+            "nexus.atomic_private_settlement.sidecar_retention_blocks"
+        );
+
+        if self.proof_profile_version
+            != defaults::nexus::atomic_private_settlement::PROOF_PROFILE_VERSION
+        {
+            invalid = true;
+            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                "nexus.atomic_private_settlement.proof_profile_version must be {} for V1",
+                defaults::nexus::atomic_private_settlement::PROOF_PROFILE_VERSION
+            )));
+        }
+        let proof_profile_version =
+            NonZeroU16::new(self.proof_profile_version).unwrap_or_else(|| {
+                invalid = true;
+                NonZeroU16::new(defaults::nexus::atomic_private_settlement::PROOF_PROFILE_VERSION)
+                    .expect("V1 private-settlement proof profile is non-zero")
+            });
+        if !(defaults::nexus::atomic_private_settlement::MIN_PARTICIPANTS
+            ..=defaults::nexus::atomic_private_settlement::MAX_PARTICIPANTS_LIMIT)
+            .contains(&self.max_participants)
+        {
+            invalid = true;
+            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                "nexus.atomic_private_settlement.max_participants must be within {}..={}",
+                defaults::nexus::atomic_private_settlement::MIN_PARTICIPANTS,
+                defaults::nexus::atomic_private_settlement::MAX_PARTICIPANTS_LIMIT
+            )));
+        }
+        let max_participants = NonZeroU16::new(self.max_participants).unwrap_or_else(|| {
+            NonZeroU16::new(defaults::nexus::atomic_private_settlement::MIN_PARTICIPANTS)
+                .expect("private-settlement minimum participant count is non-zero")
+        });
+        let default_min_auditor_approvals = NonZeroU16::new(self.default_min_auditor_approvals)
+            .unwrap_or_else(|| {
+                invalid = true;
+                emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(
+                    "nexus.atomic_private_settlement.default_min_auditor_approvals must be > 0",
+                ));
+                NonZeroU16::new(1).expect("private-settlement approval placeholder is non-zero")
+            });
+
+        let phase_budget = self
+            .audit_timeout_blocks
+            .checked_add(self.prepare_timeout_blocks)
+            .and_then(|value| value.checked_add(self.commit_timeout_blocks));
+        if phase_budget.is_none_or(|budget| budget > self.max_expiry_blocks) {
+            invalid = true;
+            emitter.emit(
+                Report::new(ParseError::InvalidNexusConfig).attach(
+                    "nexus.atomic_private_settlement phase timeouts must sum to no more than max_expiry_blocks",
+                ),
+            );
+        }
+        if self.sidecar_retention_blocks < self.max_expiry_blocks {
+            invalid = true;
+            emitter.emit(
+                Report::new(ParseError::InvalidNexusConfig).attach(
+                    "nexus.atomic_private_settlement.sidecar_retention_blocks must be at least max_expiry_blocks",
+                ),
+            );
+        }
+        if self.max_proof_bytes > defaults::nexus::atomic_private_settlement::MAX_PROOF_BYTES_LIMIT
+        {
+            invalid = true;
+            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                "nexus.atomic_private_settlement.max_proof_bytes must be at most {}",
+                defaults::nexus::atomic_private_settlement::MAX_PROOF_BYTES_LIMIT
+            )));
+        }
+        if self.max_capsule_bytes
+            > defaults::nexus::atomic_private_settlement::MAX_CAPSULE_BYTES_LIMIT
+        {
+            invalid = true;
+            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                "nexus.atomic_private_settlement.max_capsule_bytes must be at most {}",
+                defaults::nexus::atomic_private_settlement::MAX_CAPSULE_BYTES_LIMIT
+            )));
+        }
+        if self.max_carrier_bytes
+            > defaults::nexus::atomic_private_settlement::MAX_CARRIER_BYTES_LIMIT
+        {
+            invalid = true;
+            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                "nexus.atomic_private_settlement.max_carrier_bytes must be at most {}",
+                defaults::nexus::atomic_private_settlement::MAX_CARRIER_BYTES_LIMIT
+            )));
+        }
+
+        if self.capsule_padding_classes_bytes.is_empty() {
+            invalid = true;
+            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(
+                "nexus.atomic_private_settlement.capsule_padding_classes_bytes must not be empty",
+            ));
+        }
+        let mut previous_padding = 0_u32;
+        let mut capsule_padding_classes_bytes = Vec::new();
+        for (index, bytes) in self
+            .capsule_padding_classes_bytes
+            .iter()
+            .copied()
+            .enumerate()
+        {
+            if bytes == 0 || bytes <= previous_padding {
+                invalid = true;
+                emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                    "nexus.atomic_private_settlement.capsule_padding_classes_bytes[{index}] must be non-zero and strictly increasing"
+                )));
+                continue;
+            }
+            if !defaults::nexus::atomic_private_settlement::CAPSULE_PADDING_CLASSES_BYTES
+                .contains(&bytes)
+            {
+                invalid = true;
+                emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                    "nexus.atomic_private_settlement.capsule_padding_classes_bytes[{index}] is not supported by proof profile V1"
+                )));
+            }
+            if u64::from(bytes).saturating_add(16) > self.max_capsule_bytes {
+                invalid = true;
+                emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                    "nexus.atomic_private_settlement.capsule_padding_classes_bytes[{index}] plus the 16-byte authentication tag exceeds max_capsule_bytes"
+                )));
+            }
+            previous_padding = bytes;
+            capsule_padding_classes_bytes.push(
+                NonZeroU32::new(bytes).expect("validated private-settlement padding is non-zero"),
+            );
+        }
+
+        if self.permitted_policy_versions.is_empty() {
+            invalid = true;
+            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(
+                "nexus.atomic_private_settlement.permitted_policy_versions must not be empty",
+            ));
+        }
+        let mut permitted_policy_versions = BTreeSet::new();
+        for version in self.permitted_policy_versions {
+            if version != 1 {
+                invalid = true;
+                emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                    "nexus.atomic_private_settlement.permitted_policy_versions contains unsupported version {version}; V1 supports only 1"
+                )));
+            }
+            if !permitted_policy_versions.insert(version) {
+                invalid = true;
+                emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                    "nexus.atomic_private_settlement.permitted_policy_versions contains duplicate version {version}"
+                )));
+            }
+        }
+        if invalid {
+            return None;
+        }
+        Some(actual::NexusAtomicPrivateSettlement {
+            enabled: self.enabled,
+            activation_height: self.activation_height,
+            minimum_activation_notice_blocks,
+            proof_profile_version,
+            max_participants,
+            max_expiry_blocks,
+            audit_timeout_blocks,
+            prepare_timeout_blocks,
+            commit_timeout_blocks,
+            capsule_padding_classes_bytes,
+            max_proof_bytes,
+            max_capsule_bytes,
+            max_carrier_bytes,
+            sidecar_retention_blocks,
+            default_min_auditor_approvals,
+            permitted_policy_versions,
         })
     }
 }
@@ -11611,6 +11877,7 @@ impl Nexus {
             uploaded_models,
             endorsement: endorsement_cfg,
             axt,
+            atomic_private_settlement,
             lane_relay_emergency,
             routing_policy,
             registry,
@@ -11637,6 +11904,7 @@ impl Nexus {
         let da = da.parse(emitter)?;
         let storage = storage.parse(emitter)?;
         let axt_cfg = axt.parse(emitter)?;
+        let atomic_private_settlement = atomic_private_settlement.parse(emitter)?;
         let lane_relay_emergency = lane_relay_emergency.parse(emitter)?;
         let staking = staking.parse(emitter)?;
         let fees = fees.parse(emitter)?;
@@ -11701,6 +11969,7 @@ impl Nexus {
             commit,
             da,
             axt: axt_cfg,
+            atomic_private_settlement,
             lane_relay_emergency,
         })
     }
@@ -12453,11 +12722,7 @@ impl Logger {
     }
 }
 /// User-level configuration container for `Telemetry`.
-#[derive(Debug)]
 pub struct Telemetry {
-    // Fields here are Options so that it is possible to warn the user if e.g. they provided `min_retry_period`, but haven't
-    // provided `name` and `url`
-    name: String,
     url: Url,
     min_retry_period_ms: TelemetryMinRetryPeriod,
     max_retry_delay_exponent: TelemetryMaxRetryDelayExponent,
@@ -12473,14 +12738,34 @@ pub struct Telemetry {
     telegram_rate_per_minute: Option<NonZeroU32>,
     /// Include a metrics snapshot in alerts.
     telegram_include_metrics: Option<bool>,
-    /// Optional metrics URL to poll (e.g., <http://127.0.0.1:8080/metrics>).
-    telegram_metrics_url: Option<Url>,
-    /// Optional metrics poll period (clamped to >= 100ms).
-    telegram_metrics_period_ms: Option<DurationMs>,
     /// Optional allow-list of `msg` kinds to send.
     telegram_allow_kinds: Option<Vec<String>>,
     /// Optional deny-list of `msg` kinds to suppress.
     telegram_deny_kinds: Option<Vec<String>>,
+}
+impl core::fmt::Debug for Telemetry {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("Telemetry")
+            .field("url", &"<redacted>")
+            .field("min_retry_period_ms", &self.min_retry_period_ms)
+            .field("max_retry_delay_exponent", &self.max_retry_delay_exponent)
+            .field(
+                "telegram_bot_key_configured",
+                &self.telegram_bot_key.is_some(),
+            )
+            .field(
+                "telegram_chat_id_configured",
+                &self.telegram_chat_id.is_some(),
+            )
+            .field("telegram_min_level", &self.telegram_min_level)
+            .field("telegram_targets", &self.telegram_targets)
+            .field("telegram_rate_per_minute", &self.telegram_rate_per_minute)
+            .field("telegram_include_metrics", &self.telegram_include_metrics)
+            .field("telegram_allow_kinds", &self.telegram_allow_kinds)
+            .field("telegram_deny_kinds", &self.telegram_deny_kinds)
+            .finish()
+    }
 }
 #[derive(Debug, Copy, Clone)]
 struct TelemetryMinRetryPeriod(DurationMs);
@@ -12523,7 +12808,6 @@ impl<T> FieldState<T> {
 }
 #[derive(Default)]
 struct TelemetryFields {
-    name: Option<String>,
     url: Option<Url>,
     min_retry_period_ms: Option<TelemetryMinRetryPeriod>,
     max_retry_delay_exponent: Option<TelemetryMaxRetryDelayExponent>,
@@ -12533,8 +12817,6 @@ struct TelemetryFields {
     telegram_targets: FieldState<Vec<String>>,
     telegram_rate_per_minute: FieldState<NonZeroU32>,
     telegram_include_metrics: FieldState<bool>,
-    telegram_metrics_url: FieldState<Url>,
-    telegram_metrics_period_ms: FieldState<DurationMs>,
     telegram_allow_kinds: FieldState<Vec<String>>,
     telegram_deny_kinds: FieldState<Vec<String>>,
 }
@@ -12561,15 +12843,19 @@ impl TelemetryFields {
         key: &str,
     ) -> ::core::result::Result<(), json::Error> {
         match key {
-            "name" => Self::set_unique(&mut self.name, "name", parser, |p| {
-                <String as json::JsonDeserialize>::json_deserialize(p)
-            }),
             "url" => Self::set_unique(&mut self.url, "url", parser, |p| {
                 let raw = <String as json::JsonDeserialize>::json_deserialize(p)?;
-                Url::parse(&raw).map_err(|err| json::Error::InvalidField {
+                let url = Url::parse(&raw).map_err(|err| json::Error::InvalidField {
                     field: "url".into(),
                     message: err.to_string(),
-                })
+                })?;
+                if !matches!(url.scheme(), "ws" | "wss") {
+                    return Err(json::Error::InvalidField {
+                        field: "url".into(),
+                        message: "telemetry collector URL must use ws or wss".to_owned(),
+                    });
+                }
+                Ok(url)
             }),
             "min_retry_period_ms" => Self::set_unique(
                 &mut self.min_retry_period_ms,
@@ -12613,25 +12899,6 @@ impl TelemetryFields {
                 parser,
                 Option::<bool>::json_deserialize,
             ),
-            "telegram_metrics_url" => {
-                self.telegram_metrics_url
-                    .set_optional("telegram_metrics_url", parser, |p| {
-                        let raw = Option::<String>::json_deserialize(p)?;
-                        raw.map_or(Ok(None), |value| {
-                            Url::parse(&value)
-                                .map(Some)
-                                .map_err(|err| json::Error::InvalidField {
-                                    field: "telegram_metrics_url".into(),
-                                    message: err.to_string(),
-                                })
-                        })
-                    })
-            }
-            "telegram_metrics_period_ms" => self.telegram_metrics_period_ms.set_optional(
-                "telegram_metrics_period_ms",
-                parser,
-                Option::<DurationMs>::json_deserialize,
-            ),
             "telegram_allow_kinds" => self.telegram_allow_kinds.set_optional(
                 "telegram_allow_kinds",
                 parser,
@@ -12646,23 +12913,80 @@ impl TelemetryFields {
         }
     }
     fn finish(self) -> ::core::result::Result<Telemetry, json::Error> {
+        let telegram_bot_key = self.telegram_bot_key.into_option();
+        let telegram_chat_id = self.telegram_chat_id.into_option();
+        if telegram_bot_key.as_deref().is_some_and(|value| {
+            value.is_empty()
+                || value.len() > MAX_TELEGRAM_CREDENTIAL_LENGTH
+                || !value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b':' | b'_' | b'-'))
+        }) {
+            return Err(json::Error::InvalidField {
+                field: "telegram_bot_key".into(),
+                message: "Telegram bot key must be a bounded ASCII token".to_owned(),
+            });
+        }
+        if telegram_chat_id.as_deref().is_some_and(|value| {
+            value.is_empty()
+                || value.len() > MAX_TELEGRAM_CREDENTIAL_LENGTH
+                || !value.bytes().all(|byte| {
+                    byte.is_ascii_alphanumeric() || matches!(byte, b'@' | b'+' | b'-' | b'_')
+                })
+        }) {
+            return Err(json::Error::InvalidField {
+                field: "telegram_chat_id".into(),
+                message: "Telegram chat ID must be a bounded ASCII identifier".to_owned(),
+            });
+        }
+        if telegram_bot_key.is_some() != telegram_chat_id.is_some() {
+            return Err(json::Error::InvalidField {
+                field: "telegram_bot_key".into(),
+                message: "Telegram bot key and chat ID must be configured together".to_owned(),
+            });
+        }
+        let telegram_min_level = self.telegram_min_level.into_option();
+        if let Some(level) = telegram_min_level.as_deref()
+            && !matches!(
+                level.to_ascii_uppercase().as_str(),
+                "TRACE" | "DEBUG" | "INFO" | "WARN" | "WARNING" | "ERROR"
+            )
+        {
+            return Err(json::Error::InvalidField {
+                field: "telegram_min_level".into(),
+                message: "must be TRACE, DEBUG, INFO, WARN, WARNING, or ERROR".to_owned(),
+            });
+        }
+        let telegram_targets = self.telegram_targets.into_option();
+        let telegram_rate_per_minute = self.telegram_rate_per_minute.into_option();
+        let telegram_include_metrics = self.telegram_include_metrics.into_option();
+        let telegram_allow_kinds = self.telegram_allow_kinds.into_option();
+        let telegram_deny_kinds = self.telegram_deny_kinds.into_option();
+        if telegram_bot_key.is_none()
+            && (telegram_min_level.is_some()
+                || telegram_targets.is_some()
+                || telegram_rate_per_minute.is_some()
+                || telegram_include_metrics.is_some()
+                || telegram_allow_kinds.is_some()
+                || telegram_deny_kinds.is_some())
+        {
+            return Err(json::Error::InvalidField {
+                field: "telegram_bot_key".into(),
+                message: "Telegram alert settings require bot key and chat ID".to_owned(),
+            });
+        }
         Ok(Telemetry {
-            name: self
-                .name
-                .ok_or_else(|| json::Error::missing_field("name"))?,
             url: self.url.ok_or_else(|| json::Error::missing_field("url"))?,
             min_retry_period_ms: self.min_retry_period_ms.unwrap_or_default(),
             max_retry_delay_exponent: self.max_retry_delay_exponent.unwrap_or_default(),
-            telegram_bot_key: self.telegram_bot_key.into_option(),
-            telegram_chat_id: self.telegram_chat_id.into_option(),
-            telegram_min_level: self.telegram_min_level.into_option(),
-            telegram_targets: self.telegram_targets.into_option(),
-            telegram_rate_per_minute: self.telegram_rate_per_minute.into_option(),
-            telegram_include_metrics: self.telegram_include_metrics.into_option(),
-            telegram_metrics_url: self.telegram_metrics_url.into_option(),
-            telegram_metrics_period_ms: self.telegram_metrics_period_ms.into_option(),
-            telegram_allow_kinds: self.telegram_allow_kinds.into_option(),
-            telegram_deny_kinds: self.telegram_deny_kinds.into_option(),
+            telegram_bot_key,
+            telegram_chat_id,
+            telegram_min_level,
+            telegram_targets,
+            telegram_rate_per_minute,
+            telegram_include_metrics,
+            telegram_allow_kinds,
+            telegram_deny_kinds,
         })
     }
 }
@@ -12706,16 +13030,21 @@ impl JsonDeserialize for TelemetryMaxRetryDelayExponent {
         parser: &mut json::Parser<'_>,
     ) -> ::core::result::Result<Self, json::Error> {
         let exponent = <u8 as JsonDeserialize>::json_deserialize(parser)?;
+        if exponent > MAX_TELEMETRY_RETRY_DELAY_EXPONENT {
+            return Err(json::Error::InvalidField {
+                field: "max_retry_delay_exponent".into(),
+                message: format!("must be at most {MAX_TELEMETRY_RETRY_DELAY_EXPONENT}"),
+            });
+        }
         Ok(Self(exponent))
     }
 }
 #[cfg(test)]
 #[test]
 fn telemetry_json_defaults() {
-    let json = r#"{"name":"ops","url":"http://localhost:8180"}"#;
+    let json = r#"{"url":"ws://localhost:8180"}"#;
     let telemetry = norito::json::from_json::<Telemetry>(json).expect("parse telemetry defaults");
-    assert_eq!(telemetry.name, "ops");
-    assert_eq!(telemetry.url.scheme(), "http");
+    assert_eq!(telemetry.url.scheme(), "ws");
     assert_eq!(telemetry.url.host_str(), Some("localhost"));
     assert_eq!(telemetry.url.port_or_known_default(), Some(8180));
     assert!(telemetry.url.path().is_empty() || telemetry.url.path() == "/");
@@ -12731,11 +13060,9 @@ fn telemetry_json_defaults() {
 #[test]
 fn telemetry_json_optional_fields() {
     let json = r#"{
-        "name": "ops",
-        "url": "https://example.com/metrics",
-        "telegram_bot_key": "secret",
-        "telegram_metrics_url": "https://example.com/metrics",
-        "telegram_metrics_period_ms": 5000,
+        "url": "wss://user:collector-secret@example.com/events",
+        "telegram_bot_key": "bot-secret",
+        "telegram_chat_id": "chat-id",
         "telegram_rate_per_minute": 3,
         "telegram_include_metrics": true,
         "telegram_allow_kinds": ["warn"],
@@ -12743,15 +13070,10 @@ fn telemetry_json_optional_fields() {
     }"#;
     let telemetry =
         norito::json::from_json::<Telemetry>(json).expect("parse telemetry with optional fields");
-    assert_eq!(telemetry.telegram_bot_key.as_deref(), Some("secret"));
-    assert_eq!(
-        telemetry
-            .telegram_metrics_url
-            .as_ref()
-            .expect("metrics url")
-            .as_str(),
-        "https://example.com/metrics"
-    );
+    let debug = format!("{telemetry:?}");
+    assert!(!debug.contains("collector-secret"));
+    assert!(!debug.contains("bot-secret"));
+    assert_eq!(telemetry.telegram_bot_key.as_deref(), Some("bot-secret"));
     assert_eq!(telemetry.telegram_include_metrics, Some(true));
     assert_eq!(
         telemetry
@@ -12766,11 +13088,6 @@ fn telemetry_json_optional_fields() {
         exponent_default,
         defaults::telemetry::MAX_RETRY_DELAY_EXPONENT
     );
-    let metrics_period = telemetry
-        .telegram_metrics_period_ms
-        .expect("metrics period")
-        .get();
-    assert_eq!(metrics_period, std::time::Duration::from_millis(5000));
     assert_eq!(
         telemetry.telegram_allow_kinds,
         Some(vec![String::from("warn")])
@@ -12779,24 +13096,89 @@ fn telemetry_json_optional_fields() {
         telemetry.telegram_deny_kinds,
         Some(vec![String::from("debug")])
     );
+    let actual: actual::Telemetry = telemetry.into();
+    let debug = format!("{actual:?}");
+    assert!(!debug.contains("collector-secret"));
+    assert!(!debug.contains("bot-secret"));
+}
+#[cfg(test)]
+#[test]
+fn telemetry_retry_period_has_a_safe_minimum() {
+    for (configured_ms, expected_ms) in [(0, 100), (99, 100), (100, 100), (250, 250)] {
+        let json =
+            format!(r#"{{"url":"ws://localhost:8180","min_retry_period_ms":{configured_ms}}}"#);
+        let telemetry =
+            norito::json::from_json::<Telemetry>(&json).expect("parse telemetry retry period");
+        let actual: actual::Telemetry = telemetry.into();
+        assert_eq!(
+            actual.min_retry_period,
+            std::time::Duration::from_millis(expected_ms),
+            "configured value: {configured_ms} ms"
+        );
+    }
+}
+#[cfg(test)]
+#[test]
+fn telemetry_rejects_unbounded_retry_exponent() {
+    let json = r#"{"url":"ws://localhost:8180","max_retry_delay_exponent":17}"#;
+    let err = norito::json::from_json::<Telemetry>(json)
+        .expect_err("reject excessive telemetry retry exponent");
+    assert!(err.to_string().contains("must be at most 16"));
+}
+#[cfg(test)]
+#[test]
+fn telemetry_rejects_partial_or_dormant_telegram_settings() {
+    for json in [
+        r#"{"url":"ws://localhost:8180","telegram_bot_key":"secret"}"#,
+        r#"{"url":"ws://localhost:8180","telegram_chat_id":"chat"}"#,
+        r#"{"url":"ws://localhost:8180","telegram_min_level":"WARN"}"#,
+        r#"{"url":"ws://localhost:8180","telegram_bot_key":"secret","telegram_chat_id":"chat","telegram_min_level":"critical"}"#,
+        r#"{"url":"ws://localhost:8180","telegram_bot_key":" ","telegram_chat_id":"chat"}"#,
+        r#"{"url":"ws://localhost:8180","telegram_bot_key":"bad/token","telegram_chat_id":"chat"}"#,
+        r#"{"url":"ws://localhost:8180","telegram_bot_key":"secret","telegram_chat_id":"bad chat"}"#,
+    ] {
+        let err = norito::json::from_json::<Telemetry>(json)
+            .expect_err("reject incomplete Telegram configuration");
+        assert!(
+            err.to_string().to_ascii_lowercase().contains("telegram"),
+            "{err}"
+        );
+    }
+}
+#[cfg(test)]
+#[test]
+fn telemetry_rejects_retired_telegram_http_sampler_fields() {
+    for field in [
+        r#""telegram_metrics_url":"https://example.com/metrics""#,
+        r#""telegram_metrics_period_ms":1000"#,
+    ] {
+        let json = format!(r#"{{"url":"ws://localhost:8180",{field}}}"#);
+        let err = norito::json::from_json::<Telemetry>(&json)
+            .expect_err("the first release has no Telegram HTTP metrics sampler");
+        assert!(err.to_string().contains("unknown field"), "{err}");
+    }
 }
 #[cfg(test)]
 #[test]
 fn telemetry_json_invalid_url() {
-    let json = r#"{"name":"ops","url":"not a url"}"#;
+    let json = r#"{"url":"not a url"}"#;
     let err = norito::json::from_json::<Telemetry>(json).expect_err("reject invalid url");
     assert!(err.to_string().contains("invalid field `url`"));
 }
 #[cfg(test)]
 #[test]
-fn telemetry_redaction_mode_round_trips() {
-    let json = r#""allowlist""#;
-    let mode =
-        norito::json::from_json::<TelemetryRedactionMode>(json).expect("parse redaction mode");
-    assert_eq!(mode, TelemetryRedactionMode::Allowlist);
-    let mut out = String::new();
-    mode.json_serialize(&mut out);
-    assert_eq!(out, "\"allowlist\"");
+fn telemetry_json_rejects_non_websocket_url() {
+    let json = r#"{"url":"https://collector.example/events"}"#;
+    let err =
+        norito::json::from_json::<Telemetry>(json).expect_err("reject non-WebSocket telemetry URL");
+    assert!(err.to_string().contains("must use ws or wss"));
+}
+#[cfg(test)]
+#[test]
+fn telemetry_json_rejects_removed_name_field() {
+    let json = r#"{"name":"legacy","url":"http://localhost:8180"}"#;
+    let err = norito::json::from_json::<Telemetry>(json).expect_err("reject removed name field");
+    assert!(err.to_string().contains("unknown field name"));
 }
 #[cfg(test)]
 #[test]
@@ -12808,9 +13190,94 @@ fn telemetry_signing_key_parses_hex() {
 }
 #[cfg(test)]
 #[test]
+fn telemetry_integrity_debug_redacts_signing_key() {
+    let secret = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
+    let config = TelemetryIntegrity {
+        enabled: true,
+        state_dir: None,
+        signing_key_hex: Some(secret.to_owned()),
+        signing_key_id: Some("primary".to_owned()),
+    };
+    let debug = format!("{config:?}");
+    assert!(!debug.contains(secret));
+    assert!(!debug.contains("primary"));
+    let mut emitter = Emitter::new();
+    let actual = config.parse(&mut emitter);
+    emitter.into_result().expect("integrity config parse");
+    let debug = format!("{actual:?}");
+    assert!(!debug.contains("[0, 1, 2"));
+    assert!(!debug.contains("primary"));
+}
+#[cfg(test)]
+#[test]
 fn telemetry_signing_key_rejects_wrong_length() {
     let err = parse_telemetry_signing_key("deadbeef").expect_err("reject short key");
     assert!(err.contains("must be 32 bytes"));
+}
+#[cfg(test)]
+#[test]
+fn telemetry_signing_key_rejects_prefixes_and_whitespace() {
+    let key = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
+    for noncanonical in [format!("0x{key}"), format!(" {key}"), format!("{key}\n")] {
+        assert!(
+            parse_telemetry_signing_key(&noncanonical).is_err(),
+            "accepted noncanonical signing key: {noncanonical:?}"
+        );
+    }
+}
+#[cfg(test)]
+#[test]
+fn telemetry_integrity_rejects_key_id_without_signing_key() {
+    let config = TelemetryIntegrity {
+        enabled: true,
+        state_dir: None,
+        signing_key_hex: None,
+        signing_key_id: Some("primary".to_owned()),
+    };
+    let mut emitter = Emitter::new();
+    let _ = config.parse(&mut emitter);
+    let error = emitter
+        .into_result()
+        .expect_err("key ID without a signing key must be rejected");
+    assert!(format!("{error:?}").contains("signing_key_id requires signing_key_hex"));
+}
+#[cfg(test)]
+#[test]
+fn telemetry_integrity_rejects_unsafe_key_ids() {
+    let signing_key =
+        Some("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f".to_owned());
+    for key_id in [String::new(), "line\nbreak".to_owned(), "x".repeat(129)] {
+        let config = TelemetryIntegrity {
+            enabled: true,
+            state_dir: None,
+            signing_key_hex: signing_key.clone(),
+            signing_key_id: Some(key_id),
+        };
+        let mut emitter = Emitter::new();
+        let _ = config.parse(&mut emitter);
+        let error = emitter
+            .into_result()
+            .expect_err("unsafe key ID must be rejected");
+        assert!(format!("{error:?}").contains("non-empty ASCII identifier"));
+    }
+}
+#[cfg(test)]
+#[test]
+fn telemetry_integrity_rejects_dormant_state_and_signing_settings() {
+    let config = TelemetryIntegrity {
+        enabled: false,
+        state_dir: None,
+        signing_key_hex: Some(
+            "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f".to_owned(),
+        ),
+        signing_key_id: Some("primary".to_owned()),
+    };
+    let mut emitter = Emitter::new();
+    let _ = config.parse(&mut emitter);
+    let error = emitter
+        .into_result()
+        .expect_err("disabled integrity settings must be rejected");
+    assert!(format!("{error:?}").contains("require enabled = true"));
 }
 #[cfg(test)]
 #[test]
@@ -12838,7 +13305,6 @@ fn telemetry_integrity_state_dir_resolves_relative_path() {
 impl From<Telemetry> for actual::Telemetry {
     fn from(
         Telemetry {
-            name,
             url,
             min_retry_period_ms: TelemetryMinRetryPeriod(DurationMs(min_retry_period)),
             max_retry_delay_exponent: TelemetryMaxRetryDelayExponent(max_retry_delay_exponent),
@@ -12848,16 +13314,13 @@ impl From<Telemetry> for actual::Telemetry {
             telegram_targets,
             telegram_rate_per_minute,
             telegram_include_metrics,
-            telegram_metrics_url,
-            telegram_metrics_period_ms,
             telegram_allow_kinds,
             telegram_deny_kinds,
         }: Telemetry,
     ) -> Self {
         Self {
-            name,
             url,
-            min_retry_period,
+            min_retry_period: min_retry_period.max(MIN_TIMER_INTERVAL),
             max_retry_delay_exponent,
             telegram_bot_key,
             telegram_chat_id,
@@ -12865,10 +13328,6 @@ impl From<Telemetry> for actual::Telemetry {
             telegram_targets,
             telegram_rate_per_minute,
             telegram_include_metrics: telegram_include_metrics.unwrap_or(false),
-            telegram_metrics_url,
-            telegram_metrics_period: telegram_metrics_period_ms
-                .map(iroha_config_base::util::DurationMs::get)
-                .map(|duration| duration.max(MIN_TIMER_INTERVAL)),
             telegram_allow_kinds,
             telegram_deny_kinds,
         }
@@ -26980,8 +27439,8 @@ pub struct SorafsGovernanceDagServiceRootStorage {
     /// Canonical lowercase strong Ed25519 public key bound to the producer signer.
     pub governance_dag_publisher_public_key_hex: Option<String>,
     /// Public publisher/mirror service configuration.
-    #[config(nested, key = "governance_dag_service")]
-    pub service: SorafsGovernanceDagService,
+    #[config(nested)]
+    pub governance_dag_service: SorafsGovernanceDagService,
 }
 impl Default for SorafsGovernanceDagServiceRootStorage {
     fn default() -> Self {
@@ -26992,7 +27451,7 @@ impl Default for SorafsGovernanceDagServiceRootStorage {
             governance_dag_signer_revision: None,
             governance_dag_signer_policy_digest_hex: None,
             governance_dag_publisher_public_key_hex: None,
-            service: SorafsGovernanceDagService::default(),
+            governance_dag_service: SorafsGovernanceDagService::default(),
         }
     }
 }
@@ -27080,7 +27539,9 @@ impl SorafsGovernanceDagServiceRoot {
                 "sorafs.storage.governance_dag_publisher_public_key_hex must be a canonical lowercase strong Ed25519 public key",
             ));
         }
-        let service = storage.service.parse(producer_configured, &mut emitter);
+        let service = storage
+            .governance_dag_service
+            .parse(producer_configured, &mut emitter);
         if service.enabled && source_dir.is_none() {
             emitter.emit(
                 Report::new(ParseError::InvalidSorafsConfig).attach(
@@ -27122,7 +27583,7 @@ mod sorafs_governance_dag_service_tests {
             sorafs: SorafsGovernanceDagServiceRootSorafs {
                 storage: SorafsGovernanceDagServiceRootStorage {
                     governance_dag_dir: None,
-                    service: SorafsGovernanceDagService {
+                    governance_dag_service: SorafsGovernanceDagService {
                         enabled: true,
                         ..SorafsGovernanceDagService::default()
                     },
@@ -27235,7 +27696,7 @@ mod sorafs_governance_dag_service_tests {
                     governance_dag_publisher_public_key_hex: Some(
                         VALID_PUBLISHER_PUBLIC_KEY_HEX.to_owned(),
                     ),
-                    service,
+                    governance_dag_service: service,
                 },
             },
         }
@@ -27387,7 +27848,7 @@ allow_private_head_endpoint = false
         substituted_service_key
             .sorafs
             .storage
-            .service
+            .governance_dag_service
             .publisher_public_key_hex = Some(ALTERNATE_PUBLISHER_PUBLIC_KEY_HEX.to_owned());
         cases.push(substituted_service_key);
         let mut binding_without_source = valid_dedicated_view_root();
@@ -27406,7 +27867,10 @@ allow_private_head_endpoint = false
             let mut root = valid_dedicated_view_root();
             root.sorafs.storage.governance_dag_publisher_public_key_hex =
                 Some(public_key_hex.clone());
-            root.sorafs.storage.service.publisher_public_key_hex = Some(public_key_hex);
+            root.sorafs
+                .storage
+                .governance_dag_service
+                .publisher_public_key_hex = Some(public_key_hex);
             let diagnostic = format!(
                 "{:?}",
                 root.parse()
@@ -27421,7 +27885,7 @@ allow_private_head_endpoint = false
     #[test]
     fn disabled_service_rejects_substituted_dormant_publisher_key() {
         let mut root = valid_dedicated_view_root();
-        let service = &mut root.sorafs.storage.service;
+        let service = &mut root.sorafs.storage.governance_dag_service;
         service.enabled = false;
         service.ipfs_api_url = None;
         service.signed_head_url = None;
@@ -27458,7 +27922,7 @@ allow_private_head_endpoint = false
             dedicated.governance_dag_signer_policy_digest_hex;
         storage.governance_dag_publisher_public_key_hex =
             dedicated.governance_dag_publisher_public_key_hex;
-        storage.governance_dag_service = dedicated.service;
+        storage.governance_dag_service = dedicated.governance_dag_service;
         storage.governance_dag_service.publisher_public_key_hex =
             Some(ALTERNATE_PUBLISHER_PUBLIC_KEY_HEX.to_owned());
         let mut emitter = Emitter::new();

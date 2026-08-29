@@ -1,7 +1,5 @@
 {
   "format_version": 1,
-  "source_commit": "47cdc2d11e90d7034b57ae97fb460005020f037d",
-  "source_slice_hash_scope": "complete Rust constant declaration including trailing LF",
   "canonical_ron": {
     "path": "../../../../artifacts/poseidon/constants.ron",
     "byte_length": 5612,
@@ -9,24 +7,10 @@
   },
   "assets": [
     {
-      "path": "poseidon2_goldilocks_width3_v1.bin",
+      "path": "poseidon_goldilocks_width3_v1.bin",
       "byte_length": 1632,
       "sha256": "7b30fe50faeddb74a7433bc65a43b7c6b46484b36eab5a65869e08894166dfde",
-      "layout": "65 x 3 round-constant u64 LE words, then 3 x 3 MDS u64 LE words",
-      "source_preimages": [
-        {
-          "path": "../poseidon.rs",
-          "constant": "ROUND_CONSTANTS",
-          "physical_lines": 327,
-          "sha256": "b0f80f63663da4ba4577166101bfa8e80351f0d718391bddab45e6a78c7cd460"
-        },
-        {
-          "path": "../poseidon.rs",
-          "constant": "MDS",
-          "physical_lines": 17,
-          "sha256": "7bf894a1926cdca6b1a2c31838f898f8fa9fd53b8e0e36c21595f9f4443a911d"
-        }
-      ]
+      "layout": "65 x 3 round-constant u64 LE words, then 3 x 3 MDS u64 LE words"
     }
   ]
 }

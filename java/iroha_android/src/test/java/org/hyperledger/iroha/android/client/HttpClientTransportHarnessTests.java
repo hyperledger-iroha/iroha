@@ -58,7 +58,7 @@ public final class HttpClientTransportHarnessTests {
               202,
               new byte[] {0x01, 0x02, 0x03},
               Map.of("Content-Type", "application/x-norito")));
-      server.enqueueStatusResponse(hashHex, MockResponse.json(202, statusPayload(hashHex, "Queued")));
+      server.enqueueStatusResponse(hashHex, MockResponse.json(200, statusPayload(hashHex, "Queued")));
       server.enqueueStatusResponse(hashHex, MockResponse.json(200, statusPayload(hashHex, "Applied")));
 
       final ClientResponse response = transport.submitTransaction(transaction).join();

@@ -153,12 +153,13 @@ Each area lists **Current controls** (implemented today) and **Outstanding gaps*
 ### Telemetry and Logging
 
 **Current controls**
-- Telemetry redaction enforced by default for operator/extended/full profiles with keyword/prefix taxonomy, allow-list gating, and deterministic truncation; redaction metrics exported per `specs/telemetry.md`.
-- Tamper-evident telemetry export via hash-chained payloads with optional keyed signatures and key identifiers; applied to websocket and dev-telemetry sinks.
+- Telemetry redaction is unconditional in every build and profile. A fixed keyword/prefix taxonomy, UTF-8-safe deterministic truncation, and bounded error chains have no runtime bypass or allow-list configuration.
+- Tamper-evident telemetry export uses hash-chained payloads with optional keyed signatures and key identifiers. Persisted websocket and development-file chains bind a fingerprint of the exact sink and require owner-held, exclusively locked state on Unix.
+- WebSocket collector input is control-only and bounded to 1 KiB frames/messages; Telegram and peer-monitor HTTP clients use fixed deadlines, bounded streaming bodies, and reject redirects where credentials or trust boundaries could be crossed.
 - Prometheus endpoints served over TLS; scrape tokens configurable in `iroha_config`.
 
 **Outstanding gaps**
-- None; audit allow-list changes via telemetry redaction guardrails and `status.md` updates.
+- Re-run crash/full-disk/half-close qualification for optional exporters on each shipping Unix platform; taxonomy/source drift remains guarded in CI.
 
 ### Time and Randomness
 
@@ -192,7 +193,7 @@ Each area lists **Current controls** (implemented today) and **Outstanding gaps*
 | Release-signing key separation | Open | Offline root with threshold signing (tracked via `roadmap.md` Milestone R3 release runbook) | Security WG | 2025-10-31 |
 | Membership registry reconciliation | Open | Enforce view-hash checks and halt on mismatch (`SUM-203` follow-up) | Consensus WG | 2025-10-25 |
 | Pre-auth DoS controls | Open | Connection gating and handshake caps implemented (`preauth_*` config, `torii_pre_auth_reject_total`), continue tuning via follow-up ticket | Torii WG & Core WG | 2025-10-31 |
-| Telemetry redaction policy | Closed | Strict redaction + allow-list guard + integrity chain shipped; see `specs/telemetry.md`. | Observability WG | 2025-12-31 |
+| Telemetry redaction policy | Closed | Unconditional strict redaction + taxonomy/source guard + integrity chain shipped; see `specs/telemetry.md`. | Observability WG | 2025-12-31 |
 | Time and NTP hardening | Closed | Runtime NTS health bounds, membership epochs, monotonic output, and reject-mode admission shipped; retain independent host-clock monitoring (see `specs/references/nts.md`). | Runtime WG & Ops | 2025-11-10 |
 | Membership mismatch telemetry | Open | `sumeragi_membership_mismatch_total` metric landed; wire alerting and operational runbook | Consensus WG | 2025-10-15 |
 | Attachment sanitisation | Closed | Magic-byte sniffing + bounded decompression + subprocess sanitizer mode + export re‑sanitization shipped (see `specs/security_hardening_requirements.md`). | Runtime WG | 2025-11-30 |

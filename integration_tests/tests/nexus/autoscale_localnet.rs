@@ -11,7 +11,7 @@ use iroha::{
         block::{
             CertifiedMergeLedgerReference, SignedBlock,
             consensus::{
-                COMMITTED_LANE_STATUS_STATE_APPLIED_BY_DIRECT_EXECUTION,
+                COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK,
                 committed_lane_block_status_counts_as_progress,
             },
         },
@@ -345,7 +345,7 @@ struct ExpandContractCycleOutcome {
     expansion_time_s: f64,
     contraction_time_s: f64,
     peers_with_scale_out_after_expansion: usize,
-    peers_with_direct_applied_committed_lane_block_after_expansion: usize,
+    peers_with_canonically_applied_committed_lane_block_after_expansion: usize,
     peers_with_scale_in_after_expansion: usize,
     peers_with_scale_in_since_cycle_start: usize,
     scale_in_transition_required: bool,
@@ -404,8 +404,8 @@ struct AutoscaleSoakRunSummary {
     contraction_timing: SoakTimingSummary,
     quorum_required_max: usize,
     successful_scale_out_min_peers: Option<usize>,
-    direct_applied_committed_lane_block_cycle_count: usize,
-    direct_applied_committed_lane_block_min_peers: Option<usize>,
+    canonically_applied_committed_lane_block_cycle_count: usize,
+    canonically_applied_committed_lane_block_min_peers: Option<usize>,
     required_scale_in_cycle_count: usize,
     required_scale_in_min_quorum_peers: Option<usize>,
     optional_scale_in_cycle_count: usize,
@@ -490,14 +490,14 @@ impl AutoscaleSoakRunSummary {
                 .unwrap_or(norito::json::Value::Null),
         );
         map.insert(
-            "direct_applied_committed_lane_block_cycle_count".into(),
+            "canonically_applied_committed_lane_block_cycle_count".into(),
             norito::json::Value::from(usize_to_u64(
-                self.direct_applied_committed_lane_block_cycle_count,
+                self.canonically_applied_committed_lane_block_cycle_count,
             )),
         );
         map.insert(
-            "direct_applied_committed_lane_block_min_peers".into(),
-            self.direct_applied_committed_lane_block_min_peers
+            "canonically_applied_committed_lane_block_min_peers".into(),
+            self.canonically_applied_committed_lane_block_min_peers
                 .map(usize_to_u64)
                 .map(norito::json::Value::from)
                 .unwrap_or(norito::json::Value::Null),
@@ -557,7 +557,7 @@ struct AutoscaleSoakCycleEvent {
     attempt: usize,
     quorum_required: usize,
     scale_out_transition_peers: Option<usize>,
-    direct_applied_committed_lane_block_peers: Option<usize>,
+    canonically_applied_committed_lane_block_peers: Option<usize>,
     scale_in_peers_after_expansion: Option<usize>,
     scale_in_peers_since_cycle_start: Option<usize>,
     expansion_time_s: Option<f64>,
@@ -599,8 +599,8 @@ impl AutoscaleSoakCycleEvent {
                 .unwrap_or(norito::json::Value::Null),
         );
         map.insert(
-            "direct_applied_committed_lane_block_peers".into(),
-            self.direct_applied_committed_lane_block_peers
+            "canonically_applied_committed_lane_block_peers".into(),
+            self.canonically_applied_committed_lane_block_peers
                 .map(usize_to_u64)
                 .map(norito::json::Value::from)
                 .unwrap_or(norito::json::Value::Null),
@@ -658,8 +658,8 @@ struct AutoscaleSoakReporter {
     contraction_times_s: Vec<f64>,
     quorum_required_max: usize,
     successful_scale_out_min_peers: Option<usize>,
-    direct_applied_committed_lane_block_cycle_count: usize,
-    direct_applied_committed_lane_block_min_peers: Option<usize>,
+    canonically_applied_committed_lane_block_cycle_count: usize,
+    canonically_applied_committed_lane_block_min_peers: Option<usize>,
     required_scale_in_cycle_count: usize,
     required_scale_in_min_quorum_peers: Option<usize>,
     optional_scale_in_cycle_count: usize,
@@ -706,8 +706,8 @@ impl AutoscaleSoakReporter {
             contraction_times_s: Vec::new(),
             quorum_required_max: 0,
             successful_scale_out_min_peers: None,
-            direct_applied_committed_lane_block_cycle_count: 0,
-            direct_applied_committed_lane_block_min_peers: None,
+            canonically_applied_committed_lane_block_cycle_count: 0,
+            canonically_applied_committed_lane_block_min_peers: None,
             required_scale_in_cycle_count: 0,
             required_scale_in_min_quorum_peers: None,
             optional_scale_in_cycle_count: 0,
@@ -770,7 +770,7 @@ impl AutoscaleSoakReporter {
             attempt: 0,
             quorum_required,
             scale_out_transition_peers: None,
-            direct_applied_committed_lane_block_peers: None,
+            canonically_applied_committed_lane_block_peers: None,
             scale_in_peers_after_expansion: None,
             scale_in_peers_since_cycle_start: None,
             expansion_time_s: None,
@@ -795,7 +795,7 @@ impl AutoscaleSoakReporter {
             attempt,
             quorum_required,
             scale_out_transition_peers: None,
-            direct_applied_committed_lane_block_peers: None,
+            canonically_applied_committed_lane_block_peers: None,
             scale_in_peers_after_expansion: None,
             scale_in_peers_since_cycle_start: None,
             expansion_time_s: None,
@@ -821,7 +821,7 @@ impl AutoscaleSoakReporter {
             attempt,
             quorum_required,
             scale_out_transition_peers: None,
-            direct_applied_committed_lane_block_peers: None,
+            canonically_applied_committed_lane_block_peers: None,
             scale_in_peers_after_expansion: None,
             scale_in_peers_since_cycle_start: None,
             expansion_time_s: None,
@@ -845,7 +845,7 @@ impl AutoscaleSoakReporter {
             attempt,
             quorum_required,
             scale_out_transition_peers: None,
-            direct_applied_committed_lane_block_peers: None,
+            canonically_applied_committed_lane_block_peers: None,
             scale_in_peers_after_expansion: None,
             scale_in_peers_since_cycle_start: None,
             expansion_time_s: None,
@@ -887,17 +887,17 @@ impl AutoscaleSoakReporter {
                     min.min(cycle_outcome.peers_with_scale_out_after_expansion)
                 }),
         );
-        if cycle_outcome.peers_with_direct_applied_committed_lane_block_after_expansion > 0 {
-            self.direct_applied_committed_lane_block_cycle_count = self
-                .direct_applied_committed_lane_block_cycle_count
+        if cycle_outcome.peers_with_canonically_applied_committed_lane_block_after_expansion > 0 {
+            self.canonically_applied_committed_lane_block_cycle_count = self
+                .canonically_applied_committed_lane_block_cycle_count
                 .saturating_add(1);
-            self.direct_applied_committed_lane_block_min_peers =
-                Some(self.direct_applied_committed_lane_block_min_peers.map_or(
-                    cycle_outcome.peers_with_direct_applied_committed_lane_block_after_expansion,
+            self.canonically_applied_committed_lane_block_min_peers =
+                Some(self.canonically_applied_committed_lane_block_min_peers.map_or(
+                    cycle_outcome.peers_with_canonically_applied_committed_lane_block_after_expansion,
                     |min| {
                         min.min(
                             cycle_outcome
-                                .peers_with_direct_applied_committed_lane_block_after_expansion,
+                                .peers_with_canonically_applied_committed_lane_block_after_expansion,
                         )
                     },
                 ));
@@ -933,8 +933,8 @@ impl AutoscaleSoakReporter {
             attempt,
             quorum_required,
             scale_out_transition_peers: Some(cycle_outcome.peers_with_scale_out_after_expansion),
-            direct_applied_committed_lane_block_peers: Some(
-                cycle_outcome.peers_with_direct_applied_committed_lane_block_after_expansion,
+            canonically_applied_committed_lane_block_peers: Some(
+                cycle_outcome.peers_with_canonically_applied_committed_lane_block_after_expansion,
             ),
             scale_in_peers_after_expansion: None,
             scale_in_peers_since_cycle_start: Some(
@@ -952,8 +952,8 @@ impl AutoscaleSoakReporter {
             attempt,
             quorum_required,
             scale_out_transition_peers: None,
-            direct_applied_committed_lane_block_peers: Some(
-                cycle_outcome.peers_with_direct_applied_committed_lane_block_after_expansion,
+            canonically_applied_committed_lane_block_peers: Some(
+                cycle_outcome.peers_with_canonically_applied_committed_lane_block_after_expansion,
             ),
             scale_in_peers_after_expansion: Some(cycle_outcome.peers_with_scale_in_after_expansion),
             scale_in_peers_since_cycle_start: Some(
@@ -971,8 +971,8 @@ impl AutoscaleSoakReporter {
             attempt,
             quorum_required,
             scale_out_transition_peers: Some(cycle_outcome.peers_with_scale_out_after_expansion),
-            direct_applied_committed_lane_block_peers: Some(
-                cycle_outcome.peers_with_direct_applied_committed_lane_block_after_expansion,
+            canonically_applied_committed_lane_block_peers: Some(
+                cycle_outcome.peers_with_canonically_applied_committed_lane_block_after_expansion,
             ),
             scale_in_peers_after_expansion: Some(cycle_outcome.peers_with_scale_in_after_expansion),
             scale_in_peers_since_cycle_start: Some(
@@ -997,7 +997,7 @@ impl AutoscaleSoakReporter {
             attempt: self.max_attempt_used_in_any_cycle,
             quorum_required: 0,
             scale_out_transition_peers: None,
-            direct_applied_committed_lane_block_peers: None,
+            canonically_applied_committed_lane_block_peers: None,
             scale_in_peers_after_expansion: None,
             scale_in_peers_since_cycle_start: None,
             expansion_time_s: None,
@@ -1030,10 +1030,10 @@ impl AutoscaleSoakReporter {
             contraction_timing: SoakTimingSummary::from_samples(&self.contraction_times_s),
             quorum_required_max: self.quorum_required_max,
             successful_scale_out_min_peers: self.successful_scale_out_min_peers,
-            direct_applied_committed_lane_block_cycle_count: self
-                .direct_applied_committed_lane_block_cycle_count,
-            direct_applied_committed_lane_block_min_peers: self
-                .direct_applied_committed_lane_block_min_peers,
+            canonically_applied_committed_lane_block_cycle_count: self
+                .canonically_applied_committed_lane_block_cycle_count,
+            canonically_applied_committed_lane_block_min_peers: self
+                .canonically_applied_committed_lane_block_min_peers,
             required_scale_in_cycle_count: self.required_scale_in_cycle_count,
             required_scale_in_min_quorum_peers: self.required_scale_in_min_quorum_peers,
             optional_scale_in_cycle_count: self.optional_scale_in_cycle_count,
@@ -2387,8 +2387,8 @@ fn committed_lane_block_is_certified(block: &CommittedLaneBlockSnapshot) -> bool
             block.executable_payload_available,
         )
 }
-fn committed_lane_block_is_direct_applied(block: &CommittedLaneBlockSnapshot) -> bool {
-    block.execution_status == COMMITTED_LANE_STATUS_STATE_APPLIED_BY_DIRECT_EXECUTION
+fn committed_lane_block_is_canonically_applied(block: &CommittedLaneBlockSnapshot) -> bool {
+    block.execution_status == COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK
         && committed_lane_block_is_certified(block)
 }
 fn committed_lane_block_latest_rows_equivalent(
@@ -2480,23 +2480,25 @@ fn peer_committed_lane_block_snapshot(
         committed_lane_block_is_certified,
     )
 }
-fn peer_direct_applied_committed_lane_block_snapshot(
+fn peer_canonically_applied_committed_lane_block_snapshot(
     peer: &PeerStatusSnapshot,
     lane_id: u32,
 ) -> Option<&CommittedLaneBlockSnapshot> {
     latest_unambiguous_committed_lane_block_snapshot(
         peer,
         lane_id,
-        committed_lane_block_is_direct_applied,
+        committed_lane_block_is_canonically_applied,
     )
 }
-fn peers_with_direct_applied_committed_lane_block_for_lane(
+fn peers_with_canonically_applied_committed_lane_block_for_lane(
     snapshot: &[PeerStatusSnapshot],
     lane_id: u32,
 ) -> usize {
     snapshot
         .iter()
-        .filter(|peer| peer_direct_applied_committed_lane_block_snapshot(peer, lane_id).is_some())
+        .filter(|peer| {
+            peer_canonically_applied_committed_lane_block_snapshot(peer, lane_id).is_some()
+        })
         .count()
 }
 enum LaneValidatorEvidence<'a> {
@@ -4072,13 +4074,13 @@ fn run_expand_contract_cycle(
         "autoscale cycle {cycle_index}: expansion profile was observed but fresh deterministic autoscale scale-out transitions were not observed on quorum peers after the cycle baseline (scale-out peers after expansion snapshot: {peers_with_scale_out}/{TOTAL_PEERS}; required quorum: {quorum_required})"
     );
     let post_expansion_status = status_snapshot(network)?;
-    let peers_with_direct_applied_committed_lane_block =
-        peers_with_direct_applied_committed_lane_block_for_lane(
+    let peers_with_canonically_applied_committed_lane_block =
+        peers_with_canonically_applied_committed_lane_block_for_lane(
             &post_expansion_status,
             elastic_lane_id,
         );
     eprintln!(
-        "[autoscale-localnet][cycle {cycle_index}] direct-applied committed lane-block peers after expansion: {peers_with_direct_applied_committed_lane_block}/{TOTAL_PEERS}"
+        "[autoscale-localnet][cycle {cycle_index}] canonically applied committed lane-block peers after expansion: {peers_with_canonically_applied_committed_lane_block}/{TOTAL_PEERS}"
     );
     let require_scale_in_transition_this_cycle = if require_expansion_status_before_contraction {
         require_scale_in_transition
@@ -4194,8 +4196,8 @@ fn run_expand_contract_cycle(
         expansion_time_s,
         contraction_time_s,
         peers_with_scale_out_after_expansion: peers_with_scale_out,
-        peers_with_direct_applied_committed_lane_block_after_expansion:
-            peers_with_direct_applied_committed_lane_block,
+        peers_with_canonically_applied_committed_lane_block_after_expansion:
+            peers_with_canonically_applied_committed_lane_block,
         peers_with_scale_in_after_expansion,
         peers_with_scale_in_since_cycle_start,
         scale_in_transition_required: require_scale_in_transition_this_cycle,
@@ -7648,10 +7650,10 @@ mod tests {
         expansion_top_up_tx_count, first_retirement_height_after,
         is_autoscale_elastic_storage_segment, lifecycle_advanced_after_intent,
         parse_autoscale_transition_stats, parse_autoscale_transition_stats_for_lane,
-        parse_lane_drain_lifecycle_log_evidence, peer_committed_lane_block_snapshot,
-        peer_direct_applied_committed_lane_block_snapshot, peer_lane_commitment_snapshot,
-        peer_lane_status, peer_lane_validator_snapshot,
-        peers_with_direct_applied_committed_lane_block_for_lane,
+        parse_lane_drain_lifecycle_log_evidence,
+        peer_canonically_applied_committed_lane_block_snapshot, peer_committed_lane_block_snapshot,
+        peer_lane_commitment_snapshot, peer_lane_status, peer_lane_validator_snapshot,
+        peers_with_canonically_applied_committed_lane_block_for_lane,
         peers_with_elastic_storage_progress, peers_with_expanded_lane_signal,
         peers_with_scale_in_transition, peers_with_scale_out_transition,
         scale_in_transition_counts, scale_in_transition_quorum_satisfied,
@@ -7676,7 +7678,6 @@ mod tests {
                 COMMITTED_LANE_STATUS_PAYLOAD_PREFLIGHTED_AWAITING_STATE_APPLICATION,
                 COMMITTED_LANE_STATUS_PAYLOAD_RECOVERED_AWAITING_STATE_APPLICATION,
                 COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK,
-                COMMITTED_LANE_STATUS_STATE_APPLIED_BY_DIRECT_EXECUTION,
             },
             nexus::{DataSpaceId, LaneId},
         },
@@ -8045,72 +8046,72 @@ mod tests {
         );
     }
     #[test]
-    fn direct_applied_committed_lane_block_count_requires_direct_status_and_qc() {
-        let direct = committed_lane_block_status_with_execution(
-            1,
-            2,
-            COMMITTED_LANE_STATUS_STATE_APPLIED_BY_DIRECT_EXECUTION,
-            true,
-        );
-        let canonical = committed_lane_block_status_with_execution(
+    fn canonically_applied_committed_lane_block_count_requires_canonical_status_and_qc() {
+        let applied = committed_lane_block_status_with_execution(
             1,
             2,
             COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK,
             true,
         );
-        let forged_direct = committed_lane_block_status_with_execution(
+        let preflighted = committed_lane_block_status_with_execution(
             1,
             2,
-            COMMITTED_LANE_STATUS_STATE_APPLIED_BY_DIRECT_EXECUTION,
-            false,
-        );
-        let mut under_quorum_direct = committed_lane_block_status_with_execution(
-            1,
-            3,
-            COMMITTED_LANE_STATUS_STATE_APPLIED_BY_DIRECT_EXECUTION,
+            COMMITTED_LANE_STATUS_PAYLOAD_PREFLIGHTED_AWAITING_STATE_APPLICATION,
             true,
         );
-        under_quorum_direct.commit_qc_signer_count = 2;
-        let wrong_lane_direct = committed_lane_block_status_with_execution(
+        let forged_applied = committed_lane_block_status_with_execution(
+            1,
+            2,
+            COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK,
+            false,
+        );
+        let mut under_quorum_applied = committed_lane_block_status_with_execution(
+            1,
+            3,
+            COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK,
+            true,
+        );
+        under_quorum_applied.commit_qc_signer_count = 2;
+        let wrong_lane_applied = committed_lane_block_status_with_execution(
             2,
             2,
-            COMMITTED_LANE_STATUS_STATE_APPLIED_BY_DIRECT_EXECUTION,
+            COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK,
             true,
         );
         let snapshot = vec![
             PeerStatusSnapshot {
-                committed_lane_blocks: vec![direct.clone()],
+                committed_lane_blocks: vec![applied.clone()],
                 ..PeerStatusSnapshot::default()
             },
             PeerStatusSnapshot {
-                committed_lane_blocks: vec![canonical],
+                committed_lane_blocks: vec![preflighted],
                 ..PeerStatusSnapshot::default()
             },
             PeerStatusSnapshot {
-                committed_lane_blocks: vec![forged_direct, under_quorum_direct],
+                committed_lane_blocks: vec![forged_applied, under_quorum_applied],
                 ..PeerStatusSnapshot::default()
             },
             PeerStatusSnapshot {
-                committed_lane_blocks: vec![wrong_lane_direct, direct],
+                committed_lane_blocks: vec![wrong_lane_applied, applied],
                 ..PeerStatusSnapshot::default()
             },
         ];
         assert_eq!(
-            peers_with_direct_applied_committed_lane_block_for_lane(&snapshot, 1),
+            peers_with_canonically_applied_committed_lane_block_for_lane(&snapshot, 1),
             2,
-            "only certified direct-applied lane-block receipts for the observed lane should count"
+            "only certified canonically applied lane-block receipts for the observed lane should count"
         );
         assert!(
-            peer_direct_applied_committed_lane_block_snapshot(&snapshot[0], 1).is_some(),
-            "certified direct application should be observable as direct evidence"
+            peer_canonically_applied_committed_lane_block_snapshot(&snapshot[0], 1).is_some(),
+            "certified canonical application should be observable as applied evidence"
         );
         assert!(
-            peer_direct_applied_committed_lane_block_snapshot(&snapshot[1], 1).is_none(),
-            "canonical application receipts must not inflate direct-execution evidence"
+            peer_canonically_applied_committed_lane_block_snapshot(&snapshot[1], 1).is_none(),
+            "preflight readiness must not inflate canonical application evidence"
         );
         assert!(
-            peer_direct_applied_committed_lane_block_snapshot(&snapshot[2], 1).is_none(),
-            "forged availability and under-quorum direct statuses must fail closed"
+            peer_canonically_applied_committed_lane_block_snapshot(&snapshot[2], 1).is_none(),
+            "forged availability and under-quorum applied statuses must fail closed"
         );
     }
     #[test]
@@ -8235,56 +8236,57 @@ mod tests {
             expansion_observed_on_quorum_peers_for_lane(&exact_duplicate_snapshot, None, 1, 3),
             "exact duplicate committed lane-block rows should not hide valid expansion evidence"
         );
-        let direct_a = committed_lane_block_status_with_execution(
+        let applied_a = committed_lane_block_status_with_execution(
             1,
             3,
-            COMMITTED_LANE_STATUS_STATE_APPLIED_BY_DIRECT_EXECUTION,
+            COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK,
             true,
         );
-        let mut direct_b = committed_lane_block_status_with_execution(
+        let mut applied_b = committed_lane_block_status_with_execution(
             1,
             3,
-            COMMITTED_LANE_STATUS_STATE_APPLIED_BY_DIRECT_EXECUTION,
+            COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK,
             true,
         );
-        direct_b.commit_qc_signer_count = 4;
-        let direct_conflicting_peer = PeerStatusSnapshot {
-            committed_lane_blocks: vec![direct_a, direct_b],
+        applied_b.commit_qc_signer_count = 4;
+        let applied_conflicting_peer = PeerStatusSnapshot {
+            committed_lane_blocks: vec![applied_a, applied_b],
             ..PeerStatusSnapshot::default()
         };
         assert!(
-            peer_direct_applied_committed_lane_block_snapshot(&direct_conflicting_peer, 1)
+            peer_canonically_applied_committed_lane_block_snapshot(&applied_conflicting_peer, 1)
                 .is_none(),
-            "conflicting same-height direct-applied rows must fail closed"
+            "conflicting same-height applied rows must fail closed"
         );
-        let direct_conflicting_snapshot = vec![
-            direct_conflicting_peer.clone(),
-            direct_conflicting_peer.clone(),
-            direct_conflicting_peer,
+        let applied_conflicting_snapshot = vec![
+            applied_conflicting_peer.clone(),
+            applied_conflicting_peer.clone(),
+            applied_conflicting_peer,
             PeerStatusSnapshot::default(),
         ];
         assert_eq!(
-            peers_with_direct_applied_committed_lane_block_for_lane(
-                &direct_conflicting_snapshot,
+            peers_with_canonically_applied_committed_lane_block_for_lane(
+                &applied_conflicting_snapshot,
                 1,
             ),
             0,
-            "ambiguous direct-applied rows must not inflate direct-execution evidence"
+            "ambiguous applied rows must not inflate canonical application evidence"
         );
-        let mut wrong_dataspace_direct = committed_lane_block_status_with_execution(
+        let mut wrong_dataspace_applied = committed_lane_block_status_with_execution(
             1,
             4,
-            COMMITTED_LANE_STATUS_STATE_APPLIED_BY_DIRECT_EXECUTION,
+            COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK,
             true,
         );
-        wrong_dataspace_direct.dataspace_id = 99;
+        wrong_dataspace_applied.dataspace_id = 99;
         let wrong_dataspace_peer = PeerStatusSnapshot {
-            committed_lane_blocks: vec![wrong_dataspace_direct],
+            committed_lane_blocks: vec![wrong_dataspace_applied],
             ..PeerStatusSnapshot::default()
         };
         assert!(
-            peer_direct_applied_committed_lane_block_snapshot(&wrong_dataspace_peer, 1).is_none(),
-            "wrong-dataspace direct-applied rows must not inflate direct-execution evidence"
+            peer_canonically_applied_committed_lane_block_snapshot(&wrong_dataspace_peer, 1)
+                .is_none(),
+            "wrong-dataspace applied rows must not inflate canonical application evidence"
         );
     }
 
@@ -8319,10 +8321,6 @@ mod tests {
                 true,
             ),
             (COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK, true),
-            (
-                COMMITTED_LANE_STATUS_STATE_APPLIED_BY_DIRECT_EXECUTION,
-                true,
-            ),
         ];
         for (execution_status, executable_payload_available) in allowed {
             let block = committed_lane_block_status_with_execution(
@@ -8358,9 +8356,9 @@ mod tests {
                 "predecessor-blocked status must not become progress with a forged executable flag",
             ),
             RejectedCommittedLaneExecution(
-                COMMITTED_LANE_STATUS_STATE_APPLIED_BY_DIRECT_EXECUTION,
+                COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK,
                 false,
-                "direct-applied status must not become progress with a forged missing executable flag",
+                "canonically applied status must not become progress with a forged missing executable flag",
             ),
             RejectedCommittedLaneExecution(
                 "future_unknown_state",
@@ -9335,8 +9333,8 @@ mod tests {
             },
             quorum_required_max: 3,
             successful_scale_out_min_peers: Some(3),
-            direct_applied_committed_lane_block_cycle_count: 2,
-            direct_applied_committed_lane_block_min_peers: Some(3),
+            canonically_applied_committed_lane_block_cycle_count: 2,
+            canonically_applied_committed_lane_block_min_peers: Some(3),
             required_scale_in_cycle_count: 2,
             required_scale_in_min_quorum_peers: Some(3),
             optional_scale_in_cycle_count: 1,
@@ -9365,8 +9363,8 @@ mod tests {
         assert!(root.contains_key("contraction_time_s_max"));
         assert!(root.contains_key("quorum_required_max"));
         assert!(root.contains_key("successful_scale_out_min_peers"));
-        assert!(root.contains_key("direct_applied_committed_lane_block_cycle_count"));
-        assert!(root.contains_key("direct_applied_committed_lane_block_min_peers"));
+        assert!(root.contains_key("canonically_applied_committed_lane_block_cycle_count"));
+        assert!(root.contains_key("canonically_applied_committed_lane_block_min_peers"));
         assert!(root.contains_key("required_scale_in_cycle_count"));
         assert!(root.contains_key("required_scale_in_min_quorum_peers"));
         assert!(root.contains_key("optional_scale_in_cycle_count"));
@@ -9388,7 +9386,7 @@ mod tests {
             expansion_time_s: 0.001,
             contraction_time_s: 20.0,
             peers_with_scale_out_after_expansion: 1,
-            peers_with_direct_applied_committed_lane_block_after_expansion: 0,
+            peers_with_canonically_applied_committed_lane_block_after_expansion: 0,
             peers_with_scale_in_after_expansion: 4,
             peers_with_scale_in_since_cycle_start: 4,
             scale_in_transition_required: true,
@@ -9414,7 +9412,7 @@ mod tests {
             expansion_time_s: 0.001,
             contraction_time_s: 20.0,
             peers_with_scale_out_after_expansion: 3,
-            peers_with_direct_applied_committed_lane_block_after_expansion: 0,
+            peers_with_canonically_applied_committed_lane_block_after_expansion: 0,
             peers_with_scale_in_after_expansion: 2,
             peers_with_scale_in_since_cycle_start: 2,
             scale_in_transition_required: true,
@@ -9440,7 +9438,7 @@ mod tests {
             expansion_time_s: 0.001,
             contraction_time_s: 0.1,
             peers_with_scale_out_after_expansion: 3,
-            peers_with_direct_applied_committed_lane_block_after_expansion: 0,
+            peers_with_canonically_applied_committed_lane_block_after_expansion: 0,
             peers_with_scale_in_after_expansion: 0,
             peers_with_scale_in_since_cycle_start: 0,
             scale_in_transition_required: false,
@@ -9464,7 +9462,7 @@ mod tests {
             expansion_time_s: 0.5,
             contraction_time_s: 2.0,
             peers_with_scale_out_after_expansion: 4,
-            peers_with_direct_applied_committed_lane_block_after_expansion: 4,
+            peers_with_canonically_applied_committed_lane_block_after_expansion: 4,
             peers_with_scale_in_after_expansion: 2,
             peers_with_scale_in_since_cycle_start: 3,
             scale_in_transition_required: true,
@@ -9473,7 +9471,7 @@ mod tests {
             expansion_time_s: 0.4,
             contraction_time_s: 0.1,
             peers_with_scale_out_after_expansion: 3,
-            peers_with_direct_applied_committed_lane_block_after_expansion: 2,
+            peers_with_canonically_applied_committed_lane_block_after_expansion: 2,
             peers_with_scale_in_after_expansion: 0,
             peers_with_scale_in_since_cycle_start: 0,
             scale_in_transition_required: false,
@@ -9497,12 +9495,12 @@ mod tests {
             Some(3)
         );
         assert_eq!(
-            root.get("direct_applied_committed_lane_block_cycle_count")
+            root.get("canonically_applied_committed_lane_block_cycle_count")
                 .and_then(norito::json::Value::as_u64),
             Some(2)
         );
         assert_eq!(
-            root.get("direct_applied_committed_lane_block_min_peers")
+            root.get("canonically_applied_committed_lane_block_min_peers")
                 .and_then(norito::json::Value::as_u64),
             Some(2)
         );
@@ -9543,7 +9541,7 @@ mod tests {
             attempt: 3,
             quorum_required: 3,
             scale_out_transition_peers: Some(2),
-            direct_applied_committed_lane_block_peers: Some(3),
+            canonically_applied_committed_lane_block_peers: Some(3),
             scale_in_peers_after_expansion: Some(1),
             scale_in_peers_since_cycle_start: Some(4),
             expansion_time_s: Some(2.5),
@@ -9562,7 +9560,7 @@ mod tests {
             Some(3)
         );
         assert_eq!(
-            root.get("direct_applied_committed_lane_block_peers")
+            root.get("canonically_applied_committed_lane_block_peers")
                 .and_then(norito::json::Value::as_u64),
             Some(3)
         );

@@ -10,12 +10,7 @@
         "total_rows": 900,
         "transfer_rows": 540,
         "non_transfer_rows": 360,
-        "mint_rows": 48,
-        "burn_rows": 24,
-        "role_grant_rows": 4,
-        "role_revoke_rows": 4,
-        "meta_set_rows": 8,
-        "permission_rows": 8,
+        "meta_set_rows": 360,
         "transfer_ratio": 0.6
       }
     }

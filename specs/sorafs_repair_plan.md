@@ -73,9 +73,8 @@ canonical `failure_events[].name` inventory, require reviewed
 `repair-failure-event-*` labels without non-production markers, require
 reviewed failure events to cover both PoR and PoTR sources, and reject
 duplicate or unknown source entries plus duplicate event entries.
-Observability artifacts also bind `metric_count` to the unique canonical
-`metrics` inventory, require the reviewed repair metrics, and reject duplicate
-or unknown metric labels before promotion can report ready.
+Observability artifacts require reviewed dashboard and alert-rule provisioning
+without embedding a duplicate repair metric inventory.
 Repair payload-safety artifacts must explicitly set `raw_roster_included`,
 `raw_evidence_included`, `response_bodies_included`,
 `raw_repair_payloads_included`, `raw_ledger_included`, and
@@ -85,9 +84,9 @@ canary artifacts for auditor roster, failure capture, signed auditor API,
 worker lifecycle, event streams, governance handoff, observability, and
 governance approval evidence. The builder requires reviewed deployment
 context, complete failure-source, failure-event, repair route,
-lifecycle-status, handoff-target, and metric coverage where applicable,
+lifecycle-status, and handoff-target coverage where applicable,
 rejects duplicate or unknown failure-source, route, lifecycle-status,
-handoff-target, and metric inputs before writing,
+and handoff-target inputs before writing,
 auditor-roster and failure-bundle digest bindings, governance handoff digest
 bindings, auditor minimum counts, reviewed `repair-auditor-*` labels and
 `repair-failure-event-*` failure events matching their counts, default
@@ -109,7 +108,7 @@ response-file examples cover auditor-roster and worker-lifecycle canaries.
 | Repair Worker | Executes bounded local rehydration, chunk fetch/re-seed, and orchestrator requests. | Execution is permitted only for the exact finalized live lease. The bounded in-process single-flight set is ephemeral coordination, never task state or authority. |
 | Auditor API | Route-specific signed-transaction ingress for reports, escalations, appeals, and worker actions. | Torii accepts one caller-signed native transaction on each `/v1/sorafs/audit/repair/*` command route and performs exact instruction/action matching before strict durable ingress. |
 | Payload Validator | Validates canonical report, slash-proposal, policy, approval, task-event, and audit-event payloads. | Implemented in `sorafs_manifest::repair` plus `sorafs_manifest::reference::validate_repair_payload_bytes`; transaction signatures, authority, permissions, revisions, leases, and idempotency are enforced by the common transaction/native-ISI path. |
-| SLA & Telemetry | Metrics, logs, and alerts for backlog, latency, and outcomes. | Instrumented via `iroha_telemetry`, exported to OTLP + Prometheus. |
+| SLA & Telemetry | Metrics, logs, and alerts for backlog, latency, and outcomes. | Canonical Prometheus families plus bounded structured logs; finalized repair queries remain authoritative. |
 | Persistence | Durable recording of tasks, events, and outcomes. | Native ledger records and finalized task/event queries are the sole V1 authority. The only local durability is retry-safe signed-transaction forwarding and rebuildable consumer cursors. |
 | CLI Tooling | Operator-facing commands for queue inspection, manual escalation, and GC inspection/dry-run. | `iroha sorafs repair *` and `iroha sorafs gc *` commands with JSON output + Norito envelopes. |
 
@@ -293,8 +292,9 @@ validation. Native `RepairLedgerTaskV1` state plus the append-only
    - Expired leases become eligible for a new native claim; no local watchdog
      may rewrite lease or terminal state.
    - Supervised workers rebuild queues from finalized task/event queries and
-     emit bounded metrics. Restart reconciliation must prove that duplicate
-     submissions across peers still yield one lease and one terminal outcome.
+     emit bounded structured diagnostics. Restart reconciliation must prove
+     that duplicate submissions across peers still yield one lease and one
+     terminal outcome.
 
 ## Governance Escalation Policy
 Repair authority and policy are not sourced from a file key or environment
@@ -374,23 +374,19 @@ The rollout evidence scripts have focused Python coverage in:
 - `scripts/tests/run_sorafs_repair_rollout_evidence_test.py`
 
 ## SLA & Observability
-- Metrics (Prometheus naming):
-  - `torii_sorafs_repair_tasks_total{status}` — Counter for task transitions.
-  - `torii_sorafs_repair_latency_minutes_bucket{outcome}` — Histogram measuring time from creation to completion/escalation.
-  - `torii_sorafs_repair_queue_depth{provider}` — Gauge for queued tasks per provider.
-  - `torii_sorafs_repair_backlog_oldest_age_seconds` — Age of the oldest queued task.
-  - `torii_sorafs_repair_lease_expired_total{outcome}` — Counter for expired leases (requeued/escalated).
-  - `torii_sorafs_slash_proposals_total{outcome}` — Counter for slash proposal transitions.
-- Governance audit JSON metadata mirrors the telemetry labels (`ticket_id`, `manifest`, `provider`, `status` for repair events; `outcome` for slash proposals) to keep correlation deterministic.
-- Alerts:
-  - `SoraFsRepairBacklogHigh`: queue > 50 tasks or oldest queued > SLA.
-  - `SoraFsRepairEscalations`: escalations per hour > 3.
-  - `SoraFsRepairLeaseExpirySpike`: lease expiries per hour > 5.
+- Monitor the authoritative finalized task and event projections through
+  `/v1/sorafs/audit/repair/tasks` and `/v1/sorafs/audit/repair/events`. Compute
+  backlog, age, escalation, and lease-expiry thresholds from one anchored query
+  snapshot instead of a second mutable telemetry projection.
+- Governance audit JSON keeps deterministic correlation fields (`ticket_id`,
+  `manifest`, `provider`, `status`, and slash `outcome`).
 - Logs:
   - Structured JSON with `task_id`, `status`, `sla_deadline`, `retry_count`.
   - Loki retention 180 days hot, 2 years archived (mirrors pricing policy logs).
 - Dashboards:
-  - Grafana panels for backlog trend, SLA percentiles, auditor activity.
+  - The capacity dashboard retains the emitted
+    `torii_sorafs_gc_blocked_total{reason="repair_active"}` signal; repair
+    lifecycle views are built from finalized audit-query exports.
   - Runbook links to `specs/sorafs_ops_playbook.md` and `sorafs_gateway_self_cert.md` for transport-related incidents.
 
 ## Persistence & Retention
@@ -522,18 +518,14 @@ single terminal outcome. Governance handoff artifacts require
 `handoff_target_count`, bind it
 to the unique canonical `handoff_targets` inventory, and reject missing,
 inflated, duplicate, or unknown handoff-target evidence. Observability artifacts
-also bind `metric_count` to the unique canonical `metrics` inventory, require
-the reviewed repair metrics, and reject duplicate or unknown metric labels
-before promotion can report ready.
+require reviewed dashboard and alert-rule provisioning without embedding a
+duplicate repair metric inventory.
 The canary builder only encodes these reviewed operator assertions in the
 closed payload-free schema; generating a canary does not prove them. Promotion
 requires genuine signed artifacts from the reviewed deployment, and reviewers
 must validate the underlying finalized cursors, transaction receipts, restart
 records, and cross-peer terminal outcome outside the payload-free bundle.
-The summary exports the sorted reviewed `metrics` inventory plus
-`metric_count_values`, and the aggregate production-readiness gate requires
-those fields to match the observability artifact fingerprint before final
-promotion can report ready. The repair gate fail-closes when more than one
+The repair gate fail-closes when more than one
 valid roster, failure bundle, handoff, or policy anchor appears, and clears the
 mixed `valid_roster_digests`, `valid_failure_bundle_digests`,
 `valid_handoff_digests`, or `valid_policy_digests` set before aggregate

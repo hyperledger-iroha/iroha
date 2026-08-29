@@ -3,6 +3,7 @@ mod bounded_async_response;
 mod moderation;
 #[cfg(test)]
 mod operator_auth_tests;
+mod private_settlement;
 mod public_musubi;
 mod repair;
 mod reputation_journal;
@@ -107,6 +108,18 @@ pub use iroha_torii_shared::parliament_api::{
     ParliamentTimedOvnSessionProjectionV1, ParliamentTlePartialReleaseShareV1,
     ParliamentTleReleaseContextResponseV1, ParliamentTransitionDraftRequestV1,
     ParliamentTransitionDraftResponseV1, RequiredParliamentBodyProjectionV1,
+};
+pub use iroha_torii_shared::private_settlement_api::{
+    PrivateSettlementAuditApprovalRequestV1, PrivateSettlementAuditApprovalResponseV1,
+    PrivateSettlementAuditorCapsuleResponseV1, PrivateSettlementAvailabilityShareRequestV1,
+    PrivateSettlementAvailabilityShareResponseV1, PrivateSettlementBundleReceiptResponseV1,
+    PrivateSettlementBundleStatusResponseV1, PrivateSettlementBundleSubmitRequestV1,
+    PrivateSettlementBundleSubmitResponseV1, PrivateSettlementCommitVoteRequestV1,
+    PrivateSettlementCommitteeProofResponseV1, PrivateSettlementLegStatusResponseV1,
+    PrivateSettlementLegUploadDispositionV1, PrivateSettlementLegUploadRequestV1,
+    PrivateSettlementLegUploadResponseV1, PrivateSettlementLifecycleDtoV1,
+    PrivateSettlementPhaseCertificateRequestV1, PrivateSettlementPhaseCertificateResponseV1,
+    PrivateSettlementPhaseVoteResponseV1, PrivateSettlementPrepareVoteRequestV1,
 };
 pub use iroha_torii_shared::sorafs_hedging_billing_api::BillingAcknowledgementProofV1 as SorafsBillingAcknowledgementProof;
 pub use iroha_torii_shared::validation_fee_api::{
@@ -9783,18 +9796,6 @@ impl Client {
     pub fn get_sumeragi_qc_json(&self) -> Result<norito::json::Value> {
         sumeragi_qc_json_payload(&self.get_sumeragi_qc()?)
     }
-    /// GET `/v1/sumeragi/pacemaker` — pacemaker timers/config snapshot.
-    ///
-    /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
-    pub fn get_sumeragi_pacemaker_json(&self) -> Result<norito::json::Value> {
-        let url = join_torii_url(&self.torii_url, "v1/sumeragi/pacemaker");
-        let resp = self.send_builder(
-            self.operator_signed_request(HttpMethod::GET, url, Vec::new())?
-                .header("Accept", APPLICATION_JSON),
-        )?;
-        Self::parse_json_ok_response(&resp, "Failed to get sumeragi pacemaker")
-    }
     /// GET `/v1/sumeragi/evidence/count` — total persisted evidence entries.
     ///
     /// # Errors
@@ -10190,7 +10191,6 @@ mod status_tests {
             teu_dataspace_backlog: Vec::new(),
             dataspace_catalog: Vec::new(),
             nexus: None,
-            sorafs_micropayments: Vec::new(),
             taikai_ingest: Vec::new(),
             taikai_alias_rotations: Vec::new(),
             da_receipt_cursors: Vec::new(),
@@ -31673,67 +31673,6 @@ mod tests {
         assert_operator_signature_headers(&snapshot);
     }
     #[test]
-    fn sumeragi_operator_endpoints_include_signature_headers_when_key_configured() {
-        type SumeragiEndpointCase = (&'static str, fn(&Client) -> Result<norito::json::Value>);
-        let cases: [SumeragiEndpointCase; 1] = [(
-            "/v1/sumeragi/pacemaker",
-            Client::get_sumeragi_pacemaker_json,
-        )];
-        for (path, request) in cases {
-            let mut client = client_with_base_url(base_url());
-            let operator_key_pair = checked_random_keypair();
-            client.set_operator_key_pair(operator_key_pair.clone());
-            let (result, snapshot) =
-                capture_request(empty_response(StatusCode::UNAUTHORIZED), || {
-                    request(&client)
-                });
-            let _ = result.expect_err("mocked unauthorized response should fail");
-            assert_sumeragi_json_request(&snapshot, path);
-            assert_operator_signature_headers(&snapshot);
-            let headers: HashMap<_, _> = snapshot.headers.iter().cloned().collect();
-            let timestamp_ms = headers[HEADER_OPERATOR_TIMESTAMP_MS]
-                .parse::<u64>()
-                .expect("operator timestamp header");
-            let nonce = &headers[HEADER_OPERATOR_NONCE];
-            let signature_bytes = base64::engine::general_purpose::STANDARD
-                .decode(headers[HEADER_OPERATOR_SIGNATURE].as_bytes())
-                .expect("operator signature header should decode");
-            let signature = Signature::try_from_bytes(&signature_bytes)
-                .expect("operator signature header must pass checked admission");
-            let local_message = Client::operator_network_request_message(
-                &client.network_id,
-                &snapshot.method,
-                &snapshot.url,
-                &snapshot.body,
-                timestamp_ms,
-                nonce,
-            )
-            .expect("bounded local operator message");
-            signature
-                .verify(operator_key_pair.public_key(), &local_message)
-                .expect("operator signature must bind the client's exact network");
-            let foreign_network =
-                NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
-                    Hash::prehashed([0xFD; Hash::LENGTH]),
-                ));
-            let foreign_message = Client::operator_network_request_message(
-                &foreign_network,
-                &snapshot.method,
-                &snapshot.url,
-                &snapshot.body,
-                timestamp_ms,
-                nonce,
-            )
-            .expect("bounded foreign operator message");
-            assert!(
-                signature
-                    .verify(operator_key_pair.public_key(), &foreign_message)
-                    .is_err(),
-                "same endpoint on another genesis must not accept the operator signature"
-            );
-        }
-    }
-    #[test]
     fn sumeragi_json_endpoints_request_json() {
         type SumeragiEndpointCase = (&'static str, fn(&Client) -> Result<norito::json::Value>);
         let cases: [SumeragiEndpointCase; 2] = [
@@ -31798,54 +31737,6 @@ mod tests {
         }
     }
     #[test]
-    fn sumeragi_operator_json_endpoints_reject_duplicate_key_payloads() {
-        type SumeragiEndpointCase = (&'static str, fn(&Client) -> Result<norito::json::Value>);
-        let cases: [SumeragiEndpointCase; 1] = [(
-            "/v1/sumeragi/pacemaker",
-            Client::get_sumeragi_pacemaker_json,
-        )];
-        for (path, request) in cases {
-            let mut client = client_with_base_url(base_url());
-            client.set_operator_key_pair(checked_random_keypair());
-            let (result, snapshot) = capture_request(
-                json_response(StatusCode::OK, r#"{"dup":1,"dup":2}"#),
-                || request(&client),
-            );
-            let err = result.expect_err("duplicate-key successful JSON payload should fail");
-            assert!(
-                err.to_string().contains("failed to decode JSON payload"),
-                "{path} returned unexpected error: {err}"
-            );
-            assert_sumeragi_json_request(&snapshot, path);
-            assert_operator_signature_headers(&snapshot);
-        }
-    }
-    #[test]
-    fn sumeragi_operator_json_endpoints_reject_non_ok_responses_with_context() {
-        type SumeragiEndpointCase = (
-            &'static str,
-            &'static str,
-            fn(&Client) -> Result<norito::json::Value>,
-        );
-        let cases: [SumeragiEndpointCase; 1] = [(
-            "/v1/sumeragi/pacemaker",
-            "Failed to get sumeragi pacemaker",
-            Client::get_sumeragi_pacemaker_json,
-        )];
-        for (path, context, request) in cases {
-            let mut client = client_with_base_url(base_url());
-            client.set_operator_key_pair(checked_random_keypair());
-            let (result, snapshot) = capture_request(
-                json_response(StatusCode::FORBIDDEN, "operator key rejected"),
-                || request(&client),
-            );
-            let err = result.expect_err("non-OK operator JSON endpoint response should fail");
-            assert_endpoint_error(&err, path, context, "403", "operator key rejected");
-            assert_sumeragi_json_request(&snapshot, path);
-            assert_operator_signature_headers(&snapshot);
-        }
-    }
-    #[test]
     fn transaction_response_handler_returns_err_on_bad_request() {
         let response = mk_response(StatusCode::BAD_REQUEST, Vec::new(), None);
         assert!(TransactionResponseHandler::handle(&response).is_err());
@@ -31898,7 +31789,6 @@ mod tests {
             teu_dataspace_backlog: Vec::new(),
             dataspace_catalog: Vec::new(),
             nexus: None,
-            sorafs_micropayments: Vec::new(),
             taikai_ingest: Vec::new(),
             taikai_alias_rotations: Vec::new(),
             da_receipt_cursors: Vec::new(),

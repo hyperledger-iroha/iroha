@@ -1,9 +1,7 @@
 //! Deterministic ordering helpers for FASTPQ batches.
 //!
-//! Ordering commitments follow the staged plan in `specs/fastpq_plan.md` and now use the canonical
-//! Poseidon sponge over Goldilocks with the `fastpq:v1:ordering` domain tag.
-use crate::{Result, TransitionBatch, pack_bytes, poseidon};
-use ::core::convert::TryInto as _;
+//! Ordering commitments use the full-width canonical Iroha hash over canonical Norito bytes.
+use crate::{Result, TransitionBatch};
 use iroha_crypto::Hash;
 use norito::core;
 /// Domain separation tag for ordering commitments.
@@ -12,33 +10,11 @@ const ORDERING_DOMAIN: &[u8] = b"fastpq:v1:ordering";
 ///
 /// # Errors
 ///
-/// Propagates Norito serialization failures or parameter mismatches while
-/// cloning the batch for canonical ordering.
+/// Propagates Norito serialization failures.
 pub fn ordering_hash(batch: &TransitionBatch) -> Result<Hash> {
-    let mut canonical = batch.clone();
-    canonical.sort();
+    let canonical = batch.canonicalized();
     let encoded = core::to_bytes(&canonical.transitions)?;
-    let domain_packed = pack_bytes(ORDERING_DOMAIN);
-    let encoded_packed = pack_bytes(&encoded);
-    let mut limbs = Vec::with_capacity(domain_packed.limbs.len() + encoded_packed.limbs.len() + 2);
-    limbs.push(
-        domain_packed
-            .length
-            .try_into()
-            .expect("ordering domain length fits into field limb"),
-    );
-    limbs.extend(domain_packed.limbs);
-    limbs.push(
-        encoded_packed
-            .length
-            .try_into()
-            .expect("encoded transition bytes length fits into field limb"),
-    );
-    limbs.extend(encoded_packed.limbs);
-    let digest = poseidon::hash_field_elements_cpu(&limbs);
-    let mut bytes = [0u8; Hash::LENGTH];
-    bytes[..8].copy_from_slice(&digest.to_le_bytes());
-    Ok(Hash::prehashed(bytes))
+    Ok(Hash::new_from_chunks(&[ORDERING_DOMAIN, &encoded]))
 }
 #[cfg(test)]
 mod tests {
@@ -58,13 +34,13 @@ mod tests {
             b"asset/a".to_vec(),
             vec![2],
             vec![3],
-            OperationKind::Burn,
+            OperationKind::MetaSet,
         ));
         original.push(StateTransition::new(
             b"asset/b".to_vec(),
             vec![5],
             vec![6],
-            OperationKind::Mint,
+            OperationKind::Transfer,
         ));
         let mut permuted = original.clone();
         permuted.transitions.swap(0, 2);
@@ -74,7 +50,7 @@ mod tests {
         assert_eq!(h1, h2);
     }
     #[test]
-    fn ordering_hash_matches_expected_digest() {
+    fn ordering_hash_uses_the_full_domain_separated_digest() {
         let mut batch =
             TransitionBatch::new("fastpq-lane-balanced", crate::PublicInputs::default());
         batch.push(StateTransition::new(
@@ -87,19 +63,14 @@ mod tests {
             b"k2".to_vec(),
             vec![0x03],
             vec![0x04],
-            OperationKind::Mint,
+            OperationKind::MetaSet,
         ));
         batch.sort();
         let hash = ordering_hash(&batch).expect("ordering hash");
+        let encoded = core::to_bytes(&batch.transitions).expect("encode transitions");
+        assert_eq!(hash, Hash::new_from_chunks(&[ORDERING_DOMAIN, &encoded]));
         let raw: [u8; iroha_crypto::Hash::LENGTH] = hash.into();
-        assert_eq!(
-            raw,
-            [
-                0xE2, 0xC2, 0x06, 0xD4, 0xD6, 0xAB, 0x6C, 0x8B, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                0x00, 0x00, 0x00, 0x01,
-            ]
-        );
+        assert!(raw[8..].iter().any(|&byte| byte != 0));
     }
     #[test]
     fn ordering_hash_distinguishes_trailing_zero_bytes() {

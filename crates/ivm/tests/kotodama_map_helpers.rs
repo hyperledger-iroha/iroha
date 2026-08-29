@@ -9,7 +9,7 @@ use ivm::{
     },
     mock_wsv::{AccountId, MockWorldStateView, WsvHost},
 };
-use std::{collections::HashMap, str::FromStr};
+use std::str::FromStr;
 mod common;
 #[test]
 fn ephemeral_map_constructor_is_rejected() {
@@ -229,7 +229,7 @@ fn runtime_durable_ensure_state_map() {
             .parse()
             .expect("public key"),
     );
-    let host = WsvHost::new_with_subject(wsv, alice, HashMap::new());
+    let host = WsvHost::new_with_subject(wsv, alice);
     vm.set_host(host);
     common::select_kotodama_entrypoint(&mut vm, &code, "main");
     vm.run().expect("exec");

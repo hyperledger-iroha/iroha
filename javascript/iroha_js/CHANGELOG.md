@@ -459,8 +459,8 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 - Added the missing `ToriiClient.submitTransactionAndWait` helper so the
   runtime now matches the published TypeScript definitions, validating
   `hashHex` inputs and reusing the existing pipeline polling logic.
-- Added `ToriiClient` helpers for Sumeragi telemetry endpoints
-  (`getSumeragiPacemaker`, `getSumeragiQc`, `getSumeragiBlsKeys`,
+- Added `ToriiClient` helpers for Sumeragi observability endpoints
+  (`getSumeragiQc`, `getSumeragiBlsKeys`,
   `getSumeragiLeader`, `getSumeragiParams`) with README
   examples, TypeScript definitions, and tests
   so JS SDK consumers can inspect the same `/v1/sumeragi/*` diagnostics that
@@ -522,7 +522,7 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
   helper can stream the SoraFS registry endpoints without bespoke pagination,
   extending the JS-07 query wrapper work to the storage APIs.【javascript/iroha_js/src/toriiClient.js:681】【javascript/iroha_js/index.d.ts:3408】【javascript/iroha_js/test/toriiClient.test.js:760】【javascript/iroha_js/README.md:732】
 - Tightened the Sumeragi telemetry helpers by normalising the
-  `getSumeragiPacemaker`, `getSumeragiQc`, `getSumeragiBlsKeys`,
+  `getSumeragiQc`, `getSumeragiBlsKeys`,
   `getSumeragiLeader` and `getSumeragiParams`
   responses (raising type errors on malformed telemetry)
   and corrected the `getSumeragiStatus` TypeScript declaration to reflect that

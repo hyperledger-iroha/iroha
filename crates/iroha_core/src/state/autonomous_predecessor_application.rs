@@ -72,7 +72,7 @@ impl State {
     ///
     /// The predecessor may itself have reached WSV through an ordinary
     /// canonical block (`Current` receipt) or through an autonomous merge
-    /// carrier. Neither path admits a direct-execution receipt.
+    /// carrier.
     ///
     /// Unlike the ordinary helper, this deliberately ignores hash-only lane
     /// ownership snapshots. Those snapshots authenticate a canonical carrier

@@ -431,7 +431,6 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
     cfg.zk.fastpq.metal_threadgroup_width = None;
     cfg.zk.fastpq.metal_trace = defaults::zk::fastpq::METAL_TRACE;
     cfg.zk.fastpq.metal_debug_enum = defaults::zk::fastpq::METAL_DEBUG_ENUM;
-    cfg.zk.fastpq.metal_debug_fused = defaults::zk::fastpq::METAL_DEBUG_FUSED;
     cfg.streaming.key_material =
         StreamingKeyMaterial::new(checked_connect_key_fixture()).expect("streaming key material");
     cfg.streaming.codec = A::StreamingCodec::from_defaults();

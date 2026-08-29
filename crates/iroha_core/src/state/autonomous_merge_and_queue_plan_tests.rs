@@ -657,7 +657,7 @@ fn autonomous_execution_rejects_post_stage_axt_replay_drift() {
 #[test]
 fn autonomous_execution_stage_rejects_preexisting_axt_replay_overlay() {
     let (state, entry, carrier, _) = autonomous_merge_commit_authorization_fixture(false, false);
-    let mut state_block = state.lane_application_block(carrier.header().clone());
+    let mut state_block = state.merge_preexecution_block(carrier.header().clone());
     let replay_key = AxtHandleReplayKey::from_parts(
         DataSpaceId::UNIVERSAL,
         axt_replay_incarnation_for_test(0xD3),
@@ -685,7 +685,7 @@ fn autonomous_execution_pre_vote_rejects_due_start_of_block_effect() {
             ConsensusMode::Permissioned,
         )
         .expect("certified execution stages before due block effects run");
-    stage_exact_empty_autonomous_carrier_membership_for_pre_vote(&mut state_block);
+    stage_exact_autonomous_carrier_membership_for_pre_vote(&mut state_block, &carrier);
     assert!(matches!(
         state_block.validate_staged_merge_execution_authorization(),
         Err(MergeLedgerCommitError::ExecutionDivergence(_))
@@ -701,7 +701,7 @@ fn autonomous_execution_pre_vote_rejects_due_start_of_block_effect() {
     );
 }
 #[test]
-fn autonomous_execution_pre_vote_requires_exact_empty_carrier_membership() {
+fn autonomous_execution_pre_vote_requires_exact_merge_carrier_membership() {
     let (state, entry, carrier, _) = autonomous_merge_commit_authorization_fixture(false, false);
     let mut state_block = state
         .block_with_certified_merge_entry(
@@ -713,7 +713,7 @@ fn autonomous_execution_pre_vote_requires_exact_empty_carrier_membership() {
     assert!(matches!(
         state_block.validate_staged_merge_execution_authorization(),
         Err(MergeLedgerCommitError::ExecutionBatchInvalid(message))
-            if message.contains("exact-empty post-block/pre-vote")
+            if message.contains("exact merge-only post-block/pre-vote")
     ));
 }
 #[test]
@@ -735,15 +735,15 @@ fn autonomous_execution_pre_vote_rejects_wrong_carrier_membership_height() {
     .expect("a successor carrier height is non-zero");
     state_block
         .transactions
-        .insert_block(std::collections::HashSet::new(), wrong_height);
+        .insert_block(state_block.merge_carrier_entrypoints.clone(), wrong_height);
     assert!(matches!(
         state_block.validate_staged_merge_execution_authorization(),
         Err(MergeLedgerCommitError::ExecutionBatchInvalid(message))
-            if message.contains("exact-empty post-block/pre-vote")
+            if message.contains("exact merge-only post-block/pre-vote")
     ));
 }
 #[test]
-fn autonomous_execution_pre_vote_rejects_non_empty_carrier_membership() {
+fn autonomous_execution_pre_vote_rejects_extra_carrier_membership() {
     let (state, entry, carrier, _) = autonomous_merge_commit_authorization_fixture(false, false);
     let mut state_block = state
         .block_with_certified_merge_entry(
@@ -756,13 +756,15 @@ fn autonomous_execution_pre_vote_rejects_non_empty_carrier_membership() {
     let unexpected_transaction = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(
         Hash::new(b"unexpected-autonomous-carrier-transaction"),
     );
+    let mut membership = state_block.merge_carrier_entrypoints.clone();
+    membership.insert(unexpected_transaction);
     state_block
         .transactions
-        .insert_block_with_single_tx(unexpected_transaction, carrier_height);
+        .insert_block(membership, carrier_height);
     assert!(matches!(
         state_block.validate_staged_merge_execution_authorization(),
         Err(MergeLedgerCommitError::ExecutionBatchInvalid(message))
-            if message.contains("exact-empty post-block/pre-vote")
+            if message.contains("exact merge-only post-block/pre-vote")
     ));
 }
 #[test]
@@ -775,12 +777,12 @@ fn autonomous_execution_pre_vote_rejects_premature_pending_carrier_hash() {
             ConsensusMode::Permissioned,
         )
         .expect("certified execution stages before the canonical carrier row");
-    stage_exact_empty_autonomous_carrier_membership_for_pre_vote(&mut state_block);
+    stage_exact_autonomous_carrier_membership_for_pre_vote(&mut state_block, &carrier);
     state_block.block_hashes.push(carrier.hash());
     assert!(matches!(
         state_block.validate_staged_merge_execution_authorization(),
         Err(MergeLedgerCommitError::ExecutionBatchInvalid(message))
-            if message.contains("exact-empty post-block/pre-vote")
+            if message.contains("exact merge-only post-block/pre-vote")
     ));
 }
 #[test]
@@ -795,7 +797,7 @@ fn autonomous_execution_finality_rejects_unbound_event_surface_drift() {
                 ConsensusMode::Permissioned,
             )
             .expect("certified autonomous execution must stage on its exact carrier");
-        stage_exact_empty_autonomous_carrier_membership_for_pre_vote(&mut state_block);
+        stage_exact_autonomous_carrier_membership_for_pre_vote(&mut state_block, &carrier);
         let expected_event = EventBox::from(BlockEvent {
             header: carrier.header(),
             status: BlockStatus::Approved,
@@ -825,7 +827,7 @@ fn autonomous_execution_finality_rejects_unbound_event_surface_drift() {
             ConsensusMode::Permissioned,
         )
         .expect("certified autonomous execution must stage on its exact carrier");
-    stage_exact_empty_autonomous_carrier_membership_for_pre_vote(&mut state_block);
+    stage_exact_autonomous_carrier_membership_for_pre_vote(&mut state_block, &carrier);
     state_block
         .validate_staged_merge_execution_authorization()
         .expect("fixture reaches the exact post-block/pre-vote surface");
@@ -925,7 +927,7 @@ fn assert_queue_plan_native_exact_compare_and_set() {
         .expect("resolve proposal-native QueuePlan lane bindings");
     let carrier = empty_global_block_after(Some(&parent));
     let write_set_before = state
-        .lane_application_block(carrier.header().clone())
+        .merge_preexecution_block(carrier.header().clone())
         .merge_execution_write_set_root();
     let mut state_block = state
         .block_with_queue_plan_admissions(carrier.header().clone(), &[certificate.clone()])
@@ -1191,7 +1193,7 @@ fn assert_queue_plan_native_batch_rollback_is_atomic() {
             .insert(second_member_key.clone(), second_member_payload.clone());
         world.commit();
     }
-    let mut state_block = state.lane_application_block(carrier.header().clone());
+    let mut state_block = state.merge_preexecution_block(carrier.header().clone());
     let write_set_before_batch = state_block.merge_execution_write_set_root();
     assert!(
         state_block
@@ -1404,7 +1406,7 @@ fn queue_plan_conflict_requires_pending_or_applied_owner_evidence() {
         vec![conflicting_binding.entrypoint_hash],
         "the all-External canonical commit path must preserve the typed entrypoint hash bytes"
     );
-    state.record_direct_committed_entrypoints(
+    state.record_committed_entrypoints_for_tests(
         committed_memberships,
         NonZeroUsize::new(
             usize::try_from(queue_plan_proposal_height_for_state_test(&state))
@@ -1534,7 +1536,7 @@ fn queue_plan_conflict_requires_pending_or_applied_owner_evidence() {
         conflicting_transaction.hash_as_entrypoint(),
         "the External typed identity must remain byte-compatible inside a mixed batch"
     );
-    state.record_direct_committed_entrypoints(
+    state.record_committed_entrypoints_for_tests(
         sealed_memberships,
         NonZeroUsize::new(
             usize::try_from(

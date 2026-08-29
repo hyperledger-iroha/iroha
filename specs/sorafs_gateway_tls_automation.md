@@ -319,7 +319,7 @@ identical headers.
 | Header | `X-Sora-TLS-State` | Embedded in gateway responses (e.g., `ech-enabled;expiry=2025-06-12T12:00:00Z`). | Monitor synthetically; on `ech-disabled` or `degraded`, follow the playbooks below.
 | Logs | Deployment-owned controller/adapter supervisor | Payload-free renewal outcomes and bounded failure classes. | Capture sanitized logs with incident tickets and during drills.
 
-Expose the metrics via Prometheus/OpenTelemetry, wire dashboards for expiry and
+Expose the metrics via Prometheus, wire dashboards for expiry and
 renewal trends, and create synthetic probes that verify the
 `X-Sora-TLS-State` header hourly.
 

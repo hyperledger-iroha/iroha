@@ -2764,7 +2764,9 @@ mod tests {
         let mut transaction = block.transaction();
         operation(&mut transaction)?;
         transaction.apply();
-        block.commit().expect("commit reputation test block");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit reputation test block");
         let block_signer = keypair(0xFE);
         let signature = BlockSignature::new(
             0,

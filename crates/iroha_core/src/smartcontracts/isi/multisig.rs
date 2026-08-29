@@ -6356,7 +6356,9 @@ seiyaku TriggerDispatch {
             )
             .expect("initial propose");
             tx.apply();
-            block.commit().expect("commit first block");
+            block
+                .commit_world_overlay_for_testing()
+                .expect("commit first block");
             multisig_id
         };
         let block_header = BlockHeader::new(nonzero!(2_u64), None, None, None, 3, 0);

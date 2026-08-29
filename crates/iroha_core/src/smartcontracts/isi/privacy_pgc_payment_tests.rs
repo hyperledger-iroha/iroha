@@ -290,7 +290,9 @@ fn verified_pgc_payment_replaces_complete_table_atomically_and_replay_rejects() 
             .expect("schedule exact delayed PGC retention tightening");
         transaction.apply();
     }
-    block.commit().expect("commit bootstrap and payment block");
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit bootstrap and payment block");
     let next_header = BlockHeader::new(
         NonZeroU64::new(TEST_BLOCK_HEIGHT + 300).expect("effective height"),
         Some(header_hash),

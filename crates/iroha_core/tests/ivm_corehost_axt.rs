@@ -1546,7 +1546,6 @@ fn axt_replay_ledger_rejects_reuse_after_restart() {
         dsid,
     );
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 25, 0);
-    let committed_header = header.clone();
     let mut block = state.block(header);
     {
         use iroha_data_model::nexus::{
@@ -1588,9 +1587,9 @@ fn axt_replay_ledger_rejects_reuse_after_restart() {
             .expect("exact replay-ledger AXT sequence should stage");
         stx.apply();
     }
-    block.commit().expect("commit replay ledger setup");
-    state.push_block_hash_for_testing(committed_header.hash());
-    state.update_latest_block_header_cache_for_tests(committed_header);
+    block
+        .commit_empty_block_for_testing()
+        .expect("commit replay ledger setup");
     state.set_axt_policy(
         dsid,
         AxtPolicyEntry {
@@ -1755,7 +1754,9 @@ fn axt_replay_ledger_prunes_expired_entries_on_slot_rollover() {
             .expect("exact replay-ledger AXT sequence should stage");
         stx.apply();
     }
-    block.commit().expect("commit first replay block");
+    block
+        .commit_empty_block_for_testing()
+        .expect("commit first replay block");
     assert_eq!(
         WorldReadOnly::axt_replay_ledger(state.view().world())
             .iter()
@@ -1768,7 +1769,9 @@ fn axt_replay_ledger_prunes_expired_entries_on_slot_rollover() {
     {
         let _stx = block2.transaction();
     }
-    block2.commit().expect("commit second replay block");
+    block2
+        .commit_empty_block_for_testing()
+        .expect("commit second replay block");
     assert!(
         WorldReadOnly::axt_replay_ledger(state.view().world()).is_empty(),
         "expired replay entries should be pruned on slot rollover"
@@ -1851,7 +1854,6 @@ fn axt_replay_ledger_blocks_reuse_after_host_rebuild() {
     };
     let binding = AxtBinding::new(binding_bytes);
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 5, 0);
-    let committed_header = header.clone();
     let mut block = state.block(header);
     {
         use iroha_data_model::nexus::{
@@ -1886,8 +1888,9 @@ fn axt_replay_ledger_blocks_reuse_after_host_rebuild() {
         .expect("exact replay-ledger AXT sequence should stage");
         stx.apply();
     }
-    block.commit().expect("commit replay ledger envelope");
-    anchor_axt_test_header(&mut state, committed_header);
+    block
+        .commit_empty_block_for_testing()
+        .expect("commit replay ledger envelope");
     let mut host = CoreHost::from_state(authority.clone(), &state)
         .expect("fixture state should produce a valid CoreHost");
     install_replay_probe_policy(
@@ -2127,15 +2130,15 @@ fn axt_replay_ledger_blocks_reuse_after_policy_reset() {
         commit_height: 1,
     };
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-    let committed_header = header.clone();
     let mut block = state.block(header);
     let mut stx = block.transaction();
     stx.current_lane_id = Some(lane);
     stx.record_axt_envelope(envelope)
         .expect("exact replay-ledger AXT sequence should stage");
     stx.apply();
-    block.commit().expect("commit initial replay envelope");
-    anchor_axt_test_header(&mut state, committed_header);
+    block
+        .commit_empty_block_for_testing()
+        .expect("commit initial replay envelope");
     state.set_axt_policy(
         dsid,
         AxtPolicyEntry {

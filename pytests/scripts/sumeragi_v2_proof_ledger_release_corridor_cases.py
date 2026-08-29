@@ -8,10 +8,10 @@ def test_release_inventory_constants_match_current_source_seal(
     module = load_checker()
     assert module._PRODUCTION_LIVENESS_RELEASE_COUNT == 864
     assert module._PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 == (
-        "39d0b3083847ad0ad8bcf5c67469b20b9a056148fad90679d753a9e63b07455b"
+        "44784c79c489d83ab142bb0db84e89138c3a54b1349926a80597e2c5b21a83df"
     )
     assert module._PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 == (
-        "d481a3e598bb6c9c66ca37da7e81cb56f897daeee69289f8c2aa0f427271347c"
+        "e294395f0bdb4997e396e3ea876fd26f578c51c6afc3845b71779286d46ed494"
     )
     assert module._SUMERAGI_V2_PACKAGE_LAYOUT_GUARD_SHA256 == (
         "e99da2c824b86930b76c741d2f7aa47ab16092c2f84e43550fb6362a36133268"
@@ -22,7 +22,7 @@ def test_release_inventory_constants_match_current_source_seal(
     assert module._PRODUCTION_MULTILANE_FOCUS_TEST_COUNT == 522
     assert module._PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT == 523
     assert module._PRODUCTION_MULTILANE_FOCUS_INVENTORY_SHA256 == (
-        "a19753ab7879a95094d8f1ee968e2e44d9a36453f2814acdadffaaead1ab4a97"
+        "5e8b82b400b438eabb7733adbccae15b5aa212a98a89161a586cbce686e2f6e9"
     )
     assert module._PRODUCTION_LIFECYCLE_INGRESS_PUBLICATION_FENCE_ITEM_SHA256 == {
         "PreparedFairIngressQueueWitness::lock_exact_dequeue_retaining": (
@@ -2368,7 +2368,7 @@ kura.claim_autonomous_lifecycle_process_generation(
         "kura::tests::progress_witness_durability::"
         "bound_progress_recovery_handles_crash_phases_without_path_escape",
         "kura::tests::progress_witness_durability::"
-        "direct_receipt_snapshot_preserves_sparse_and_mixed_format_entries",
+        "application_receipt_snapshot_preserves_sparse_entries",
         "kura::tests::progress_witness_durability::"
         "initial_preindex_data_sync_failure_rolls_back_payload_before_retry",
         "kura::tests::progress_witness_durability::"
@@ -3608,7 +3608,7 @@ def test_multilane_inventory_checker_rejects_weakened_production_count(
             "changed-module counts must equal the exact reviewed release inventory",
         ),
         (
-            '    "39d0b3083847ad0ad8bcf5c67469b20"',
+            '    "44784c79c489d83ab142bb0db84e8913"',
             '    "00000000000000000000000000000000"',
             "canonical production TSV SHA-256 must equal",
         ),

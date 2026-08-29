@@ -247,7 +247,9 @@ fn seed_public_lane_state(
     .execute(delegator, &mut tx)
     .expect("bond stake");
     tx.apply();
-    block.commit().expect("commit block");
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit block");
 }
 fn build_test_router(state: Arc<State>, kura: &Arc<Kura>, local_peer_id: PeerId) -> axum::Router {
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
@@ -263,8 +265,7 @@ fn build_test_router(state: Arc<State>, kura: &Arc<Kura>, local_peer_id: PeerId)
         &queue,
         &local_peer_id,
         broadcast::channel(1).0,
-        true,
-        false,
+        iroha_config::parameters::actual::TelemetryProfile::Operator,
     );
     torii.router()
 }

@@ -16333,7 +16333,7 @@ fn leave_hf_shared_lease_last_member_uses_configured_drain_grace() -> Result<(),
     }
     .execute(&ALICE_ID, &mut stx)?;
     stx.apply();
-    state_block.commit()?;
+    state_block.commit_world_overlay_for_testing()?;
     let source_id = hf_source_id(repo_id, resolved_revision)?;
     let pool_id = hf_shared_lease_pool_id(source_id, storage_class, lease_term_ms)?;
     let member_key = (pool_id.to_string(), ALICE_ID.to_string());
@@ -16409,7 +16409,7 @@ fn hf_shared_lease_registration_does_not_create_runtime_service() -> Result<(), 
             .is_none()
     );
     stx.apply();
-    state_block.commit()?;
+    state_block.commit_world_overlay_for_testing()?;
     let view = state.view();
     let member = view
         .world()
@@ -16511,7 +16511,7 @@ fn renew_hf_shared_lease_active_window_queues_next_window() -> Result<(), eyre::
     }
     .execute(&ALICE_ID, &mut stx)?;
     stx.apply();
-    state_block.commit()?;
+    state_block.commit_world_overlay_for_testing()?;
     let source_id = hf_source_id(repo_id, resolved_revision)?;
     let pool_id = hf_shared_lease_pool_id(source_id, storage_class, lease_term_ms)?;
     let member_key = (pool_id.to_string(), ALICE_ID.to_string());
@@ -17446,7 +17446,7 @@ fn deploy_soracloud_service_records_bundle_and_audit_state() -> Result<(), eyre:
     }
     .execute(&ALICE_ID, &mut stx)?;
     stx.apply();
-    state_block.commit()?;
+    state_block.commit_world_overlay_for_testing()?;
     let view = state.view();
     let world = view.world();
     let service_name: iroha_data_model::name::Name = "portal".parse().expect("valid");
@@ -18655,7 +18655,7 @@ fn inrou_reconciliation_excludes_inactive_validator_with_live_capability()
         1
     );
     deploy_tx.apply();
-    deploy_block.commit()?;
+    deploy_block.commit_world_overlay_for_testing()?;
 
     soracloud_transaction_at!(state, reconcile_header, reconcile_block, reconcile_tx, 200);
     reconcile_tx
@@ -18728,7 +18728,7 @@ fn inrou_peer_rotation_prunes_stale_capability_and_stops_sticky_placement_immedi
         1
     );
     deploy_tx.apply();
-    deploy_block.commit()?;
+    deploy_block.commit_world_overlay_for_testing()?;
 
     soracloud_transaction_at!(state, reconcile_header, reconcile_block, reconcile_tx, 200);
     reconcile_tx
@@ -18804,7 +18804,7 @@ fn inrou_reconciliation_prunes_expired_host_capability() -> Result<(), eyre::Rep
         1
     );
     deploy_tx.apply();
-    deploy_block.commit()?;
+    deploy_block.commit_world_overlay_for_testing()?;
 
     soracloud_transaction_at!(state, reconcile_header, reconcile_block, reconcile_tx, 200);
     isi::ReconcileSoracloudInrouPlacements.execute(&ALICE_ID, &mut reconcile_tx)?;
@@ -18974,7 +18974,7 @@ fn report_soracloud_service_lease_usage_updates_authoritative_lease_state()
     }
     .execute(&ALICE_ID, &mut stx)?;
     stx.apply();
-    state_block.commit()?;
+    state_block.commit_world_overlay_for_testing()?;
 
     let successor_height = lease_started_height
         .checked_add(1)
@@ -19156,7 +19156,7 @@ fn service_lease_usage_is_reporter_scoped_exact_and_replay_safe() -> Result<(), 
         .execute(authority, &mut stx)?;
     }
     stx.apply();
-    state_block.commit()?;
+    state_block.commit_world_overlay_for_testing()?;
     let successor_height = lease_started_height
         .checked_add(1)
         .expect("the test lease height has a successor");
@@ -19414,7 +19414,7 @@ fn service_lease_usage_is_reporter_scoped_exact_and_replay_safe() -> Result<(), 
     .expect_err("a validator must not spoof another replica slot");
 
     stx.apply();
-    state_block.commit()?;
+    state_block.commit_world_overlay_for_testing()?;
     soracloud_transaction_at_height!(state, block_header, state_block, stx, 4);
 
     let placement_key = (
@@ -19545,7 +19545,7 @@ fn service_lease_usage_is_reporter_scoped_exact_and_replay_safe() -> Result<(), 
     );
 
     stx.apply();
-    state_block.commit()?;
+    state_block.commit_world_overlay_for_testing()?;
     soracloud_transaction_at_height!(state, block_header, state_block, stx, 5);
     isi::ReportSoracloudServiceLeaseUsage {
         service_name: bundle.service.service_name.clone(),
@@ -20077,7 +20077,7 @@ fn deploy_soracloud_service_accepts_required_inline_materials() -> Result<(), ey
     }
     .execute(&ALICE_ID, &mut stx)?;
     stx.apply();
-    state_block.commit()?;
+    state_block.commit_world_overlay_for_testing()?;
     let service_name: iroha_data_model::name::Name = "portal".parse().expect("valid service name");
     let view = state.view();
     let deployment = view
@@ -20313,7 +20313,7 @@ fn upgrade_soracloud_service_starts_canary_rollout() -> Result<(), eyre::Report>
     }
     .execute(&ALICE_ID, &mut stx)?;
     stx.apply();
-    state_block.commit()?;
+    state_block.commit_world_overlay_for_testing()?;
     let view = state.view();
     let world = view.world();
     let service_name: iroha_data_model::name::Name = "portal".parse().expect("valid");
@@ -20740,7 +20740,7 @@ fn unhealthy_rollout_auto_rolls_back_to_baseline() -> Result<(), eyre::Report> {
     }
     .execute(&ALICE_ID, &mut stx)?;
     stx.apply();
-    state_block.commit()?;
+    state_block.commit_world_overlay_for_testing()?;
     let view = state.view();
     let world = view.world();
     let deployment = world
@@ -20880,7 +20880,7 @@ fn rollback_soracloud_service_reuses_admitted_revision() -> Result<(), eyre::Rep
     }
     .execute(&ALICE_ID, &mut stx)?;
     stx.apply();
-    state_block.commit()?;
+    state_block.commit_world_overlay_for_testing()?;
     let view = state.view();
     let world = view.world();
     let deployment = world
@@ -21021,7 +21021,7 @@ fn mutate_soracloud_state_records_authoritative_service_state() -> Result<(), ey
     })
     .execute(&ALICE_ID, &mut stx)?;
     stx.apply();
-    state_block.commit()?;
+    state_block.commit_world_overlay_for_testing()?;
     let view = state.view();
     let world = view.world();
     let entry = world
@@ -22783,7 +22783,7 @@ fn record_soracloud_decryption_request_persists_policy_snapshot() -> Result<(), 
     })
     .execute(&ALICE_ID, &mut stx)?;
     stx.apply();
-    state_block.commit()?;
+    state_block.commit_world_overlay_for_testing()?;
     let view = state.view();
     let world = view.world();
     let record = world
@@ -22927,7 +22927,7 @@ fn start_soracloud_training_job_records_authoritative_job_state() -> Result<(), 
     training.execute(&mut stx)?;
     let service_name = training.service_name;
     stx.apply();
-    state_block.commit()?;
+    state_block.commit_world_overlay_for_testing()?;
     let view = state.view();
     let world = view.world();
     let record = world
@@ -22958,7 +22958,7 @@ fn checkpoint_soracloud_training_job_updates_authoritative_state() -> Result<(),
     training.checkpoint(&mut stx, metrics_hash)?;
     let service_name = training.service_name;
     stx.apply();
-    state_block.commit()?;
+    state_block.commit_world_overlay_for_testing()?;
     let view = state.view();
     let world = view.world();
     let record = world
@@ -22989,7 +22989,7 @@ fn retry_soracloud_training_job_records_retry_pending_state() -> Result<(), eyre
     })
     .execute(&ALICE_ID, &mut stx)?;
     stx.apply();
-    state_block.commit()?;
+    state_block.commit_world_overlay_for_testing()?;
     let view = state.view();
     let world = view.world();
     let record = world
@@ -23044,7 +23044,7 @@ fn register_soracloud_model_artifact_records_authoritative_state() -> Result<(),
     })
     .execute(&ALICE_ID, &mut stx)?;
     stx.apply();
-    state_block.commit()?;
+    state_block.commit_world_overlay_for_testing()?;
     let view = state.view();
     let world = view.world();
     let artifact = world
@@ -23154,7 +23154,7 @@ fn model_weight_lifecycle_updates_authoritative_registry_state() -> Result<(), e
     .execute(&ALICE_ID, &mut stx)
     .expect_err("rollback to current version should fail");
     stx.apply();
-    state_block.commit()?;
+    state_block.commit_world_overlay_for_testing()?;
     let view = state.view();
     let world = view.world();
     let registry = world
@@ -23304,7 +23304,7 @@ fn rollback_soracloud_model_weight_updates_authoritative_registry_state() -> Res
     })
     .execute(&ALICE_ID, &mut stx)?;
     stx.apply();
-    state_block.commit()?;
+    state_block.commit_world_overlay_for_testing()?;
     let view = state.view();
     let world = view.world();
     let registry = world

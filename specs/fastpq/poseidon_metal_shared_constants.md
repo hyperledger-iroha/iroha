@@ -7,8 +7,8 @@ regenerate it, and how GPU pipelines are expected to ingest the data.
 
 The FASTPQ permutation is the original dense-MDS Poseidon construction with a
 width-three, rate-two state, eight full rounds, 57 partial rounds, and the
-Goldilocks-bijective `x^7` S-box. The retained `poseidon2.metal` and binary
-asset names are legacy filenames; they do not identify the construction.
+Goldilocks-bijective `x^7` S-box. Its source and constants asset use direct
+Poseidon names so the filenames identify the implemented construction.
 
 ## Snapshot Manifest
 
@@ -33,7 +33,7 @@ the consistency tests before publishing GPU artifacts.
 
 ## Feeding Metal/CUDA Builds
 
-- `crates/fastpq_prover/metal/kernels/poseidon2.metal` and
+- `crates/fastpq_prover/metal/kernels/poseidon.metal` and
   `crates/fastpq_prover/cuda/fastpq_cuda.cu` must be regenerated from the
   manifest whenever the table changes.
 - Rounded and MDS constants are staged into contiguous `MTLBuffer`/`__constant`
@@ -53,7 +53,7 @@ the consistency tests before publishing GPU artifacts.
 2. Record the new SHA-256 in this document and in any dashboards that monitor
    GPU artefacts.
 3. `cargo test -p fastpq_prover poseidon_manifest_consistency` parses
-   `poseidon2.metal` and `fastpq_cuda.cu` at build time and asserts that their
+   `poseidon.metal` and `fastpq_cuda.cu` at build time and asserts that their
    serialized constants match the manifest, keeping the CUDA/Metal tables and
    the canonical snapshot in lock-step.
 

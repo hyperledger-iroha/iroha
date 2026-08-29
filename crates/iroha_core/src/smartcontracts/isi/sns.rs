@@ -1113,7 +1113,9 @@ mod tests {
                 &authority,
             );
             stx.apply();
-            block.commit().expect("PSP alias fixture block commits");
+            block
+                .commit_world_overlay_for_testing()
+                .expect("PSP alias fixture block commits");
         }
         PspAliasFixture {
             state,
@@ -1300,7 +1302,9 @@ mod tests {
             )
             .expect("persist auto-renew config");
             transaction.apply();
-            block.commit().expect("auto-renew setup block commits");
+            block
+                .commit_world_overlay_for_testing()
+                .expect("auto-renew setup block commits");
         }
         AliasAutoRenewFixture {
             state,
@@ -1315,7 +1319,9 @@ mod tests {
         let header = next_header_at(state, now_ms);
         let mut block = state.block(header.clone());
         let _ = block.execute_time_triggers(&header);
-        block.commit().expect("maintenance block commits");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("maintenance block commits");
     }
     fn update_domain_policy(
         state: &State,
@@ -1333,7 +1339,9 @@ mod tests {
             norito::codec::Encode::encode(&policy),
         );
         transaction.apply();
-        block.commit().expect("policy update block commits");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("policy update block commits");
     }
     #[test]
     fn native_auto_renew_suspends_invalid_persisted_timing_without_charge() {
@@ -1356,7 +1364,9 @@ mod tests {
             crate::sns::persist_alias_auto_renew_state(&mut transaction, &stored)
                 .expect("persist invalid-state compatibility fixture");
             transaction.apply();
-            block.commit().expect("invalid-state fixture block commits");
+            block
+                .commit_world_overlay_for_testing()
+                .expect("invalid-state fixture block commits");
         }
         let owner_before = asset_balance(&fixture.state, &fixture.payment_asset, &fixture.owner);
         run_alias_auto_renew_maintenance(&fixture.state, 2);
@@ -2105,7 +2115,9 @@ mod tests {
             .execute(&authority, &mut transaction)
             .expect("fund alias lease payer");
             transaction.apply();
-            block.commit().expect("funding block commits");
+            block
+                .commit_world_overlay_for_testing()
+                .expect("funding block commits");
         }
         let dataspace_name = "paynet".parse().expect("canonical dataspace name");
         let dataspace_id =
@@ -2199,7 +2211,9 @@ mod tests {
                 .execute(&authority, &mut transaction)
                 .expect("exact replay is a no-op in the same transaction");
             transaction.apply();
-            block.commit().expect("atomic alias setup commits");
+            block
+                .commit_world_overlay_for_testing()
+                .expect("atomic alias setup commits");
         }
         let payer_after_create = asset_balance(&state, &payment_asset, &authority);
         let exact_total = parent_quote
@@ -2253,7 +2267,9 @@ mod tests {
                 .account_permissions
                 .insert(target_account.clone(), permissions);
             transaction.apply();
-            block.commit().expect("derived-state damage commits");
+            block
+                .commit_world_overlay_for_testing()
+                .expect("derived-state damage commits");
         }
         let payer_before_repair = asset_balance(&state, &payment_asset, &authority);
         let stale_guard_repair = EnsureAlias::new(
@@ -2273,7 +2289,9 @@ mod tests {
                 .execute(&authority, &mut transaction)
                 .expect("repair classification must precede stale quote validation");
             transaction.apply();
-            block.commit().expect("free repair block commits");
+            block
+                .commit_world_overlay_for_testing()
+                .expect("free repair block commits");
         }
         assert_eq!(
             asset_balance(&state, &payment_asset, &authority),
@@ -2421,7 +2439,9 @@ mod tests {
             .execute(&authority, &mut stx)
             .expect("mint payment balance");
             stx.apply();
-            block.commit().expect("mint block commits");
+            block
+                .commit_world_overlay_for_testing()
+                .expect("mint block commits");
         }
         let alias =
             AccountAlias::domainless("merchant".parse().expect("label"), DataSpaceId::UNIVERSAL);
@@ -2441,7 +2461,9 @@ mod tests {
             .execute(&authority, &mut stx)
             .expect("acquire lease");
             stx.apply();
-            block.commit().expect("acquire block commits");
+            block
+                .commit_world_overlay_for_testing()
+                .expect("acquire block commits");
         }
         let view = state.view();
         let acquired = get_name_record(
@@ -2463,7 +2485,9 @@ mod tests {
                 .execute(&authority, &mut stx)
                 .expect("renew lease");
             stx.apply();
-            block.commit().expect("renew block commits");
+            block
+                .commit_world_overlay_for_testing()
+                .expect("renew block commits");
         }
         let view = state.view();
         let renewed = get_name_record(
@@ -2536,7 +2560,9 @@ mod tests {
             .execute(&authority, &mut transaction)
             .expect("acquire lease");
             transaction.apply();
-            block.commit().expect("acquire block commits");
+            block
+                .commit_world_overlay_for_testing()
+                .expect("acquire block commits");
         }
         let (current_expiry, payer_before, collector_before) = {
             let view = state.view();
@@ -2637,7 +2663,9 @@ mod tests {
             .execute(&authority, &mut stx)
             .expect("mint payment balance");
             stx.apply();
-            block.commit().expect("mint block commits");
+            block
+                .commit_world_overlay_for_testing()
+                .expect("mint block commits");
         }
         let alias = AccountAlias::domainless(
             "clearorbit3941".parse().expect("label"),
@@ -2662,7 +2690,9 @@ mod tests {
             .execute(&authority, &mut stx)
             .expect("ensure alias for newly registered account");
             stx.apply();
-            block.commit().expect("registration batch commits");
+            block
+                .commit_world_overlay_for_testing()
+                .expect("registration batch commits");
         }
         let view = state.view();
         assert!(
@@ -2754,7 +2784,9 @@ mod tests {
             .execute(&authority, &mut stx)
             .expect("mint payment balance");
             stx.apply();
-            block.commit().expect("mint block commits");
+            block
+                .commit_world_overlay_for_testing()
+                .expect("mint block commits");
         }
         let alias = AccountAlias::new(
             "clear-orbit-3941".parse().expect("label"),
@@ -2785,7 +2817,9 @@ mod tests {
             .execute(&authority, &mut stx)
             .expect("ensure FI alias for newly registered account");
             stx.apply();
-            block.commit().expect("FI registration batch commits");
+            block
+                .commit_world_overlay_for_testing()
+                .expect("FI registration batch commits");
         }
         let view = state.view();
         let lease = get_name_record(
@@ -2866,7 +2900,9 @@ mod tests {
                     successes = successes.saturating_add(1);
                     winner = Some(target);
                     stx.apply();
-                    block.commit().expect("winning PSP alias claim commits");
+                    block
+                        .commit_world_overlay_for_testing()
+                        .expect("winning PSP alias claim commits");
                 }
                 Err(error) => {
                     assert!(
@@ -2968,7 +3004,9 @@ mod tests {
             .execute(&authority, &mut stx)
             .expect("Hapoalim-scoped same local alias must succeed");
             stx.apply();
-            block.commit().expect("independent PSP aliases commit");
+            block
+                .commit_world_overlay_for_testing()
+                .expect("independent PSP aliases commit");
         }
         let view = state.view();
         let leumi_lease = get_name_record(
@@ -3033,7 +3071,9 @@ mod tests {
             .execute(&authority, &mut stx)
             .expect("mint payment balance");
             stx.apply();
-            block.commit().expect("mint block commits");
+            block
+                .commit_world_overlay_for_testing()
+                .expect("mint block commits");
         }
         let alias =
             AccountAlias::domainless("retail".parse().expect("label"), DataSpaceId::UNIVERSAL);
@@ -3225,7 +3265,9 @@ mod tests {
             .execute(&authority, &mut stx)
             .expect("fund resource owner");
             stx.apply();
-            block.commit().expect("funding block commits");
+            block
+                .commit_world_overlay_for_testing()
+                .expect("funding block commits");
         }
         let alias =
             AccountAlias::domainless("merchant".parse().expect("label"), DataSpaceId::UNIVERSAL);

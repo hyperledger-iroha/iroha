@@ -2565,7 +2565,9 @@ async fn authoritative_lane_peers_require_explicit_bindings_for_permissioned_rou
     peers.push(local_peer_id.clone());
     peers.push(remote_peer_id.clone());
     peers.apply();
-    block.commit().expect("commit permissioned peer roster");
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit permissioned peer roster");
     let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
     let authoritative = super::authoritative_lane_peers(app.as_ref(), route).authoritative;
     assert!(
@@ -2650,7 +2652,9 @@ fn install_two_peer_npos_roster(
     peers.push(local_peer_id.clone());
     peers.push(remote_peer_id.clone());
     peers.apply();
-    block.commit().expect("commit npos peer roster");
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit npos peer roster");
 }
 #[cfg(feature = "connect")]
 #[tokio::test]
@@ -2744,7 +2748,9 @@ async fn authoritative_lane_peers_do_not_fall_back_to_online_peers_when_state_is
         let mut peers = block.world.peers_mut_for_testing().transaction();
         peers.clear();
         peers.apply();
-        block.commit().expect("commit empty npos peer roster");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit empty npos peer roster");
     }
     let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
     let authoritative = super::authoritative_lane_peers(app.as_ref(), route).authoritative;

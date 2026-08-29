@@ -888,7 +888,7 @@ fn autonomous_payload_slot_is_bound_to_the_active_incarnation_marker() {
     kura.persist_committed_lane_block_session(&first_session, &first_signer_pops)
         .expect("persist first marker-bound certified session");
     let application_state_hash = Some(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
-        b"marker-bound direct application state",
+        b"marker-bound preflight state",
     )));
     let application_result =
         TransactionResult::new(TransactionResultInner::Ok(DataTriggerSequence::new()));
@@ -905,11 +905,6 @@ fn autonomous_payload_slot_is_bound_to_the_active_incarnation_marker() {
     let first_preflight = kura
         .read_lane_block_execution_preflight(lane_entry.lane_id, 1)
         .expect("read first marker-bound preflight");
-    kura.persist_direct_lane_block_application_receipt(&first_input, &first_preflight)
-        .expect("persist first marker-bound direct receipt");
-    let first_direct_snapshot =
-        kura.active_direct_lane_block_application_receipts_structural_snapshot();
-    assert_eq!(first_direct_snapshot.len(), 1);
     let recreated = rebind_autonomous_lane_payload_for_kura(
         &first,
         lane_entry.lane_id,
@@ -919,12 +914,6 @@ fn autonomous_payload_slot_is_bound_to_the_active_incarnation_marker() {
         &signer,
     );
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &recreated);
-    assert!(
-        !kura.active_direct_lane_block_application_receipts_match_structural_snapshot(
-            &first_direct_snapshot,
-        ),
-        "snapshot revalidation must reject a receipt set captured before lane recreation",
-    );
     assert!(
         kura.read_lane_block_execution_input(lane_entry.lane_id, 1)
             .is_none(),
@@ -939,16 +928,6 @@ fn autonomous_payload_slot_is_bound_to_the_active_incarnation_marker() {
         kura.read_lane_block_execution_preflight(lane_entry.lane_id, 1)
             .is_none(),
         "switching the marker must hide a retired execution preflight",
-    );
-    assert!(
-        kura.read_lane_block_application_receipt(lane_entry.lane_id, 1)
-            .is_none(),
-        "switching the marker must hide a retired direct receipt",
-    );
-    assert!(
-        kura.direct_lane_block_application_receipts_snapshot()
-            .is_empty(),
-        "direct receipt snapshots must not mix in a retired incarnation",
     );
     kura.persist_lane_executable_payload(&recreated, network_id, epoch)
         .expect("the authoritative fresh marker admits the recreated incarnation");
@@ -971,11 +950,6 @@ fn autonomous_payload_slot_is_bound_to_the_active_incarnation_marker() {
         vec![application_result],
     )
     .expect("replace the retired preflight under the fresh marker");
-    let recreated_preflight = kura
-        .read_lane_block_execution_preflight(lane_entry.lane_id, 1)
-        .expect("read recreated marker-bound preflight");
-    kura.persist_direct_lane_block_application_receipt(&recreated_input, &recreated_preflight)
-        .expect("replace the retired direct receipt under the fresh marker");
     assert!(
         kura.persist_lane_executable_payload(&first, network_id, epoch)
             .is_err(),
@@ -1001,11 +975,6 @@ fn autonomous_payload_slot_is_bound_to_the_active_incarnation_marker() {
         .is_err(),
         "a delayed preflight replay must not replace the recreated lane slot",
     );
-    assert!(
-        kura.persist_direct_lane_block_application_receipt(&first_input, &first_preflight)
-            .is_err(),
-        "a delayed direct-receipt replay must not replace the recreated lane slot",
-    );
     assert_eq!(
         kura.read_autonomous_lane_block_artifact(lane_entry.lane_id, 1, network_id, epoch,)
             .expect("read recreated marker-bound payload")
@@ -1029,19 +998,6 @@ fn autonomous_payload_slot_is_bound_to_the_active_incarnation_marker() {
             .expect("read recreated preflight")
             .proposal,
         recreated.origin_proposal,
-    );
-    assert_eq!(
-        kura.read_lane_block_application_receipt(lane_entry.lane_id, 1)
-            .expect("read recreated direct receipt")
-            .proposal,
-        recreated.origin_proposal,
-    );
-    assert_eq!(
-        kura.direct_lane_block_application_receipts_snapshot()
-            .into_iter()
-            .map(|receipt| receipt.proposal)
-            .collect::<Vec<_>>(),
-        vec![recreated.origin_proposal.clone()],
     );
     drop(kura);
     let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
@@ -1077,13 +1033,6 @@ fn autonomous_payload_slot_is_bound_to_the_active_incarnation_marker() {
         reopened
             .read_lane_block_execution_preflight(lane_entry.lane_id, 1)
             .expect("restart recovers recreated preflight")
-            .proposal,
-        recreated.origin_proposal,
-    );
-    assert_eq!(
-        reopened
-            .read_lane_block_application_receipt(lane_entry.lane_id, 1)
-            .expect("restart recovers recreated direct receipt")
             .proposal,
         recreated.origin_proposal,
     );

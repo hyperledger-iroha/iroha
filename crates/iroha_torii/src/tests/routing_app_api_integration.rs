@@ -2552,7 +2552,7 @@ mod app_api_integration_tests {
             );
         tx.apply();
         block
-            .commit()
+            .commit_world_overlay_for_testing()
             .expect("commit projection registry seed block");
     }
     #[derive(Clone)]

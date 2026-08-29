@@ -4,7 +4,6 @@ use ivm::{
     IVM, KotodamaCompiler,
     mock_wsv::{AccountId, MockWorldStateView, PermissionToken, WsvHost},
 };
-use std::collections::HashMap;
 mod common;
 fn account(domain: &str, public_key: &str) -> AccountId {
     let _domain = iroha_data_model::DomainId::try_new(domain, "universal").unwrap();
@@ -31,7 +30,7 @@ fn kotodama_register_domain_e2e() {
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(alice.clone());
     wsv.grant_permission(&alice, PermissionToken::RegisterDomain);
-    let host = WsvHost::new_with_subject(wsv, alice.clone(), HashMap::new());
+    let host = WsvHost::new_with_subject(wsv, alice.clone());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
     // Load and run

@@ -768,8 +768,9 @@ fn zero_root_equality_replays_the_exact_terminal_suffix_and_consumes_to_all_equa
     let all_equal = pending
         .discharge_zero_padding_root_equality_v1(verified_root)
         .expect("exact zero-root equality discharge");
+    let final_challenge_seeds = all_equal.into_final_challenge_seeds_v1();
     assert_eq!(
-        all_equal.final_challenge_seeds.transcript_digest(),
+        final_challenge_seeds.transcript_digest(),
         replayed_final_transcript_tag
     );
 }
@@ -1368,6 +1369,17 @@ fn provisional_terminal_chronology_surface_is_move_only_opaque_and_ordered() {
     assert!(!chronology_surface.contains("fn cross_field_root_v1("));
     assert!(!chronology_surface.contains("fn global_lookup_root_v1("));
     assert!(!chronology_surface.contains("fn zero_padding_root_v1("));
+
+    let all_equal_surface = source
+        .split_once("impl ZkAmsMkheRnsNativeAllTerminalRootsEqualV1")
+        .expect("all-roots-equal consuming projection")
+        .1
+        .split_once("/// Atomic move-only owner of the provisional terminal-root chronology.")
+        .expect("all-roots-equal projection boundary")
+        .0;
+    assert!(all_equal_surface.contains("into_final_challenge_seeds_v1(self)"));
+    assert!(!all_equal_surface.contains("&self"));
+    assert!(!all_equal_surface.contains("&mut self"));
 
     let transition = source
         .split_once("pub(super) fn bind_provisional_terminal_chronology_v1(")

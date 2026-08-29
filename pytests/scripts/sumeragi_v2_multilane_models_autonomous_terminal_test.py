@@ -521,6 +521,21 @@ def test_autonomous_terminal_recovery_rejects_deferred_sibling_mutation(
         for error in errors
     ), errors
 
+    replace_once_after(
+        path,
+        "if recover_one_attempt(",
+        "recovered_attempts = recovered_attempts.saturating_add(1);",
+        "let _ = recovered_attempts;",
+    )
+    errors = validate_autonomous_terminal_recovery_fixture(
+        tmp_path, module, models
+    )
+    assert any(
+        "reconcile_autonomous_lifecycle_startup" in error
+        and "recovered_attempts = recovered_attempts.saturating_add(1);" in error
+        for error in errors
+    ), errors
+
 
 def test_autonomous_terminal_recovery_rejects_unvalidated_pending_padding(
     tmp_path: Path,

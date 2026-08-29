@@ -148,8 +148,8 @@ frame, and validation receipt to equal that authenticated round exactly. A
 local lock is only a consistency/cache input and is never used to guess a
 missing origin. Conflicting body, manifest, frame, or execution-commitment
 identities fail closed, while a lockless validator can request the exact
-certified round directly from any signer. Revision 4 has no legacy decoder
-which fills a missing proposal origin.
+certified round directly from any signer. Revision 4 requires the signed
+proposal origin explicitly and rejects an artifact that omits it.
 
 The canonical height-one genesis header is the only header-origin exception.
 Its authenticated bytes fix `view_change_index = 0` before consensus timers
@@ -1494,10 +1494,10 @@ without allocating a new work ID; tag drift or a conflicting post-completion
 certificate still fails closed. This extends an existing named regression and
 therefore does not change the inventory cardinality.
 Its canonical module/test TSV inventory SHA-256 is
-`39d0b3083847ad0ad8bcf5c67469b20b9a056148fad90679d753a9e63b07455b`.
+`44784c79c489d83ab142bb0db84e89138c3a54b1349926a80597e2c5b21a83df`.
 Nine of those legs execute the separate 522-test G-UNIT focus inventory. Its
 canonical source-derived inventory contains 523 TSV lines and has SHA-256
-`a19753ab7879a95094d8f1ee968e2e44d9a36453f2814acdadffaaead1ab4a97`.
+`5e8b82b400b438eabb7733adbccae15b5aa212a98a89161a586cbce686e2f6e9`.
 The 316-test core group includes grouped Native prevote-budget rejection before
 Kura/WSV mutation, historical source-bundle authentication, crash-safe latest-
 index and prune-V2 recovery, cross-route manifest-barrier isolation, durable
@@ -1693,8 +1693,8 @@ and the root-marker directory, so a second crash cannot retire the only
 rollback-safe copy before the preceding replacements are durable. Filesystem
 aliases, including Windows reparse-point files or directories, fail closed.
 State and root replacement are native atomic replacements on Unix and Windows,
-while platforms without durable directory synchronization fail closed. V1/V2,
-corrupt, and unknown bytes are unsupported; there is no migration.
+while platforms without durable directory synchronization fail closed. The
+canonical schema is mandatory; corrupt and unknown bytes fail closed.
 
 The root marker is the local trust anchor, not an external monotonic counter.
 Replacing or rolling it back—including restoring the bootstrap sentinel—or

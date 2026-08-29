@@ -404,7 +404,9 @@ fn kaigi_privacy_join_fails_closed_until_authority_is_bound() {
         "unexpected rejection: {err:?}"
     );
     tx1.apply();
-    block1.commit().expect("commit block1");
+    block1
+        .commit_world_overlay_for_testing()
+        .expect("commit block1");
     let view = state.view();
     let domain = view.world.domain(&domain_id).expect("domain exists");
     let key = kaigi_metadata_key(&call_id.call_name).expect("metadata key");

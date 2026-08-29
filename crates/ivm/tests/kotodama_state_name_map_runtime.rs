@@ -3,7 +3,7 @@ use iroha_crypto::PublicKey;
 use iroha_data_model::prelude::AccountId;
 use ivm::mock_wsv::{MockWorldStateView, WsvHost};
 use ivm::{CoreHost, IVM, kotodama::compiler::Compiler as KotodamaCompiler};
-use std::{collections::HashMap, str::FromStr};
+use std::str::FromStr;
 mod common;
 fn run_program(src: &str) -> IVM {
     let code = KotodamaCompiler::new()
@@ -36,7 +36,7 @@ fn run_program_with_wsv(src: &str, wsv: MockWorldStateView) -> (IVM, MockWorldSt
         .compile_source(src)
         .expect("compile kotodama");
     let subject = test_subject();
-    let host = WsvHost::new_with_subject(wsv, subject, HashMap::new());
+    let host = WsvHost::new_with_subject(wsv, subject);
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
     vm.load_program(&code).expect("load program");

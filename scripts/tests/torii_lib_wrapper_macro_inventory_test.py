@@ -961,10 +961,6 @@ class ToriiWrapperMacroInventoryTest(unittest.TestCase):
                 "handler_post_transaction, iso_body_limit);",
             ),
             (
-                "PACEMAKER => operator_get(handler_pacemaker_status, app_state);",
-                "PACEMAKER => public_get(handler_pacemaker_status);",
-            ),
-            (
                 '#[cfg(feature = "telemetry")]\n'
                 "    #[allow(clippy::unused_self)]\n"
                 "    fn add_telemetry_routes",

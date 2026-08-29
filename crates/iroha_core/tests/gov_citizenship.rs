@@ -232,7 +232,7 @@ fn citizenship_records_persist_across_transactions() {
     .expect("citizen bond succeeds");
     stx_1.apply();
     block_1
-        .commit()
+        .commit_world_overlay_for_testing()
         .expect("first block with citizen registration commits");
     let citizen_record = state
         .view()
@@ -281,7 +281,7 @@ fn citizenship_top_up_preserves_the_original_bond_interval_and_service_state() {
     .expect("initial citizen bond succeeds");
     stx_1.apply();
     block_1
-        .commit()
+        .commit_world_overlay_for_testing()
         .expect("initial citizen bond block commits");
     let mut block_2 = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
     let mut stx_2 = block_2.transaction();

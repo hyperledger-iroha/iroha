@@ -107,7 +107,7 @@ artifact for the Rust IVM team, Swift bridge owners, and telemetry tooling.
 4. **Dashboards**: new fields now render in CLI output. Ensure exporters produce
    data before flipping dashboards live.
 
-## WP2-A Metal Shader Plan (Poseidon Pipelines)
+## WP2-A Metal Shader Plan (Poseidon Batches)
 
 The first WP2 milestone covers the planning work for the Poseidon Metal kernels
 that mirror the CUDA implementation. The plan splits the effort into kernels,
@@ -116,19 +116,14 @@ implementation and testing.
 
 ### Kernel Scope
 
-1. `poseidon_permute`: permutes `state_count` independent states. Each thread
-   owns a `STATE_CHUNK` (4 states) and runs all `TOTAL_ROUNDS` iterations using
-   threadgroup-shared round constants staged at dispatch time.
+1. `poseidon_permute`: permutes `state_count` independent states. Shipping
+   Goldilocks dispatches assign one state to each lane and run all
+   `TOTAL_ROUNDS` iterations using threadgroup-shared round constants.
 2. `poseidon_hash_columns`: reads the sparse `PoseidonColumnSlice` catalogue and
    performs Merkle-friendly hashing of every column (matching the CPU’s
-   `PoseidonColumnBatch` layout). It uses the same threadgroup constant buffer
-   as the permute kernel but loops over `(states_per_lane * block_count)`
-   outputs so the kernel can amortize queue submissions.
-3. `poseidon_trace_fused`: computes the parent/leaf digests for the trace table
-   in a single pass. The fused kernel consumes `PoseidonFusedArgs` so the host
-   can describe non-contiguous regions and a `leaf_offset`/`parent_offset`, and
-   it shares all round/MDS tables with the other kernels.
-
+   `PoseidonColumnBatch` layout). It uses the same threadgroup constants as the
+   permute kernel; the Metal host divides large inputs into adaptive column
+   ranges and pipelines those dispatches through completion-backed slots.
 ### Command Scheduling & Host Contracts
 
 - Every kernel dispatch runs through `MetalPipelines::command_queue`, which
@@ -137,11 +132,10 @@ implementation and testing.
   `FASTPQ_METAL_COLUMN_THRESHOLD`. The warm-up path in `with_metal_state`
   compiles all three Poseidon kernels up-front so the first dispatch does not
   pay a pipeline creation penalty.
-- Threadgroup sizing mirrors the existing Metal FFT/LDE defaults: the target is
-  8,192 threads per submission with a hard cap of 256 threads per group. The
-  host may downshift the `states_per_lane` multiplier for low-power devices by
-  dialing the environment overrides (`FASTPQ_METAL_POSEIDON_STATES_PER_BATCH`
-  to be added in WP2-B) without modifying the shader logic.
+- Threadgroup width is selected from the device limits and may be pinned with
+  `FASTPQ_METAL_POSEIDON_LANES` for profiling. Goldilocks grids are sized from
+  the actual state count with one state per lane; BN254 retains a separate,
+  internal device-derived multi-state geometry.
 - Column staging follows the same double-buffered pool already used by the FFT
   pipelines. The Poseidon kernels accept raw pointers into that staging buffer
   and never touch global heap allocations, which keeps memory-determinism
@@ -151,7 +145,7 @@ implementation and testing.
 
 - The `PoseidonSnapshot` manifest described in
   `specs/fastpq/poseidon_metal_shared_constants.md` is now the canonical
-  source for the round constants and MDS matrix. Both Metal (`poseidon2.metal`)
+  source for the round constants and MDS matrix. Both Metal (`poseidon.metal`)
   and CUDA (`fastpq_cuda.cu`) kernels must be regenerated whenever the manifest
   changes.
 - WP2-B will add a tiny host loader that reads the manifest at runtime and
@@ -168,10 +162,10 @@ implementation and testing.
 - Unit tests (`cargo test -p fastpq_prover --features fastpq-gpu`) will grow an
   assertion that hashes the embedded shader constants and compares them with
   the manifest’s SHA before executing the GPU fixture suite.
-- The existing kernel statistics toggles (`FASTPQ_METAL_TRACE_DISPATCH`,
+- The existing kernel statistics controls (`FASTPQ_METAL_TRACE`,
   `FASTPQ_METAL_QUEUE_FANOUT`, queue depth telemetry) become required evidence
   for WP2 exit: every test run must prove that the scheduler never violates the
-  configured fan-out and that the fused trace kernel keeps the queue below the
+  configured fan-out and that the batched trace kernels keep the queue below the
   adaptive window.
 - The Swift XCFramework smoke harness and the Rust benchmark runners will start
   exporting `acceleration.poseidon.permute_p90_ms{cpu,metal}` so WP2-D can chart
@@ -189,7 +183,7 @@ implementation and testing.
   ensures the manifest MDS matrix equals the scalar implementation, preventing
   silent drift when the canonical tables are regenerated.
 - Added `crates/fastpq_prover/tests/poseidon_manifest_consistency.rs`, which
-  parses the Poseidon tables embedded in `poseidon2.metal` and
+  parses the Poseidon tables embedded in `poseidon.metal` and
   `fastpq_cuda.cu` and asserts that both kernels serialize exactly the same
   constants as the manifest. CI now fails if someone edits the shader/CUDA
   files without regenerating the canonical manifest.

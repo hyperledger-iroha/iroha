@@ -240,9 +240,9 @@ using the `#quarterly-routed-trace-audit-schedule` anchor.
   commits successfully, so a block whose transaction commit fails cannot
   partially publish those runtime, topology, or world indexes either. Staged
   autoscale or DA side effects with a missing inserted transaction block abort
-  before geometry reconciliation or WSV cleanup. WSV-only commits without an
-  inserted transaction block still persist world mutations, but do not advance
-  block metadata caches or query-index status. The commit path runs the fallible
+  before geometry reconciliation, WSV cleanup, or any world-state publication.
+  Every committed WSV mutation is thus bound to canonical transaction membership
+  and block metadata. The commit path runs the fallible
   autoscale geometry
   reconciliation before transaction commit, publishes the autoscale
   catalog/runtime reset before staged DA indexes, and prunes committed WSV rows
@@ -601,7 +601,7 @@ revision-4 context and are not stress knobs.
 | Scenario / test | Coverage | Key telemetry |
 | --- | --- | --- |
 | `npos_baseline_1s_captures_metrics` | Commits the bounded baseline workload with signed 1-second cadence and records status/queue observations. | `commit_time_ms`, transaction and adapter queue status. |
-| `npos_queue_backpressure_triggers_metrics` | Floods the transaction queue to ensure admission deferrals kick in deterministically and that the queue exports capacity/saturation counters. | `sumeragi_tx_queue_depth`, `sumeragi_tx_queue_capacity`, `sumeragi_tx_queue_saturated`, `sumeragi_pacemaker_backpressure_deferrals_total`. |
+| `npos_queue_backpressure_triggers_metrics` | Floods the transaction queue to ensure admission deferrals kick in deterministically and that the queue exports capacity/saturation counters. | `sumeragi_tx_queue_depth`, `sumeragi_tx_queue_capacity`, `sumeragi_tx_queue_saturated`. |
 
 Attach the JSON lines the harness prints together with the Prometheus scrape
 captured during the run whenever governance asks for evidence that backpressure

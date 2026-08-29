@@ -37,7 +37,7 @@ fn torii_test_harness(cfg: Root) -> ToriiTestHarness {
     let queue = std::sync::Arc::new(iroha_core::queue::Queue::from_config(queue_cfg, events));
     let (_peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
     let telemetry_handle =
-        iroha_torii::MaybeTelemetry::for_tests().map_gate(TelemetryProfile::Full);
+        iroha_torii::MaybeTelemetry::for_tests().with_profile(TelemetryProfile::Full);
     let torii = iroha_torii::Torii::new_with_handle(
         iroha_data_model::ChainId::from("test-chain"),
         iroha_torii::test_utils::signed_query_network_id(),

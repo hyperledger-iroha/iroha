@@ -4517,14 +4517,45 @@ public final class HttpClientTransportTests {
         : "Shared exact quantity must remain a canonical JSON string";
     final org.hyperledger.iroha.android.model.FeePaymentIntent boundaryFeePayment =
         FeePaymentJson.parse(boundary.get("fee_payment"), "torii_boundary.fee_payment");
-    final Map<String, Object> request =
-        HttpClientTransport.buildContractCallDraftPayload(
-            string(boundary, "authority"),
-            boundaryFeePayment,
-            null,
-            string(boundary, "contract_alias"),
+    final ContractInvocation trustedInvocation =
+        new ContractInvocation(
+            "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
+            hexToBytes("11".repeat(32)),
             string(boundary, "entrypoint"),
-            boundaryPayload);
+            hexToBytes(string(record, "norito_hex")));
+    final StubResponseExecutor executor =
+        new StubResponseExecutor(
+            503,
+            "fixture boundary reached".getBytes(StandardCharsets.UTF_8),
+            "unavailable");
+    final HttpClientTransport transport =
+        HttpClientTransport.withExecutor(
+            executor, signedClientConfig("https://fixture.invalid"));
+    boolean failed = false;
+    try {
+      transport
+          .prepareContractCall(
+              string(boundary, "authority"),
+              boundaryFeePayment,
+              null,
+              string(boundary, "contract_alias"),
+              string(boundary, "entrypoint"),
+              boundaryPayload,
+              new ContractCallDraftIntent(trustedInvocation, Map.of()))
+          .join();
+    } catch (final CompletionException expected) {
+      failed = true;
+    }
+    assert failed : "Shared contract call must reach the deterministic failing boundary";
+
+    final TransportRequest captured = executor.lastRequest();
+    assert captured != null : "Shared contract call request must be captured";
+    assert "POST".equals(captured.method()) : "Shared contract call must use POST";
+    assert "https://fixture.invalid/v1/contracts/call".equals(captured.uri().toString())
+        : "Shared contract call route mismatch";
+    @SuppressWarnings("unchecked")
+    final Map<String, Object> request =
+        (Map<String, Object>) JsonParser.parse(readBody(captured));
 
     assert string(boundary, "authority").equals(request.get("authority"))
         : "Shared call authority mismatch";

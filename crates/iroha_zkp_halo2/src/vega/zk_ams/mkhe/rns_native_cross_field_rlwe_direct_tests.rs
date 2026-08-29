@@ -1432,6 +1432,120 @@ fn bound_pre_direct_inventory_is_the_only_production_direct_bind_surface() {
 }
 
 #[test]
+fn claimed_source_numeric_binding_is_recomputed_before_direct_chronology() {
+    let digest_axes: [[u8; DIGEST_BYTES_V1]; 13] =
+        core::array::from_fn(|index| digest_v1((index + 1) as u8));
+    let numeric_tails: [(u64, u64, u64); EVALUATIONS_V1] = core::array::from_fn(|relation| {
+        let relation = relation as u64;
+        (relation + 1, relation + 101, relation + 201)
+    });
+    let expected = claimed_source_numeric_binding_digest_from_parts_v1(&digest_axes, numeric_tails)
+        .expect("canonical claimed-source binding");
+    assert_eq!(
+        validate_claimed_source_numeric_binding_from_parts_v1(
+            expected,
+            &digest_axes,
+            numeric_tails,
+        ),
+        Ok(())
+    );
+
+    let mut foreign_axes = digest_axes;
+    foreign_axes[5][0] ^= 1;
+    let foreign_axis_binding =
+        claimed_source_numeric_binding_digest_from_parts_v1(&foreign_axes, numeric_tails)
+            .expect("foreign-axis binding remains well formed");
+    assert_ne!(foreign_axis_binding, expected);
+    assert_eq!(
+        validate_claimed_source_numeric_binding_from_parts_v1(
+            expected,
+            &foreign_axes,
+            numeric_tails,
+        ),
+        Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidContext)
+    );
+
+    let mut foreign_tails = numeric_tails;
+    foreign_tails[EVALUATIONS_V1 - 1].2 ^= 1;
+    let foreign_tail_binding =
+        claimed_source_numeric_binding_digest_from_parts_v1(&digest_axes, foreign_tails)
+            .expect("foreign-tail binding remains well formed");
+    assert_ne!(foreign_tail_binding, expected);
+    assert_eq!(
+        validate_claimed_source_numeric_binding_from_parts_v1(
+            expected,
+            &digest_axes,
+            foreign_tails,
+        ),
+        Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidContext)
+    );
+    assert_eq!(
+        validate_claimed_source_numeric_binding_from_parts_v1(
+            [0; DIGEST_BYTES_V1],
+            &digest_axes,
+            numeric_tails,
+        ),
+        Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidContext)
+    );
+
+    let mut zero_axis = digest_axes;
+    zero_axis[3] = [0; DIGEST_BYTES_V1];
+    assert_eq!(
+        claimed_source_numeric_binding_digest_from_parts_v1(&zero_axis, numeric_tails),
+        Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidContext)
+    );
+    assert_eq!(
+        claimed_source_numeric_binding_digest_from_parts_v1(
+            &digest_axes,
+            numeric_tails[..EVALUATIONS_V1 - 1].iter().copied(),
+        ),
+        Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidGeometry)
+    );
+
+    let source = include_str!("rns_native_cross_field_rlwe_direct.rs");
+    let direct_bind = source
+        .split_once("pub(super) fn bind_authenticated_claimed_qpcs_inventory_direct_v2")
+        .expect("production direct bind")
+        .1
+        .split_once("fn validate_relation_schedule_v1")
+        .expect("production direct bind boundary")
+        .0;
+    let lineage = direct_bind
+        .find("validate_claimed_source_numeric_lineage_v1(")
+        .expect("claimed-source lineage validation");
+    let q_mask = direct_bind
+        .find("q_mask_s_root_v1(")
+        .expect("q-mask authentication");
+    let terminal_split = direct_bind
+        .find("into_cross_field_obligation_and_global_pending_v1")
+        .expect("terminal chronology split");
+    assert!(lineage < q_mask && lineage < terminal_split);
+
+    let validation = source
+        .split_once("fn validate_claimed_source_numeric_lineage_v1")
+        .expect("claimed-source validation")
+        .1
+        .split_once("/// Atomically convert the opaque authenticated claimed-qPCS input")
+        .expect("claimed-source validation boundary")
+        .0;
+    for required in [
+        "source.snapshot().layout().source_binding_digest()",
+        "final_transcript.source_binding_digest()",
+        "source.statement_anchor_digest()",
+        "source.qpcs().evaluation_binding_digest()",
+        "schedule.q_mask_s_root()",
+        "final_transcript.transcript_digest()",
+        "numeric_tails.iter().copied().map(|tail| tail.values_v1())",
+        "validate_claimed_source_numeric_binding_from_parts_v1(",
+    ] {
+        assert!(
+            validation.contains(required),
+            "missing claimed-source binding check: {required}"
+        );
+    }
+}
+
+#[test]
 #[ignore = "full 4x16,384-gate GBP qualification; run explicitly on a high-memory host"]
 fn full_gbp_typed_bind_seal_verify_discharge_and_mutations() {
     let prover_schedule = full_relation_schedule_v1();
@@ -2070,6 +2184,98 @@ fn authenticated_difference_low_alias_is_borrowed_then_retained_for_source_packi
     assert!(projection.contains("difference_low_commitment_v1(group, digit)"));
     assert!(!projection.contains("inventory"));
     assert!(!projection.contains("from_raw"));
+}
+
+#[test]
+fn all_roots_projection_retains_the_exact_source_and_envelope_allocation() {
+    fn assert_source_snapshot<T: ZkAmsMkheRnsNativeSourceSnapshotV1>() {}
+    assert_source_snapshot::<
+        RnsNativeCrossFieldRlweCompositeSourceOwnerV2<'static, 'static, TranscriptTestSnapshotV1>,
+    >();
+
+    let allocation = [11_u8, 12, 13, 14, 15, 16];
+    let contained = &allocation[2..5];
+    let foreign = [13_u8, 14, 15];
+    assert_eq!(relative_slice_offset_v1(&allocation, contained), Some(2));
+    assert_eq!(relative_slice_offset_v1(&allocation, &foreign), None);
+
+    let source = include_str!("rns_native_cross_field_rlwe_direct.rs");
+    let owner_declaration = source
+        .find("pub(super) struct RnsNativeCrossFieldRlweCompositeSourceOwnerV2")
+        .expect("composite source owner");
+    let owner_prefix = &source[owner_declaration.saturating_sub(420)..owner_declaration];
+    assert!(!owner_prefix.contains("derive(Clone"));
+    assert!(!owner_prefix.contains("derive(Copy"));
+    let owner = source[owner_declaration..]
+        .split_once("impl<'source, 'proof, S: ZkAmsMkheRnsNativeSourceSnapshotV1>")
+        .expect("composite source owner boundary")
+        .0;
+    for retained in [
+        "_direct: RnsNativeCrossFieldRlweTerminalBoundVerifiedV1<'proof>",
+        "inventory: RnsNativeCrossFieldInventoryPrerequisiteV1<'source, 'proof, S>",
+        "_existing_radix: RnsNativeExistingRadixDirectAliasV1<'proof>",
+        "_numeric_sidecar: RnsNativeCrossFieldRlweNumericSidecarV2",
+    ] {
+        assert!(
+            owner.contains(retained),
+            "missing retained owner: {retained}"
+        );
+    }
+    for forbidden in ["pub(super) inventory:", "raw_parts", "root(", "digest("] {
+        assert!(
+            !owner.contains(forbidden),
+            "composite source owner exposes {forbidden}"
+        );
+    }
+
+    let projection = source
+        .split_once("pub(super) fn into_composite_context_v2<'envelope>(")
+        .expect("consuming composite projection")
+        .1
+        .split_once("pub(super) const fn direct(&self)")
+        .expect("consuming composite projection boundary")
+        .0;
+    let allocation_check = projection
+        .find("validate_composite_envelope_allocation_v2(&self.inventory, envelope)?")
+        .expect("exact envelope allocation check");
+    let roots_consumed = projection
+        .find("_terminal_roots_equal.into_final_challenge_seeds_v1()")
+        .expect("terminal roots consumed into final seeds");
+    let context_check = projection
+        .find("validate_composite_source_context_v2(")
+        .expect("source context revalidation");
+    let composite_join = projection
+        .find("RnsNativeCrossFieldRlweCompositeInputV2::from_authenticated_parts_v2(")
+        .expect("opaque composite join");
+    assert!(allocation_check < roots_consumed);
+    assert!(roots_consumed < context_check);
+    assert!(context_check < composite_join);
+    assert!(!projection.contains("clone("));
+    assert!(!projection.contains("to_vec("));
+
+    let allocation_validator = source
+        .split_once("fn validate_composite_envelope_allocation_v2")
+        .expect("envelope allocation validator")
+        .1
+        .split_once("fn validate_composite_source_context_v2")
+        .expect("envelope allocation validator boundary")
+        .0;
+    assert!(
+        allocation_validator.contains(
+            "relative_slice_offset_v1(cross_section, inventory.continuation()).is_none()"
+        )
+    );
+    for required in [
+        "descriptor.kind() == kind",
+        "descriptor.encoded_bytes()",
+        "descriptor.section_digest()",
+        "envelope.proof_digest()",
+    ] {
+        assert!(
+            allocation_validator.contains(required),
+            "missing envelope validation: {required}"
+        );
+    }
 }
 
 #[test]

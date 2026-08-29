@@ -4843,7 +4843,7 @@ seiyaku DynamicAccessCounter {
             .contract_manifests
             .insert(code_hash, manifest.clone());
         stx.apply();
-        let _ = st_block.commit();
+        let _ = st_block.commit_world_overlay_for_testing();
         // Build a tx carrying this program; add manifest copy into metadata as well (optional)
         let mut md = iroha_data_model::metadata::Metadata::default();
         md.insert(MANIFEST_METADATA_KEY.parse().unwrap(), Json::new(manifest));
@@ -4968,7 +4968,7 @@ seiyaku DynamicAccessCounter {
         let mut stx = st_block.transaction();
         stx.world.contract_manifests.insert(code_hash, manifest_a);
         stx.apply();
-        let _ = st_block.commit();
+        let _ = st_block.commit_world_overlay_for_testing();
         let tx = TransactionBuilder::new(
             test_network_id(),
             alice.clone(),
@@ -5005,7 +5005,7 @@ seiyaku DynamicAccessCounter {
         let mut stx = st_block.transaction();
         stx.world.contract_manifests.insert(code_hash, manifest_b);
         stx.apply();
-        let _ = st_block.commit();
+        let _ = st_block.commit_world_overlay_for_testing();
         let set_b = derive_for_transaction(&tx, Some(&state.view()), IvmStrategy::Conservative);
         assert!(set_b.read_keys.contains("state:beta"));
         assert!(!set_b.read_keys.contains("state:alpha"));
@@ -5052,7 +5052,7 @@ seiyaku DynamicAccessCounter {
         let mut stx = st_block.transaction();
         stx.world.contract_manifests.insert(code_hash, manifest);
         stx.apply();
-        let _ = st_block.commit();
+        let _ = st_block.commit_world_overlay_for_testing();
         let tx = TransactionBuilder::new(
             test_network_id(),
             alice.clone(),
@@ -5150,7 +5150,7 @@ seiyaku DynamicAccessCounter {
             .contract_manifests
             .insert(code_hash, manifest.clone());
         stx.apply();
-        let _ = st_block.commit();
+        let _ = st_block.commit_world_overlay_for_testing();
         let tx = TransactionBuilder::new(
             test_network_id(),
             alice.clone(),
@@ -5233,7 +5233,7 @@ seiyaku DynamicAccessCounter {
             .contract_manifests
             .insert(code_hash, manifest.clone());
         stx.apply();
-        let _ = st_block.commit();
+        let _ = st_block.commit_world_overlay_for_testing();
         let tx = TransactionBuilder::new(
             test_network_id(),
             alice.clone(),
@@ -5318,7 +5318,7 @@ seiyaku DynamicAccessCounter {
             .contract_manifests
             .insert(code_hash, manifest.clone());
         stx.apply();
-        let _ = st_block.commit();
+        let _ = st_block.commit_world_overlay_for_testing();
         let tx = TransactionBuilder::new(
             test_network_id(),
             alice.clone(),
@@ -5468,7 +5468,7 @@ seiyaku DynamicAccessCounter {
                 .unwrap();
             stx.apply();
         }
-        st_block.commit().unwrap();
+        st_block.commit_world_overlay_for_testing().unwrap();
         let tx = TransactionBuilder::new(
             test_network_id(),
             alice.clone(),
@@ -5537,7 +5537,7 @@ seiyaku DynamicAccessCounter {
                 .unwrap();
             stx.apply();
         }
-        st_block.commit().unwrap();
+        st_block.commit_world_overlay_for_testing().unwrap();
         let tx = TransactionBuilder::new(
             test_network_id(),
             alice.clone(),
@@ -5619,7 +5619,7 @@ seiyaku DynamicAccessCounter {
             stx.apply();
             (code_hash, trigger_id, hints)
         };
-        st_block.commit().unwrap();
+        st_block.commit_world_overlay_for_testing().unwrap();
         let tx = TransactionBuilder::new(
             test_network_id(),
             alice.clone(),
@@ -5734,7 +5734,7 @@ seiyaku DynamicAccessCounter {
             stx.apply();
             (code_hash, trigger_id, hints)
         };
-        st_block.commit().unwrap();
+        st_block.commit_world_overlay_for_testing().unwrap();
         let tx = TransactionBuilder::new(
             test_network_id(),
             alice.clone(),

@@ -223,7 +223,6 @@ fn main() -> Result<()> {
         .with_auto_populated_trusted_peers()
         .with_config_layer(move |layer| {
             layer
-                .write("telemetry_enabled", true)
                 .write("telemetry_profile", telemetry_profile.as_str())
                 .write(["logger", "level"], "INFO");
         })

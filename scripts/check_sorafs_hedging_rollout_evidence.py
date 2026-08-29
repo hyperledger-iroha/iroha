@@ -182,11 +182,11 @@ REQUIRED_RECONCILIATION_SOURCES = (
     "governance-penalties",
 )
 REQUIRED_METRICS = (
-    "xor_usd_reference_price",
-    "feed_lag_seconds",
-    "statement_generation_count",
-    "statement_failure_count",
-    "escrow_runway_seconds",
+    "sorafs_hedging_billing_last_tick_fresh",
+    "sorafs_hedging_billing_finalized_projection_ready",
+    "sorafs_hedging_billing_finalized_lag_blocks",
+    "sorafs_hedging_billing_finalized_head_height",
+    "sorafs_hedging_billing_finalized_height",
 )
 REQUIRED_PRICE_FEEDS = (
     "feed-primary",

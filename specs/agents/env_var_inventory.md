@@ -79,7 +79,7 @@ Total references: **786** · Unique variables: **188**
 
 ## CARGO_CFG_TARGET_OS (build: 4, prod: 2, tool: 2)
 
-- build: crates/fastpq_prover/build.rs:33 — `let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();`
+- build: crates/fastpq_prover/build.rs:30 — `let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();`
 - build: crates/gpuzstd_cuda/build.rs:28 — `let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();`
 - prod: crates/iroha_crypto/src/bin/sm_perf_check.rs:654 — `let os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_else(|_| env::consts::OS.to_owned());`
 - prod: crates/iroha_crypto/src/bin/sm_perf_check.rs:684 — `let os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_else(|_| env::consts::OS.to_owned());`
@@ -88,9 +88,8 @@ Total references: **786** · Unique variables: **188**
 - tool: xtask/src/poseidon_bench.rs:82 — `os: std::env::var("CARGO_CFG_TARGET_OS")`
 - tool: xtask/src/stage1_bench.rs:59 — `os: std::env::var("CARGO_CFG_TARGET_OS")`
 
-## CARGO_FEATURE_CUDA (build: 2)
+## CARGO_FEATURE_CUDA (build: 1)
 
-- build: crates/fastpq_prover/build.rs:31 — `let cuda_feature = env::var_os("CARGO_FEATURE_CUDA").is_some();`
 - build: crates/ivm/build.rs:36 — `if env::var_os("CARGO_FEATURE_CUDA").is_some()`
 
 ## CARGO_FEATURE_CUDA_KERNEL (build: 2)
@@ -100,7 +99,7 @@ Total references: **786** · Unique variables: **188**
 
 ## CARGO_FEATURE_FASTPQ_GPU (build: 1)
 
-- build: crates/fastpq_prover/build.rs:32 — `let fastpq_gpu_feature = env::var_os("CARGO_FEATURE_FASTPQ_GPU").is_some();`
+- build: crates/fastpq_prover/build.rs:29 — `let fastpq_gpu_feature = env::var_os("CARGO_FEATURE_FASTPQ_GPU").is_some();`
 
 ## CARGO_FEATURE_FFI_EXPORT (prod: 1)
 
@@ -110,7 +109,7 @@ Total references: **786** · Unique variables: **188**
 
 - prod: crates/build-support/src/lib.rs:259 — `let ffi_import = std::env::var_os("CARGO_FEATURE_FFI_IMPORT").is_some();`
 
-## CARGO_MANIFEST_DIR (bench: 2, build: 5, example: 1, prod: 44, test: 307, tool: 6)
+## CARGO_MANIFEST_DIR (bench: 2, build: 5, example: 1, prod: 44, test: 308, tool: 6)
 
 - prod: crates/build-support/src/lib.rs:100 — `let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").ok()?);`
 - prod: crates/connect_norito_bridge/src/bin/swift_parity_regen.rs:296 — `Path::new(env!("CARGO_MANIFEST_DIR"))`
@@ -118,16 +117,17 @@ Total references: **786** · Unique variables: **188**
 - test: crates/connect_norito_bridge/src/kagemusha_bridge_tests/tests/recipient_fixture_owner.rs:27 — `let checked = Path::new(env!("CARGO_MANIFEST_DIR"))`
 - test: crates/connect_norito_bridge/src/lib.rs:14590 — `env!("CARGO_MANIFEST_DIR"),`
 - test: crates/connect_norito_bridge/src/sorafs_tests.rs:149 — `fs::read(format!("{}/../../{}", env!("CARGO_MANIFEST_DIR"), path))`
+- test: crates/fastpq_prover/src/bin/fastpq_cuda_bench.rs:1834 — `let path = Path::new(env!("CARGO_MANIFEST_DIR"))`
+- test: crates/fastpq_prover/src/bin/fastpq_cuda_bench.rs:1841 — `let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");`
 - prod: crates/fastpq_prover/src/poseidon_manifest.rs:9 — `env!("CARGO_MANIFEST_DIR"),`
-- test: crates/fastpq_prover/tests/packing.rs:13 — `Path::new(env!("CARGO_MANIFEST_DIR"))`
-- test: crates/fastpq_prover/tests/poseidon_manifest_consistency.rs:22 — `let metal_path = concat!(env!("CARGO_MANIFEST_DIR"), "/metal/kernels/poseidon2.metal");`
+- test: crates/fastpq_prover/tests/backend_regression.rs:9 — `PathBuf::from(env!("CARGO_MANIFEST_DIR"))`
+- test: crates/fastpq_prover/tests/poseidon_manifest_consistency.rs:22 — `let metal_path = concat!(env!("CARGO_MANIFEST_DIR"), "/metal/kernels/poseidon.metal");`
 - test: crates/fastpq_prover/tests/poseidon_manifest_consistency.rs:40 — `let cuda_path = concat!(env!("CARGO_MANIFEST_DIR"), "/cuda/fastpq_cuda.cu");`
-- test: crates/fastpq_prover/tests/poseidon_manifest_consistency.rs:59 — `let metal_path = concat!(env!("CARGO_MANIFEST_DIR"), "/metal/kernels/poseidon2.metal");`
+- test: crates/fastpq_prover/tests/poseidon_manifest_consistency.rs:59 — `let metal_path = concat!(env!("CARGO_MANIFEST_DIR"), "/metal/kernels/poseidon.metal");`
 - test: crates/fastpq_prover/tests/poseidon_manifest_consistency.rs:64 — `let field_path = concat!(env!("CARGO_MANIFEST_DIR"), "/metal/kernels/field.metal");`
 - test: crates/fastpq_prover/tests/poseidon_manifest_consistency.rs:69 — `let cuda_path = concat!(env!("CARGO_MANIFEST_DIR"), "/cuda/fastpq_cuda.cu");`
-- test: crates/fastpq_prover/tests/proof_fixture.rs:19 — `PathBuf::from(env!("CARGO_MANIFEST_DIR"))`
-- test: crates/fastpq_prover/tests/trace_commitment.rs:22 — `Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")`
-- test: crates/fastpq_prover/tests/transcript_replay.rs:90 — `Path::new(env!("CARGO_MANIFEST_DIR"))`
+- test: crates/fastpq_prover/tests/trace_commitment.rs:22 — `PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")`
+- test: crates/fastpq_prover/tests/transcript_replay.rs:10 — `Path::new(env!("CARGO_MANIFEST_DIR"))`
 - test: crates/iroha/src/client.rs:22882 — `env!("CARGO_MANIFEST_DIR"),`
 - test: crates/iroha/src/client.rs:26292 — `let fixture_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))`
 - test: crates/iroha/src/sm.rs:184 — `PathBuf::from(env!("CARGO_MANIFEST_DIR"))`
@@ -542,7 +542,7 @@ Total references: **786** · Unique variables: **188**
 
 ## CUDA_HOME (build: 5)
 
-- build: crates/fastpq_prover/build.rs:375 — `env::var_os("CUDA_HOME")`
+- build: crates/fastpq_prover/build.rs:328 — `env::var_os("CUDA_HOME")`
 - build: crates/gpuzstd_cuda/build.rs:83 — `for root in env::var_os("CUDA_HOME")`
 - build: crates/gpuzstd_cuda/build.rs:102 — `let root = env::var_os("CUDA_HOME")`
 - build: crates/norito/accelerators/jsonstage1_cuda/build.rs:88 — `for root in env::var_os("CUDA_HOME")`
@@ -550,7 +550,7 @@ Total references: **786** · Unique variables: **188**
 
 ## CUDA_PATH (build: 5)
 
-- build: crates/fastpq_prover/build.rs:376 — `.or_else(|| env::var_os("CUDA_PATH"))`
+- build: crates/fastpq_prover/build.rs:329 — `.or_else(|| env::var_os("CUDA_PATH"))`
 - build: crates/gpuzstd_cuda/build.rs:85 — `.chain(env::var_os("CUDA_PATH"))`
 - build: crates/gpuzstd_cuda/build.rs:103 — `.or_else(|| env::var_os("CUDA_PATH"))`
 - build: crates/norito/accelerators/jsonstage1_cuda/build.rs:90 — `.chain(env::var_os("CUDA_PATH"))`
@@ -558,7 +558,7 @@ Total references: **786** · Unique variables: **188**
 
 ## CXX (build: 4)
 
-- build: crates/fastpq_prover/build.rs:419 — `env::var_os("CXX").is_some()`
+- build: crates/fastpq_prover/build.rs:372 — `env::var_os("CXX").is_some()`
 - build: crates/gpuzstd_cuda/build.rs:133 — `env::var_os("CXX").is_some()`
 - build: crates/ivm/build.rs:697 — `env::var_os("CXX").is_some()`
 - build: crates/norito/accelerators/jsonstage1_cuda/build.rs:138 — `env::var_os("CXX").is_some()`
@@ -577,16 +577,16 @@ Total references: **786** · Unique variables: **188**
 
 ## FASTPQ_METAL_LIB (prod: 2)
 
-- prod: crates/fastpq_prover/src/backend.rs:965 — `option_env!("FASTPQ_METAL_LIB")`
-- prod: crates/fastpq_prover/src/metal.rs:2816 — `option_env!("FASTPQ_METAL_LIB"),`
+- prod: crates/fastpq_prover/src/backend.rs:995 — `option_env!("FASTPQ_METAL_LIB")`
+- prod: crates/fastpq_prover/src/metal.rs:2776 — `option_env!("FASTPQ_METAL_LIB"),`
 
 ## FASTPQ_SKIP_GPU_BUILD (build: 1)
 
-- build: crates/fastpq_prover/build.rs:34 — `let skip_gpu_build = env::var_os("FASTPQ_SKIP_GPU_BUILD").is_some();`
+- build: crates/fastpq_prover/build.rs:31 — `let skip_gpu_build = env::var_os("FASTPQ_SKIP_GPU_BUILD").is_some();`
 
 ## FASTPQ_UPDATE_FIXTURES (test: 1)
 
-- test: crates/fastpq_prover/tests/common/mod.rs:11 — `fixture_update_requested_from(std::env::var_os("FASTPQ_UPDATE_FIXTURES").as_deref())`
+- test: crates/fastpq_prover/tests/common/mod.rs:30 — `fixture_update_requested_from(std::env::var_os("FASTPQ_UPDATE_FIXTURES").as_deref())`
 
 ## GENESIS_DEBUG_MODE (test: 1)
 
@@ -633,7 +633,7 @@ Total references: **786** · Unique variables: **188**
 
 ## HOST_CXX (build: 4)
 
-- build: crates/fastpq_prover/build.rs:420 — `|| env::var_os("HOST_CXX").is_some()`
+- build: crates/fastpq_prover/build.rs:373 — `|| env::var_os("HOST_CXX").is_some()`
 - build: crates/gpuzstd_cuda/build.rs:134 — `|| env::var_os("HOST_CXX").is_some()`
 - build: crates/ivm/build.rs:698 — `|| env::var_os("HOST_CXX").is_some()`
 - build: crates/norito/accelerators/jsonstage1_cuda/build.rs:139 — `|| env::var_os("HOST_CXX").is_some()`
@@ -1137,7 +1137,7 @@ Total references: **786** · Unique variables: **188**
 ## OUT_DIR (build: 8, prod: 17, test: 5)
 
 - build: crates/connect_norito_bridge/build.rs:18 — `let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("Cargo sets OUT_DIR"));`
-- build: crates/fastpq_prover/build.rs:187 — `let out_dir = PathBuf::from(env::var("OUT_DIR").map_err(|err| err.to_string())?);`
+- build: crates/fastpq_prover/build.rs:140 — `let out_dir = PathBuf::from(env::var("OUT_DIR").map_err(|err| err.to_string())?);`
 - build: crates/iroha_data_model/build.rs:10 — `let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));`
 - prod: crates/iroha_data_model/src/lib.rs:218 — `include!(concat!(env!("OUT_DIR"), "/build_consts.rs"));`
 - build: crates/ivm/build.rs:321 — `let out_dir = PathBuf::from(env::var("OUT_DIR")?);`
@@ -1254,7 +1254,7 @@ Total references: **786** · Unique variables: **188**
 
 ## SystemRoot (prod: 2)
 
-- prod: crates/fastpq_prover/src/backend.rs:577 — `env::var_os("SystemRoot").map(PathBuf::from)`
+- prod: crates/fastpq_prover/src/backend.rs:595 — `env::var_os("SystemRoot").map(PathBuf::from)`
 - prod: crates/irohad/src/soracloud_runtime.rs:18371 — `if let Some(system_root) = std::env::var_os("SystemRoot") {`
 
 ## TARGET (build: 2, prod: 1, tool: 2)

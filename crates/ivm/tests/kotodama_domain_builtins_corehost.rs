@@ -3,7 +3,6 @@ use ivm::{
     IVM, KotodamaCompiler,
     mock_wsv::{AccountId, DomainId, MockWorldStateView, PermissionToken, WsvHost},
 };
-use std::collections::HashMap;
 mod common;
 #[test]
 fn kotodama_unregister_domain() {
@@ -33,7 +32,7 @@ fn kotodama_unregister_domain() {
     wsv.add_account_unchecked(alice.clone());
     wsv.grant_permission(&alice, PermissionToken::RegisterDomain);
     assert!(wsv.register_domain(&alice, dom));
-    let host = WsvHost::new_with_subject(wsv, alice.clone(), HashMap::new());
+    let host = WsvHost::new_with_subject(wsv, alice.clone());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
     vm.load_program(&prog).expect("load");
@@ -63,7 +62,7 @@ fn kotodama_transfer_domain() {
             .expect("public key"),
     );
     wsv.add_account_unchecked(alice.clone());
-    let host = WsvHost::new_with_subject(wsv, alice.clone(), HashMap::new());
+    let host = WsvHost::new_with_subject(wsv, alice.clone());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
     vm.load_program(&prog).expect("load");

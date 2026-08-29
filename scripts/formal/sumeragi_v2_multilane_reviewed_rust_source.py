@@ -1063,6 +1063,7 @@ def _rust_path_module_invocations(
     expected: tuple[str, ...] | None,
     errors: list[str],
     masked_source: str | None = None,
+    path_binding_ranges: list[tuple[int, int]] | None = None,
 ) -> tuple[_RustIncludeInvocation, ...]:
     """Parse manifest-declared literal ``#[path] mod`` provider bindings."""
 
@@ -1161,6 +1162,10 @@ def _rust_path_module_invocations(
                 )
             cursor = close_bracket + 1
             continue
+        if path_binding_ranges is not None:
+            path_binding_ranges.append(
+                (binding_match.start(), binding_match.end())
+            )
         semicolon = binding_match.end() - 1
         line_end = source.find("\n", semicolon + 1)
         if line_end < 0:
@@ -1209,6 +1214,83 @@ def _rust_path_module_invocations(
     return tuple(invocations)
 
 
+def _rust_plain_module_invocations(
+    source: str,
+    provider: Path,
+    expected: tuple[str, ...] | None,
+    errors: list[str],
+    masked_source: str | None = None,
+    path_binding_ranges: tuple[tuple[int, int], ...] = (),
+) -> tuple[_RustIncludeInvocation, ...]:
+    """Parse only manifest-declared canonical ``mod name;`` providers.
+
+    Rust derives an out-of-line module's path from its parent filename.  The
+    reviewed manifest remains the authority: this parser never discovers or
+    follows an undeclared module, and it rejects the two legal Rust layouts as
+    ambiguous if a manifest attempts to authorize both at once.
+    """
+
+    masked = (
+        _mask_rust_comments(source) if masked_source is None else masked_source
+    )
+    expected_paths = frozenset(expected or ())
+    if not expected_paths:
+        return ()
+    module_binding = re.compile(
+        r"\b(?:(?:pub(?:\s*\([^()\r\n]*\))?)\s+)?"
+        r"mod\s+(?P<module>(?:r#)?[A-Za-z_][A-Za-z0-9_]*)\s*;"
+    )
+    invocations: list[_RustIncludeInvocation] = []
+    parent_prefix = "" if provider.name == "mod.rs" else provider.stem
+    for match in module_binding.finditer(masked):
+        if any(
+            start <= match.start() < end
+            for start, end in path_binding_ranges
+        ):
+            continue
+        module_name = match.group("module").removeprefix("r#")
+        module_prefix = (
+            module_name
+            if not parent_prefix
+            else f"{parent_prefix}/{module_name}"
+        )
+        candidates = (
+            f"{module_prefix}.rs",
+            f"{module_prefix}/mod.rs",
+        )
+        authorized = tuple(
+            candidate for candidate in candidates if candidate in expected_paths
+        )
+        if not authorized:
+            continue
+        line = source.count("\n", 0, match.start()) + 1
+        if len(authorized) != 1:
+            errors.append(
+                f"{provider}:{line}: reviewed Rust plain module {module_name!r} "
+                f"is ambiguous across manifest providers {authorized!r}"
+            )
+            continue
+        semicolon = match.end() - 1
+        line_end = source.find("\n", semicolon + 1)
+        if line_end < 0:
+            line_end = len(source)
+            line_ending = line_end
+        else:
+            line_ending = line_end + 1
+        suffix = masked[semicolon + 1 : line_end]
+        insertion_end = line_ending if not suffix.strip() else semicolon + 1
+        invocations.append(
+            _RustIncludeInvocation(
+                relative=authorized[0],
+                start=match.start(),
+                end=insertion_end,
+                line=line,
+                binding="plain mod",
+            )
+        )
+    return tuple(invocations)
+
+
 def _rust_provider_invocations(
     source: str,
     provider: Path,
@@ -1218,11 +1300,26 @@ def _rust_provider_invocations(
     """Return exact include and manifest-declared path bindings in source order."""
 
     masked = _mask_rust_comments(source)
+    path_binding_ranges: list[tuple[int, int]] = []
+    path_modules = _rust_path_module_invocations(
+        source,
+        provider,
+        expected,
+        errors,
+        masked,
+        path_binding_ranges,
+    )
     invocations = sorted(
         (
             *_rust_include_invocations(source, provider, errors, masked),
-            *_rust_path_module_invocations(
-                source, provider, expected, errors, masked
+            *path_modules,
+            *_rust_plain_module_invocations(
+                source,
+                provider,
+                expected,
+                errors,
+                masked,
+                tuple(path_binding_ranges),
             ),
         ),
         key=lambda invocation: invocation.start,

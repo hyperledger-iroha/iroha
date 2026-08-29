@@ -887,7 +887,7 @@ pub mod query {
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
             stx.apply();
-            state_block.commit().unwrap();
+            state_block.commit_world_overlay_for_testing().unwrap();
             let view = state.view();
             let predicate = CompoundPredicate::<Nft>::build(|p| p.equals("content.rarity", "rare"));
             let results: Vec<_> = FindNfts

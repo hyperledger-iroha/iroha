@@ -154,7 +154,7 @@ alerting remain consistent. The CLI/SDK map them to user-facing error messages a
     `application/x-ndjson` body (`ProofStreamItemV1` per line). HTTP/2 allows multiplexing alongside chunk
     fetches and integrates with existing gateway infrastructure.
   - Back-pressure is handled via flow control; gateways MUST not buffer more than 64 items before blocking.
-  - Each response includes `Sora-Trace-Id` header so the orchestrator can correlate with OpenTelemetry spans.
+  - Each response includes `Sora-Trace-Id` header so the orchestrator can correlate structured telemetry records across requests.
 - **Optional gRPC endpoint.**
   - `sorafs.proof.v1.ProofStreamService/StreamProofs` returning a bidirectional stream for environments that
     already use gRPC (internal testing, SDK integration). This mirrors the HTTP semantics and reuses the same

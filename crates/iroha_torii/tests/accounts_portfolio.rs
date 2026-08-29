@@ -219,7 +219,7 @@ fn seed_portfolio_accounts(state: &Arc<State>) -> (UniversalAccountId, Vec<Accou
             .expect("registering portfolio fixtures");
     }
     tx.apply();
-    block.commit().unwrap();
+    block.commit_world_overlay_for_testing().unwrap();
     (uaid, vec![first_account])
 }
 fn seed_fixture_portfolio_accounts(state: &Arc<State>) -> UniversalAccountId {
@@ -280,7 +280,7 @@ fn seed_fixture_portfolio_accounts(state: &Arc<State>) -> UniversalAccountId {
             .expect("registering portfolio fixture");
     }
     tx.apply();
-    block.commit().unwrap();
+    block.commit_world_overlay_for_testing().unwrap();
     uaid
 }
 fn account_id_from_signatory(_domain_id: DomainId, signatory_hex: &str) -> AccountId {

@@ -1,0 +1,5 @@
+error: only async functions can be instrumented with `telemetry_future`
+ --> tests/ui_fail/telemetry_future_non_async.rs:4:4
+  |
+4 | fn not_async() {}
+  |    ^^^^^^^^^

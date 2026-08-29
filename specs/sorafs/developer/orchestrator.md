@@ -702,7 +702,7 @@ this deterministic sequence:
 | Manifest governance recorded | Proves Council signatures accompany every gateway manifest. | `sorafs_cli fetch ... --output /dev/null --summary out.json` with `manifest_governance.council_signatures` archived. |
 | Attestation inventory | Tracks the documents referenced in `compliance.attestations`. | Store PDFs/JSON artefacts alongside the attestation digest and expiry. |
 | Downgrade drill logged | Ensures rollback remains deterministic. | Quarterly dry-run record showing direct-only policy applied and guard cache cleared. |
-| Telemetry retention | Provides forensic data for regulators. | Dashboard export or OTEL snapshot confirming `sorafs.fetch.*` and compliance fallbacks are being retained per policy. |
+| Telemetry retention | Provides forensic data for regulators. | Prometheus dashboard export plus retained `telemetry::sorafs.fetch.*` structured events confirming compliance fallbacks are kept per policy. |
 
 Operators should review the checklist prior to each rollout window and furnish
 the evidence pack to governance or regulators on request. Developers can reuse

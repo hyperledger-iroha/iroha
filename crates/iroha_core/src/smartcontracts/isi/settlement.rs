@@ -3039,7 +3039,9 @@ mod tests {
             .execute(&ALICE_ID, &mut stx)
             .expect("DvP execution succeeds");
         stx.apply();
-        state_block.commit().expect("commit state block");
+        state_block
+            .commit_world_overlay_for_testing()
+            .expect("commit state block");
         let view = state.view();
         let world = view.world();
         let alice_bond = AssetId::new(delivery_def_id.clone(), ALICE_ID.clone());
@@ -3107,7 +3109,9 @@ mod tests {
             .execute(&ALICE_ID, &mut stx)
             .expect("DvP execution succeeds");
         stx.apply();
-        state_block.commit().expect("commit state block");
+        state_block
+            .commit_world_overlay_for_testing()
+            .expect("commit state block");
         let view = state.view();
         let world = view.world();
         let alice_bond = AssetId::new(delivery_def_id.clone(), ALICE_ID.clone());

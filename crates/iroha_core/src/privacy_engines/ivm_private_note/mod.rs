@@ -29,7 +29,10 @@ mod stark;
 #[cfg(test)]
 mod tests;
 mod wallet;
-pub(crate) use air::IVM_PRIVATE_NOTE_AGGREGATE_AIR_DESCRIPTOR_V1;
+pub(crate) use air::{
+    IVM_PRIVATE_NOTE_AGGREGATE_AIR_DESCRIPTOR_V1, PRIVATE_NOTE_BASE_WIDTH_V1,
+    PRIVATE_NOTE_TRACE_LOG2_V1,
+};
 pub(crate) use codec::PRIVATE_PROGRAM_BYTES_V1;
 #[cfg(test)]
 pub(crate) use codec::encode_private_program_v1;
@@ -44,6 +47,8 @@ pub(crate) use fixture::{
 };
 pub(crate) use relation::{
     IVM_PRIVATE_NOTE_ENGINE_DESCRIPTOR_V1, IVM_PRIVATE_NOTE_HASH_PROFILE_DESCRIPTOR_V1,
+    PrivateNoteRelationProfileV1, derive_profiled_input_commitment_v1,
+    derive_profiled_output_commitment_v1, preflight_private_note_relation_with_profile_v1,
 };
 pub use relation::{
     IvmPrivateNoteInputWitnessV1, IvmPrivateNoteOutputWitnessV1, IvmPrivateNoteRelationErrorV1,
@@ -53,12 +58,20 @@ pub use relation::{
     PrivateNotePlaintextV1, PrivateOpcodeV1, PrivateProgramV1, derive_note_authority_v1,
     derive_note_commitment_v1, derive_note_nullifier_v1, derive_private_program_id_v1,
 };
+#[cfg(test)]
+pub(crate) use relation::{
+    accumulator_leaf_digest_for_testing_v1, accumulator_node_digest_for_testing_v1,
+};
 pub use stark::IVM_PRIVATE_NOTE_MAX_PROOF_BYTES_V1;
 pub(crate) use stark::{
     IVM_PRIVATE_NOTE_STARK_KAT_PROOF_SHA256_V1, IVM_PRIVATE_NOTE_STARK_PROFILE_DESCRIPTOR_V1,
-    IVM_PRIVATE_NOTE_STARK_PROFILE_DIGEST_V1, validate_ivm_private_note_stark_profile_v1,
-    verify_private_note_stark_v1,
+    IVM_PRIVATE_NOTE_STARK_PROFILE_DIGEST_V1, PRIVATE_NOTE_PROFILE_AUX_WIDTH_V1,
+    PRIVATE_NOTE_PROFILE_CONSTRAINT_DEGREE_V1, PrivateNoteStarkRelationV1,
+    validate_ivm_private_note_stark_profile_v1, verify_private_note_stark_v1,
 };
+#[cfg(test)]
+pub(crate) use wallet::encrypt_ivm_private_wallet_note_for_commitment_with_opening_v1;
+pub(crate) use wallet::validate_ivm_private_wallet_encryption_opening_v1;
 pub use wallet::{
     IvmPrivateNoteWalletErrorV1, decrypt_ivm_private_wallet_note_v1,
     derive_ivm_private_recipient_id_v1, encrypt_ivm_private_wallet_note_v1,

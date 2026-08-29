@@ -16,22 +16,7 @@ impl State {
                 .lane_block_application_receipt_available_without_sidecar_repair(proposal)
         };
         if application_receipt_available {
-            let descriptor = &proposal.descriptor;
-            let receipt = self
-                .kura
-                .read_lane_block_application_receipt_without_sidecar_repair(
-                    descriptor.lane_id,
-                    descriptor.lane_block_height,
-                )?;
-            return Some(
-                if receipt.format
-                    == crate::kura::LaneBlockApplicationReceiptArtifactFormat::DirectExecution
-                {
-                    ExecutionStatus::StateAppliedByDirectExecution
-                } else {
-                    ExecutionStatus::StateAppliedByCanonicalBlock
-                },
-            );
+            return Some(ExecutionStatus::StateAppliedByCanonicalBlock);
         }
         if self.certified_lane_block_session_is_applied_or_snapshot_anchored_cached(session) {
             // A replicated frontier or hash-only ordinary snapshot cannot prove

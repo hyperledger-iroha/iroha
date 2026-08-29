@@ -537,7 +537,9 @@ fn elections_mut_seeds_storage() {
         .elections_mut()
         .insert(election_id.clone(), ElectionState::default());
     stx.apply();
-    state_block.commit().expect("commit block");
+    state_block
+        .commit_world_overlay_for_testing()
+        .expect("commit block");
     let view = state.view();
     assert!(view.world.elections().get(&election_id).is_some());
 }

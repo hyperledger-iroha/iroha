@@ -150,7 +150,7 @@ fn propose_runtime_upgrade_allows_v1_when_v1_active() {
         },
     );
     stx1.apply();
-    block1.commit().unwrap();
+    block1.commit_empty_block_for_testing().unwrap();
     let header2 =
         iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block2 = state.block(header2);
@@ -361,7 +361,7 @@ fn activate_runtime_upgrade_is_idempotent_at_start_height() {
         .execute(&account_id, &mut stx1)
         .expect("propose manifest");
     stx1.apply();
-    block1.commit().unwrap();
+    block1.commit_empty_block_for_testing().unwrap();
     // Block 5: activate twice at the same height; the second invocation should be a no-op
     let header2 =
         iroha_data_model::block::BlockHeader::new(nonzero!(5_u64), None, None, None, 0, 0);
@@ -430,7 +430,7 @@ fn activation_allows_v1_in_same_block() {
         .execute(&account_id, &mut stx1)
         .expect("propose manifest");
     stx1.apply();
-    block1.commit().unwrap();
+    block1.commit_empty_block_for_testing().unwrap();
     // Block 2: activate upgrade, then validate a v1 program in the same block
     let header2 =
         iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
@@ -494,7 +494,7 @@ fn active_manifest_hash_mismatch_rejects_block_construction() {
         },
     );
     stx.apply();
-    block.commit().unwrap();
+    block.commit_empty_block_for_testing().unwrap();
     // The next block must fail closed before any transaction can execute under
     // an ABI surface that differs from the local binary.
     let header2 =

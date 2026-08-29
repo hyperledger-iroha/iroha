@@ -39,7 +39,7 @@ fn execute_query(
 #[test]
 fn canonical_query_request_is_validated_before_not_implemented() {
     let caller = sample_account();
-    let mut host = WsvHost::new_with_subject(MockWorldStateView::new(), caller, Default::default());
+    let mut host = WsvHost::new_with_subject(MockWorldStateView::new(), caller);
     let mut vm = IVM::new(u64::MAX);
     let request = QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters));
     let canonical = encode_canonical_norito(&request).expect("canonical QueryRequest");
@@ -64,7 +64,7 @@ fn canonical_query_request_is_validated_before_not_implemented() {
 #[test]
 fn alternate_wrong_nominal_wrong_pointer_and_malformed_queries_are_rejected() {
     let caller = sample_account();
-    let mut host = WsvHost::new_with_subject(MockWorldStateView::new(), caller, Default::default());
+    let mut host = WsvHost::new_with_subject(MockWorldStateView::new(), caller);
     let mut vm = IVM::new(u64::MAX);
     let request = QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters));
     let canonical = encode_canonical_norito(&request).expect("canonical QueryRequest");

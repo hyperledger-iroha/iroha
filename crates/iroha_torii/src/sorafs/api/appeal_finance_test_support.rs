@@ -982,7 +982,6 @@ fn seed_appeal_finance_asset_lock(
         0,
         0,
     );
-    let block_hash = header.hash();
     let mut block = app.state.block(header);
     let mut tx = block.transaction();
     tx.tx_call_hash = Some(Hash::prehashed([0xAF; Hash::LENGTH]));
@@ -998,10 +997,9 @@ fn seed_appeal_finance_asset_lock(
     .execute(&expected.payer_account, &mut tx)
     .expect("open appeal finance asset lock");
     tx.apply();
-    block.commit().expect("commit appeal finance asset lock");
-    let mut block_hashes = app.state.block_hashes.block();
-    block_hashes.push_for_tests(block_hash);
-    block_hashes.commit_for_tests();
+    block
+        .commit_empty_block_for_testing()
+        .expect("commit appeal finance asset lock");
 }
 fn seed_empty_appeal_finance_finalized_block(app: &SharedAppState) {
     let header = BlockHeader::new(
@@ -1012,14 +1010,10 @@ fn seed_empty_appeal_finance_finalized_block(app: &SharedAppState) {
         0,
         0,
     );
-    let block_hash = header.hash();
     app.state
         .block(header)
-        .commit()
+        .commit_empty_block_for_testing()
         .expect("commit empty finalized block");
-    let mut block_hashes = app.state.block_hashes.block();
-    block_hashes.push_for_tests(block_hash);
-    block_hashes.commit_for_tests();
 }
 fn drawdown_appeal_finance_asset_lock(
     app: &SharedAppState,
@@ -1045,7 +1039,6 @@ fn drawdown_appeal_finance_asset_lock(
         0,
         0,
     );
-    let block_hash = header.hash();
     let mut block = app.state.block(header);
     let mut tx = block.transaction();
     tx.tx_call_hash = Some(Hash::prehashed([0xB1; Hash::LENGTH]));
@@ -1054,11 +1047,8 @@ fn drawdown_appeal_finance_asset_lock(
         .expect("drawdown appeal finance asset lock");
     tx.apply();
     block
-        .commit()
+        .commit_empty_block_for_testing()
         .expect("commit appeal finance asset lock drawdown");
-    let mut block_hashes = app.state.block_hashes.block();
-    block_hashes.push_for_tests(block_hash);
-    block_hashes.commit_for_tests();
 }
 fn cancel_appeal_finance_asset_lock(
     app: &SharedAppState,
@@ -1083,7 +1073,6 @@ fn cancel_appeal_finance_asset_lock(
         0,
         0,
     );
-    let block_hash = header.hash();
     let mut block = app.state.block(header);
     let mut tx = block.transaction();
     tx.tx_call_hash = Some(Hash::prehashed([0xB2; Hash::LENGTH]));
@@ -1092,11 +1081,8 @@ fn cancel_appeal_finance_asset_lock(
         .expect("cancel appeal finance asset lock");
     tx.apply();
     block
-        .commit()
+        .commit_empty_block_for_testing()
         .expect("commit appeal finance asset lock cancellation");
-    let mut block_hashes = app.state.block_hashes.block();
-    block_hashes.push_for_tests(block_hash);
-    block_hashes.commit_for_tests();
 }
 fn sorafs_app_state_with_confirmed_appeal_deposit(
     case_id: &str,

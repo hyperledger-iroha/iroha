@@ -20,8 +20,6 @@ mod sumeragi_evidence_count_endpoint;
 mod sumeragi_evidence_list_endpoint;
 #[path = "../sumeragi_leader_endpoint.rs"]
 mod sumeragi_leader_endpoint;
-#[path = "../sumeragi_pacemaker_endpoint.rs"]
-mod sumeragi_pacemaker_endpoint;
 #[path = "../sumeragi_params_endpoint.rs"]
 mod sumeragi_params_endpoint;
 #[path = "../sumeragi_qc_endpoint.rs"]

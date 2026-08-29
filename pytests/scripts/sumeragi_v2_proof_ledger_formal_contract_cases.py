@@ -266,6 +266,9 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('serviced_candidate_store_tail_tests.rs'),
     ),
     Path('crates/iroha_p2p/src/network.rs'): (
+        Path('network/admission.rs'),
+        Path('network/best_effort_admission.rs'),
+        Path('network/reliable_actor.rs'),
         Path('network/handle_update_tests.rs'),
         Path('network/queue_depth_tests.rs'),
     ),
@@ -2397,15 +2400,25 @@ def test_each_reviewed_rust_include_manifest_fails_closed(
     canonical_parent = parent.read_text(encoding="utf-8")
     canonical_include = f'include!("{components[0].as_posix()}");'
     substituted_include = 'include!("substituted_manifest_component.rs");'
+    substituted_component = parent.parent / "substituted_manifest_component.rs"
     if canonical_parent.count(canonical_include) != 1:
         canonical_include = f'#[path = "{components[0].as_posix()}"]'
         substituted_include = '#[path = "substituted_manifest_component.rs"]'
+    if canonical_parent.count(canonical_include) != 1:
+        module_name = components[0].stem
+        canonical_include = f"mod {module_name};"
+        substituted_include = "mod substituted_manifest_component;"
+        substituted_component = (
+            parent.parent
+            / components[0].parent
+            / "substituted_manifest_component.rs"
+        )
     assert canonical_parent.count(canonical_include) == 1
     parent.write_text(
         canonical_parent.replace(canonical_include, substituted_include, 1),
         encoding="utf-8",
     )
-    (parent.parent / "substituted_manifest_component.rs").write_text(
+    substituted_component.write_text(
         canonical_component,
         encoding="utf-8",
     )

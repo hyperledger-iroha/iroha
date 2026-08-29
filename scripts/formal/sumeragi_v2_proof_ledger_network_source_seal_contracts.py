@@ -282,18 +282,16 @@ def _transport_geometry_refresh_resistant_errors(
 let origin_len = peer_id_wire_len_from_raw_key_bytes(RELAY_NODE_PUBLIC_KEY_BYTES, flags)?;
 let target_len = relay_target_wire_len(direct.then_some(RELAY_NODE_PUBLIC_KEY_BYTES), flags)?;
 let ttl_len = core::mem::size_of::<u8>();
-let priority_len = core::mem::size_of::<u32>();
 let origin_signature_len = byte_sequence_wire_len(RELAY_ORIGIN_SIGNATURE_BYTES)?;
 let field_lens = [
     origin_len,
     target_len,
     ttl_len,
-    priority_len,
     origin_signature_len,
     payload_len,
 ];
 """,
-            "relay geometry must charge the origin signature and every exact wire field",
+            "relay geometry must charge the origin signature and every exact five-field wire component",
         ),
         (
             "p2p_peer",

@@ -77,13 +77,20 @@ fn nexus_status_exports_optional_rule_dataspace() {
     assert_eq!(status.routing_policy.rules[1].dataspace_id, None);
 }
 #[test]
-fn pacemaker_metrics_are_exported() {
+fn retired_pacemaker_metrics_are_not_exported() {
     let metrics = Metrics::default();
     let dump = metrics.try_to_string().expect("metrics text");
-    assert!(
-        dump.contains("sumeragi_pacemaker_view_timeout_target_ms"),
-        "metrics export missing pacemaker view timeout target"
-    );
+    for retired in [
+        "sumeragi_pacemaker_backpressure_deferrals_total",
+        "sumeragi_pacemaker_eval_ms",
+        "sumeragi_pacemaker_view_timeout_target_ms",
+        "sumeragi_phase_latency_ema_ms",
+    ] {
+        assert!(
+            !dump.contains(retired),
+            "retired pacemaker metric {retired} must not be exported"
+        );
+    }
 }
 #[test]
 fn p2p_queue_depth_metric_accepts_updates() {
@@ -1546,69 +1553,6 @@ fn gateway_compliance_metric_labels_are_bounded_and_state_fails_closed() {
     );
     assert_eq!(metrics.torii_sorafs_gateway_compliance_ready.get(), 0);
 }
-#[test]
-fn records_hedging_billing_metrics_used_by_dashboard_and_alerts() {
-    let metrics = Metrics::default();
-    metrics.set_sorafs_hedging_reference_price_micro_usd("localnet", 2_000_000);
-    metrics.set_sorafs_hedging_feed_lag_seconds("localnet", "primary", 120);
-    metrics.set_sorafs_hedging_feed_divergence_bps("localnet", "primary", 75);
-    metrics.set_sorafs_hedging_exposure_drift_bps("localnet", "xor", 250);
-    metrics.record_sorafs_billing_statement_generation("localnet", "provider", true);
-    metrics.record_sorafs_billing_statement_generation("localnet", "provider", false);
-    metrics.set_sorafs_billing_statement_ack_backlog("localnet", 9);
-    metrics.set_sorafs_billing_escrow_runway_seconds("localnet", "provider", 172_800);
-    assert_eq!(
-        metrics
-            .torii_sorafs_hedging_xor_usd_reference_price_micro_usd
-            .with_label_values(&["localnet"])
-            .get(),
-        2_000_000
-    );
-    assert_eq!(
-        metrics
-            .torii_sorafs_hedging_feed_lag_seconds
-            .with_label_values(&["localnet", "primary"])
-            .get(),
-        120
-    );
-    assert_eq!(
-        metrics
-            .torii_sorafs_billing_statement_generation_total
-            .with_label_values(&["localnet", "provider"])
-            .get(),
-        2
-    );
-    assert_eq!(
-        metrics
-            .torii_sorafs_billing_statement_failure_total
-            .with_label_values(&["localnet", "provider"])
-            .get(),
-        1
-    );
-    assert_eq!(
-        metrics
-            .torii_sorafs_billing_statement_ack_backlog
-            .with_label_values(&["localnet"])
-            .get(),
-        9
-    );
-    let exported = metrics.try_to_string().expect("metrics text");
-    for metric_name in [
-        "torii_sorafs_hedging_xor_usd_reference_price_micro_usd",
-        "torii_sorafs_hedging_feed_lag_seconds",
-        "torii_sorafs_hedging_feed_divergence_bps",
-        "torii_sorafs_hedging_exposure_drift_bps",
-        "torii_sorafs_billing_statement_generation_total",
-        "torii_sorafs_billing_statement_failure_total",
-        "torii_sorafs_billing_statement_ack_backlog",
-        "torii_sorafs_billing_escrow_runway_seconds",
-    ] {
-        assert!(
-            exported.contains(metric_name),
-            "missing hedging/billing metric {metric_name} from export:\n{exported}"
-        );
-    }
-}
 fn record_sample_sorafs_reserve_finalized_projection(metrics: &Metrics) {
     metrics.record_sorafs_reserve_finalized_projection(&SorafsReserveFinalizedProjection {
         finalized_height: 42,
@@ -1741,77 +1685,6 @@ fn exports_sorafs_reserve_metric_families() {
     }
 }
 #[test]
-fn records_sorafs_repair_metrics() {
-    let metrics = Metrics::default();
-    metrics.inc_sorafs_repair_tasks("queued");
-    metrics.observe_sorafs_repair_latency("completed", 12.5);
-    metrics.record_sorafs_repair_queue_depths(&[
-        ("provider-a".to_string(), 2),
-        ("provider-b".to_string(), 1),
-    ]);
-    metrics.set_sorafs_repair_backlog_oldest_age_seconds(300);
-    metrics.inc_sorafs_repair_lease_expired("requeued");
-    metrics.inc_sorafs_slash_proposals("submitted");
-    assert_eq!(
-        metrics
-            .torii_sorafs_repair_tasks_total
-            .with_label_values(&["queued"])
-            .get(),
-        1
-    );
-    assert_eq!(
-        metrics
-            .torii_sorafs_repair_queue_depth
-            .with_label_values(&["provider-a"])
-            .get(),
-        2
-    );
-    assert_eq!(
-        metrics
-            .torii_sorafs_repair_queue_depth
-            .with_label_values(&["provider-b"])
-            .get(),
-        1
-    );
-    assert_eq!(
-        metrics.torii_sorafs_repair_backlog_oldest_age_seconds.get(),
-        300
-    );
-    assert_eq!(
-        metrics
-            .torii_sorafs_repair_lease_expired_total
-            .with_label_values(&["requeued"])
-            .get(),
-        1
-    );
-    assert_eq!(
-        metrics
-            .torii_sorafs_slash_proposals_total
-            .with_label_values(&["submitted"])
-            .get(),
-        1
-    );
-}
-#[test]
-fn repair_otel_handles_noop_without_exporter() {
-    let otel = SorafsRepairOtel::new();
-    otel.record_task_transition("queued");
-    otel.record_latency(1.0, "completed");
-    otel.record_backlog_oldest_age_seconds(10.0);
-    otel.record_queue_depth(2, "provider-a");
-    otel.record_lease_expired("requeued");
-    otel.record_slash_proposal("submitted");
-    let _ = global_sorafs_repair_otel();
-}
-#[test]
-fn gc_otel_handles_noop_without_exporter() {
-    let otel = SorafsGcOtel::new();
-    otel.record_run("success");
-    otel.record_eviction("retention_expired", 512);
-    otel.record_blocked("repair_active");
-    let _ = global_sorafs_gc_otel();
-}
-#[test]
 fn records_gar_violation_metrics() {
     let metrics = Metrics::default();
     metrics.record_sorafs_gar_violation("provider", "missing_id");
@@ -1841,28 +1714,6 @@ fn records_gateway_refusal_metrics() {
         ])
         .get();
     assert_eq!(total, 1, "gateway refusal counter increments");
-}
-#[test]
-fn gateway_otel_handles_noop_without_exporter() {
-    let otel = SorafsGatewayOtel::new();
-    let request = SorafsGatewayRequestMetricLabels {
-        endpoint: "/v1/sorafs/storage/chunk/{manifest_id}/{chunk_digest}",
-        method: "GET",
-        variant: "chunk",
-        chunker: "unknown",
-        profile: "unknown",
-    };
-    let response = SorafsGatewayResponseMetricLabels {
-        request,
-        result: "success",
-        status: 206,
-        error_code: "none",
-    };
-    otel.request_started_detailed(request);
-    otel.request_completed_detailed(response);
-    otel.record_ttfb_detailed(response, 42.0);
-    otel.record_proof_verification("sf1", "success", "none", 12.0);
-    let _ = global_sorafs_gateway_otel();
 }
 #[test]
 fn exports_canonical_gateway_metric_families() {
@@ -1952,24 +1803,6 @@ fn exports_canonical_gateway_metric_families() {
     }
 }
 #[test]
-fn node_otel_handles_noop_without_exporter() {
-    let otel = SorafsNodeOtel::new();
-    otel.record_storage("provider123", 512, 1_024, 10, 1);
-    otel.record_storage("provider123", 768, 1_024, 12, 2);
-    let expected_charge = "0.85".parse().expect("canonical quantity");
-    let client_debit = "0.6".parse().expect("canonical quantity");
-    let zero = Quantity::zero();
-    otel.record_deal_settlement(
-        "provider123",
-        "completed",
-        &expected_charge,
-        &client_debit,
-        &zero,
-        &zero,
-    );
-    let _ = global_sorafs_node_otel();
-}
-#[test]
 fn records_gateway_fixture_metadata() {
     let metrics = Metrics::default();
     metrics.set_sorafs_gateway_fixture_metadata("v1", "sf1", "deadbeef", 123);
@@ -2052,7 +1885,6 @@ fn sample_status() -> Status {
             commit_qc_epoch: 1,
             commit_qc_signatures_total: 5,
             commit_qc_validator_set_len: 7,
-            gossip_fallback_total: 2,
             block_created_dropped_by_lock_total: 1,
             block_created_hint_mismatch_total: 0,
             block_created_proposal_mismatch_total: 0,
@@ -2078,7 +1910,6 @@ fn sample_status() -> Status {
             prf_view: 2,
             lane_governance_sealed_total: 0,
             lane_governance_sealed_aliases: Vec::new(),
-            ..SumeragiConsensusStatus::default()
         }),
         governance: GovernanceStatus {
             proposals: GovernanceProposalCounters {
@@ -2136,12 +1967,64 @@ fn sample_status() -> Status {
             },
             targets: Vec::new(),
         },
-        sorafs_micropayments: Vec::new(),
         taikai_alias_rotations: Vec::new(),
         taikai_ingest: Vec::new(),
         da_receipt_cursors: Vec::new(),
     }
 }
+
+#[test]
+fn status_uses_one_complete_v1_binary_layout() {
+    let status = sample_status();
+    let expected_json = json::to_json(&status).expect("serialize status JSON");
+    let bytes = norito::to_bytes(&status).expect("serialize status");
+    let archived = norito::from_bytes::<Status>(&bytes).expect("deserialize status");
+    let decoded = <Status as norito::NoritoDeserialize>::deserialize(archived);
+
+    assert_eq!(
+        json::to_json(&decoded).expect("serialize decoded status JSON"),
+        expected_json
+    );
+
+    let truncated = &bytes[..bytes.len() / 2];
+    assert!(
+        norito::from_bytes::<Status>(truncated).is_err(),
+        "the V1 decoder must reject partial layouts"
+    );
+}
+
+#[test]
+fn sumeragi_status_v1_binary_roundtrip_preserves_every_field() {
+    let mut status = sample_status()
+        .sumeragi
+        .expect("sample status includes consensus telemetry");
+    status.block_created_hint_mismatch_total = 2;
+    status.block_created_proposal_mismatch_total = 3;
+    status.tx_queue_saturated = true;
+    status.tx_queue_saturated_by_count = true;
+    status.tx_queue_saturated_by_bytes = true;
+    status.tx_queue_saturated_by_age = true;
+    status.epoch_length_blocks = 100;
+    status.epoch_commit_deadline_offset = 60;
+    status.epoch_reveal_deadline_offset = 80;
+    status.view_change_proof_rejected_total = 2;
+    status.view_change_suggest_total = 3;
+    status.view_change_install_total = 4;
+    status.lane_governance_sealed_total = 1;
+    status.lane_governance_sealed_aliases = vec!["sealed-lane".to_owned()];
+
+    let expected_json = json::to_json(&status).expect("serialize consensus status JSON");
+    let bytes = norito::to_bytes(&status).expect("serialize consensus status");
+    let archived = norito::from_bytes::<SumeragiConsensusStatus>(&bytes)
+        .expect("deserialize consensus status");
+    let decoded = <SumeragiConsensusStatus as norito::NoritoDeserialize>::deserialize(archived);
+
+    assert_eq!(
+        json::to_json(&decoded).expect("serialize decoded consensus status JSON"),
+        expected_json
+    );
+}
+
 #[test]
 fn build_sumeragi_status_uses_cached_immutable_mode() {
     let metrics = Metrics::default();
@@ -2276,7 +2159,6 @@ fn serialize_status_json() {
             "commit_qc_epoch": 1,
             "commit_qc_signatures_total": 5,
             "commit_qc_validator_set_len": 7,
-            "gossip_fallback_total": 2,
             "block_created_dropped_by_lock_total": 1,
             "block_created_hint_mismatch_total": 0,
             "block_created_proposal_mismatch_total": 0,
@@ -2349,13 +2231,8 @@ fn serialize_status_json() {
                 "drop_unknown_dataspace": false,
                 "restricted_fallback": "drop",
                 "restricted_public_policy": "refuse"
-            },
-            "targets": []
-        },
-        "sorafs_micropayments": [],
-        "taikai_alias_rotations": [],
-        "taikai_ingest": [],
-        "da_receipt_cursors": []
+            }
+        }
     });
     assert_eq!(actual_value, expected_value);
     let actual = actual

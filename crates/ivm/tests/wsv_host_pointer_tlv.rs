@@ -10,7 +10,6 @@ use ivm::{
     syscalls,
 };
 use norito::to_bytes;
-use std::collections::HashMap;
 mod common;
 use common::assemble_syscalls;
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
@@ -74,7 +73,7 @@ fn balance_syscall_with_tlv_pointers() {
             "asset".parse().unwrap(),
         );
     let wsv = MockWorldStateView::with_balances(&[((alice.clone(), asset.clone()), num(50))]);
-    let host = WsvHost::new_with_subject(wsv, bob.clone(), HashMap::new());
+    let host = WsvHost::new_with_subject(wsv, bob.clone());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
     // Preload TLVs for alice and asset
@@ -93,7 +92,7 @@ fn balance_syscall_with_tlv_pointers() {
     // Grant and retry
     let mut wsv2 = MockWorldStateView::with_balances(&[((alice.clone(), asset.clone()), num(50))]);
     wsv2.grant_permission(&bob, PermissionToken::ReadAccountAssets(alice.clone()));
-    let host = WsvHost::new_with_subject(wsv2, bob.clone(), HashMap::new());
+    let host = WsvHost::new_with_subject(wsv2, bob.clone());
     vm.set_host(host);
     vm.load_program(&prog).unwrap();
     vm.run().expect("balance tlv syscall failed");
@@ -124,7 +123,7 @@ fn transfer_syscall_with_tlv_pointers() {
         ((alice.clone(), asset.clone()), num(50)),
         ((bob.clone(), asset.clone()), num(0)),
     ]);
-    let host = WsvHost::new_with_subject(wsv, bob.clone(), HashMap::new());
+    let host = WsvHost::new_with_subject(wsv, bob.clone());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
     let acc_from = make_account_tlv(&alice);
@@ -165,7 +164,7 @@ fn transfer_syscall_with_tlv_pointers() {
         ((bob.clone(), asset.clone()), num(0)),
     ]);
     wsv2.grant_permission(&bob, PermissionToken::TransferAsset(asset.clone()));
-    let host = WsvHost::new_with_subject(wsv2, bob.clone(), HashMap::new());
+    let host = WsvHost::new_with_subject(wsv2, bob.clone());
     vm.set_host(host);
     vm.load_program(&prog).unwrap();
     vm.run().expect("transfer tlv syscall failed");
@@ -183,7 +182,7 @@ fn mint_syscall_with_tlv_pointers() {
             "asset".parse().unwrap(),
         );
     let wsv = MockWorldStateView::with_balances(&[((bob.clone(), asset.clone()), num(0))]);
-    let host = WsvHost::new_with_subject(wsv, bob.clone(), HashMap::new());
+    let host = WsvHost::new_with_subject(wsv, bob.clone());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
     let acc = make_account_tlv(&bob);
@@ -205,7 +204,7 @@ fn mint_syscall_with_tlv_pointers() {
     assert!(matches!(vm.run(), Err(ivm::VMError::PermissionDenied)));
     let mut wsv2 = MockWorldStateView::with_balances(&[((bob.clone(), asset.clone()), num(0))]);
     wsv2.grant_permission(&bob, PermissionToken::MintAsset(asset.clone()));
-    let host = WsvHost::new_with_subject(wsv2, bob.clone(), HashMap::new());
+    let host = WsvHost::new_with_subject(wsv2, bob.clone());
     vm.set_host(host);
     vm.load_program(&prog).unwrap();
     vm.run().expect("mint tlv syscall failed");
@@ -236,27 +235,33 @@ fn transfer_batch_syscalls_buffer_entries() {
         ((carol.clone(), asset.clone()), num(0)),
     ]);
     wsv.grant_permission(&bob, PermissionToken::TransferAsset(asset.clone()));
-    let mut account_map = HashMap::new();
-    account_map.insert(1, alice.clone());
-    account_map.insert(2, bob.clone());
-    account_map.insert(3, carol.clone());
-    let mut asset_map = HashMap::new();
-    asset_map.insert(1, asset.clone());
-    let mut host = WsvHost::new_with_subject_map(wsv, bob.clone(), account_map, asset_map);
+    let mut host = WsvHost::new_with_subject(wsv, bob.clone());
     let mut vm = IVM::new(u64::MAX);
     host.syscall(syscalls::SYSCALL_TRANSFER_V1_BATCH_BEGIN, &mut vm)
         .expect("begin batch");
-    vm.set_register(10, 1);
-    vm.set_register(11, 2);
-    vm.set_register(12, 1);
+    let alice_ptr = vm
+        .alloc_input_tlv(&make_account_tlv(&alice))
+        .expect("allocate source account");
+    let bob_ptr = vm
+        .alloc_input_tlv(&make_account_tlv(&bob))
+        .expect("allocate first destination account");
+    let carol_ptr = vm
+        .alloc_input_tlv(&make_account_tlv(&carol))
+        .expect("allocate second destination account");
+    let asset_ptr = vm
+        .alloc_input_tlv(&make_asset_tlv(&asset))
+        .expect("allocate asset definition");
+    vm.set_register(10, alice_ptr);
+    vm.set_register(11, bob_ptr);
+    vm.set_register(12, asset_ptr);
     let amount1 = make_quantity_tlv(10_u64);
     let amount1_ptr = vm.alloc_input_tlv(&amount1).expect("alloc amount 1 tlv");
     vm.set_register(13, amount1_ptr);
     host.syscall(syscalls::SYSCALL_TRANSFER_V1, &mut vm)
         .expect("push entry 1");
-    vm.set_register(10, 1);
-    vm.set_register(11, 3);
-    vm.set_register(12, 1);
+    vm.set_register(10, alice_ptr);
+    vm.set_register(11, carol_ptr);
+    vm.set_register(12, asset_ptr);
     let amount2 = make_quantity_tlv(5_u64);
     let amount2_ptr = vm.alloc_input_tlv(&amount2).expect("alloc amount 2 tlv");
     vm.set_register(13, amount2_ptr);
@@ -306,7 +311,7 @@ fn transfer_batch_apply_syscall_executes_batch() {
         ((carol.clone(), asset.clone()), num(0)),
     ]);
     wsv.grant_permission(&bob, PermissionToken::TransferAsset(asset.clone()));
-    let host = WsvHost::new_with_subject(wsv, bob.clone(), HashMap::new());
+    let host = WsvHost::new_with_subject(wsv, bob.clone());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
     let batch_tlv = make_transfer_batch_tlv(&[

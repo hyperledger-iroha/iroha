@@ -1021,13 +1021,10 @@ async fn soracloud_status_uses_live_torii_control_plane() -> eyre::Result<()> {
         .with_min_peers(4)
         .with_npos_consensus()
         .with_config_layer(|layer| {
-            layer
-                .write("telemetry_enabled", true)
-                .write("telemetry_profile", "full")
-                .write(
-                    ["crypto", "allowed_signing"],
-                    soracloud_live_hf_allowed_signing(),
-                );
+            layer.write("telemetry_profile", "full").write(
+                ["crypto", "allowed_signing"],
+                soracloud_live_hf_allowed_signing(),
+            );
         });
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,
@@ -1082,13 +1079,10 @@ async fn soracloud_mutations_use_live_torii_control_plane() -> eyre::Result<()> 
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
         .with_config_layer(|layer| {
-            layer
-                .write("telemetry_enabled", true)
-                .write("telemetry_profile", "full")
-                .write(
-                    ["crypto", "allowed_signing"],
-                    soracloud_live_hf_allowed_signing(),
-                );
+            layer.write("telemetry_profile", "full").write(
+                ["crypto", "allowed_signing"],
+                soracloud_live_hf_allowed_signing(),
+            );
         });
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,
@@ -1338,13 +1332,10 @@ async fn soracloud_scr_host_admission_rejects_invalid_manifests_live_torii_contr
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
         .with_config_layer(|layer| {
-            layer
-                .write("telemetry_enabled", true)
-                .write("telemetry_profile", "full")
-                .write(
-                    ["crypto", "allowed_signing"],
-                    soracloud_live_hf_allowed_signing(),
-                );
+            layer.write("telemetry_profile", "full").write(
+                ["crypto", "allowed_signing"],
+                soracloud_live_hf_allowed_signing(),
+            );
         });
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,
@@ -1485,13 +1476,10 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
         .with_min_peers(4)
         .with_npos_consensus()
         .with_config_layer(|layer| {
-            layer
-                .write("telemetry_enabled", true)
-                .write("telemetry_profile", "full")
-                .write(
-                    ["crypto", "allowed_signing"],
-                    soracloud_live_hf_allowed_signing(),
-                );
+            layer.write("telemetry_profile", "full").write(
+                ["crypto", "allowed_signing"],
+                soracloud_live_hf_allowed_signing(),
+            );
         });
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,
@@ -1803,13 +1791,10 @@ async fn soracloud_hf_shared_lease_commands_use_live_torii_control_plane() -> ey
         .with_min_peers(4)
         .with_npos_consensus()
         .with_config_layer(move |layer| {
-            layer
-                .write("telemetry_enabled", true)
-                .write("telemetry_profile", "full")
-                .write(
-                    ["crypto", "allowed_signing"],
-                    soracloud_live_hf_allowed_signing(),
-                );
+            layer.write("telemetry_profile", "full").write(
+                ["crypto", "allowed_signing"],
+                soracloud_live_hf_allowed_signing(),
+            );
         });
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,
@@ -2108,13 +2093,10 @@ async fn soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window() -> ey
         .with_min_peers(4)
         .with_npos_consensus()
         .with_config_layer(move |layer| {
-            layer
-                .write("telemetry_enabled", true)
-                .write("telemetry_profile", "full")
-                .write(
-                    ["crypto", "allowed_signing"],
-                    soracloud_live_hf_allowed_signing(),
-                );
+            layer.write("telemetry_profile", "full").write(
+                ["crypto", "allowed_signing"],
+                soracloud_live_hf_allowed_signing(),
+            );
         });
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,
@@ -2382,13 +2364,10 @@ async fn soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts() -
         .with_min_peers(4)
         .with_npos_consensus()
         .with_config_layer(move |layer| {
-            layer
-                .write("telemetry_enabled", true)
-                .write("telemetry_profile", "full")
-                .write(
-                    ["crypto", "allowed_signing"],
-                    soracloud_live_hf_allowed_signing(),
-                );
+            layer.write("telemetry_profile", "full").write(
+                ["crypto", "allowed_signing"],
+                soracloud_live_hf_allowed_signing(),
+            );
         })
         .with_genesis_instruction(Grant::account_permission(
             Permission::new("CanManageSoracloud".into(), Json::new(())),
@@ -2844,9 +2823,7 @@ async fn soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback() 
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
         .with_config_layer(|layer| {
-            layer
-                .write("telemetry_enabled", true)
-                .write("telemetry_profile", "full");
+            layer.write("telemetry_profile", "full");
         });
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,
@@ -3123,9 +3100,7 @@ async fn soracloud_agent_autonomy_controls_use_live_torii_control_plane() -> eyr
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
         .with_config_layer(|layer| {
-            layer
-                .write("telemetry_enabled", true)
-                .write("telemetry_profile", "full");
+            layer.write("telemetry_profile", "full");
         });
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,
@@ -3251,9 +3226,7 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
         .with_config_layer(|layer| {
-            layer
-                .write("telemetry_enabled", true)
-                .write("telemetry_profile", "full");
+            layer.write("telemetry_profile", "full");
         });
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,
@@ -3520,9 +3493,7 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
         .with_config_layer(|layer| {
-            layer
-                .write("telemetry_enabled", true)
-                .write("telemetry_profile", "full");
+            layer.write("telemetry_profile", "full");
         });
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,

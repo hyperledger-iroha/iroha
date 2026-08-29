@@ -19,8 +19,8 @@ fn permutation_profile_identity_binds_sbox_and_constants() {
 #[test]
 fn metal_poseidon_tables_match_manifest() {
     let manifest = poseidon_manifest();
-    let metal_path = concat!(env!("CARGO_MANIFEST_DIR"), "/metal/kernels/poseidon2.metal");
-    let contents = std::fs::read_to_string(metal_path).expect("read poseidon2.metal");
+    let metal_path = concat!(env!("CARGO_MANIFEST_DIR"), "/metal/kernels/poseidon.metal");
+    let contents = std::fs::read_to_string(metal_path).expect("read poseidon.metal");
     let round_constants = parse_constant_table(&contents, "ROUND_CONSTANTS");
     assert_eq!(
         round_constants.as_slice(),
@@ -56,8 +56,8 @@ fn cuda_poseidon_tables_match_manifest() {
 fn accelerator_sources_pin_the_bijective_goldilocks_sbox() {
     assert_eq!(SBOX_EXPONENT, 7);
 
-    let metal_path = concat!(env!("CARGO_MANIFEST_DIR"), "/metal/kernels/poseidon2.metal");
-    let metal = std::fs::read_to_string(metal_path).expect("read poseidon2.metal");
+    let metal_path = concat!(env!("CARGO_MANIFEST_DIR"), "/metal/kernels/poseidon.metal");
+    let metal = std::fs::read_to_string(metal_path).expect("read poseidon.metal");
     assert!(metal.contains("pow7_vec(add_mod_vec"));
     assert!(metal.contains("chunk[i].x = pow7(chunk[i].x)"));
     assert!(!metal.contains("pow5_vec"));

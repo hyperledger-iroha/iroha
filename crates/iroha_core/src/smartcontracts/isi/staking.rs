@@ -2518,10 +2518,8 @@ mod tests {
         record_block_commit(&mut activation_block, &block);
         activation_block.commit().unwrap();
         let view = state.view();
-        let roster =
-            <crate::state::StateView as crate::state::StakeSnapshot>::epoch_validator_peer_ids(
-                &view, 0,
-            )
+        let roster = view
+            .epoch_validator_peer_ids_for_testing(0)
             .expect("stake-elected roster should be present");
         assert_eq!(
             roster,
@@ -3337,7 +3335,7 @@ mod tests {
             PublicLaneValidatorStatus::PendingActivation(2)
         ));
         stx.apply();
-        state_block.commit().unwrap();
+        state_block.commit_world_overlay_for_testing().unwrap();
         let mut activate_block = state.block(block_header_with_height(5));
         let mut activate_stx = activate_block.transaction();
         let err = ActivatePublicLaneValidator {
@@ -3351,11 +3349,13 @@ mod tests {
             Error::InvariantViolation(msg) if msg.contains("activation epoch not reached")
         ));
         activate_stx.apply();
-        activate_block.commit().unwrap();
+        activate_block.commit_world_overlay_for_testing().unwrap();
         let mut intermediate_block = state.block(block_header_with_height(6));
         let intermediate_stx = intermediate_block.transaction();
         intermediate_stx.apply();
-        intermediate_block.commit().unwrap();
+        intermediate_block
+            .commit_world_overlay_for_testing()
+            .unwrap();
         let mut activate_block = state.block(block_header_with_height(7));
         let mut activate_stx = activate_block.transaction();
         ActivatePublicLaneValidator {
@@ -3374,7 +3374,7 @@ mod tests {
         assert_eq!(record.activation_epoch, Some(2));
         assert_eq!(record.activation_height, Some(7));
         activate_stx.apply();
-        activate_block.commit().unwrap();
+        activate_block.commit_world_overlay_for_testing().unwrap();
         let view = state.view();
         let stored = view
             .world
@@ -3430,7 +3430,7 @@ mod tests {
         assert_eq!(record.activation_epoch, Some(0));
         assert_eq!(record.activation_height, Some(1));
         stx.apply();
-        state_block.commit().unwrap();
+        state_block.commit_world_overlay_for_testing().unwrap();
     }
     #[test]
     fn rewards_reject_non_active_validator() {
@@ -3675,12 +3675,12 @@ mod tests {
         .execute(&validator, &mut stx)
         .expect("register validator");
         stx.apply();
-        state_block.commit().unwrap();
+        state_block.commit_world_overlay_for_testing().unwrap();
         let block2 = new_block_with_height(5);
         let mut state_block2 = state.block(block2.as_ref().header());
         let stx2 = state_block2.transaction();
         stx2.apply();
-        state_block2.commit().unwrap();
+        state_block2.commit_world_overlay_for_testing().unwrap();
         let block3 = new_block_with_height(6);
         let view = state.view();
         let pending_record = view
@@ -3700,7 +3700,7 @@ mod tests {
         let mut state_block3 = state.block(block3.as_ref().header());
         let stx3 = state_block3.transaction();
         stx3.apply();
-        state_block3.commit().unwrap();
+        state_block3.commit_world_overlay_for_testing().unwrap();
         let block4 = new_block_with_height(7);
         let state_block4 = state.block(block4.as_ref().header());
         let record = state_block4
@@ -3715,7 +3715,7 @@ mod tests {
         );
         assert_eq!(record.activation_epoch, Some(2));
         assert_eq!(record.activation_height, Some(7));
-        state_block4.commit().unwrap();
+        state_block4.commit_world_overlay_for_testing().unwrap();
         let view = state.view();
         let stored = view
             .world
@@ -3759,13 +3759,13 @@ mod tests {
             .expect("pending record")
             .activation_height = Some(99);
         stx.apply();
-        state_block.commit().unwrap();
+        state_block.commit_world_overlay_for_testing().unwrap();
         // Insert an intermediate block to keep heights monotonic before the activation block.
         let block2 = new_block_with_height(2);
         let mut mid_block = state.block(block2.as_ref().header());
         let mid_tx = mid_block.transaction();
         mid_tx.apply();
-        mid_block.commit().unwrap();
+        mid_block.commit_world_overlay_for_testing().unwrap();
         let block3 = new_block_with_height(3);
         let mut activation_block = state.block(block3.as_ref().header());
         let mut stx3 = activation_block.transaction();
@@ -3889,7 +3889,7 @@ mod tests {
         .execute(&validator, &mut stx)
         .expect("mark exiting validator");
         stx.apply();
-        state_block.commit().unwrap();
+        state_block.commit_world_overlay_for_testing().unwrap();
         let block2 = new_block_with_height_and_time(2, 10);
         let mut state_block = state.block(block2.as_ref().header());
         let mut stx = state_block.transaction();
@@ -3961,7 +3961,7 @@ mod tests {
         .execute(&validator, &mut stx)
         .expect("register validator");
         stx.apply();
-        state_block.commit().unwrap();
+        state_block.commit_world_overlay_for_testing().unwrap();
         let block2 = new_block_with_height_and_time(2, 5);
         let mut state_block = state.block(block2.as_ref().header());
         let mut stx = state_block.transaction();
@@ -3987,7 +3987,7 @@ mod tests {
         .expect("exit slashed validator");
         finalize_validator_lifecycle(&mut stx).expect("finalize exit lifecycle");
         stx.apply();
-        state_block.commit().unwrap();
+        state_block.commit_world_overlay_for_testing().unwrap();
         let exited = state
             .view()
             .world
@@ -4039,7 +4039,7 @@ mod tests {
             "stake shares must be rebuilt for the re-registered validator"
         );
         stx.apply();
-        state_block.commit().unwrap();
+        state_block.commit_world_overlay_for_testing().unwrap();
     }
     #[test]
     #[allow(clippy::too_many_lines)]
@@ -4070,7 +4070,7 @@ mod tests {
         .execute(&validator, &mut stx)
         .expect("mark validator exiting");
         stx.apply();
-        state_block.commit().unwrap();
+        state_block.commit_empty_block_for_testing().unwrap();
         // Prepare a replacement validator with bonded stake and a registered peer.
         let block2 = new_block_with_height_and_time(2, 10);
         let mut state_block = state.block(block2.as_ref().header());
@@ -4094,7 +4094,7 @@ mod tests {
             stx.apply();
             replacement
         };
-        state_block.commit().unwrap();
+        state_block.commit_empty_block_for_testing().unwrap();
         // Capacity is still consumed while the original validator is exiting.
         let block3 = new_block_with_height_and_time(3, 10);
         let mut state_block = state.block(block3.as_ref().header());
@@ -4120,7 +4120,7 @@ mod tests {
             ));
             drop(stx);
         }
-        state_block.commit().unwrap();
+        state_block.commit_empty_block_for_testing().unwrap();
         // After the release timestamp elapses, exit finalization frees capacity.
         let block4 = new_block_with_height_and_time(4, 60);
         let mut state_block = state.block(block4.as_ref().header());
@@ -4142,7 +4142,7 @@ mod tests {
             .expect("capacity should free after exit release");
             stx.apply();
         }
-        state_block.commit().unwrap();
+        state_block.commit_empty_block_for_testing().unwrap();
         let view = state.view();
         let roster = view
             .world
@@ -4212,7 +4212,8 @@ mod tests {
         );
         {
             let view = state.view();
-            let roster = crate::state::StakeSnapshot::epoch_validator_peer_ids(&view, 0)
+            let roster = view
+                .epoch_validator_peer_ids_for_testing(0)
                 .expect("active validator should appear before key disable");
             assert!(
                 roster.contains(&validator_peer),
@@ -4227,8 +4228,9 @@ mod tests {
         record_block_commit(&mut state_block, &block);
         state_block.commit().unwrap();
         let view = state.view();
-        let roster =
-            crate::state::StakeSnapshot::epoch_validator_peer_ids(&view, 0).unwrap_or_default();
+        let roster = view
+            .epoch_validator_peer_ids_for_testing(0)
+            .unwrap_or_default();
         assert!(
             !roster.contains(&validator_peer),
             "disabled consensus key should remove validator from snapshot"
@@ -4284,7 +4286,8 @@ mod tests {
         );
         {
             let view = state.view();
-            let roster = crate::state::StakeSnapshot::epoch_validator_peer_ids(&view, 0)
+            let roster = view
+                .epoch_validator_peer_ids_for_testing(0)
                 .expect("validator should appear before topology change");
             assert!(
                 roster.contains(&validator_peer),
@@ -4302,8 +4305,9 @@ mod tests {
         record_block_commit(&mut state_block, &block);
         state_block.commit().unwrap();
         let view = state.view();
-        let roster =
-            crate::state::StakeSnapshot::epoch_validator_peer_ids(&view, 0).unwrap_or_default();
+        let roster = view
+            .epoch_validator_peer_ids_for_testing(0)
+            .unwrap_or_default();
         assert!(
             roster.contains(&validator_peer),
             "active validator should remain in the snapshot even if commit topology omits it"
@@ -4359,7 +4363,8 @@ mod tests {
         );
         {
             let view = state.view();
-            let roster = crate::state::StakeSnapshot::epoch_validator_peer_ids(&view, 0)
+            let roster = view
+                .epoch_validator_peer_ids_for_testing(0)
                 .expect("validator should appear before peer removal");
             assert!(
                 roster.contains(&validator_peer),
@@ -4381,8 +4386,9 @@ mod tests {
         record_block_commit(&mut state_block, &block);
         state_block.commit().unwrap();
         let view = state.view();
-        let roster =
-            crate::state::StakeSnapshot::epoch_validator_peer_ids(&view, 0).unwrap_or_default();
+        let roster = view
+            .epoch_validator_peer_ids_for_testing(0)
+            .unwrap_or_default();
         assert!(
             !roster.contains(&validator_peer),
             "validator should be dropped when its peer is removed from WSV"
@@ -4453,7 +4459,7 @@ mod tests {
             "validator not stored before apply"
         );
         stx.apply();
-        state_block.commit().unwrap();
+        state_block.commit_world_overlay_for_testing().unwrap();
         let view = state.view();
         let record = view
             .world
@@ -4759,7 +4765,7 @@ mod tests {
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
         stx.apply();
-        state_block.commit().unwrap();
+        state_block.commit_world_overlay_for_testing().unwrap();
         let view = state.view();
         let record = view
             .world
@@ -4946,7 +4952,7 @@ mod tests {
         .execute(&validator, &mut stx)
         .expect("re-register after exit");
         stx.apply();
-        state_block.commit().unwrap();
+        state_block.commit_world_overlay_for_testing().unwrap();
         let view = state.view();
         let record = view
             .world
@@ -5009,7 +5015,7 @@ mod tests {
         .execute(&validator, &mut stx)
         .unwrap();
         stx.apply();
-        state_block.commit().unwrap();
+        state_block.commit_empty_block_for_testing().unwrap();
         // Prepare replacement validator in a dedicated setup block.
         let setup_block = new_block_with_height_and_time(2, release_at_ms.saturating_sub(2_000));
         let mut setup_state_block = state.block(setup_block.as_ref().header());
@@ -5034,7 +5040,7 @@ mod tests {
         .execute(&ALICE_ID, &mut setup_tx)
         .unwrap();
         setup_tx.apply();
-        setup_state_block.commit().unwrap();
+        setup_state_block.commit_empty_block_for_testing().unwrap();
         let prerelease_block = new_block_with_height_and_time(3, release_at_ms.saturating_sub(1));
         let mut prerelease_state_block = state.block(prerelease_block.as_ref().header());
         {
@@ -5062,7 +5068,9 @@ mod tests {
             );
             prerelease_tx.apply();
         }
-        prerelease_state_block.commit().unwrap();
+        prerelease_state_block
+            .commit_empty_block_for_testing()
+            .unwrap();
         let post_block = new_block_with_height_and_time(4, release_at_ms.saturating_add(1));
         let mut post_state_block = state.block(post_block.as_ref().header());
         let mut post_tx = post_state_block.transaction();
@@ -5096,7 +5104,7 @@ mod tests {
             "release should finalize exit before replacement registers"
         );
         post_tx.apply();
-        post_state_block.commit().unwrap();
+        post_state_block.commit_empty_block_for_testing().unwrap();
         let view = state.view();
         assert!(
             view.world
@@ -5137,7 +5145,7 @@ mod tests {
                 .unwrap();
         }
         stx.apply();
-        state_block.commit().unwrap();
+        state_block.commit_world_overlay_for_testing().unwrap();
         let view = state.view();
         let record = view
             .world
@@ -5145,10 +5153,7 @@ mod tests {
             .get(&(LaneId::new(31), validator.clone()))
             .expect("validator record after peer removal");
         assert!(matches!(record.status, PublicLaneValidatorStatus::Exited));
-        let roster =
-            <crate::state::StateView as crate::state::StakeSnapshot>::epoch_validator_peer_ids(
-                &view, 0,
-            );
+        let roster = view.epoch_validator_peer_ids_for_testing(0);
         assert!(
             roster
                 .as_ref()
@@ -5208,7 +5213,7 @@ mod tests {
                 .unwrap();
         }
         stx.apply();
-        state_block.commit().unwrap();
+        state_block.commit_world_overlay_for_testing().unwrap();
         let view = state.view();
         let remaining_shares = view
             .world
@@ -5490,7 +5495,7 @@ mod tests {
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
         stx.apply();
-        state_block.commit().unwrap();
+        state_block.commit_world_overlay_for_testing().unwrap();
         let view = state.view();
         let escrow_asset = AssetId::new(asset_def_id.clone(), escrow.clone());
         let sink_asset = AssetId::new(asset_def_id.clone(), delegator.clone());
@@ -5697,7 +5702,7 @@ mod tests {
         .execute(&validator, &mut stx)
         .unwrap();
         stx.apply();
-        state_block.commit().unwrap();
+        state_block.commit_world_overlay_for_testing().unwrap();
         let view = state.view();
         let claimed = view
             .world
@@ -5747,7 +5752,7 @@ mod tests {
         .execute(&validator, &mut stx)
         .unwrap();
         stx.apply();
-        state_block.commit().unwrap();
+        state_block.commit_world_overlay_for_testing().unwrap();
         let view = state.view();
         let claimed = view
             .world
@@ -5796,7 +5801,7 @@ mod tests {
         .execute(&validator, &mut stx)
         .unwrap();
         stx.apply();
-        state_block.commit().unwrap();
+        state_block.commit_world_overlay_for_testing().unwrap();
         let view = state.view();
         assert!(
             view.world
@@ -5844,7 +5849,7 @@ mod tests {
         .execute(&validator, &mut stx)
         .unwrap();
         stx.apply();
-        state_block.commit().unwrap();
+        state_block.commit_world_overlay_for_testing().unwrap();
         let view = state.view();
         let claimed = view
             .world
@@ -6070,7 +6075,7 @@ mod tests {
             .execute(&ALICE_ID, &mut stx)
             .expect("cancel evidence penalty");
         stx.apply();
-        state_block.commit().unwrap();
+        state_block.commit_world_overlay_for_testing().unwrap();
         let view = state.world.consensus_evidence.view();
         let updated = view.get(&key).expect("evidence record");
         assert!(updated.penalty_cancelled);

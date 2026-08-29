@@ -275,10 +275,9 @@ LaneConfigEntry {
   commits successfully, so those runtime, topology, and world indexes cannot
   leak from a block whose transaction commit later fails. Staged autoscale, DA,
   or verified-relay side effects with a missing inserted transaction block abort
-  before geometry reconciliation, WSV cleanup, or relay-cache hydration.
-  WSV-only commits without an inserted transaction block still persist their
-  world mutations, but do not advance block metadata caches or query-index
-  status.
+  before geometry reconciliation, WSV cleanup, relay-cache hydration, or any
+  world-state publication. Every committed WSV mutation therefore belongs to a
+  canonical transaction block and advances through the same atomic commit path.
   Commit also
   completes fallible autoscale geometry reconciliation before the transaction
   commit and publishes the autoscale catalog/runtime reset before staged DA

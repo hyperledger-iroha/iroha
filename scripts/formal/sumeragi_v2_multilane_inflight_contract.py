@@ -2479,11 +2479,24 @@ INFLIGHT_LAYOUT_PRODUCTION_BINDINGS = (
             "canonical_lane_queue_reservation_group_identity_projection(",
             "replacement.retirement_hash() != Some(self.retirement_hash)",
             "let (action, actor, before, after) = if finalize_release",
-            "match release_mode",
+            "let replacement_disposition = replacement.replica_queue_disposition()",
+            "replacement_disposition != released_disposition.replica_queue_disposition()",
+            "match (release_mode, released_disposition)",
             "AutonomousLaneClaimReleaseAuthorizationMode::QueuePrepared",
             "AutonomousLaneClaimReleaseAuthorizationMode::ReplicaFifo",
-            "if self.actor == self.producer",
+            "if self.actor == self.producer {\n"
+            "                            return Err(\n"
+            '                                "producer cannot use non-Queue '
+            'replica FIFO release authority"',
+            "AutonomousLaneClaimReleaseAuthorizationMode::ReplicaDisposition",
+            "AutonomousLaneReleasedClaimDisposition::ReplicaQueueAbsent",
+            "AutonomousLaneReleasedClaimDisposition::ReplicaQueueFifoPreserved",
+            "if self.actor == self.producer {\n"
+            "                            return Err(\n"
+            '                                "producer cannot use replica Queue '
+            'disposition authority"',
             "IN_FLIGHT_FIRST_RELEASE_RESERVATION_DIRECT_RELEASED",
+            "disposition.reservation_state()",
             "self.actor,",
             "IN_FLIGHT_FIRST_RELEASE_ACTION_ADVANCE_RELEASED",
             "IN_FLIGHT_FIRST_RELEASE_ACTION_ADVANCE_RELEASE_PENDING",
@@ -2851,9 +2864,15 @@ INFLIGHT_LAYOUT_PRODUCTION_BINDINGS = (
             "certified_merge_queue_reservation_hashes(",
             "state_block.staged_merge_entry()",
             "staged_merge_queue_reservation_hashes",
-            "self.queue.remove_committed_hashes(",
             ".filter(|entrypoint_hash|",
             "!staged_merge_queue_reservation_hashes.contains(entrypoint_hash)",
+            "globally_bound_durable_claim_hashes(committed_queue_hashes.iter().copied())",
+            "authorize_completed_autonomous_queue_cleanup_for_entrypoints(",
+            "self.network_id,",
+            "&terminal_candidates,",
+            "remove_committed_hashes_with_kura_terminal_authorizations(",
+            "committed_queue_hashes,",
+            "terminal_authorizations,",
         ),
     ),
     (
@@ -3804,13 +3823,27 @@ INFLIGHT_LAYOUT_ORDERED_SOURCE_CHECKS = (
             "let binding_a =",
             "if replacement.retirement_hash() != Some(self.retirement_hash)",
             "let (action, actor, before, after) = if finalize_release",
-            "let (reservation_state, fifo_restored, actor) = match release_mode",
+            "let replacement_disposition = replacement.replica_queue_disposition();",
+            "replacement_disposition != released_disposition.replica_queue_disposition()",
+            "let (reservation_state, fifo_restored, actor) =",
+            "match (release_mode, released_disposition) {",
             "AutonomousLaneClaimReleaseAuthorizationMode::QueuePrepared",
             "AutonomousLaneClaimReleaseAuthorizationMode::ReplicaFifo",
-            "if self.actor == self.producer",
+            "if self.actor == self.producer {\n"
+            "                            return Err(\n"
+            '                                "producer cannot use non-Queue '
+            'replica FIFO release authority"',
             "IN_FLIGHT_FIRST_RELEASE_RESERVATION_DIRECT_RELEASED",
             "true,",
             "self.actor,",
+            "AutonomousLaneClaimReleaseAuthorizationMode::ReplicaDisposition",
+            "AutonomousLaneReleasedClaimDisposition::ReplicaQueueAbsent",
+            "AutonomousLaneReleasedClaimDisposition::ReplicaQueueFifoPreserved",
+            "if self.actor == self.producer {\n"
+            "                            return Err(\n"
+            '                                "producer cannot use replica Queue '
+            'disposition authority"',
+            "disposition.reservation_state()",
             "IN_FLIGHT_FIRST_RELEASE_ACTION_ADVANCE_RELEASED",
             "IN_FLIGHT_FIRST_RELEASE_ACTION_ADVANCE_RELEASE_PENDING",
             "let projection = ProductionInFlightFirstReleaseTransitionProjection {",

@@ -151,8 +151,8 @@ IVM/Crypto will target these two kernels in the next accel sweep. Baseline budge
 The latest FASTPQ CUDA sweep closed the obvious buildability/parity regressions on
 Linux: the `fastpq-gpu` feature path now compiles with CUDA 12.0 on a GCC 13 host
 by steering NVCC to a supported host compiler and disabling the conflicting
-device-debug flags, and the regular/fused Poseidon column-hash paths now match
-the CPU reference once the GPU batch builders use the same trace-column and
+device-debug flags, and the sole batched Poseidon column plus Merkle-pair path
+matches the CPU reference because its builders use the same trace-column and
 trace-node domains as the scalar sponge. The next tuning pass should therefore
 focus on device-resident workspaces and copy elimination rather than re-fighting
 basic parity issues. That work has advanced again: the native CUDA FFT/IFFT/LDE

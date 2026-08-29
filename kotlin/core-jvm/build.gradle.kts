@@ -43,6 +43,11 @@ kotlin {
 
 tasks.test {
     useJUnitPlatform()
+    inputs.file(
+        rootProject.layout.projectDirectory
+            .dir("..")
+            .file("fixtures/norito_rpc/atomic_private_settlement_sdk_v1.json"),
+    )
     inputs.file(rootProject.layout.projectDirectory.dir("..").file("fixtures/musubi/sdk_v1.json"))
     inputs.file(
         rootProject.layout.projectDirectory
@@ -57,6 +62,11 @@ tasks.test {
             .file("fixtures/sumeragi_v2/native_amx_v2_grouped.json"),
     )
     inputs.file(rootProject.layout.projectDirectory.dir("..").file("fixtures/numeric_v1_golden.json"))
+    inputs.file(
+        rootProject.layout.projectDirectory
+            .dir("..")
+            .file("fixtures/kotodama/entrypoint_argument_record_v1.json"),
+    )
     inputs.file(rootProject.layout.projectDirectory.dir("..").file("fixtures/zk/verifying_key_record_v1.json"))
     inputs.file(
         rootProject.layout.projectDirectory

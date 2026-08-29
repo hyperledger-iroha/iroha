@@ -26062,6 +26062,7 @@ def _transport_geometry_production_source_fidelity_errors(
     reviewed_roles = {
         "core": "crates/iroha_core/src/sumeragi/mod.rs",
         "runtime": "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+        "p2p_network": "crates/iroha_p2p/src/network.rs",
     }
     for role, path in paths.items():
         if role in reviewed_roles:
@@ -28290,7 +28291,7 @@ if max_frame_bytes > crate::MAX_ENCRYPTED_FRAME_BYTES {
     p2p_start_context = (
         (
             "impl", "<", "T", ":", "Pload", "+", "message", "::", "ClassifyTopic",
-            ",", "E", ":", "Enc", "+", "Sync", ">", "NetworkBaseHandle", "<", "T",
+            "+", "Sync", ",", "E", ":", "Enc", "+", "Sync", ">", "NetworkBaseHandle", "<", "T",
             ",", "E", ">",
         ),
     )
@@ -28354,6 +28355,11 @@ Self::start_with_crypto_and_initial_trusted_sources(
     if p2p_start_inner is not None:
         expected_first_guard = rust_code_tokens(
             """
+let quic_enabled = validate_shipping_quic_policy(quic_enabled)?;
+let quic_datagrams_enabled =
+    validate_shipping_quic_datagram_policy(quic_datagrams_enabled)?;
+let (allow_nets, deny_nets) =
+    parse_acl_cidrs(&allow_cidrs, &deny_cidrs).map_err(invalid_transport_geometry)?;
 let P2pIdentityKeys {
     node: key_pair,
     soranet_transport,
@@ -28375,9 +28381,39 @@ let transport_geometry = validate_transport_queue_geometry::<E>(
         body_tokens = rust_code_tokens(p2p_start_inner.body)
         if body_tokens[: len(expected_first_guard)] != expected_first_guard:
             errors.append(
-                f"{p2p_start_path}:{p2p_start_inner.line}: complete transport geometry "
-                "validation must be the first P2P startup action before any listener bind"
+                f"{p2p_start_path}:{p2p_start_inner.line}: shipping-transport, ACL, "
+                "identity, and complete frame geometry validation must retain their "
+                "exact fail-closed prefix before any listener bind"
             )
+        _require_rust_token_sequence(
+            p2p_start_path,
+            p2p_start_inner,
+            """
+let max_total_connections = max_total_connections.map_or(
+    iroha_config::parameters::defaults::network::lane_profile::CORE_MAX_TOTAL_CONNECTIONS,
+    core::num::NonZeroUsize::get,
+);
+crate::preauth::PreauthDeadline::from_now(preauth_timeout).ok_or_else(|| {
+    io::Error::new(
+        io::ErrorKind::InvalidInput,
+        "network.preauth_timeout_ms cannot be represented by the monotonic clock",
+    )
+})?;
+""",
+            "pre-authentication tenure must be representable before listener publication",
+            errors,
+        )
+        _require_rust_token_sequence(
+            p2p_start_path,
+            p2p_start_inner,
+            """
+let preauth_capacity = Arc::new(Semaphore::new(max_total_connections));
+let preauth_source_gate = Arc::new(PreauthSourceGate::new(preauth_max_connections_per_ip));
+let mut listener_tasks = Vec::new();
+""",
+            "global and per-source pre-authentication ownership gates must exist before listener publication",
+            errors,
+        )
 
     for expected, description in (
         (
@@ -28473,6 +28509,14 @@ let mut emitter = Emitter::new();
             "reviewed first-release AEAD frame expansion",
         ),
         (
+            "pub const PREAUTH_TIMEOUT: Duration = Duration::from_secs(30);",
+            "reviewed pre-authentication absolute tenure",
+        ),
+        (
+            "pub const PREAUTH_MAX_CONNECTIONS_PER_IP: NonZeroUsize = nonzero!(8_usize);",
+            "reviewed per-source pre-authentication connection cap",
+        ),
+        (
             "pub const P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_BYTES: NonZeroUsize = "
             "nonzero!(128 * 1024 * 1024_usize);",
             "reviewed high-priority encrypted-frame byte reserve",
@@ -28532,6 +28576,52 @@ let mut emitter = Emitter::new();
     actual_source = sources["actual"]
     user_path = paths["user"]
     user_source = sources["user"]
+    _require_rust_source_token_sequence(
+        actual_path,
+        actual_source,
+        """
+pub preauth_timeout: Duration,
+pub preauth_max_connections_per_ip: NonZeroUsize,
+pub reply_writer_flush_timeout: Duration,
+""",
+        "actual network config retains pre-authentication tenure and per-source admission cap",
+        errors,
+    )
+    _require_rust_source_token_sequence(
+        user_path,
+        user_source,
+        """
+#[config(default = "defaults::network::PREAUTH_TIMEOUT.into()")]
+pub preauth_timeout_ms: DurationMs,
+#[config(default = "defaults::network::PREAUTH_MAX_CONNECTIONS_PER_IP")]
+pub preauth_max_connections_per_ip: NonZeroUsize,
+""",
+        "user network config exposes the pre-authentication tenure and per-source admission cap",
+        errors,
+    )
+    _require_rust_source_token_sequence(
+        user_path,
+        user_source,
+        """
+let idle_timeout = idle_timeout.get().max(min_interval);
+let preauth_timeout = preauth_timeout.get().max(min_interval);
+let reply_writer_flush_timeout = reply_writer_flush_timeout.get().max(min_interval);
+""",
+        "user network parsing clamps pre-authentication and reply-writer tenures to the timer floor",
+        errors,
+    )
+    _require_rust_source_token_sequence(
+        user_path,
+        user_source,
+        """
+idle_timeout,
+preauth_timeout,
+preauth_max_connections_per_ip,
+reply_writer_flush_timeout,
+""",
+        "user-to-actual network mapping preserves both pre-authentication controls",
+        errors,
+    )
     for field in (
         "max_frame_bytes",
         "max_frame_bytes_consensus",
@@ -29262,7 +29352,7 @@ Ok(())
     network_handle_context = (
         (
             "impl", "<", "T", ":", "Pload", "+", "message", "::", "ClassifyTopic",
-            ",", "E", ":", "Enc", "+", "Sync", ">", "NetworkBaseHandle", "<",
+            "+", "Sync", ",", "E", ":", "Enc", "+", "Sync", ">", "NetworkBaseHandle", "<",
             "T", ",", "E", ">",
         ),
     )
@@ -31039,7 +31129,7 @@ let admitted = if broadcast {
         network_reliable_items.get("new_targeted_post"),
         """
 Self {
-    message: Some(message),
+    message: Some(AdmittedNetworkPayload::from_network(message)),
     byte_lease: byte_lease.into(),
     progress_authority: Some(authority),
     remaining_broadcast_targets: None,
@@ -31387,15 +31477,15 @@ struct ActorProgressSource {
         p2p_network_path,
         p2p_network_source,
         """
-struct AdmittedNetworkMessage<T> {
-    message: Option<NetworkMessage<T>>,
-    byte_lease: NetworkActorLease,
-    progress_authority: Option<ProgressDeliveryAuthority>,
-    remaining_broadcast_targets: Option<VecDeque<PeerId>>,
-    pending_flush_acks: HashMap<PeerId, PendingWriterFlush>,
-    reply_writer_timeout_attempt: Option<u8>,
-    reply_writer_deadline: Option<ExactReplyWriterDeadline>,
-    reply_flush_ack: Option<tokio::sync::oneshot::Sender<NetworkReplyFlushCompletion>>,
+pub(super) struct AdmittedNetworkMessage<T> {
+    pub(super) message: Option<AdmittedNetworkPayload<T>>,
+    pub(super) byte_lease: NetworkActorLease,
+    pub(super) progress_authority: Option<ProgressDeliveryAuthority>,
+    pub(super) remaining_broadcast_targets: Option<VecDeque<PeerId>>,
+    pub(super) pending_flush_acks: HashMap<PeerId, PendingWriterFlush>,
+    pub(super) reply_writer_timeout_attempt: Option<u8>,
+    pub(super) reply_writer_deadline: Option<ExactReplyWriterDeadline>,
+    pub(super) reply_flush_ack: Option<tokio::sync::oneshot::Sender<NetworkReplyFlushCompletion>>,
 }
 """,
         "single actor owner carries message, bytes, delivery authority, target cursor, writer receivers, timeout attempt, fixed deadline, and typed reply completion sender",
@@ -31536,10 +31626,12 @@ self.terminating_connections.insert(conn_id);
         """
 let Some(tenure) = self.reply_route_tenures.remove(&conn_id) else {
     self.terminating_connections.remove(&conn_id);
+    self.protocol_rejected_connections.remove(&conn_id);
     return 0;
 };
 tenure.cancel();
 self.terminating_connections.remove(&conn_id);
+self.protocol_rejected_connections.remove(&conn_id);
 self.network_actor_progress_budget
     .cancel_reply_route(&tenure)
 """,
@@ -31588,6 +31680,7 @@ if let Some(tenure) = self.reply_route_tenures.get(&conn_id).cloned() {
     }
 } else {
     self.terminating_connections.remove(&conn_id);
+    self.protocol_rejected_connections.remove(&conn_id);
 }
 """,
         "peer termination fences writes immediately but defers exact delivery-authority retirement until every local receiver releases its guard",
@@ -31824,7 +31917,7 @@ if transferred {
         p2p_network_path,
         network_reliable_items.get("post_reliable_actor_frame_to_writer"),
         """
-match ref_peer.handle.post_recover_with_flush_ack(frame) {
+match ref_peer.handle.post_recover_with_flush_ack(frame.clone()) {
     Ok(receiver) => {
 """,
         "reliable actor dispatch enters the ownership-bearing peer writer",
@@ -49792,7 +49885,7 @@ asyncServeProducerTurnReady' =
             "AsyncTimeoutControlDependencyAdvancesLeaderWire": (
                 "/\\ owner.phase \\in {\"Proposal\", \"PrepareVote\", "
                 "\"CommitVote\", \"PrepareQC\", \"CommitQC\", "
-                "\"TimeoutVote\"} "
+                "\"TimeoutVote\", \"Chunk\"} "
                 "/\\ item.kind \\in {\"TimeoutVote\", \"TimeoutCertificate\"} "
                 "/\\ AsyncControlItemContext(item) = owner.context "
                 "/\\ DeliveryHeight(item) = owner.height "
@@ -53612,6 +53705,7 @@ self.finality_completion.is_some()
     && self.pending_runner_decision_cleanup.is_none()
     && self.live_lifecycle_decision_apply.is_none()
     && self.live_lifecycle_validate_successor.is_none()
+    && self.pending_released_lifecycle_validate_apply.is_none()
     && self.retained_effect_batch.is_none()
     && self.parked_effect_batch.is_none()
 """,

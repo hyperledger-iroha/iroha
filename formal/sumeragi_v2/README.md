@@ -1741,9 +1741,9 @@ rotating-leader progress, or another liveness claim.
 `MergeSidecarLifecycleSnapshotV3` is the sole durable lifecycle schema. It
 contains geometry, `next_stream_epoch`, responder generation, requester
 streams, the unified bounded server-stream table, request gates, and the root
-generation; V1/V2 are unsupported rather than decoded or migrated. Before the
-state directory exists, the root is atomically published and fsynced as a
-generation-zero bootstrap sentinel with no snapshot hash. A surviving
+generation. Before the state directory exists, the root is atomically
+published and fsynced as a generation-zero bootstrap sentinel with no snapshot
+hash. A surviving
 generation-one candidate beside that sentinel is semantically validated and
 rechecked before the root adopts it. Later snapshots alternate between two
 immutable state slots. The inactive slot is fsynced first and an independent
@@ -1770,7 +1770,7 @@ generation and preserves retained responder state. A new same-roster requester
 against a full table, an unauthorized active-state replacement, or overflow
 returns `Capacity` atomically.
 The canonical module/test TSV inventory SHA-256 is
-`39d0b3083847ad0ad8bcf5c67469b20b9a056148fad90679d753a9e63b07455b`.
+`44784c79c489d83ab142bb0db84e89138c3a54b1349926a80597e2c5b21a83df`.
 The six boundaries preserve the predecessor CommitQC through wire-to-core
 conversion, block rollover until the decided lane session is durable, reopen a
 globally finalized tip whose lane evidence is incomplete, filter terminal

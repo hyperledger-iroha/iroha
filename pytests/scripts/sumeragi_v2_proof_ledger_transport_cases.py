@@ -287,7 +287,7 @@ def test_merge_sidecar_holder_semantics_survive_item_digest_refresh(
             ),
         ),
         (
-            Path("crates/iroha_p2p/src/network.rs"),
+            Path("crates/iroha_p2p/src/network/reliable_actor.rs"),
             "release_cancelled_targets",
             "entry.publish_ready_exact_reply_before_terminal_drop();",
             "let _unfenced = &entry;",
@@ -737,7 +737,12 @@ def test_transport_geometry_source_fidelity_rejects_reply_flush_ack_mutants(
         tmp_path, module, "SumeragiV2AsyncNetwork.tla"
     )
     repo_root = formal_dir.parents[2]
-    network_path = repo_root / "crates" / "iroha_p2p" / "src" / "network.rs"
+    network_relative = (
+        Path("crates/iroha_p2p/src/network/reliable_actor.rs")
+        if item_name in {"into_dispatch_parts", "retain_after_dispatch_attempt"}
+        else Path("crates/iroha_p2p/src/network.rs")
+    )
+    network_path = repo_root / network_relative
     mutate_rust_item_source(module, network_path, item_name, old, new)
 
     errors = module._transport_geometry_production_source_fidelity_errors(repo_root)
@@ -759,7 +764,7 @@ def test_transport_geometry_source_fidelity_rejects_reply_flush_ack_mutants(
             ),
         ),
         (
-            Path("crates/iroha_p2p/src/network.rs"),
+            Path("crates/iroha_p2p/src/network/reliable_actor.rs"),
             "new_targeted_post",
             (("impl", "<", "T", ">", "AdmittedNetworkMessage", "<", "T", ">"),),
             "pending_flush_acks: HashMap::new(),\n"
@@ -776,7 +781,7 @@ def test_transport_geometry_source_fidelity_rejects_reply_flush_ack_mutants(
             ),
         ),
         (
-            Path("crates/iroha_p2p/src/network.rs"),
+            Path("crates/iroha_p2p/src/network/reliable_actor.rs"),
             "push_back",
             (
                 (
@@ -802,7 +807,7 @@ def test_transport_geometry_source_fidelity_rejects_reply_flush_ack_mutants(
             ),
         ),
         (
-            Path("crates/iroha_p2p/src/network.rs"),
+            Path("crates/iroha_p2p/src/network/reliable_actor.rs"),
             "retry_back",
             (
                 (

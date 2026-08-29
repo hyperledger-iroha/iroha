@@ -485,13 +485,8 @@ mod tests {
             transaction.apply();
         }
         state_block
-            .commit()
+            .commit_empty_block_for_testing()
             .expect("commit deployment-state anchor");
-        {
-            let mut block_hashes = app.state.block_hashes.block();
-            block_hashes.push_for_tests(block_hash);
-            block_hashes.commit_for_tests();
-        }
         assert_eq!(app.state.view().latest_block_hash(), Some(block_hash));
         block_hash
     }

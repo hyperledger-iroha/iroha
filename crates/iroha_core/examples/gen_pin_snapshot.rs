@@ -85,7 +85,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .execute(&alice(), &mut tx)?;
     }
     tx.apply();
-    block.commit()?;
+    block.commit_world_overlay_for_testing()?;
     let view = state.view();
     let world = view.world();
     let manifest = world.pin_manifests().get(&digest).expect("manifest stored");

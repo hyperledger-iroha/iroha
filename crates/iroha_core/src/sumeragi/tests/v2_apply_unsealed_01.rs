@@ -385,7 +385,7 @@ v2_apply_test!(committed_merge_reservation_is_finalized_exactly_once, {
         .service
         .publish_committed_block_merge_entry(&carrier)
         .expect("publish exact committed merge application evidence");
-    fixture.state.record_direct_committed_entrypoints(
+    fixture.state.record_committed_entrypoints_for_tests(
         [reservation.entrypoint_hash],
         NonZeroUsize::new(2).expect("committed carrier height"),
     );
@@ -507,7 +507,7 @@ v2_apply_test!(
             .collect::<Vec<_>>();
         let keys = members.iter().map(|(_, key)| *key).collect::<Vec<_>>();
         let (_parent, entry) = merge_entry_with_reservations(&fixture.context, members);
-        fixture.state.record_direct_committed_entrypoints(
+        fixture.state.record_committed_entrypoints_for_tests(
             [keys[0].entrypoint_hash],
             NonZeroUsize::new(1).expect("committed height"),
         );
@@ -536,7 +536,7 @@ v2_apply_test!(
             "all group owners must remain live after failed full-State preflight"
         );
         assert!(queue.lane_reservation_commit_barriers().is_empty());
-        fixture.state.record_direct_committed_entrypoints(
+        fixture.state.record_committed_entrypoints_for_tests(
             [keys[1].entrypoint_hash],
             NonZeroUsize::new(1).expect("committed height"),
         );
@@ -643,7 +643,7 @@ v2_apply_test!(
             .expect("two-group result root");
         batch.execution_root = crate::merge::merge_execution_root(&batch.lanes);
         batch.batch_hash = crate::merge::merge_execution_batch_hash(batch);
-        fixture.state.record_direct_committed_entrypoints(
+        fixture.state.record_committed_entrypoints_for_tests(
             [first.entrypoint_hash, second.entrypoint_hash],
             NonZeroUsize::new(1).expect("committed height"),
         );
@@ -726,7 +726,7 @@ v2_apply_test!(committed_merge_reservation_rejects_bare_norito, {
         "framed and bare Norito must remain distinct"
     );
     *encoded = bare;
-    fixture.state.record_direct_committed_entrypoints(
+    fixture.state.record_committed_entrypoints_for_tests(
         [reservation.entrypoint_hash],
         NonZeroUsize::new(1).expect("committed height"),
     );
@@ -1256,7 +1256,7 @@ v2_apply_test!(
             .store_block_with_merge_entry(Arc::new(carrier.clone()), &entry)
             .expect("persist committed merge carrier and exact sidecar");
         fixture.persist_exact_v2_finality_chain(&[&parent, &carrier]);
-        fixture.state.record_direct_committed_entrypoints(
+        fixture.state.record_committed_entrypoints_for_tests(
             [reservation.entrypoint_hash],
             NonZeroUsize::new(2).expect("exact merge-carrier transaction height"),
         );
@@ -1293,7 +1293,7 @@ v2_apply_test!(
             "missing canonical State history must not consume Queue ownership"
         );
         commit_exact_fixture_carrier_chain_to_state(&fixture, &parent, &carrier);
-        fixture.state.record_direct_committed_entrypoints(
+        fixture.state.record_committed_entrypoints_for_tests(
             [reservation.entrypoint_hash],
             NonZeroUsize::new(1).expect("deliberately mismatched State membership height"),
         );
@@ -1364,7 +1364,7 @@ v2_apply_test!(
             mismatched_snapshot
         );
         assert!(replayed_queue.lane_reservation_startup_reconciliation_pending());
-        fixture.state.record_direct_committed_entrypoints(
+        fixture.state.record_committed_entrypoints_for_tests(
             [reservation.entrypoint_hash],
             NonZeroUsize::new(2).expect("exact merge-carrier State height"),
         );
@@ -1527,7 +1527,7 @@ v2_apply_test!(
             .expect("persist exact valid-prefix merge binding");
         fixture.persist_exact_v2_finality_chain(&[&parent, &first_carrier]);
         commit_exact_fixture_carrier_chain_to_state(&fixture, &parent, &first_carrier);
-        fixture.state.record_direct_committed_entrypoints(
+        fixture.state.record_committed_entrypoints_for_tests(
             [first.entrypoint_hash, second.entrypoint_hash],
             NonZeroUsize::new(2).expect("exact merge-carrier State height"),
         );
@@ -1639,7 +1639,7 @@ v2_apply_test!(committed_group_recovery_accepts_exact_commit_prefix, {
         .expect("persist full committed suffix merge group");
     fixture.persist_exact_v2_finality_chain(&[&parent, &carrier]);
     commit_exact_fixture_carrier_chain_to_state(&fixture, &parent, &carrier);
-    fixture.state.record_direct_committed_entrypoints(
+    fixture.state.record_committed_entrypoints_for_tests(
         keys.iter().map(|key| key.entrypoint_hash),
         NonZeroUsize::new(2).expect("exact committed suffix carrier State height"),
     );
@@ -1757,7 +1757,7 @@ v2_apply_test!(
             .expect("persist exact first committed group");
         fixture.persist_exact_v2_finality_chain(&[&parent, &carrier]);
         commit_exact_fixture_carrier_chain_to_state(&fixture, &parent, &carrier);
-        fixture.state.record_direct_committed_entrypoints(
+        fixture.state.record_committed_entrypoints_for_tests(
             first_keys
                 .iter()
                 .map(|key| key.entrypoint_hash)
@@ -1855,7 +1855,7 @@ v2_apply_test!(replayed_mixed_commit_barrier_group_reopens_startup_gate, {
         .expect("persist replayed commit barrier merge group");
     fixture.persist_exact_v2_finality_chain(&[&parent, &carrier]);
     commit_exact_fixture_carrier_chain_to_state(&fixture, &parent, &carrier);
-    fixture.state.record_direct_committed_entrypoints(
+    fixture.state.record_committed_entrypoints_for_tests(
         keys.iter().map(|key| key.entrypoint_hash),
         NonZeroUsize::new(2).expect("exact replayed commit barrier carrier State height"),
     );
@@ -1929,7 +1929,7 @@ v2_apply_test!(
             .expect("install partial-state reservation journal");
         let (payload, _) = reserve_autonomous_crash_batch(&fixture, &queue, &producer);
         let keys = payload.reservation_keys.clone();
-        fixture.state.record_direct_committed_entrypoints(
+        fixture.state.record_committed_entrypoints_for_tests(
             [keys[0].entrypoint_hash],
             NonZeroUsize::new(1).expect("partial committed height"),
         );

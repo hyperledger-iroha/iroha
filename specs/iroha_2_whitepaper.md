@@ -230,9 +230,9 @@ Smart contracts run on the Iroha Virtual Machine (IVM):
   explicit and version-controlled. Runtime changes flow through `SetParameter` instructions.
 - **Observability:** `iroha_telemetry` exports Prometheus metrics, structured logs, and dashboard data checked
   by CI scripts (`ci/check_swift_dashboards.sh`, `scripts/render_swift_dashboards.sh`,
-  `scripts/check_swift_dashboard_data.py`). Streaming and consensus events are available over WebSocket, and
-  `scripts/sumeragi_backpressure_log_scraper.py` correlates pacemaker backpressure with telemetry for
-  troubleshooting. Hijiri parameters use the existing parameter query and event surfaces; there is no
+  `scripts/check_swift_dashboard_data.py`). Streaming and consensus events are available over WebSocket;
+  authenticated status plus transaction, ingress, and P2P queue metrics provide consensus diagnostics.
+  Hijiri parameters use the existing parameter query and event surfaces; there is no
   dedicated Hijiri event stream.
 - **Testing:** `cargo test --workspace`, integration tests (`integration_tests/`), language SDK suites, and
   Norito golden fixtures protect determinism. Pointer ABI, syscall lists, and governance manifests have

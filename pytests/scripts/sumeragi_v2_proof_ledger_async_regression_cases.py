@@ -2215,7 +2215,7 @@ def test_asyncnetwork_authority_and_order_contract_fails_closed(
         ),
         (
             "AsyncTimeoutControlDependencyAdvancesLeaderWire",
-            '"PrepareQC", "CommitQC", "TimeoutVote"}',
+            '"PrepareQC", "CommitQC", "TimeoutVote", "Chunk"}',
             '"PrepareQC", "CommitQC", "TimeoutVote", "CertifiedResponse"}',
         ),
         (

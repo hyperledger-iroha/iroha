@@ -52,9 +52,12 @@
 use core::{convert::Infallible, fmt};
 
 use super::{
+    collective::RnsNativeQpcsCompositeAuthorityV2,
     rns_native_global_lookup_z_commitment_view::rns_native_global_inverse_product_sumcheck::RNS_NATIVE_GLOBAL_MEMBERSHIP_RESIDUAL_MAX_BYTES_V1,
     rns_native_profile::zk_ams_mkhe_rns_native_profile_manifest_v1,
     rns_native_source::ZK_AMS_MKHE_RNS_NATIVE_SOURCE_VERSION_V1,
+    rns_native_transcript::ZkAmsMkheRnsNativeChallengeSeedsV1,
+    rns_native_wire::ZkAmsMkheRnsNativeProofEnvelopeV1,
 };
 
 use crate::{
@@ -839,6 +842,110 @@ pub(super) trait RnsNativeSourcePackingOwnedReplayPredecessorV2<'proof>:
     fn begin_authenticated_replay_v2(
         &mut self,
     ) -> Result<Self::Replay<'_>, RnsNativeSourcePackingSameOpeningErrorV1>;
+}
+
+/// Opaque proof that the exact direct/membership predecessor also passed the
+/// source/packing same-opening equation and its post-equation outer bind.
+///
+/// The authority is minted only by consuming the verified prerequisite below
+/// and is passed directly to that prerequisite's recursively owned
+/// predecessor.  It exposes no proof digest, residual, context parts, boolean
+/// attestation, or constructor.
+#[allow(
+    dead_code,
+    missing_copy_implementations,
+    reason = "the same-opening authority is consumed by one atomic composite transition"
+)]
+#[must_use = "same-opening authority must remain paired with its exact predecessor and envelope"]
+pub(super) struct RnsNativeSourcePackingCompositeAuthorityV2<'envelope> {
+    envelope: &'envelope ZkAmsMkheRnsNativeProofEnvelopeV1,
+    context: RnsNativeSourcePackingSameOpeningContextV1,
+    combined_outer_bindings: RnsNativeSourcePackingCombinedOuterBindingsV1,
+    manifest_digest: [u8; DIGEST_BYTES_V1],
+    source_context_digest: [u8; DIGEST_BYTES_V1],
+    point_root: [u8; DIGEST_BYTES_V1],
+    replay_receipt_digest: [u8; DIGEST_BYTES_V1],
+    pre_challenge_binding_digest: [u8; DIGEST_BYTES_V1],
+    tau_digest: [u8; DIGEST_BYTES_V1],
+    q_digest: [u8; DIGEST_BYTES_V1],
+    proof_digest: [u8; DIGEST_BYTES_V1],
+    residual_digest: [u8; DIGEST_BYTES_V1],
+    binding_digest: [u8; DIGEST_BYTES_V1],
+}
+
+impl RnsNativeSourcePackingCompositeAuthorityV2<'_> {
+    pub(super) fn validate_predecessor_v2(
+        &self,
+        safe_core: RnsNativeSourcePackingSafeCoreV1,
+        combined_outer_bindings: RnsNativeSourcePackingCombinedOuterBindingsV1,
+    ) -> Result<(), RnsNativeSourcePackingSameOpeningErrorV1> {
+        self.context.validate_v1()?;
+        self.combined_outer_bindings.validate_v1()?;
+        let proof_digests = [
+            self.manifest_digest,
+            self.source_context_digest,
+            self.point_root,
+            self.replay_receipt_digest,
+            self.pre_challenge_binding_digest,
+            self.tau_digest,
+            self.q_digest,
+            self.proof_digest,
+            self.residual_digest,
+            self.binding_digest,
+        ];
+        if self.context.safe_core != safe_core
+            || self.combined_outer_bindings != combined_outer_bindings
+            || self.manifest_digest != self.context.profile_manifest_digest
+            || self.source_context_digest != source_context_digest_v1(self.context)?
+            || proof_digests.contains(&[0; DIGEST_BYTES_V1])
+            || proof_digests
+                .iter()
+                .enumerate()
+                .any(|(index, digest)| proof_digests[index + 1..].contains(digest))
+        {
+            return Err(RnsNativeSourcePackingSameOpeningErrorV1::InvalidContext);
+        }
+        Ok(())
+    }
+
+    pub(super) fn validate_composite_context_v2(
+        &self,
+        envelope: &ZkAmsMkheRnsNativeProofEnvelopeV1,
+        transcript: &ZkAmsMkheRnsNativeChallengeSeedsV1,
+    ) -> Result<(), RnsNativeSourcePackingSameOpeningErrorV1> {
+        if !core::ptr::eq(self.envelope, envelope)
+            || self.context.profile_manifest_digest != transcript.profile_manifest_digest()
+            || self.context.source_binding_digest != transcript.source_binding_digest()
+            || self.context.main_snapshot_digest != transcript.main_snapshot_digest()
+            || self.context.nonce_snapshot_digest != transcript.nonce_snapshot_digest()
+            || self.context.source_receipt_digest != transcript.source_receipt_digest()
+            || envelope.profile_manifest_digest() != transcript.profile_manifest_digest()
+            || envelope.topology_digest() != transcript.topology_digest()
+            || envelope.release_candidate_digest() != transcript.release_candidate_digest()
+            || envelope.statement_digest() != transcript.statement_digest()
+            || envelope.operational_context_digest() != transcript.operational_context_digest()
+            || envelope.source_receipt_digest() != transcript.source_receipt_digest()
+        {
+            return Err(RnsNativeSourcePackingSameOpeningErrorV1::InvalidContext);
+        }
+        Ok(())
+    }
+}
+
+/// Purpose-specific atomic continuation implemented only by the concrete
+/// recursively owned direct/membership predecessor.
+pub(super) trait RnsNativeSourcePackingCompositeTransitionV2<'proof, 'envelope>:
+    RnsNativeSourcePackingCombinedDirectMembershipPredecessorV1<'proof>
+{
+    type CompositeInput;
+    type Error;
+
+    fn consume_source_packing_for_composite_v2(
+        self,
+        source_packing_authority: RnsNativeSourcePackingCompositeAuthorityV2<'envelope>,
+        qpcs_authority: RnsNativeQpcsCompositeAuthorityV2<'envelope>,
+        envelope: &'envelope ZkAmsMkheRnsNativeProofEnvelopeV1,
+    ) -> Result<Self::CompositeInput, Self::Error>;
 }
 
 /// Deliberately uninhabited production ownership seal.
@@ -1838,6 +1945,8 @@ pub(super) struct RnsNativeSourcePackingSameOpeningPrerequisiteV1<
     P: RnsNativeSourcePackingCombinedDirectMembershipPredecessorV1<'proof>,
 > {
     previous: P,
+    context: RnsNativeSourcePackingSameOpeningContextV1,
+    combined_outer_bindings: RnsNativeSourcePackingCombinedOuterBindingsV1,
     residual: &'proof [u8],
     manifest_digest: [u8; DIGEST_BYTES_V1],
     source_context_digest: [u8; DIGEST_BYTES_V1],
@@ -1885,6 +1994,58 @@ impl<'proof, P: RnsNativeSourcePackingCombinedDirectMembershipPredecessorV1<'pro
     pub(super) const fn binding_digest(&self) -> [u8; DIGEST_BYTES_V1] {
         self.binding_digest
     }
+
+    /// Consume this exact verified child directly into the concrete
+    /// predecessor's composite transition.  Neither the predecessor nor either
+    /// authority is ever returned as detached parts.
+    pub(super) fn into_composite_context_v2<'envelope>(
+        self,
+        qpcs_authority: RnsNativeQpcsCompositeAuthorityV2<'envelope>,
+        envelope: &'envelope ZkAmsMkheRnsNativeProofEnvelopeV1,
+    ) -> Result<
+        <P as RnsNativeSourcePackingCompositeTransitionV2<'proof, 'envelope>>::CompositeInput,
+        <P as RnsNativeSourcePackingCompositeTransitionV2<'proof, 'envelope>>::Error,
+    >
+    where
+        P: RnsNativeSourcePackingCompositeTransitionV2<'proof, 'envelope>,
+    {
+        let Self {
+            previous,
+            context,
+            combined_outer_bindings,
+            residual: _,
+            manifest_digest,
+            source_context_digest,
+            point_root,
+            replay_receipt_digest,
+            pre_challenge_binding_digest,
+            tau_digest,
+            q_digest,
+            proof_digest,
+            residual_digest,
+            binding_digest,
+        } = self;
+        let source_packing_authority = RnsNativeSourcePackingCompositeAuthorityV2 {
+            envelope,
+            context,
+            combined_outer_bindings,
+            manifest_digest,
+            source_context_digest,
+            point_root,
+            replay_receipt_digest,
+            pre_challenge_binding_digest,
+            tau_digest,
+            q_digest,
+            proof_digest,
+            residual_digest,
+            binding_digest,
+        };
+        previous.consume_source_packing_for_composite_v2(
+            source_packing_authority,
+            qpcs_authority,
+            envelope,
+        )
+    }
 }
 
 /// Test-only detached kernel adapter retained for mutation fixtures.
@@ -1924,6 +2085,8 @@ where
     let verified = finalize_verified_kernel_v1(equation_verified, combined_outer_bindings)?;
     Ok(RnsNativeSourcePackingSameOpeningPrerequisiteV1 {
         previous,
+        context,
+        combined_outer_bindings,
         residual: verified.residual,
         manifest_digest: verified.manifest_digest,
         source_context_digest: verified.source_context_digest,
@@ -1972,6 +2135,8 @@ where
     let verified = finalize_verified_kernel_v1(equation_verified, combined_outer_bindings)?;
     Ok(RnsNativeSourcePackingSameOpeningPrerequisiteV1 {
         previous,
+        context,
+        combined_outer_bindings,
         residual: verified.residual,
         manifest_digest: verified.manifest_digest,
         source_context_digest: verified.source_context_digest,

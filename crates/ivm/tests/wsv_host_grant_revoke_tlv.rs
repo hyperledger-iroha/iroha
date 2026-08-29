@@ -5,7 +5,6 @@ use ivm::{
     mock_wsv::{AccountId, AssetDefinitionId, MockWorldStateView, PermissionToken, WsvHost},
     syscalls,
 };
-use std::collections::HashMap;
 mod common;
 use common::assemble_syscalls;
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
@@ -56,7 +55,7 @@ fn grant_revoke_permission_with_tlv() {
         Quantity::from(50_u64),
     )]);
     wsv.grant_permission(&bob, PermissionToken::ManagePermissions);
-    let host = WsvHost::new_with_subject(wsv, bob.clone(), HashMap::new());
+    let host = WsvHost::new_with_subject(wsv, bob.clone());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
     // Step 1: grant ReadAccountAssets(alice) to bob via Name TLV

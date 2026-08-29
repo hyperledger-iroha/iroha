@@ -1638,7 +1638,7 @@ fn v2_finality_summary_maps_to_public_status_without_regression() {
     assert_eq!(sumeragi.locked_qc_height, artifacts[1].height);
 }
 #[test]
-fn disabled_telemetry_tracks_durable_v2_finality_before_enable() {
+fn disabled_telemetry_tracks_durable_v2_finality() {
     let kura = Kura::blank_kura_for_testing();
     let block = DummyBlocks::new().next();
     kura.store_block(Arc::clone(&block))
@@ -1650,8 +1650,6 @@ fn disabled_telemetry_tracks_durable_v2_finality_before_enable() {
     let _disabled_receipt = kura
         .store_v2_finality_artifact(&artifact)
         .expect("persist finality while telemetry observations are disabled");
-    assert_v2_finality_telemetry(&metrics, &artifact);
-    telemetry.enable();
     assert_v2_finality_telemetry(&metrics, &artifact);
 }
 #[test]

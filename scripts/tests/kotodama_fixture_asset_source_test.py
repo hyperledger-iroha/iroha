@@ -115,7 +115,7 @@ SOURCES = (
     ),
     SourceSpec(
         'crates/ivm/tests/kotodama_state_name_map_runtime.rs',
-        'ce7b5caf3cd1017ef7e8e59a5da3ae78aa34484318c753e18e333b518e25d70a',
+        '9aaab2323ce5a05f987364aa17679766484e861c4032fcd5d1959ff275944716',
         (
             AssetSpec('001.ko', 'c0d59dd29744c70955b883227fdd3d48e50bbabe387a71b85a62cc2feea227d3', 269, True),
             AssetSpec('002.ko', '5a82559e5cba3e2df840615c6385f3931602c3e9494bee83f3328c47e442e5ff', 396, True),
@@ -188,7 +188,7 @@ SOURCES = (
     ),
     SourceSpec(
         'crates/ivm/src/koto_test_driver_tests.rs',
-        '0a7d9cff2c9a7723c2a7ada89eb4f80c50d5e4385230b33e542c19ae469b1848',
+        '1eaa76514bd3b3682ff92888a5c231598411cb9f712123bd00bb9fe07caafbe0',
         (
             AssetSpec('001.ko', '7548b3a38f2c54eb30a4ea614e67ebc342db76efc18fad0366863f4e1518e800', 875, True),
             AssetSpec('002.ko', '63961644f937f1cc2e56f76506f3578fc93067ce0da0da17203855519f13394d', 217, True),
@@ -286,7 +286,7 @@ SOURCES = (
     ),
 )
 
-# These semantic anchors explain the four current Rust preimage changes instead
+# These semantic anchors explain the reviewed Rust preimage changes instead
 # of allowing their skeleton seals to be advanced as opaque digest substitutions.
 SOURCE_REQUIRED_FRAGMENTS = {
     'crates/ivm/tests/kotodama.rs': (
@@ -302,6 +302,13 @@ SOURCE_REQUIRED_FRAGMENTS = {
     ),
     'crates/ivm/src/koto_test_driver_tests.rs': (
         b'{{\\"unexpected\\":true,\\"value\\":7}}',
+        b'WsvHost::new_with_subject(MockWorldStateView::default(), caller)',
+        b'WsvHost::new_with_subject(MockWorldStateView::default(), caller.clone())',
+        b'WsvHost::new_with_subject(MockWorldStateView::default(), controller.clone())',
+    ),
+    'crates/ivm/tests/kotodama_state_name_map_runtime.rs': (
+        b'use std::str::FromStr;',
+        b'WsvHost::new_with_subject(wsv, subject);',
     ),
 }
 SOURCE_FORBIDDEN_FRAGMENTS = {
@@ -314,6 +321,13 @@ SOURCE_FORBIDDEN_FRAGMENTS = {
     ),
     'crates/ivm/src/koto_test_driver_tests.rs': (
         b'{{\\"value\\":7,\\"unexpected\\":true}}',
+        b'WsvHost::new_with_subject(MockWorldStateView::default(), caller, HashMap::new())',
+        b'caller.clone(),\n            HashMap::new(),',
+        b'controller.clone(),\n            HashMap::new(),',
+    ),
+    'crates/ivm/tests/kotodama_state_name_map_runtime.rs': (
+        b'use std::{collections::HashMap, str::FromStr};',
+        b'WsvHost::new_with_subject(wsv, subject, HashMap::new());',
     ),
 }
 

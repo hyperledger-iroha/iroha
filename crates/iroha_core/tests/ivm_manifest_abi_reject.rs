@@ -169,7 +169,7 @@ fn ivm_manifest_mismatched_abi_hash_rejected_at_admission() {
         .contract_manifests_mut_for_testing()
         .insert(code_hash, manifest);
     stx1.apply();
-    let _ = block1.commit();
+    let _ = block1.commit_world_overlay_for_testing();
     // Block 2: submit the IVM program; admission should reject due to abi_hash mismatch
     let header2 =
         iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
@@ -266,7 +266,7 @@ fn ivm_manifest_matching_abi_hash_accepted_at_admission() {
     .execute(&account_id, &mut stx1)
     .expect("activate manifest admission contract");
     stx1.apply();
-    let _ = block1.commit();
+    let _ = block1.commit_world_overlay_for_testing();
     // Block 2: submit the IVM program; admission should accept due to matching abi_hash
     let header2 =
         iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
@@ -331,7 +331,7 @@ fn ivm_manifest_without_abi_hash_is_rejected_at_admission() {
         .contract_manifests_mut_for_testing()
         .insert(code_hash, manifest);
     stx1.apply();
-    let _ = block1.commit();
+    let _ = block1.commit_world_overlay_for_testing();
     // Block 2: a present V1 manifest is incomplete without its ABI binding.
     let header2 =
         iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
@@ -420,7 +420,7 @@ fn ivm_manifest_matching_abi_hash_v1_accepted_at_admission() {
     .execute(&account_id, &mut stx1)
     .expect("activate V1 manifest admission contract");
     stx1.apply();
-    let _ = block1.commit();
+    let _ = block1.commit_world_overlay_for_testing();
     // Block 2: submit program; admission should accept
     let header2 =
         iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
@@ -488,7 +488,7 @@ fn ivm_manifest_unknown_syscall_rejected_before_execution() {
         .contract_manifests_mut_for_testing()
         .insert(code_hash, manifest);
     stx1.apply();
-    let _ = block1.commit();
+    let _ = block1.commit_world_overlay_for_testing();
     // Block 2: submit the program with an unknown syscall; admission should reject before execution.
     let header2 =
         iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);

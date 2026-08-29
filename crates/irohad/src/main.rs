@@ -972,10 +972,6 @@ pub enum StartError {
     StartP2p,
     /// Failed to initialize block storage (Kura)
     InitKura,
-    /// Failed to start development telemetry
-    StartDevTelemetry,
-    /// Failed to start telemetry subsystem
-    StartTelemetry,
     /// Failed to listen for OS shutdown signals
     ListenOsSignal,
     /// Failed to start the Torii API server
@@ -1013,8 +1009,6 @@ impl std::fmt::Display for StartError {
         let key = match self {
             StartError::StartP2p => "error.start_p2p",
             StartError::InitKura => "error.init_kura",
-            StartError::StartDevTelemetry => "error.start_dev_telemetry",
-            StartError::StartTelemetry => "error.start_telemetry",
             StartError::ListenOsSignal => "error.listen_os_signal",
             StartError::StartTorii => "error.start_torii",
         };
@@ -7537,25 +7531,24 @@ impl Iroha {
             supervisor.monitor(child);
             handle
         };
-        let telemetry_profile = if !emergency_fast && config.telemetry_enabled {
+        let telemetry_profile = if !emergency_fast {
             config.telemetry_profile
         } else {
             iroha_config::parameters::actual::TelemetryProfile::Disabled
         };
-        let telemetry_capabilities = telemetry_profile.capabilities();
         #[cfg(feature = "telemetry")]
         let (metrics, state_telemetry, streaming_telemetry) = {
             let metrics =
                 init_global_metrics_handle(config.dev_telemetry.panic_on_duplicate_metrics);
             let state = StateTelemetry::from_privacy_parameters(
                 Arc::clone(&metrics),
-                telemetry_capabilities.expensive_metrics_enabled(),
+                telemetry_profile.metrics_enabled(),
                 &config.network.soranet_privacy,
             );
-            let streaming = if telemetry_capabilities.metrics_enabled() {
+            let streaming = if telemetry_profile.metrics_enabled() {
                 Some(StreamingTelemetry::new(
                     Arc::clone(&metrics),
-                    telemetry_capabilities.metrics_enabled(),
+                    telemetry_profile.metrics_enabled(),
                 ))
             } else {
                 None
@@ -8602,11 +8595,6 @@ impl Iroha {
                 run_ticket_event_listener(streaming_events_handle, ticket_events_rx).await;
             }));
         }
-        #[cfg(feature = "telemetry")]
-        if !emergency_fast {
-            start_telemetry(&logger, &config, &mut supervisor).await?;
-            log_startup_trace("irohad.telemetry.ready", startup_trace_started_at);
-        }
         // Thread the remaining runtime preferences from config into state. ZK
         // configuration was installed once before Kura replay so hydrated SCCP
         // usage was checked against the actual configured caps at startup.
@@ -8785,7 +8773,7 @@ impl Iroha {
             });
         }
         #[cfg(feature = "telemetry")]
-        let telemetry = if emergency_fast {
+        let telemetry = if emergency_fast || !telemetry_profile.metrics_enabled() {
             iroha_core::telemetry::Telemetry::from(state_telemetry.clone())
         } else {
             let (telemetry, child) = iroha_core::telemetry::start(
@@ -8796,11 +8784,16 @@ impl Iroha {
                 network.online_peers_receiver(),
                 config.common.peer.id.clone(),
                 TimeSource::new_system(),
-                telemetry_capabilities.metrics_enabled(),
+                telemetry_profile.metrics_enabled(),
             );
             supervisor.monitor(child);
             telemetry
         };
+        #[cfg(feature = "telemetry")]
+        if !emergency_fast && telemetry_profile.metrics_enabled() {
+            start_telemetry(&logger, &config, &telemetry, &mut supervisor).await;
+            log_startup_trace("irohad.telemetry.ready", startup_trace_started_at);
+        }
         let peers_gossiper_topology_events = events_sender.subscribe();
         let (peers_gossiper, child) = PeersGossiper::start(
             config.common.peer.id.clone(),
@@ -10045,10 +10038,44 @@ impl Iroha {
                 sorafs_node::NodeHandle::clone(sorafs_node),
             )
         });
+        let private_settlement_availability_signer = state
+            .nexus_snapshot()
+            .atomic_private_settlement
+            .enabled
+            .then(|| {
+                iroha_core::private_settlement::PrivateSettlementAvailabilitySignerV1::new(
+                    config.common.key_pair.clone(),
+                )
+            })
+            .transpose()
+            .map_err(|error| Report::new(StartError::StartTorii).attach(error))?
+            .map(Arc::new);
+        let private_settlement_phase_signer = state
+            .nexus_snapshot()
+            .atomic_private_settlement
+            .enabled
+            .then(|| {
+                iroha_core::private_settlement::PrivateSettlementPhaseSignerV1::new(
+                    config.common.key_pair.clone(),
+                )
+            })
+            .transpose()
+            .map_err(|error| Report::new(StartError::StartTorii).attach(error))?
+            .map(Arc::new);
         let runtime_deps = iroha_torii::ToriiRuntimeDeps::new(torii_telemetry)
             .with_parliament_tle_release_coordinator(parliament_tle_release_coordinator)
             .with_torii_proxy_bridge_signer(config.common.key_pair.clone())
             .with_vpn_relay_trust(vpn_relay_trust);
+        let runtime_deps = if let Some(signer) = private_settlement_availability_signer {
+            runtime_deps.with_private_settlement_availability_signer(signer)
+        } else {
+            runtime_deps
+        };
+        let runtime_deps = if let Some(signer) = private_settlement_phase_signer {
+            runtime_deps.with_private_settlement_phase_signer(signer)
+        } else {
+            runtime_deps
+        };
         let runtime_deps = if let Some(sorafs_node) = sorafs_node {
             runtime_deps.with_sorafs_node(sorafs_node)
         } else {
@@ -10422,47 +10449,83 @@ impl Iroha {
     }
 }
 #[cfg(feature = "telemetry")]
+struct AbortTelemetryTaskOnDrop(tokio::task::AbortHandle);
+#[cfg(feature = "telemetry")]
+impl Drop for AbortTelemetryTaskOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+#[cfg(feature = "telemetry")]
+fn monitor_optional_telemetry_task(
+    supervisor: &mut Supervisor,
+    task_name: &'static str,
+    mut handle: tokio::task::JoinHandle<()>,
+) {
+    let shutdown = supervisor.shutdown_signal();
+    let abort_on_drop = AbortTelemetryTaskOnDrop(handle.abort_handle());
+    supervisor.monitor(tokio::spawn(async move {
+        let _abort_on_drop = abort_on_drop;
+        tokio::select! {
+            result = &mut handle => {
+                match result {
+                    Ok(()) => iroha_logger::warn!(task = task_name, "Optional telemetry task exited"),
+                    Err(error) => {
+                        iroha_logger::error!(task = task_name, %error, "Optional telemetry task failed")
+                    }
+                }
+                shutdown.receive().await;
+            }
+            () = shutdown.receive() => {
+                handle.abort();
+                let _ = handle.await;
+            }
+        }
+    }));
+}
+#[cfg(feature = "telemetry")]
 async fn start_telemetry(
     logger: &LoggerHandle,
     config: &Config,
+    telemetry: &iroha_core::telemetry::Telemetry,
     supervisor: &mut Supervisor,
-) -> ReportResult<(), StartError> {
-    const MSG_SUBSCRIBE: &str = "unable to subscribe to the channel";
-    const MSG_START_TASK: &str = "unable to start the task";
-    let telemetry_profile = if config.telemetry_enabled {
-        config.telemetry_profile
-    } else {
-        iroha_config::parameters::actual::TelemetryProfile::Disabled
-    };
-    let telemetry_capabilities = telemetry_profile.capabilities();
-    if !telemetry_capabilities.metrics_enabled() {
+) {
+    #[cfg(not(feature = "telegram-alerts"))]
+    let _ = telemetry;
+    let telemetry_profile = config.telemetry_profile;
+    if !telemetry_profile.metrics_enabled() {
         iroha_logger::info!(
             ?telemetry_profile,
             "Telemetry metrics disabled by profile; skipping sinks",
         );
-        return Ok(());
+        return;
     }
     #[cfg(feature = "dev-telemetry")]
     {
-        if telemetry_capabilities.developer_outputs_enabled() {
+        if telemetry_profile.developer_outputs_enabled() {
             if let Some(out_file) = &config.dev_telemetry.out_file {
-                let receiver = logger
+                match logger
                     .subscribe_on_telemetry(iroha_logger::telemetry::Channel::Future)
                     .await
-                    .change_context(StartError::StartDevTelemetry)
-                    .attach(MSG_SUBSCRIBE)?;
-                let handle = iroha_telemetry::dev::start_file_output(
-                    out_file.resolve_relative_path(),
-                    config.telemetry_integrity.clone(),
-                    receiver,
-                )
-                .await
-                .map_err(|err| {
-                    Report::new(StartError::StartDevTelemetry)
-                        .attach(MSG_START_TASK)
-                        .attach(err)
-                })?;
-                supervisor.monitor(handle);
+                {
+                    Ok(receiver) => match iroha_telemetry::dev::start_file_output(
+                        out_file.resolve_relative_path(),
+                        config.telemetry_integrity.clone(),
+                        receiver,
+                    )
+                    .await
+                    {
+                        Ok(handle) => {
+                            monitor_optional_telemetry_task(supervisor, "developer", handle)
+                        }
+                        Err(error) => {
+                            iroha_logger::warn!(%error, "Failed to start developer telemetry")
+                        }
+                    },
+                    Err(error) => {
+                        iroha_logger::warn!(%error, "Failed to subscribe developer telemetry")
+                    }
+                }
             }
         } else {
             iroha_logger::debug!(
@@ -10472,52 +10535,59 @@ async fn start_telemetry(
         }
     }
     if let Some(telemetry_cfg) = &config.telemetry {
-        let receiver = logger
+        match logger
             .subscribe_on_telemetry(iroha_logger::telemetry::Channel::Regular)
             .await
-            .change_context(StartError::StartTelemetry)
-            .attach(MSG_SUBSCRIBE)?;
-        let handle = iroha_telemetry::ws::start(
-            telemetry_cfg.clone(),
-            config.telemetry_integrity.clone(),
-            receiver,
-        )
-        .await
-        .map_err(|err| {
-            Report::new(StartError::StartTelemetry)
-                .attach(MSG_START_TASK)
-                .attach(err)
-        })?;
-        supervisor.monitor(handle);
+        {
+            Ok(receiver) => match iroha_telemetry::ws::start(
+                telemetry_cfg.clone(),
+                config.telemetry_integrity.clone(),
+                receiver,
+            ) {
+                Ok(handle) => monitor_optional_telemetry_task(supervisor, "websocket", handle),
+                Err(error) => iroha_logger::warn!(%error, "Failed to start telemetry exporter"),
+            },
+            Err(error) => iroha_logger::warn!(%error, "Failed to subscribe telemetry exporter"),
+        }
         #[cfg(feature = "telegram-alerts")]
-        if telemetry_capabilities.developer_outputs_enabled()
+        if telemetry_profile.developer_outputs_enabled()
             && telemetry_cfg.telegram_bot_key.is_some()
             && telemetry_cfg.telegram_chat_id.is_some()
         {
             let chain_id_str = config.common.chain.to_string();
-            let receiver = logger
+            let node_name = config.common.peer.id.to_string();
+            let metrics_telemetry = telemetry.clone();
+            match logger
                 .subscribe_on_telemetry(iroha_logger::telemetry::Channel::Regular)
                 .await
-                .change_context(StartError::StartTelemetry)
-                .attach(MSG_SUBSCRIBE)?;
-            let metrics_url = telemetry_cfg.telegram_metrics_url.clone().or_else(|| {
-                let addr = config.torii.address.value().to_string();
-                url::Url::parse(&format!("http://{}/metrics", addr)).ok()
-            });
-            let mut cfg = telemetry_cfg.clone();
-            cfg.telegram_metrics_url = metrics_url;
-            match iroha_telemetry::telegram::start_with_context(cfg, Some(chain_id_str), receiver)
-                .await
             {
-                Ok(h) => supervisor.monitor(h),
-                Err(e) => iroha_logger::warn!(%e, "Failed to start Telegram alerts"),
+                Ok(receiver) => match iroha_telemetry::telegram::start(
+                    telemetry_cfg.clone(),
+                    node_name,
+                    Some(chain_id_str),
+                    move || {
+                        let telemetry = metrics_telemetry.clone();
+                        async move {
+                            telemetry
+                                .metrics_fresh_checked()
+                                .await
+                                .ok()
+                                .map(iroha_telemetry::telegram::MetricsSnapshot::from_metrics)
+                        }
+                    },
+                    receiver,
+                ) {
+                    Ok(handle) => monitor_optional_telemetry_task(supervisor, "telegram", handle),
+                    Err(error) => iroha_logger::warn!(%error, "Failed to start Telegram alerts"),
+                },
+                Err(error) => {
+                    iroha_logger::warn!(%error, "Failed to subscribe Telegram alerts")
+                }
             }
         }
-        iroha_logger::info!("Telemetry started");
-        Ok(())
+        iroha_logger::info!("Telemetry sink startup completed");
     } else {
         iroha_logger::info!("Telemetry not started due to absent configuration");
-        Ok(())
     }
 }
 /// Relays local configuration-actor updates to local runtime components.
@@ -11024,6 +11094,8 @@ pub enum ConfigError {
     #[cfg(feature = "dev-telemetry")]
     /// Telemetry output path pointed to a directory.
     TelemetryOutFileIsDir,
+    /// Telemetry settings request a capability that is disabled or absent from this build.
+    InactiveTelemetryConfiguration,
     /// Network and Torii addresses conflict.
     SameNetworkAndToriiAddrs,
     /// Invalid directory path supplied in configuration.
@@ -11076,6 +11148,10 @@ impl core::fmt::Display for ConfigError {
             Self::TelemetryOutFileIsDir => {
                 write!(f, "Telemetry output file path is a directory")
             }
+            Self::InactiveTelemetryConfiguration => write!(
+                f,
+                "Telemetry configuration requests an inactive or unavailable capability"
+            ),
             Self::SameNetworkAndToriiAddrs => write!(
                 f,
                 "Torii and Network addresses are the same, but should be different"
@@ -11139,7 +11215,6 @@ fn fastpq_metal_overrides_from_config(
         threadgroup_size: config.metal_threadgroup_width,
         dispatch_trace: config.metal_trace,
         debug_enum: config.metal_debug_enum,
-        debug_fused: config.metal_debug_fused,
     }
 }
 /// Apply concurrency settings (IVM scheduler + Rayon) derived from configuration.
@@ -12284,6 +12359,40 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         validate_startup_config_offline(&config)
             .expect("Fast must not resolve disabled runtime providers");
     }
+    #[cfg(feature = "telemetry")]
+    #[test]
+    fn runtime_validation_rejects_configured_but_disabled_telemetry() {
+        let mut table = minimal_config_table();
+        iroha_config::base::toml::Writer::new(&mut table)
+            .write("telemetry_profile", "disabled")
+            .write(["telemetry", "url"], "ws://collector.example/events");
+        let config = Config::from_toml_source(TomlSource::inline(table))
+            .expect("disabled telemetry config parses structurally");
+        let mut emitter = Emitter::new();
+        validate_config_runtime(&mut emitter, &config);
+        let error = emitter
+            .into_result()
+            .expect_err("inactive telemetry sink must fail runtime validation");
+        assert!(
+            format!("{error:?}").contains("disables telemetry"),
+            "{error:?}"
+        );
+    }
+    #[test]
+    fn runtime_validation_rejects_integrity_state_without_a_sink() {
+        let mut config = Config::from_toml_source(TomlSource::inline(minimal_config_table()))
+            .expect("minimal config parses");
+        config.telemetry_integrity.state_dir = Some(PathBuf::from("telemetry-state"));
+        let mut emitter = Emitter::new();
+        validate_config_runtime(&mut emitter, &config);
+        let error = emitter
+            .into_result()
+            .expect_err("dormant integrity state must fail runtime validation");
+        assert!(
+            format!("{error:?}").contains("require a configured telemetry sink"),
+            "{error:?}"
+        );
+    }
     pub fn multilane_config_table() -> Table {
         toml::from_str(
             r#"chain = "00000000-0000-0000-0000-000000000000"
@@ -12792,9 +12901,6 @@ mod accel_tests {
         ivm::reset_metal_backend_for_tests();
     }
 }
-fn log_config_warning(message: &str) {
-    iroha_logger::warn!(target: "config", "{message}");
-}
 #[cfg(test)]
 static INSTRUCTION_REGISTRY_TEST_LOCK: Mutex<()> = Mutex::new(());
 #[cfg(test)]
@@ -12978,22 +13084,56 @@ fn validate_config_runtime(emitter: &mut Emitter<ConfigError>, config: &Config) 
     {
         emitter.emit(Report::new(ConfigError::SorafsGatewayRequiresStorage));
     }
-    /// Warnings about unused configuration options are logged via the standard
-    /// logger so that they are visible alongside other diagnostic messages.
     #[cfg(not(feature = "telemetry"))]
     if config.telemetry.is_some() {
-        log_config_warning(
-            "`telemetry` config is specified, but ignored, because Iroha is compiled without `telemetry` feature enabled",
+        emitter.emit(
+            Report::new(ConfigError::InactiveTelemetryConfiguration)
+                .attach("`telemetry` requires a binary built with the `telemetry` feature"),
         );
+    }
+    #[cfg(feature = "telemetry")]
+    {
+        if config.telemetry.is_some() && !config.telemetry_profile.metrics_enabled() {
+            emitter.emit(
+                Report::new(ConfigError::InactiveTelemetryConfiguration)
+                    .attach("`telemetry` is configured while telemetry_profile disables telemetry"),
+            );
+        }
+        let telegram_requested = config.telemetry.as_ref().is_some_and(|telemetry| {
+            telemetry.telegram_bot_key.is_some() || telemetry.telegram_chat_id.is_some()
+        });
+        #[cfg(not(feature = "telegram-alerts"))]
+        if telegram_requested {
+            emitter.emit(
+                Report::new(ConfigError::InactiveTelemetryConfiguration).attach(
+                    "Telegram alert settings require a binary built with `telegram-alerts`",
+                ),
+            );
+        }
+        #[cfg(feature = "telegram-alerts")]
+        if telegram_requested && !config.telemetry_profile.developer_outputs_enabled() {
+            emitter.emit(
+                Report::new(ConfigError::InactiveTelemetryConfiguration)
+                    .attach("Telegram alerts require the Developer or Full telemetry profile"),
+            );
+        }
     }
     #[cfg(not(feature = "dev-telemetry"))]
     if config.dev_telemetry.out_file.is_some() {
-        log_config_warning(
-            "`dev_telemetry.out_file` config is specified, but ignored, because Iroha is compiled without `dev-telemetry` feature enabled",
+        emitter.emit(
+            Report::new(ConfigError::InactiveTelemetryConfiguration)
+                .attach("`dev_telemetry.out_file` requires a binary built with `dev-telemetry`"),
         );
     }
     #[cfg(feature = "dev-telemetry")]
     if let Some(path) = &config.dev_telemetry.out_file {
+        if !config.telemetry_profile.developer_outputs_enabled() {
+            emitter.emit(
+                Report::new(ConfigError::InactiveTelemetryConfiguration).attach(
+                    "`dev_telemetry.out_file` requires the Developer or Full telemetry profile",
+                ),
+            );
+        }
         if path.value().parent().is_none() {
             emitter.emit(
                 Report::new(ConfigError::TelemetryOutFileIsRootOrEmpty)
@@ -13006,6 +13146,18 @@ fn validate_config_runtime(emitter: &mut Emitter<ConfigError>, config: &Config) 
                     .attach(path.clone().into_attachment().display_path()),
             );
         }
+    }
+    if config.telemetry.is_none()
+        && config.dev_telemetry.out_file.is_none()
+        && (config.telemetry_integrity.state_dir.is_some()
+            || config.telemetry_integrity.signing_key.is_some()
+            || config.telemetry_integrity.signing_key_id.is_some())
+    {
+        emitter.emit(
+            Report::new(ConfigError::InactiveTelemetryConfiguration).attach(
+                "telemetry integrity state/signing settings require a configured telemetry sink",
+            ),
+        );
     }
     if config.sumeragi.role == iroha_config::parameters::actual::NodeRole::Validator {
         if !config.confidential.enabled {
@@ -13665,7 +13817,7 @@ fn run_main_with_config_guard(
         "Sumeragi v2 data availability is mandatory"
     );
     #[cfg(feature = "telemetry")]
-    if !emergency_fast {
+    if !emergency_fast && config.telemetry_profile.expensive_metrics_enabled() {
         let fastpq_device_labels = FastpqDeviceLabels::from_config(&config.zk.fastpq);
         install_fastpq_execution_mode_probe(&fastpq_device_labels);
         install_fastpq_poseidon_probe(&fastpq_device_labels);
@@ -14916,6 +15068,53 @@ mod tests {
     const GOVERNANCE_DAG_CHECKPOINT_STORE_HANDLE: &str =
         "sealed:governance-dag:producer-checkpoint";
     const GOVERNANCE_DAG_CHECKPOINT_STORE_POLICY_DIGEST: [u8; 32] = [0xA6; 32];
+    #[cfg(feature = "telemetry")]
+    #[tokio::test]
+    async fn optional_telemetry_exit_does_not_stop_supervisor() {
+        let mut supervisor = Supervisor::new();
+        let shutdown = supervisor.shutdown_signal();
+        monitor_optional_telemetry_task(&mut supervisor, "test", tokio::spawn(async {}));
+        let run = tokio::spawn(supervisor.start());
+        tokio::task::yield_now().await;
+        assert!(
+            !run.is_finished(),
+            "optional telemetry completion must wait for node shutdown"
+        );
+        shutdown.send();
+        tokio::time::timeout(std::time::Duration::from_secs(1), run)
+            .await
+            .expect("supervisor shutdown timeout")
+            .expect("supervisor task")
+            .expect("supervisor result");
+    }
+    #[cfg(feature = "telemetry")]
+    #[tokio::test]
+    async fn dropping_supervisor_aborts_optional_telemetry() {
+        struct NotifyOnDrop(Option<tokio::sync::oneshot::Sender<()>>);
+        impl Drop for NotifyOnDrop {
+            fn drop(&mut self) {
+                if let Some(sender) = self.0.take() {
+                    let _ = sender.send(());
+                }
+            }
+        }
+
+        let mut supervisor = Supervisor::new();
+        let (dropped_sender, dropped_receiver) = tokio::sync::oneshot::channel();
+        let (started_sender, started_receiver) = tokio::sync::oneshot::channel();
+        let handle = tokio::spawn(async move {
+            let _notify_on_drop = NotifyOnDrop(Some(dropped_sender));
+            let _ = started_sender.send(());
+            std::future::pending::<()>().await;
+        });
+        monitor_optional_telemetry_task(&mut supervisor, "test", handle);
+        started_receiver.await.expect("optional telemetry start");
+        drop(supervisor);
+        tokio::time::timeout(std::time::Duration::from_secs(1), dropped_receiver)
+            .await
+            .expect("optional telemetry abort timeout")
+            .expect("optional telemetry drop notification");
+    }
     #[derive(Debug)]
     struct GovernanceDagPublisherBindingSigner {
         key_pair: iroha_crypto::KeyPair,
@@ -15561,13 +15760,16 @@ mod tests {
             "letlive_query_store=ifemergency_fast{live_query_store.into_inert_handle()}else{let(handle,child)=live_query_store.start();supervisor.monitor(child);handle};"
         ));
         assert!(compact_source.contains(
-            "lettelemetry_profile=if!emergency_fast&&config.telemetry_enabled{config.telemetry_profile}else{iroha_config::parameters::actual::TelemetryProfile::Disabled};"
+            "lettelemetry_profile=if!emergency_fast{config.telemetry_profile}else{iroha_config::parameters::actual::TelemetryProfile::Disabled};"
         ));
         assert!(
             compact_source.contains(
-                "if!emergency_fast{start_telemetry(&logger,&config,&mutsupervisor).await?;"
+                "if!emergency_fast&&telemetry_profile.metrics_enabled(){start_telemetry(&logger,&config,&telemetry,&mutsupervisor).await;"
             )
         );
+        assert!(compact_source.contains(
+            "telemetry.metrics_fresh_checked().await.ok().map(iroha_telemetry::telegram::MetricsSnapshot::from_metrics)"
+        ));
         assert!(
             compact_source
                 .contains("letnts_reservation=iroha_core::time::reserve(nts_params).ok_or_else(")
@@ -15594,7 +15796,7 @@ mod tests {
         assert!(nts_start > os_signal_preflight);
         assert!(nts_start > publication_preflight);
         assert!(compact_source.contains(
-            "lettelemetry=ifemergency_fast{iroha_core::telemetry::Telemetry::from(state_telemetry.clone())}else{"
+            "lettelemetry=ifemergency_fast||!telemetry_profile.metrics_enabled(){iroha_core::telemetry::Telemetry::from(state_telemetry.clone())}else{"
         ));
         assert!(compact_source.contains(
             "if!emergency_fast{apply_state_runtime_config_before_snapshot_auth(&mutstate,&config);}"
@@ -16424,14 +16626,12 @@ mod tests {
                 metal_threadgroup_width: Some(128),
                 metal_trace: true,
                 metal_debug_enum: true,
-                metal_debug_fused: false,
             };
             let overrides = fastpq_metal_overrides_from_config(&cfg);
             assert_eq!(overrides.max_in_flight, Some(8));
             assert_eq!(overrides.threadgroup_size, Some(128));
             assert!(overrides.dispatch_trace);
             assert!(overrides.debug_enum);
-            assert!(!overrides.debug_fused);
         }
         #[cfg(feature = "fastpq-gpu")]
         #[test]
@@ -16454,7 +16654,6 @@ mod tests {
                 metal_threadgroup_width: None,
                 metal_trace: false,
                 metal_debug_enum: false,
-                metal_debug_fused: false,
             };
             assert!(!fastpq_poseidon_word_preflight_enabled(&cfg));
             cfg.poseidon_mode = FastpqPoseidonMode::Gpu;

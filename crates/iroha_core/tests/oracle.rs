@@ -421,7 +421,8 @@ fn oracle_flow_persists_history_and_prunes() {
         vec![Hash::new(b"bundle-0")],
     );
     stx.apply();
-    sb.commit().expect("commit first block");
+    sb.commit_world_overlay_for_testing()
+        .expect("commit first block");
     {
         let view = state.view();
         let history = view
@@ -455,7 +456,8 @@ fn oracle_flow_persists_history_and_prunes() {
         Vec::new(),
     );
     stx.apply();
-    sb.commit().expect("commit second block");
+    sb.commit_world_overlay_for_testing()
+        .expect("commit second block");
     let view = state.view();
     let history = view
         .world()
@@ -547,7 +549,8 @@ fn oracle_register_requires_typed_permission_and_accepts_role_permission() {
     )
     .expect("role permission should authorize feed registration");
     stx.apply();
-    sb.commit().expect("commit role-authorized registration");
+    sb.commit_world_overlay_for_testing()
+        .expect("commit role-authorized registration");
     assert!(state.view().world().oracle_feeds().get(&feed_id).is_some());
 }
 #[test]
@@ -734,7 +737,8 @@ fn oracle_instruction_box_dispatch_covers_operator_surface() {
     )
     .expect("dispatch revoke twitter binding");
     stx.apply();
-    sb.commit().expect("commit dispatch block");
+    sb.commit_world_overlay_for_testing()
+        .expect("commit dispatch block");
     let view = state.view();
     assert!(view.world().oracle_feeds().get(&feed_id).is_some());
     assert_eq!(
@@ -2889,7 +2893,8 @@ fn oracle_queries_return_feeds_history_stats_disputes_changes_and_bindings() {
         &attestation,
     );
     stx.apply();
-    sb.commit().expect("commit query state");
+    sb.commit_world_overlay_for_testing()
+        .expect("commit query state");
     let view = state.view();
     assert_eq!(
         FindOracleFeedById::new(feed_id.clone())
@@ -3027,7 +3032,8 @@ fn oracle_iter_queries_do_not_leak_unrelated_feed_records() {
     )
     .expect("open feed-a dispute");
     stx.apply();
-    sb.commit().expect("commit query isolation state");
+    sb.commit_world_overlay_for_testing()
+        .expect("commit query isolation state");
     let view = state.view();
     let feed_b_history = FindOracleHistoryByFeedId::new(feed_b.clone())
         .execute(CompoundPredicate::PASS, &view)
@@ -3155,7 +3161,7 @@ fn oracle_applies_rewards_and_penalties() {
     .execute(&provider_a, &mut stx)
     .expect("aggregate slot");
     stx.apply();
-    sb.commit().expect("commit block");
+    sb.commit_world_overlay_for_testing().expect("commit block");
     let view = state.view();
     let a_id = AssetId::new(asset_def_id.clone(), provider_a.clone());
     let b_id = AssetId::new(asset_def_id.clone(), provider_b.clone());
@@ -3356,7 +3362,7 @@ fn oracle_dispute_bond_and_resolution_flow() {
     .execute(&challenger, &mut stx)
     .expect("resolve dispute");
     stx.apply();
-    sb.commit().expect("commit block");
+    sb.commit_world_overlay_for_testing().expect("commit block");
     let view = state.view();
     let challenger_id = AssetId::new(asset_def_id.clone(), challenger.clone());
     let target_id = AssetId::new(asset_def_id.clone(), target.clone());
@@ -3440,7 +3446,7 @@ fn oracle_change_pipeline_applies_feed() {
         .expect("stage vote");
     }
     stx.apply();
-    sb.commit().expect("commit block");
+    sb.commit_world_overlay_for_testing().expect("commit block");
     let view = state.view();
     let stored = view
         .world()
@@ -3493,9 +3499,11 @@ fn oracle_change_deadline_rolls_back() {
     .execute(&provider, &mut stx)
     .expect("propose change");
     stx.apply();
-    sb.commit().expect("commit proposal block");
+    sb.commit_world_overlay_for_testing()
+        .expect("commit proposal block");
     let sb2 = state.block(header(3));
-    sb2.commit().expect("commit sweep block");
+    sb2.commit_world_overlay_for_testing()
+        .expect("commit sweep block");
     let view = state.view();
     let change = view
         .world()
@@ -3600,7 +3608,7 @@ fn record_twitter_binding_updates_registry_and_index() {
     .execute(&provider, &mut stx)
     .expect("record twitter binding");
     stx.apply();
-    sb.commit().expect("commit block");
+    sb.commit_world_overlay_for_testing().expect("commit block");
     let view = state.view();
     let stored = view
         .world()

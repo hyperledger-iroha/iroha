@@ -145,6 +145,9 @@ impl_direct_instruction_box!(crate::isi::privacy::RegisterPrivacyZkX509CrlV1);
 impl_direct_instruction_box!(crate::isi::privacy::RotatePrivacyZkX509CrlV1);
 impl_direct_instruction_box!(crate::isi::privacy::RevokePrivacyZkX509CrlV1);
 impl_direct_instruction_box!(crate::isi::privacy::SubmitPrivacyProofV1);
+impl_direct_instruction_box!(crate::isi::private_settlement::ActivatePrivateSettlementPoolV1);
+impl_direct_instruction_box!(crate::isi::private_settlement::AbortAtomicPrivateSettlementV1);
+impl_direct_instruction_box!(crate::isi::private_settlement::FinalizeAtomicPrivateSettlementV1);
 impl_direct_instruction_box!(crate::isi::bridge::SubmitBridgeProof);
 impl_direct_instruction_box!(crate::isi::bridge::RecordBridgeReceipt);
 impl_direct_instruction_box!(crate::isi::bridge::RecordSccpMessage);
@@ -1828,6 +1831,8 @@ pub mod offline;
 pub mod oracle;
 /// First-release privacy governance and proof-admission instructions.
 pub mod privacy;
+/// Atomic private cross-dataspace settlement carrier instructions.
+pub mod private_settlement;
 /// Generic RAM-LFE program-policy instructions.
 pub mod ram_lfe;
 /// Registration-related instructions (accounts, assets, domains, etc.).
@@ -2709,6 +2714,10 @@ pub mod prelude {
             RotatePrivacyZkX509TrustAnchorV1, SchedulePrivacyConsensusPolicyTighteningV1,
             SchedulePrivacyProtocolLimitsTighteningV1, SubmitPrivacyProofV1,
             TransitionPrivacyProtocolLifecycleV1,
+        },
+        private_settlement::{
+            AbortAtomicPrivateSettlementV1, ActivatePrivateSettlementPoolV1,
+            FinalizeAtomicPrivateSettlementV1, PrivateSettlementPoolActivationValidationErrorV1,
         },
         ram_lfe::{
             ActivateRamLfeProgramPolicy, DeactivateRamLfeProgramPolicy, RegisterRamLfeProgramPolicy,

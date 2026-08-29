@@ -12,7 +12,6 @@ use ivm::{
 };
 use std::{
     any::Any,
-    collections::HashMap,
     path::{Path, PathBuf},
     str::FromStr,
 };
@@ -200,7 +199,7 @@ fn run_register_and_mint_snippet(compiler: &KotodamaCompiler, path: &Path) {
         wsv.register_account(&caller, recipient.clone()),
         "register recipient"
     );
-    let host = WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new());
+    let host = WsvHost::new_with_subject(wsv, caller.clone());
     let asset_id_clone = asset_id.clone();
     run_program_with_host(
         "register-and-mint",
@@ -241,7 +240,7 @@ fn run_transfer_asset_snippet(compiler: &KotodamaCompiler, path: &Path) {
         ),
         "seed caller balance"
     );
-    let host = WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new());
+    let host = WsvHost::new_with_subject(wsv, caller.clone());
     let asset_id_clone = asset_id.clone();
     run_program_with_host(
         "transfer-asset",
@@ -299,7 +298,7 @@ fn run_call_transfer_asset_snippet(compiler: &KotodamaCompiler, path: &Path) {
         "call-transfer-asset",
         "pay",
         &program,
-        WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new()),
+        WsvHost::new_with_subject(wsv, caller.clone()),
         move |host| {
             let alice_balance = host.wsv.balance(alice.clone(), asset_id_clone.clone());
             let bob_balance = host.wsv.balance(bob.clone(), asset_id_clone.clone());
@@ -329,11 +328,7 @@ fn run_nft_flow_snippet(compiler: &KotodamaCompiler, path: &Path) {
     );
     let nft_id = NftId::from_str("n0$wonderland.universal").expect("nft id");
     let mut vm = IVM::new(u64::MAX);
-    vm.set_host(WsvHost::new_with_subject(
-        wsv,
-        caller.clone(),
-        HashMap::new(),
-    ));
+    vm.set_host(WsvHost::new_with_subject(wsv, caller.clone()));
     vm.load_program(&program)
         .expect("load documentation example nft-flow");
     common::select_kotodama_entrypoint(&mut vm, &program, "nft_issue_and_transfer");

@@ -1,6 +1,6 @@
-//! Authenticated fixed-size cells for strict SoraNet constant-rate transport.
+//! Authenticated fixed-size cells for strict `SoraNet` constant-rate transport.
 //!
-//! QUIC DATAGRAMs are unreliable and may be reordered.  Strict SoraNet does
+//! QUIC DATAGRAMs are unreliable and may be reordered.  Strict `SoraNet` does
 //! not try to disguise that property as reliable delivery: every scheduled
 //! tick, including cover, consumes the post-handshake record sequence.  A
 //! missing, duplicated, reordered, or unauthenticated cell therefore makes the
@@ -80,7 +80,7 @@ impl CellClass {
 pub enum MuxChannel {
     /// An authenticated cover tick with no application payload.
     Cover = 0,
-    /// General SoraNet application payload.
+    /// General `SoraNet` application payload.
     Application = 1,
     /// Exit-adapter request or response payload.
     Exit = 2,
@@ -103,7 +103,7 @@ impl MuxChannel {
     }
 }
 
-/// Logical stream transition flags authenticated by the SoraNet record layer.
+/// Logical stream transition flags authenticated by the `SoraNet` record layer.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct MuxFlags(u8);
 
@@ -627,7 +627,9 @@ impl WireCell {
         let mut encoded = [0_u8; CONSTANT_RATE_CELL_BYTES];
         encoded[0] = CELL_TYPE_DATA;
         encoded[1] = self.class as u8;
-        encoded[2..4].copy_from_slice(&(self.record.len() as u16).to_be_bytes());
+        let record_len =
+            u16::try_from(self.record.len()).expect("the fixed cell record bound fits in a u16");
+        encoded[2..4].copy_from_slice(&record_len.to_be_bytes());
         encoded[4..4 + self.record.len()].copy_from_slice(&self.record);
         encoded
     }

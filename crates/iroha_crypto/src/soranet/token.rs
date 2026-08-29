@@ -503,9 +503,9 @@ impl AdmissionTokenVerifier {
                 max: self.max_ttl,
             });
         }
-        let replay_id = self.reserve_replay(token, now)?;
+        let reservation_id = self.reserve_replay(token, now)?;
         if let Err(error) = self.preflight_crypto_material(token) {
-            self.release_replay(replay_id);
+            self.release_replay(reservation_id);
             return Err(error);
         }
         let body = token.body_bytes();
@@ -518,12 +518,12 @@ impl AdmissionTokenVerifier {
         )
         .map_err(VerifyError::Signature);
         if let Err(error) = signature_result {
-            self.release_replay(replay_id);
+            self.release_replay(reservation_id);
             return Err(error);
         }
-        let consumed = self.consume_replay(token, replay_id, now);
+        let consumed = self.consume_replay(token, reservation_id, now);
         if consumed.is_err() {
-            self.release_replay(replay_id);
+            self.release_replay(reservation_id);
         }
         consumed
     }
@@ -2551,7 +2551,7 @@ mod tests {
     #[test]
     fn pending_replay_reservation_rejects_concurrent_duplicate() {
         let fixture = minted_token_with_expectation(
-            0xC0FFEE,
+            0x00C0_FFEE,
             300,
             "ML-DSA keypair generation should succeed",
         );

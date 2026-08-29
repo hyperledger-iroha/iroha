@@ -178,7 +178,7 @@ PASSIVE_RECOVERY_MODEL_BINDINGS = (
         (
             "autonomous_lane_block_merge_receipt_revalidates_without_sidecar_repair",
             "lane_block_application_receipt_available_without_sidecar_repair",
-            "read_lane_block_application_receipt_without_sidecar_repair",
+            "ExecutionStatus::StateAppliedByCanonicalBlock",
             "lane_block_application_receipt_conflicts_with_preflight_without_sidecar_repair",
             "read_preflighted_lane_block_execution_input_for_application_without_sidecar_repair",
             "lane_block_execution_preflight_has_rejections_without_sidecar_repair",
@@ -521,7 +521,7 @@ PASSIVE_RECOVERY_ORDERED_CHECKS = (
         (
             "autonomous_lane_block_merge_receipt_revalidates_without_sidecar_repair",
             "lane_block_application_receipt_available_without_sidecar_repair",
-            "read_lane_block_application_receipt_without_sidecar_repair",
+            "ExecutionStatus::StateAppliedByCanonicalBlock",
             "lane_block_application_receipt_conflicts_with_preflight_without_sidecar_repair",
             "read_preflighted_lane_block_execution_input_for_application_without_sidecar_repair",
             "lane_block_execution_preflight_has_rejections_without_sidecar_repair",
@@ -772,6 +772,46 @@ def _validate_source_relations(
                 )
                 break
             cursor = position
+
+    # The lifecycle functions contain additional timing uses after the
+    # constructor call, so a whole-item subsequence check can accidentally
+    # match those later occurrences after the constructor arguments are
+    # reordered.  Bind the complete, whitespace-insensitive call instead: the
+    # retry floor and ceiling must be derived from retransmission and round
+    # timing in this exact order in both startup corridors.
+    lane_work_limits_call = "".join(
+        """
+        let lane_work_limits = lane_work_limits(
+            &shared_config,
+            network.reply_route_source_capacity(),
+            consensus_frame_byte_capacity,
+            block_sync_frame_byte_capacity,
+            retransmit_interval,
+            round_timeout,
+        )?;
+        """.split()
+    )
+    for relative, symbol in (
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
+            "run_non_pending_lifecycle_loop",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs",
+            "run_pending_kura_lifecycle_height",
+        ),
+    ):
+        item = _item_for(
+            root, items, relative, "fn", symbol, errors, rust_binding_item
+        )
+        if item is None:
+            continue
+        if "".join(item.split()).count(lane_work_limits_call) != 1:
+            errors.append(
+                f"{root / relative}: passive/recovery item {symbol} is "
+                "missing or reorders the exact lane_work_limits source-bound "
+                "token sequence"
+            )
 
     for relative, kind, symbol, tokens in PASSIVE_RECOVERY_FORBIDDEN_CHECKS:
         item = _item_for(

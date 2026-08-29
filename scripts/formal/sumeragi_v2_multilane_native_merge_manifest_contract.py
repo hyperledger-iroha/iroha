@@ -16,6 +16,9 @@ NATIVE_MERGE_MANIFEST_CORRIDOR_RELATIVE = Path(
     "crates/iroha_core/src/sumeragi/tests/"
     "v2_apply_unsealed_01c_historical_recovery.rs"
 )
+NATIVE_MERGE_MANIFEST_FIXTURE_RELATIVE = Path(
+    "crates/iroha_core/src/sumeragi/tests/v2_apply_unsealed_00.rs"
+)
 
 NATIVE_MERGE_SOURCE_BINDINGS = (
     (
@@ -264,6 +267,12 @@ NATIVE_MERGE_MANIFEST_CALLER_BINDINGS = (
 
 NATIVE_MERGE_MANIFEST_NORMALIZED_RELATIONS = (
     (
+        NATIVE_MERGE_MANIFEST_FIXTURE_RELATIVE.as_posix(),
+        "method",
+        "ApplyFixture::new_for_production_recovered_decision_apply_with_native_lane_lifecycle",
+        "Self::new_with_options_and_network(false, false, true, true, true)",
+    ),
+    (
         "crates/iroha_core/src/sumeragi/exec.rs",
         "fn",
         "canonical_native_amx_application_sources",
@@ -427,7 +436,7 @@ NATIVE_MERGE_MANIFEST_RAW_TEST_CHECKS = (
         NATIVE_MERGE_MANIFEST_CORRIDOR_RELATIVE,
         "historical_autonomous_recovery_reaches_exactly_once_canonical_merge_application",
         (
-            "ApplyFixture::new_with_options_and_network(false, false, true, true, true)",
+            "ApplyFixture::new_for_production_recovered_decision_apply_with_native_lane_lifecycle()",
             "lane_work.merge_execution_full_validation_checks_for_test(),\n"
             "            0",
             "for _ in 0..4 {",
@@ -472,6 +481,7 @@ NATIVE_MERGE_MANIFEST_SOURCE_RELATIVES = (
     NATIVE_MERGE_MANIFEST_CONTRACT_RELATIVE,
     NATIVE_MERGE_MANIFEST_TEST_RELATIVE,
     NATIVE_MERGE_MANIFEST_CORRIDOR_RELATIVE,
+    NATIVE_MERGE_MANIFEST_FIXTURE_RELATIVE,
 )
 
 
@@ -552,7 +562,7 @@ def validate_native_merge_manifest_relations(
         if count != 1:
             errors.append(
                 f"{root / relative}: Native merge-manifest relation {symbol} "
-                "must bind the exact staged or committed merge entry once, "
+                "must bind the exact reviewed Native relation once, "
                 f"found {count}"
             )
 

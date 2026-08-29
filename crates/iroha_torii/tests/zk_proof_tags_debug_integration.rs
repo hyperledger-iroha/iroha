@@ -38,7 +38,9 @@ async fn proof_tags_returns_ascii_tags() {
             .proofs_by_tag_mut_for_testing()
             .insert(*b"I10P", vec![id.clone()]);
         stx.apply();
-        block.commit().expect("commit proof tag indexes");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit proof tag indexes");
     }
     let state = Arc::new(state);
     let app = Router::new().route(

@@ -256,19 +256,9 @@ def observability(*, critical: bool = False) -> dict:
     payload = base("sorafs.repair.observability_canary.v1")
     payload.update(
         {
-            "metrics_scrape_success": True,
             "dashboard_provisioned": True,
             "alert_rules_installed": True,
             "critical_alerts_firing": critical,
-            "metrics": [
-                "torii_sorafs_repair_tasks_total",
-                "torii_sorafs_repair_latency_minutes_bucket",
-                "torii_sorafs_repair_queue_depth",
-                "torii_sorafs_repair_backlog_oldest_age_seconds",
-                "torii_sorafs_repair_lease_expired_total",
-                "torii_sorafs_slash_proposals_total",
-            ],
-            "metric_count": len(MODULE.REQUIRED_METRICS),
             "response_bodies_included": False,
         }
     )
@@ -344,15 +334,6 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
     assert payload["required"]["failure_capture"]["valid"] is True
     assert payload["valid_handoff_digests"] == [DIGEST]
     assert payload["valid_policy_digests"] == [DIGEST]
-    assert payload["metrics"] == sorted(MODULE.REQUIRED_METRICS)
-    assert payload["metric_count_values"] == [len(MODULE.REQUIRED_METRICS)]
-    observability_artifact = payload["required"]["observability"]["artifacts"][0]
-    assert observability_artifact["fingerprint"]["metric_count"] == len(
-        MODULE.REQUIRED_METRICS
-    )
-    assert observability_artifact["fingerprint"]["metrics"] == list(
-        MODULE.REQUIRED_METRICS
-    )
 
 
 def test_bound_fixture_tables_cover_checker_bound_kind_sets() -> None:
@@ -393,7 +374,6 @@ def test_fixture_inventories_cover_checker_required_sets() -> None:
     assert tuple(governance_handoff()["handoff_targets"]) == (
         MODULE.REQUIRED_GOVERNANCE_TARGETS
     )
-    assert tuple(observability()["metrics"]) == MODULE.REQUIRED_METRICS
 
 
 def test_repair_routes_use_exact_command_and_query_status_codes() -> None:
@@ -1406,35 +1386,6 @@ def test_observability_critical_alert_fails(tmp_path: Path) -> None:
     write_json(tmp_path / "observability.json", observability(critical=True))
 
     assert run_gate(tmp_path) == 1
-
-
-def test_observability_metrics_must_not_duplicate(tmp_path: Path) -> None:
-    write_complete_evidence(tmp_path)
-    payload = observability()
-    payload["metrics"].append(payload["metrics"][0])
-    payload["metric_count"] = len(payload["metrics"])
-    write_json(tmp_path / "observability.json", payload)
-    summary = tmp_path / "summary.json"
-
-    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
-    result = json.loads(summary.read_text(encoding="utf-8"))
-    artifact = result["required"]["observability"]["artifacts"][0]
-    assert "metrics must not contain duplicate values" in artifact["errors"]
-    assert "metric_count must match unique metrics count" in artifact["errors"]
-
-
-def test_observability_metrics_must_not_include_unknown_values(tmp_path: Path) -> None:
-    write_complete_evidence(tmp_path)
-    payload = observability()
-    payload["metrics"].append("torii_sorafs_repair_debug_metric")
-    payload["metric_count"] = len(payload["metrics"])
-    write_json(tmp_path / "observability.json", payload)
-    summary = tmp_path / "summary.json"
-
-    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
-    result = json.loads(summary.read_text(encoding="utf-8"))
-    artifact = result["required"]["observability"]["artifacts"][0]
-    assert "metrics must not include unknown values" in artifact["errors"]
 
 
 def test_explicit_unknown_schema_fails(tmp_path: Path) -> None:

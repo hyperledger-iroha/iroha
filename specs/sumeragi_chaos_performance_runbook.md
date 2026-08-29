@@ -85,9 +85,10 @@ adding retired timeout or recovery knobs.
    ingress-rejection metrics.
 5. Preserve consensus logs and exact controlled-message/outage timestamps.
 
-Collector/RBC/DA/adaptive-pacemaker fields in legacy-labeled telemetry endpoints
-and Prometheus catalog entries are non-authoritative observations. They may
-remain zero and must not override authoritative revision-4 status.
+Node-local RBC/DA, queue, transport, and ingress metrics are non-authoritative
+observations and must not override revision-4 status. Retired adaptive-
+pacemaker fields and endpoints are not part of the first-release telemetry
+surface.
 
 ## Sign-off
 

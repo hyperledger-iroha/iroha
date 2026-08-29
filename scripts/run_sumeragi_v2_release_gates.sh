@@ -1912,7 +1912,7 @@ required_production_liveness_tests=(
   kura::tests::progress_witness_durability::absent_progress_namespace_requires_every_directory_barrier
   kura::tests::progress_witness_durability::bound_progress_recovery_handles_crash_phases_without_path_escape
   kura::tests::progress_witness_durability::certified_lane_block_strict_retry_reissues_every_barrier
-  kura::tests::progress_witness_durability::direct_receipt_snapshot_preserves_sparse_and_mixed_format_entries
+  kura::tests::progress_witness_durability::application_receipt_snapshot_preserves_sparse_entries
   kura::tests::progress_witness_durability::initial_preindex_data_sync_failure_rolls_back_payload_before_retry
   kura::tests::progress_witness_durability::lane_block_application_receipt_strict_retry_reissues_every_barrier
   kura::tests::progress_witness_durability::predecessor_application_receipt_fails_closed_while_durability_barrier_fails
@@ -2971,7 +2971,6 @@ required_multilane_core_focus_tests=(
   kura::tests::merge_application_receipt_is_first_release_retirement_admissible_and_fails_closed_after_lane_recreation
   state::tests::certified_autoscale_scale_in_rechecks_late_authenticated_unmerged_relay
   state::tests::certified_autoscale_scale_in_rechecks_late_unapplied_certified_lane_block
-  state::tests::certified_autoscale_scale_in_rechecks_late_unrepaired_direct_application_marker
   state::tests::prospective_autoscale_retirement_binding_projects_exact_active_route_before_staging
   state::tests::prospective_autoscale_retirement_blocks_block_local_queue_plan_obligation
   state::tests::autoscale_scale_in_commit_runs_queue_veto_inside_lifecycle_fence
@@ -3118,6 +3117,7 @@ required_multilane_core_focus_tests=(
   kura::tests::autonomous_merge_bundle_pair_rejects_malformed_truncated_oversized_partial_and_linked_artifacts
   block::valid::tests::autonomous_merge_carrier_content_gate_accepts_only_exact_empty_carrier
   block::tests::merge_capable_validation_paths_source_bind_post_effect_authorization
+  state::tests::autonomous_atomic_batch_receipts_survive_production_carrier_validation_and_apply_once
   state::tests::canonical_wsv_authorization_commits_exact_autonomous_execution_once
   state::tests::autonomous_execution_commit_rejects_missing_apply_carrier_authorization
   state::tests::autonomous_execution_commit_rejects_missing_wsv_authorization
@@ -3133,9 +3133,9 @@ required_multilane_core_focus_tests=(
   state::tests::autonomous_execution_stage_rejects_preexisting_axt_replay_overlay
   state::tests::finalized_merge_execution_commit_surface_borrows_exact_carrier_hash
   state::tests::autonomous_execution_pre_vote_rejects_due_start_of_block_effect
-  state::tests::autonomous_execution_pre_vote_requires_exact_empty_carrier_membership
+  state::tests::autonomous_execution_pre_vote_requires_exact_merge_carrier_membership
   state::tests::autonomous_execution_pre_vote_rejects_wrong_carrier_membership_height
-  state::tests::autonomous_execution_pre_vote_rejects_non_empty_carrier_membership
+  state::tests::autonomous_execution_pre_vote_rejects_extra_carrier_membership
   state::tests::autonomous_execution_pre_vote_rejects_premature_pending_carrier_hash
   state::tests::autonomous_execution_finality_rejects_unbound_event_surface_drift
   block::tests::historical_native_amx_source_bundle_authenticates_every_evidence_layer

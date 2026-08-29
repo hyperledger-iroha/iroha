@@ -261,7 +261,7 @@ SDKs consume. The new scoreboard integration adds a few noteworthy flags:
   scheduling, while positive or negative deltas adjust the weighted
   round-robin credits without mutating the advert metadata.
 - `--telemetry-region=REGION` tags the emitted `sorafs_orchestrator_*`
-  Prometheus metrics (and downstream OpenTelemetry exporters) so dashboards can
+  Prometheus metrics so dashboards can
   slice active fetches, durations, and retry counters by region or environment.
 
 Scoreboard mode requires adverts for every `--provider` entry so the CLI can
@@ -343,7 +343,7 @@ orchestrator. A machine-readable summary is emitted to stdout (and, when
 - `--scoreboard-out=PATH` persists the computed eligibility/weighting snapshot
   to Norito JSON for audits. Pair it with `--scoreboard-now=UNIX_SECS` when you
   need deterministic fixtures for CI or release evidence.
-- `--telemetry-source-label=LABEL` records which OTLP stream produced the
+- `--telemetry-source-label=LABEL` records which collector or evidence source produced the
   concurrency snapshot inside the scoreboard metadata so
   `cargo xtask sorafs-adoption-check --require-telemetry` can reject captures
   that do not prove their telemetry origin.

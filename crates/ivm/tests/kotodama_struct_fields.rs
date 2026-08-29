@@ -3,7 +3,6 @@ use ivm::{
     IVM, KotodamaCompiler,
     mock_wsv::{AccountId, MockWorldStateView, WsvHost},
 };
-use std::collections::HashMap;
 mod common;
 #[test]
 fn struct_fields_lower_to_syscall_args() {
@@ -39,7 +38,7 @@ fn struct_fields_lower_to_syscall_args() {
             .expect("public key"),
     );
     wsv.add_account_unchecked(bob.clone());
-    let host = WsvHost::new_with_subject(wsv, bob.clone(), HashMap::new());
+    let host = WsvHost::new_with_subject(wsv, bob.clone());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
     vm.load_program(&prog).expect("load");

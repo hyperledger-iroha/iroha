@@ -324,6 +324,11 @@ def copy_reply_writer_deadline_fixture(tmp_path: Path) -> None:
         Path("crates/iroha_core/src/sumeragi/v2_worker.rs"),
         Path("crates/iroha_core/src/sumeragi/tests/v2_worker_main_01.rs"),
         Path("crates/iroha_p2p/src/network.rs"),
+        Path("crates/iroha_p2p/src/network/admission.rs"),
+        Path("crates/iroha_p2p/src/network/best_effort_admission.rs"),
+        Path("crates/iroha_p2p/src/network/reliable_actor.rs"),
+        Path("crates/iroha_p2p/src/network/handle_update_tests.rs"),
+        Path("crates/iroha_p2p/src/network/queue_depth_tests.rs"),
     ):
         destination = tmp_path / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -22577,7 +22582,7 @@ def test_timeout_vote_episode_rust_mutations_survive_digest_refresh(
         ),
         (
             "AsyncTimeoutControlDependencyAdvancesLeaderWire",
-            '"PrepareQC", "CommitQC", "TimeoutVote"}',
+            '"PrepareQC", "CommitQC", "TimeoutVote", "Chunk"}',
             '"PrepareQC", "CommitQC", "TimeoutVote", "CertifiedResponse"}',
             "owner-relative timeout-control dependency predicate",
         ),

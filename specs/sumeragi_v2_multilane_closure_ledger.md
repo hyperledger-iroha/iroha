@@ -59,7 +59,7 @@ execution or release receipts.
 - The bound static inventory contains exactly 84 corridor legs, 864/864
   production tests across 43 modules, 522/522 G-UNIT rows, and four mandatory
   G-4P gates. The grouped fixture pin validates. The recursive SDK resolver
-  enumerates 1,442 grouped and 1,444 diagnostics paths at the exact hashes in
+  enumerates 1,451 grouped and 1,453 diagnostics paths at the exact hashes in
   the owning corpus and `G-SDK` rows below. These are source inventories, not
   execution receipts.
 - The reviewed closure has no remaining explicit in-scope multilane TODO. The
@@ -138,9 +138,9 @@ invariants together.
    configured byte/count budgets and only from authenticated committee or QC
    sources. Local cache contents and network arrival order never choose
    canonical state.
-9. **Coordinated first-release wire.** Every new Norito persistence and wire
-   layout has an explicit version. Consensus never implicitly decodes a legacy
-   shape or runs mixed old/new layouts.
+9. **Coordinated first-release wire.** Every Norito persistence and wire layout
+   advertises its explicit canonical version. Consensus accepts exactly that
+   layout.
 
 ## In-flight first-release formal boundary
 
@@ -366,22 +366,21 @@ TLC and Apalache must expose an extra marker/receipt or a missing drain blocker.
 round/context, authority height, coordinator route/incarnation/height/view and
 proposal, while `NativeAmxSourceParticipantClaimV4` binds every participant
 route/incarnation. Grouped signing slot claims remain separately keyed by
-`NativeAmxSigningSlotV3`; unsupported or malformed journal layouts fail
-closed.
+`NativeAmxSigningSlotV3`; any journal-layout mismatch fails closed.
 
 **Closure condition.** A versioned durable source claim must bind the source
 ID, typed transaction-entrypoint hash, plan digest, round context, authority
 height, coordinator route/incarnation/planned height/view/proposal, and every
 participant route/incarnation. Grouped slot claims remain a separate
-anti-equivocation dimension. Unsupported journal versions fail closed before
-state restoration; no migration or best-effort projection is allowed.
+anti-equivocation dimension. State restoration accepts only the canonical
+journal layout and fails closed before mutation on any mismatch.
 
 **Focused and adversarial tests.** Cover source, entrypoint, plan, epoch,
 context, authority-height, coordinator route/incarnation/height/view/proposal,
 and participant-set drift before and after restart. Cover a crash before record
 publication, after record fsync, before anchor publication, after anchor
 publication, truncated and oversized files, duplicate sequences, unexpected
-files, symlinks, and a stale legacy journal.
+files, symlinks, and a stale noncanonical journal.
 
 **Formal obligation and mutation.** Invariant `MLNativeSourceClaimInjective`
 states that one source claim cannot authorize two distinct bound sessions.
@@ -1142,9 +1141,10 @@ after canonical Kura/WSV commit.
 **Closure condition.** Every peer deterministically re-executes the exact
 certified batch on the committed base WSV and atomically commits canonical
 Kura/WSV state. Staging requires no pending block hash or transaction-height
-row; pre-vote validation requires no pending block hash and one exact empty row
-at the carrier height; final application requires that same row plus the exact
-singleton finalized carrier hash. The move-only WSV authorization retains the
+row; pre-vote validation requires no pending block hash and one canonical row
+containing exactly the certified merge entrypoints at the carrier height; final
+application requires that same row plus the exact singleton finalized carrier
+hash. The move-only WSV authorization retains the
 exact encoded autonomous external-event prefix and its event count. Pre-vote
 validation proves that prefix unchanged, reconstructs the certified root from
 only those retained autonomous bytes, and separately binds the complete
@@ -1167,16 +1167,16 @@ result attempt, tampered results/write set/post state, duplicate ordinary/merge
 membership, Kura-before-WSV and WSV-before-queue crash boundaries, each
 Commit/ForgetCommit boundary, repeated reconciliation, losing/future/stale
 proposal, timeout, reconfiguration, retirement, release-order restoration,
-pre-vote absence/wrong-height/non-empty carrier rows, a premature pending
+pre-vote absence/wrong-height/extra carrier membership, a premature pending
 carrier hash, a mismatched finalized carrier hash, and unbound finality-time
 event-surface drift.
 The focused inventory names
 `state::tests::finalized_merge_execution_commit_surface_borrows_exact_carrier_hash`,
 `state::tests::autonomous_execution_commit_rejects_post_publication_event_surface_drift`,
 `state::tests::autonomous_execution_pre_vote_rejects_due_start_of_block_effect`,
-`state::tests::autonomous_execution_pre_vote_requires_exact_empty_carrier_membership`,
+`state::tests::autonomous_execution_pre_vote_requires_exact_merge_carrier_membership`,
 `state::tests::autonomous_execution_pre_vote_rejects_wrong_carrier_membership_height`,
-`state::tests::autonomous_execution_pre_vote_rejects_non_empty_carrier_membership`,
+`state::tests::autonomous_execution_pre_vote_rejects_extra_carrier_membership`,
 `state::tests::autonomous_execution_pre_vote_rejects_premature_pending_carrier_hash`,
 and
 `state::tests::autonomous_execution_finality_rejects_unbound_event_surface_drift`.
@@ -1189,7 +1189,7 @@ Assert exactly one history/query inclusion result.
 that each accepted reservation has one of three terminal outcomes: globally
 applied once, released once in FIFO position, or durably retained by one live
 certified owner. `MLCarrierCommitSurfaceExact` additionally preserves the
-ordered pristine, exact-empty post-block/pre-vote, and exact finalized-carrier
+ordered pristine, exact merge-only post-block/pre-vote, and exact finalized-carrier
 surfaces, including the exact autonomous event prefix, separately bound full
 carrier publication vector, and drained final live buffer. Mutation
 `ML-MUT-AUT-05` advances queue state before
@@ -1651,7 +1651,7 @@ status/diagnostics payload negative. The development resolver
 `ci/resolve_sumeragi_v2_sdk_source_closure.py` and manifest
 `ci/sumeragi_v2_sdk_source_closure.json` cover transitive production sources
 and Kotlin/Java Native model dependencies. The current mutable-tree inventory
-  is exactly 1,442 grouped and 1,444 diagnostics records. Their canonical hashes
+is exactly 1,451 grouped and 1,453 diagnostics records. Their canonical hashes
 are
 recorded once in the owning corpus row and once in the release gate. The
 release receipt must reproduce those values from its immutable candidate;
@@ -1743,12 +1743,11 @@ corpus includes
 The harness and source-bound release inventory both require that exact count.
 The source inventories now require OpenAPI 7, Python 63, JavaScript 61, Swift
 5, Kotlin 7, and Java 6 tests. The current recursive mutable-tree closure
-  contains exactly 1,442 grouped and 1,444 diagnostics records. Its grouped and
-diagnostics
-suite-source SHA-256 values are
-  `21b644da9624a4a6378a053be48abc753ae72e8667aa3c7b525ca8c65cd07dd4`
+contains exactly 1,451 grouped and 1,453 diagnostics records. Its grouped and
+diagnostics suite-source SHA-256 values are
+`bdf4efd88885521e3806cfe610e7ab3d72d690ebe329a4b7acfc0b2fe9b22ae0`
 and
-  `548edf17556c3be5a342f0e62a56ad98bfee725929c656ceafa3f9112335810b`.
+`90235165ad20cc6e4363d4fd6935b8c25bc2e1856cdbbad3323dcc5c4843c2a3`.
 The checked-in grouped fixture has SHA-256
 `e4fb62addba3c3b8aecdbff55840e21620c770ab96d346ca55b156cf0239942b`.
 The diagnostics closure directly includes the 48-line wire fixture whose
@@ -2056,11 +2055,11 @@ browser JavaScript distribution, SoraFS orderbook JavaScript implementation
 and types, the standalone Python orderbook module, Kotlin/Java Native models,
 grouped JSON, and wire TSV. Its record totals and suite-source digests must be
 derived and receipt-bound from the exact immutable candidate. The current
-  mutable-tree closure contains exactly 1,442 grouped and 1,444 diagnostics
+mutable-tree closure contains exactly 1,451 grouped and 1,453 diagnostics
 records, with grouped and diagnostics suite-source SHA-256 values
-  `21b644da9624a4a6378a053be48abc753ae72e8667aa3c7b525ca8c65cd07dd4`
+`bdf4efd88885521e3806cfe610e7ab3d72d690ebe329a4b7acfc0b2fe9b22ae0`
 and
-  `548edf17556c3be5a342f0e62a56ad98bfee725929c656ceafa3f9112335810b`.
+`90235165ad20cc6e4363d4fd6935b8c25bc2e1856cdbbad3323dcc5c4843c2a3`.
 The current grouped JSON and wire TSV SHA-256 values are
 `e4fb62addba3c3b8aecdbff55840e21620c770ab96d346ca55b156cf0239942b`
 and

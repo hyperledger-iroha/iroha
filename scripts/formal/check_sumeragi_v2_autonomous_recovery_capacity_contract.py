@@ -49,11 +49,6 @@ MUTATIONS = (
         "MLAutonomousPredecessorGloballyApplied",
     ),
     (
-        "DirectExecutionAutonomousPredecessor",
-        "multilane_autonomous_recovery_capacity_direct_execution_predecessor_bug.cfg",
-        "MLAutonomousPredecessorGloballyApplied",
-    ),
-    (
         "StartupRepairBeforeEnvelope",
         "multilane_autonomous_recovery_capacity_startup_repair_before_envelopes_bug.cfg",
         "MLStartupRepairAfterCarrierEnvelopes",
@@ -169,12 +164,6 @@ STABLE_BINDING_IDENTITIES = {
         "crates/iroha_core/src/state/autonomous_predecessor_application_tests.rs",
         "fn",
         "autonomous_lane_predecessor_accepts_exact_canonical_receipt_without_merge_frontier",
-    ),
-    "autonomous_predecessor_direct_execution_rejection": (
-        "MLAutonomousPredecessorGloballyApplied",
-        "crates/iroha_core/src/state/autonomous_predecessor_application_tests.rs",
-        "fn",
-        "autonomous_lane_predecessor_rejects_direct_execution_receipt",
     ),
     "autonomous_current_merge_receipt_revalidator": (
         "MLAutonomousPredecessorGloballyApplied",
@@ -514,12 +503,6 @@ STABLE_BINDING_REQUIRED_ANCHORS = {
         "canonical_lane_block_predecessor_receipt_revalidates_without_sidecar_repair",
         "certified_autonomous_lane_block_predecessor_is_globally_applied_cached",
         "malformed-frontier",
-    ),
-    "autonomous_predecessor_direct_execution_rejection": (
-        "persist_direct_lane_block_application_receipt(&input, &preflight)",
-        "lane_block_predecessor_application_receipt_available_without_sidecar_repair",
-        "!kura.canonical_lane_block_predecessor_receipt_revalidates_without_sidecar_repair",
-        "!state.certified_autonomous_lane_block_predecessor_is_globally_applied_cached",
     ),
     "autonomous_current_merge_receipt_revalidator": (
         "receipt.format == LaneBlockApplicationReceiptArtifactFormat::MergeExecution",
@@ -920,10 +903,6 @@ MODEL_OPERATOR_TOKENS = {
         'autonomousPredecessorEvidence\' = "HashOnlyOwnership"',
         "autonomousPredecessorAdmitted' = (Mode = \"HashOnlyAutonomousPredecessor\")",
     ),
-    "ObserveDirectExecutionAutonomousPredecessor": (
-        'autonomousPredecessorEvidence\' = "DirectExecutionReceipt"',
-        "autonomousPredecessorAdmitted' = (Mode = \"DirectExecutionAutonomousPredecessor\")",
-    ),
     "AdmitAutonomousPredecessorFromExactWsvFrontier": (
         'autonomousPredecessorEvidence\' = "ExactWsvFrontier"',
         "autonomousPredecessorAdmitted' = TRUE",
@@ -1006,7 +985,6 @@ MODEL_OPERATOR_TOKENS = {
         '"MergeReceiptCarrierRevalidated"',
         '"CanonicalReceiptRevalidated"',
         'autonomousPredecessorEvidence = "HashOnlyOwnership"',
-        'autonomousPredecessorEvidence = "DirectExecutionReceipt"',
         "~autonomousPredecessorAdmitted",
     ),
     "MLCertifiedFrontierCapacityReconstructable": (
@@ -1159,7 +1137,6 @@ def _validate_model_source(source: str, errors: list[str]) -> None:
             "DischargeCarrierNWithTerminalProof",
             "DischargeCarrierNWithReceiptProof",
             "ObserveHashOnlyAutonomousPredecessor",
-            "ObserveDirectExecutionAutonomousPredecessor",
             "AdmitAutonomousPredecessorFromExactWsvFrontier",
             "AdmitAutonomousPredecessorFromRevalidatedMergeReceipt",
             "AdmitAutonomousPredecessorFromRevalidatedCanonicalReceipt",
@@ -1487,7 +1464,6 @@ def _validate_evidence_document(source: str, errors: list[str]) -> None:
         "production bindings are complete",
         "RouteLatestOnlySkip",
         "HashOnlyAutonomousPredecessor",
-        "DirectExecutionAutonomousPredecessor",
         "StartupRepairBeforeEnvelope",
         "FrontierMissingBundleEnvelope",
         "ClaimPeakAfterMutation",

@@ -800,7 +800,7 @@ fn autonomous_merge_commit_authorization_fixture_inner(
     if let Some(fixture) = transfer_fixture {
         let committed_fragments = match fixture {
             QueuePlanTransferFixture::Single => 1,
-            QueuePlanTransferFixture::AtomicBatch | QueuePlanTransferFixture::IndependentBatch => 3,
+            QueuePlanTransferFixture::AtomicBatch | QueuePlanTransferFixture::IndependentBatch => 2,
         };
         carrier.set_committed_fragment_count(committed_fragments);
     }
@@ -834,7 +834,7 @@ fn staged_autonomous_merge_commit_block<'state>(
             .is_some(),
         "successful re-execution must mint canonical WSV commit authorization"
     );
-    stage_exact_empty_autonomous_carrier_membership_for_pre_vote(&mut state_block);
+    stage_exact_autonomous_carrier_membership_for_pre_vote(&mut state_block, carrier);
     let (time_entrypoints, time_hashes, time_results) =
         state_block.execute_time_triggers(&carrier.header());
     assert!(time_entrypoints.is_empty());
@@ -847,7 +847,12 @@ fn staged_autonomous_merge_commit_block<'state>(
         .commit_unchecked()
         .unpack(|_| {});
     let topology = state.commit_topology_snapshot();
-    let _events = state_block.apply_without_execution(&committed, topology);
+    let (_events, authorization) = state_block.apply_without_execution_inner(
+        &committed,
+        topology,
+        ApplyTopologyAuthority::Fixture,
+    );
+    authorization.expect("fixture application must authorize the exact canonical carrier");
     assert!(
         state_block
             .canonical_carrier_commit_metadata_authorization
@@ -883,7 +888,12 @@ fn production_validated_autonomous_merge_commit_block<'state>(
         "production validation must retain the certified carrier identity"
     );
     let topology = state.commit_topology_snapshot();
-    let _events = state_block.apply_without_execution(&committed, topology);
+    let (_events, authorization) = state_block.apply_without_execution_inner(
+        &committed,
+        topology,
+        ApplyTopologyAuthority::Fixture,
+    );
+    authorization.expect("production-validated carrier application must remain authorized");
     assert!(
         state_block
             .canonical_carrier_commit_metadata_authorization
@@ -898,11 +908,14 @@ fn production_validated_autonomous_merge_commit_block<'state>(
         .expect("production consumer handoff must leave the exact finalized carrier surface");
     state_block
 }
-fn stage_exact_empty_autonomous_carrier_membership_for_pre_vote(state_block: &mut StateBlock<'_>) {
+fn stage_exact_autonomous_carrier_membership_for_pre_vote(
+    state_block: &mut StateBlock<'_>,
+    carrier: &SignedBlock,
+) {
     let height = autonomous_carrier_transaction_height(state_block);
     state_block
-        .transactions
-        .insert_block(std::collections::HashSet::new(), height);
+        .stage_canonical_carrier_membership(carrier.entrypoint_hashes(), height)
+        .expect("certified carrier membership must match its merge execution batch");
 }
 fn autonomous_carrier_transaction_height(state_block: &StateBlock<'_>) -> NonZeroUsize {
     usize::try_from(state_block._curr_block.height().get())

@@ -5948,6 +5948,7 @@ impl Executor {
         ivm_cache: &mut IvmCache,
     ) -> Result<(), ValidationFail> {
         state_transaction.bind_privacy_transaction_intent_v1(None);
+        state_transaction.bind_private_settlement_carrier_v1(None);
         state_transaction.kagemusha_taira_canary_wire_identity = None;
         state_transaction.kagemusha_release_lifecycle_entrypoint = None;
         if transaction.authority() != authority {
@@ -5959,6 +5960,11 @@ impl Executor {
         let privacy_intent_binding =
             crate::privacy::signed_privacy_transaction_intent_binding_v1(&transaction)?;
         state_transaction.bind_privacy_transaction_intent_v1(privacy_intent_binding);
+        let private_settlement_carrier_binding =
+            crate::private_settlement::carrier::signed_private_settlement_carrier_binding_v1(
+                &transaction,
+            )?;
+        state_transaction.bind_private_settlement_carrier_v1(private_settlement_carrier_binding);
         if state_transaction.kagemusha_taira_canary_external_entrypoint {
             state_transaction.kagemusha_taira_canary_wire_identity =
                 signed_kagemusha_taira_canary_wire_identity_v1(&transaction)?;
@@ -9384,6 +9390,9 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
     // `zk::SubmitBallot` vendor instruction remains IVM-latch-only below.
     if is_any!(
         iroha_data_model::isi::settlement::SettlementInstructionBox,
+        iroha_data_model::isi::private_settlement::ActivatePrivateSettlementPoolV1,
+        iroha_data_model::isi::private_settlement::AbortAtomicPrivateSettlementV1,
+        iroha_data_model::isi::private_settlement::FinalizeAtomicPrivateSettlementV1,
         iroha_data_model::isi::bridge::SubmitBridgeProof,
         iroha_data_model::isi::bridge::RecordBridgeReceipt,
         iroha_data_model::isi::bridge::ApplySccpRouteGovernance,
@@ -11034,7 +11043,7 @@ mod tests {
         );
         state
             .block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0))
-            .commit()
+            .commit_empty_block_for_testing()
             .expect("commit bootstrap block");
         state
     }
@@ -16880,7 +16889,7 @@ mod tests {
         let state = State::new(world, kura, query_handle);
         state
             .block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0))
-            .commit()
+            .commit_empty_block_for_testing()
             .expect("commit bootstrap block");
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -17063,7 +17072,7 @@ mod tests {
         let state = State::new(world, kura, query_handle);
         state
             .block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0))
-            .commit()
+            .commit_empty_block_for_testing()
             .expect("commit bootstrap block");
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
         let mut block = state.block(header);

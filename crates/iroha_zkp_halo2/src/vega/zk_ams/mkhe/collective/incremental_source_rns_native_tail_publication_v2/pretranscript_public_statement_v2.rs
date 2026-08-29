@@ -634,7 +634,9 @@ where
 
 #[path = "pretranscript_public_statement_v2/claimed_qpcs_source_carrier_v2.rs"]
 mod claimed_qpcs_source_carrier_v2;
-pub(in crate::vega::zk_ams::mkhe) use claimed_qpcs_source_carrier_v2::RnsNativeClaimedDirectNumericOriginV2;
+pub(in crate::vega::zk_ams::mkhe) use claimed_qpcs_source_carrier_v2::{
+    RnsNativeClaimedDirectNumericOriginV2, RnsNativeQpcsCompositeAuthorityV2,
+};
 
 #[cfg(test)]
 #[path = "pretranscript_public_statement_v2_tests.rs"]

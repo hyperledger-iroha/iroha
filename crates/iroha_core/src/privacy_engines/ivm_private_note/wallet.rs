@@ -73,15 +73,10 @@ impl From<X25519WalletErrorV1> for IvmPrivateNoteWalletErrorV1 {
         Self::Key
     }
 }
-fn encode_note_v1(
+fn encode_note_material_v1(
     note: &PrivateNotePlaintextV1,
     commitment: PrivacyCommitmentV1,
-) -> Result<Zeroizing<[u8; PRIVACY_IVM_PRIVATE_NOTE_PLAINTEXT_BYTES_V1]>, IvmPrivateNoteWalletErrorV1>
-{
-    if derive_note_commitment_v1(note).map_err(|_| IvmPrivateNoteWalletErrorV1::Note)? != commitment
-    {
-        return Err(IvmPrivateNoteWalletErrorV1::Binding);
-    }
+) -> Zeroizing<[u8; PRIVACY_IVM_PRIVATE_NOTE_PLAINTEXT_BYTES_V1]> {
     let mut bytes = Zeroizing::new([0_u8; PRIVACY_IVM_PRIVATE_NOTE_PLAINTEXT_BYTES_V1]);
     let mut cursor = 0;
     bytes[cursor..cursor + 4].copy_from_slice(&NOTE_MAGIC_V1);
@@ -98,9 +93,9 @@ fn encode_note_v1(
     cursor += 32;
     bytes[cursor..cursor + 32].copy_from_slice(&note.memo_digest);
     debug_assert_eq!(cursor + 32, PRIVACY_IVM_PRIVATE_NOTE_PLAINTEXT_BYTES_V1);
-    Ok(bytes)
+    bytes
 }
-fn decode_note_v1(
+fn decode_note_material_v1(
     bytes: &[u8],
     expected_commitment: PrivacyCommitmentV1,
 ) -> Result<PrivateNotePlaintextV1, IvmPrivateNoteWalletErrorV1> {
@@ -123,19 +118,13 @@ fn decode_note_v1(
     rho.copy_from_slice(&bytes[84..116]);
     blinding.copy_from_slice(&bytes[116..148]);
     memo_digest.copy_from_slice(&bytes[148..180]);
-    let note = PrivateNotePlaintextV1 {
+    Ok(PrivateNotePlaintextV1 {
         value,
         spending_authority,
         rho,
         blinding,
         memo_digest,
-    };
-    if derive_note_commitment_v1(&note).map_err(|_| IvmPrivateNoteWalletErrorV1::Note)?
-        != expected_commitment
-    {
-        return Err(IvmPrivateNoteWalletErrorV1::Note);
-    }
-    Ok(note)
+    })
 }
 /// Derive the private-IVM recipient identity from a strict canonical X25519 public key.
 pub fn derive_ivm_private_recipient_id_v1(
@@ -252,37 +241,19 @@ pub fn validate_ivm_private_encrypted_output_v1(
     validate_x25519_public_key_v1(encrypted.ephemeral_public_key.into_bytes())?;
     parsed_ciphertext(encrypted).map(|_| ())
 }
-/// Encrypt one fixed-width private note.
-pub fn encrypt_ivm_private_wallet_note_v1(
-    rng: &mut (impl RngCore + CryptoRng),
+fn encrypt_note_material_v1(
     pool_id: PrivacyPoolIdV1,
     program_id: PrivacyProgramIdV1,
     note: &PrivateNotePlaintextV1,
+    commitment: PrivacyCommitmentV1,
     recipient_public_key: [u8; 32],
+    ephemeral_secret: &[u8; EPHEMERAL_SECRET_BYTES_V1],
+    nonce_bytes: &[u8; PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_NONCE_BYTES_V1],
 ) -> Result<PrivacyEncryptedOutputV1, IvmPrivateNoteWalletErrorV1> {
-    let commitment =
-        derive_note_commitment_v1(note).map_err(|_| IvmPrivateNoteWalletErrorV1::Note)?;
-    let recipient = derive_ivm_private_recipient_id_v1(recipient_public_key)?;
-    let mut randomness_session =
-        HealthCheckedCryptoRngV1::new(rng).map_err(map_curve_randomness_error_v1)?;
-    let mut entropy = Zeroizing::new([0_u8; WALLET_ENTROPY_BYTES_V1]);
-    randomness_session
-        .try_fill_bytes(entropy.as_mut())
-        .map_err(|_| IvmPrivateNoteWalletErrorV1::RandomnessUnavailable)?;
-    let ephemeral_secret: &[u8; EPHEMERAL_SECRET_BYTES_V1] = entropy
-        .get(..EPHEMERAL_SECRET_BYTES_V1)
-        .and_then(|bytes| bytes.try_into().ok())
-        .ok_or(IvmPrivateNoteWalletErrorV1::RandomnessUnavailable)?;
-    let nonce_bytes: &[u8; PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_NONCE_BYTES_V1] = entropy
-        .get(
-            EPHEMERAL_SECRET_BYTES_V1
-                ..EPHEMERAL_SECRET_BYTES_V1 + PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_NONCE_BYTES_V1,
-        )
-        .and_then(|bytes| bytes.try_into().ok())
-        .ok_or(IvmPrivateNoteWalletErrorV1::RandomnessUnavailable)?;
-    if !encryption_entropy_is_healthy_v1(ephemeral_secret, nonce_bytes) {
-        return Err(IvmPrivateNoteWalletErrorV1::RandomnessUnavailable);
+    if commitment.is_zero() || !encryption_entropy_is_healthy_v1(ephemeral_secret, nonce_bytes) {
+        return Err(IvmPrivateNoteWalletErrorV1::Randomness);
     }
+    let recipient = derive_ivm_private_recipient_id_v1(recipient_public_key)?;
     let ephemeral_public = x25519_public_key_v1(ephemeral_secret)?;
     let shared = x25519_shared_secret_v1(ephemeral_secret, recipient_public_key)?;
     let ephemeral_public_key = PrivacyEncryptionKeyV1::new(ephemeral_public);
@@ -294,7 +265,7 @@ pub fn encrypt_ivm_private_wallet_note_v1(
         commitment,
     );
     let key = note_key_v1(&shared, &aad);
-    let plaintext = encode_note_v1(note, commitment)?;
+    let plaintext = encode_note_material_v1(note, commitment);
     let nonce: &chacha20poly1305::XNonce = nonce_bytes
         .as_slice()
         .try_into()
@@ -326,6 +297,81 @@ pub fn encrypt_ivm_private_wallet_note_v1(
     validate_ivm_private_encrypted_output_v1(pool_id, program_id, commitment, &encrypted)?;
     Ok(encrypted)
 }
+/// Encrypt one fixed-width private note.
+pub fn encrypt_ivm_private_wallet_note_v1(
+    rng: &mut (impl RngCore + CryptoRng),
+    pool_id: PrivacyPoolIdV1,
+    program_id: PrivacyProgramIdV1,
+    note: &PrivateNotePlaintextV1,
+    recipient_public_key: [u8; 32],
+) -> Result<PrivacyEncryptedOutputV1, IvmPrivateNoteWalletErrorV1> {
+    let commitment =
+        derive_note_commitment_v1(note).map_err(|_| IvmPrivateNoteWalletErrorV1::Note)?;
+    derive_ivm_private_recipient_id_v1(recipient_public_key)?;
+    let mut randomness_session =
+        HealthCheckedCryptoRngV1::new(rng).map_err(map_curve_randomness_error_v1)?;
+    let mut entropy = Zeroizing::new([0_u8; WALLET_ENTROPY_BYTES_V1]);
+    randomness_session
+        .try_fill_bytes(entropy.as_mut())
+        .map_err(|_| IvmPrivateNoteWalletErrorV1::RandomnessUnavailable)?;
+    let ephemeral_secret: &[u8; EPHEMERAL_SECRET_BYTES_V1] = entropy
+        .get(..EPHEMERAL_SECRET_BYTES_V1)
+        .and_then(|bytes| bytes.try_into().ok())
+        .ok_or(IvmPrivateNoteWalletErrorV1::RandomnessUnavailable)?;
+    let nonce_bytes: &[u8; PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_NONCE_BYTES_V1] = entropy
+        .get(
+            EPHEMERAL_SECRET_BYTES_V1
+                ..EPHEMERAL_SECRET_BYTES_V1 + PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_NONCE_BYTES_V1,
+        )
+        .and_then(|bytes| bytes.try_into().ok())
+        .ok_or(IvmPrivateNoteWalletErrorV1::RandomnessUnavailable)?;
+    if !encryption_entropy_is_healthy_v1(ephemeral_secret, nonce_bytes) {
+        return Err(IvmPrivateNoteWalletErrorV1::RandomnessUnavailable);
+    }
+    encrypt_note_material_v1(
+        pool_id,
+        program_id,
+        note,
+        commitment,
+        recipient_public_key,
+        ephemeral_secret,
+        nonce_bytes,
+    )
+}
+
+/// Encrypt a pre-committed profiled note using a capsule-retained ephemeral opening.
+///
+/// The caller must already have derived `commitment` under its governed note
+/// profile. The supplied ephemeral secret is retained only in restricted audit
+/// material; a fresh authenticated nonce is obtained from `rng`.
+#[cfg(test)]
+pub(crate) fn encrypt_ivm_private_wallet_note_for_commitment_with_opening_v1(
+    rng: &mut (impl RngCore + CryptoRng),
+    pool_id: PrivacyPoolIdV1,
+    program_id: PrivacyProgramIdV1,
+    note: &PrivateNotePlaintextV1,
+    commitment: PrivacyCommitmentV1,
+    recipient_public_key: [u8; 32],
+    ephemeral_secret: &[u8; EPHEMERAL_SECRET_BYTES_V1],
+) -> Result<PrivacyEncryptedOutputV1, IvmPrivateNoteWalletErrorV1> {
+    derive_ivm_private_recipient_id_v1(recipient_public_key)?;
+    x25519_public_key_v1(ephemeral_secret)?;
+    let mut randomness_session =
+        HealthCheckedCryptoRngV1::new(rng).map_err(map_curve_randomness_error_v1)?;
+    let mut nonce = Zeroizing::new([0_u8; PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_NONCE_BYTES_V1]);
+    randomness_session
+        .try_fill_bytes(nonce.as_mut())
+        .map_err(|_| IvmPrivateNoteWalletErrorV1::RandomnessUnavailable)?;
+    encrypt_note_material_v1(
+        pool_id,
+        program_id,
+        note,
+        commitment,
+        recipient_public_key,
+        ephemeral_secret,
+        &nonce,
+    )
+}
 /// Encrypt one fixed-width private note with operating-system entropy.
 ///
 /// # Errors
@@ -339,23 +385,13 @@ pub fn encrypt_ivm_private_wallet_note_with_os_rng_v1(
 ) -> Result<PrivacyEncryptedOutputV1, IvmPrivateNoteWalletErrorV1> {
     encrypt_ivm_private_wallet_note_v1(&mut OsRng, pool_id, program_id, note, recipient_public_key)
 }
-/// Decrypt, authenticate, and commitment-check one fixed-width private note.
-pub fn decrypt_ivm_private_wallet_note_v1(
+fn decrypt_note_material_v1(
     pool_id: PrivacyPoolIdV1,
     program_id: PrivacyProgramIdV1,
     expected_commitment: PrivacyCommitmentV1,
     encrypted: &PrivacyEncryptedOutputV1,
-    recipient_secret_key: &[u8; 32],
+    shared: &[u8; 32],
 ) -> Result<PrivateNotePlaintextV1, IvmPrivateNoteWalletErrorV1> {
-    validate_ivm_private_encrypted_output_v1(pool_id, program_id, expected_commitment, encrypted)?;
-    let recipient_public_key = ivm_private_recipient_public_key_v1(recipient_secret_key)?;
-    if derive_ivm_private_recipient_id_v1(recipient_public_key)? != encrypted.recipient {
-        return Err(IvmPrivateNoteWalletErrorV1::Binding);
-    }
-    let shared = x25519_shared_secret_v1(
-        recipient_secret_key,
-        encrypted.ephemeral_public_key.into_bytes(),
-    )?;
     let aad = aad_v1(
         pool_id,
         program_id,
@@ -363,7 +399,7 @@ pub fn decrypt_ivm_private_wallet_note_v1(
         encrypted.ephemeral_public_key,
         expected_commitment,
     );
-    let key = note_key_v1(&shared, &aad);
+    let key = note_key_v1(shared, &aad);
     let (nonce_bytes, authenticated) = parsed_ciphertext(encrypted)?;
     let nonce: &chacha20poly1305::XNonce = nonce_bytes
         .as_slice()
@@ -382,7 +418,63 @@ pub fn decrypt_ivm_private_wallet_note_v1(
             )
             .map_err(|_| IvmPrivateNoteWalletErrorV1::Authentication)?,
     );
-    decode_note_v1(plaintext.as_slice(), expected_commitment)
+    decode_note_material_v1(plaintext.as_slice(), expected_commitment)
+}
+
+/// Authenticate a published ciphertext using a capsule-only ephemeral opening.
+///
+/// This path needs neither the role account's signing secret nor the note's
+/// spending secret. The caller first derives `expected_commitment` under its
+/// governed profile, then this function proves the envelope decrypts to the
+/// exact expected note and one-time recipient key.
+pub(crate) fn validate_ivm_private_wallet_encryption_opening_v1(
+    pool_id: PrivacyPoolIdV1,
+    program_id: PrivacyProgramIdV1,
+    expected_note: &PrivateNotePlaintextV1,
+    expected_commitment: PrivacyCommitmentV1,
+    encrypted: &PrivacyEncryptedOutputV1,
+    recipient_public_key: [u8; 32],
+    ephemeral_secret: &[u8; EPHEMERAL_SECRET_BYTES_V1],
+) -> Result<(), IvmPrivateNoteWalletErrorV1> {
+    validate_ivm_private_encrypted_output_v1(pool_id, program_id, expected_commitment, encrypted)?;
+    if derive_ivm_private_recipient_id_v1(recipient_public_key)? != encrypted.recipient
+        || x25519_public_key_v1(ephemeral_secret)? != encrypted.ephemeral_public_key.into_bytes()
+    {
+        return Err(IvmPrivateNoteWalletErrorV1::Binding);
+    }
+    let shared = x25519_shared_secret_v1(ephemeral_secret, recipient_public_key)?;
+    let decrypted =
+        decrypt_note_material_v1(pool_id, program_id, expected_commitment, encrypted, &shared)?;
+    if &decrypted != expected_note {
+        return Err(IvmPrivateNoteWalletErrorV1::Note);
+    }
+    Ok(())
+}
+/// Decrypt, authenticate, and commitment-check one fixed-width private note.
+pub fn decrypt_ivm_private_wallet_note_v1(
+    pool_id: PrivacyPoolIdV1,
+    program_id: PrivacyProgramIdV1,
+    expected_commitment: PrivacyCommitmentV1,
+    encrypted: &PrivacyEncryptedOutputV1,
+    recipient_secret_key: &[u8; 32],
+) -> Result<PrivateNotePlaintextV1, IvmPrivateNoteWalletErrorV1> {
+    validate_ivm_private_encrypted_output_v1(pool_id, program_id, expected_commitment, encrypted)?;
+    let recipient_public_key = ivm_private_recipient_public_key_v1(recipient_secret_key)?;
+    if derive_ivm_private_recipient_id_v1(recipient_public_key)? != encrypted.recipient {
+        return Err(IvmPrivateNoteWalletErrorV1::Binding);
+    }
+    let shared = x25519_shared_secret_v1(
+        recipient_secret_key,
+        encrypted.ephemeral_public_key.into_bytes(),
+    )?;
+    let note =
+        decrypt_note_material_v1(pool_id, program_id, expected_commitment, encrypted, &shared)?;
+    if derive_note_commitment_v1(&note).map_err(|_| IvmPrivateNoteWalletErrorV1::Note)?
+        != expected_commitment
+    {
+        return Err(IvmPrivateNoteWalletErrorV1::Note);
+    }
+    Ok(note)
 }
 #[cfg(test)]
 mod tests {
@@ -827,17 +919,17 @@ mod tests {
     fn inner_note_codec_rejects_magic_commitment_and_opening_corruption() {
         let (_, _, note, _) = fixture();
         let commitment = derive_note_commitment_v1(&note).unwrap();
-        let encoded = encode_note_v1(&note, commitment).unwrap();
+        let encoded = encode_note_material_v1(&note, commitment);
         for index in [0, 4, 36, 52, 84, 116, 148, encoded.len() - 1] {
             let mut tampered = Zeroizing::new(*encoded);
             tampered[index] ^= 1;
             assert!(
-                decode_note_v1(tampered.as_slice(), commitment).is_err(),
+                decode_note_material_v1(tampered.as_slice(), commitment).is_err(),
                 "tampered plaintext byte {index} was accepted"
             );
         }
         assert_eq!(
-            decode_note_v1(&encoded[..encoded.len() - 1], commitment),
+            decode_note_material_v1(&encoded[..encoded.len() - 1], commitment),
             Err(IvmPrivateNoteWalletErrorV1::Note)
         );
     }

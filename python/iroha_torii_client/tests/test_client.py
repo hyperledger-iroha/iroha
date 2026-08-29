@@ -8057,33 +8057,6 @@ def _status_payload(
     }
 
 
-def test_get_sumeragi_pacemaker_parses_snapshot() -> None:
-    session = RecordingSession()
-    session.queue(
-        StubResponse(
-            payload={
-                "backoff_ms": 50,
-                "rtt_floor_ms": 10,
-                "jitter_ms": 5,
-                "backoff_multiplier": 2,
-                "rtt_floor_multiplier": 3,
-                "max_backoff_ms": 120,
-                "jitter_frac_permille": 25,
-                "round_elapsed_ms": 40,
-                "view_timeout_target_ms": 90,
-                "view_timeout_remaining_ms": 12,
-            }
-        )
-    )
-    client = ToriiClient("http://node.test", session=session)
-
-    pacemaker = client.get_sumeragi_pacemaker()
-
-    assert pacemaker.backoff_ms == 50
-    assert pacemaker.view_timeout_remaining_ms == 12
-    assert session.calls[0]["url"].endswith("/v1/sumeragi/pacemaker")
-
-
 def test_get_sumeragi_leader_parses_prf() -> None:
     session = RecordingSession()
     session.queue(

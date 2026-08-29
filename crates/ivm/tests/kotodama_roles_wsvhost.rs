@@ -5,7 +5,6 @@ use ivm::{
     kotodama::compiler::Compiler as KotodamaCompiler,
     mock_wsv::{AccountId, MockWorldStateView, WsvHost},
 };
-use std::collections::HashMap;
 mod common;
 const TEST_ACCOUNT_LITERAL: &str = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
 const TEST_ASSET_LITERAL: &str = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
@@ -16,7 +15,7 @@ fn make_vm_with_wsv() -> (IVM, AccountId) {
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(alice.clone());
     wsv.grant_permission(&alice, PermissionToken::ManageRoles);
-    let host = WsvHost::new_with_subject(wsv, alice.clone(), HashMap::new());
+    let host = WsvHost::new_with_subject(wsv, alice.clone());
     let mut vm = IVM::new(1_000_000);
     vm.set_host(host);
     (vm, alice)

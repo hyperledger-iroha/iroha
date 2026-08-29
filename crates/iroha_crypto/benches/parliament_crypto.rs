@@ -242,6 +242,40 @@ struct ThresholdFixture {
     verify_cases: Vec<(Vec<u8>, ThresholdBlsSignature<BeaconPurpose>)>,
 }
 
+fn threshold_verify_cases(
+    committee_size: u16,
+    signers: &[AdaptiveThresholdBlsSecretShare<BeaconPurpose>],
+    threshold: usize,
+    transcript: &AdaptiveThresholdBlsPublicTranscript<BeaconPurpose>,
+    rng: &mut ChaCha20Rng,
+) -> Vec<(Vec<u8>, ThresholdBlsSignature<BeaconPurpose>)> {
+    if committee_size != THRESHOLD_COMMITTEE_SIZES[2] {
+        return Vec::new();
+    }
+    [
+        0,
+        COMBINE_PAYLOAD_BYTES,
+        THRESHOLD_BLS_MAX_MESSAGE_PAYLOAD_BYTES_V1,
+    ]
+    .into_iter()
+    .map(|payload_len| {
+        let payload = vec![0x5A; payload_len];
+        let partials = signers[..threshold]
+            .iter()
+            .map(|signer| {
+                signer
+                    .sign_payload_with_rng(transcript, &payload, rng)
+                    .expect("sign verification-size case")
+            })
+            .collect::<Vec<_>>();
+        let signature = transcript
+            .combine_partial_signatures(&payload, &partials)
+            .expect("combine verification-size case");
+        (payload, signature)
+    })
+    .collect()
+}
+
 fn threshold_fixture(committee_size: u16) -> ThresholdFixture {
     let fault_tolerance = (committee_size - 1) / 3;
     let threshold = fault_tolerance + 1;
@@ -269,7 +303,7 @@ fn threshold_fixture(committee_size: u16) -> ThresholdFixture {
     }
     let qualified_indices = (1..=minimum_qualified).collect::<Vec<_>>();
     let transcript = AdaptiveThresholdBlsPublicTranscript::from_qualified_dealers(
-        parameters,
+        &parameters,
         &dealers,
         &qualified_indices,
         indexed_binding(4, usize::from(committee_size)),
@@ -312,32 +346,13 @@ fn threshold_fixture(committee_size: u16) -> ThresholdFixture {
         "threshold and full subsets must reconstruct the same signature"
     );
 
-    let verify_cases = if committee_size == THRESHOLD_COMMITTEE_SIZES[2] {
-        [
-            0,
-            COMBINE_PAYLOAD_BYTES,
-            THRESHOLD_BLS_MAX_MESSAGE_PAYLOAD_BYTES_V1,
-        ]
-        .into_iter()
-        .map(|payload_len| {
-            let case_payload = vec![0x5A; payload_len];
-            let case_partials = signers[..threshold_len]
-                .iter()
-                .map(|signer| {
-                    signer
-                        .sign_payload_with_rng(&transcript, &case_payload, &mut rng)
-                        .expect("sign verification-size case")
-                })
-                .collect::<Vec<_>>();
-            let signature = transcript
-                .combine_partial_signatures(&case_payload, &case_partials)
-                .expect("combine verification-size case");
-            (case_payload, signature)
-        })
-        .collect()
-    } else {
-        Vec::new()
-    };
+    let verify_cases = threshold_verify_cases(
+        committee_size,
+        &signers,
+        threshold_len,
+        &transcript,
+        &mut rng,
+    );
 
     ThresholdFixture {
         committee_size,
@@ -349,17 +364,13 @@ fn threshold_fixture(committee_size: u16) -> ThresholdFixture {
     }
 }
 
-fn bench_threshold_bls(c: &mut Criterion) {
-    let fixtures = THRESHOLD_COMMITTEE_SIZES
-        .into_iter()
-        .map(threshold_fixture)
-        .collect::<Vec<_>>();
+fn bench_threshold_combine(c: &mut Criterion, fixtures: &[ThresholdFixture]) {
     let mut combine = c.benchmark_group("parliament/threshold_bls/combine");
     combine
         .sample_size(10)
         .warm_up_time(Duration::from_secs(1))
         .measurement_time(Duration::from_secs(3));
-    for fixture in &fixtures {
+    for fixture in fixtures {
         combine.throughput(Throughput::Elements(
             u64::try_from(fixture.threshold).expect("threshold fits u64"),
         ));
@@ -400,13 +411,15 @@ fn bench_threshold_bls(c: &mut Criterion) {
         );
     }
     combine.finish();
+}
 
+fn bench_threshold_invalid(c: &mut Criterion, fixtures: &[ThresholdFixture]) {
     let mut invalid = c.benchmark_group("parliament/threshold_bls/invalid_fast_fail");
     invalid
         .sample_size(10)
         .warm_up_time(Duration::from_secs(1))
         .measurement_time(Duration::from_secs(2));
-    for fixture in &fixtures {
+    for fixture in fixtures {
         let mut reordered = fixture.partials[..fixture.threshold].to_vec();
         reordered.swap(0, 1);
         assert_eq!(
@@ -434,7 +447,9 @@ fn bench_threshold_bls(c: &mut Criterion) {
         );
     }
     invalid.finish();
+}
 
+fn bench_threshold_verify(c: &mut Criterion, fixtures: &[ThresholdFixture]) {
     let largest = fixtures
         .last()
         .expect("threshold fixture matrix is nonempty");
@@ -465,6 +480,16 @@ fn bench_threshold_bls(c: &mut Criterion) {
     verify.finish();
 }
 
+fn bench_threshold_bls(c: &mut Criterion) {
+    let fixtures = THRESHOLD_COMMITTEE_SIZES
+        .into_iter()
+        .map(threshold_fixture)
+        .collect::<Vec<_>>();
+    bench_threshold_combine(c, &fixtures);
+    bench_threshold_invalid(c, &fixtures);
+    bench_threshold_verify(c, &fixtures);
+}
+
 struct TimedSurvivorCase {
     participant_ids: Vec<[u8; 32]>,
     release_identity: TleReleaseIdentityV1,
@@ -477,6 +502,27 @@ struct TimedOvnFixture {
     small_ballots: Vec<TimedOvnMaskedBallotV1>,
     registration_wire: Vec<u8>,
     ballot_wire: Vec<u8>,
+}
+
+fn cast_small_timed_ovn_ballots(
+    secrets: &[TimedOvnRegistrationSecretV1],
+    survivors: &TimedOvnSurvivorRosterV1,
+    rng: &mut ChaCha20Rng,
+) -> Vec<TimedOvnMaskedBallotV1> {
+    let choices = [
+        TimedOvnChoiceV1::Aye,
+        TimedOvnChoiceV1::Nay,
+        TimedOvnChoiceV1::Abstain,
+    ];
+    secrets
+        .iter()
+        .zip(choices)
+        .map(|(secret, choice)| {
+            secret
+                .cast_ballot_with_rng(survivors, choice, rng)
+                .expect("cast deterministic timed-OVN ballot")
+        })
+        .collect()
 }
 
 fn timed_ovn_fixture() -> TimedOvnFixture {
@@ -520,7 +566,7 @@ fn timed_ovn_fixture() -> TimedOvnFixture {
         }
         registrations.push(registration);
     }
-    let roster = TimedOvnRosterV1::new(session, registrations)
+    let roster = TimedOvnRosterV1::new(&session, registrations)
         .expect("freeze proof-verified timed-OVN roster");
     let registration_wire = roster.registrations()[0].to_bytes();
     assert_eq!(EXPECTED_REGISTRATION_WIRE_BYTES_V1, 3_624);
@@ -545,7 +591,7 @@ fn timed_ovn_fixture() -> TimedOvnFixture {
                 timed_ovn_parameter_hash_v1(),
             )
             .expect("construct timed-OVN release identity");
-            TimedOvnSurvivorRosterV1::new(&roster, &case_ids, release_identity)
+            TimedOvnSurvivorRosterV1::new(&roster, &case_ids, &release_identity)
                 .expect("preflight survivor fixture");
             TimedSurvivorCase {
                 participant_ids: case_ids,
@@ -557,23 +603,10 @@ fn timed_ovn_fixture() -> TimedOvnFixture {
     let small_survivors = TimedOvnSurvivorRosterV1::new(
         &roster,
         &small_case.participant_ids,
-        small_case.release_identity,
+        &small_case.release_identity,
     )
     .expect("freeze small survivor fixture");
-    let choices = [
-        TimedOvnChoiceV1::Aye,
-        TimedOvnChoiceV1::Nay,
-        TimedOvnChoiceV1::Abstain,
-    ];
-    let small_ballots = small_secrets
-        .iter()
-        .zip(choices)
-        .map(|(secret, choice)| {
-            secret
-                .cast_ballot_with_rng(&small_survivors, choice, &mut rng)
-                .expect("cast deterministic timed-OVN ballot")
-        })
-        .collect::<Vec<_>>();
+    let small_ballots = cast_small_timed_ovn_ballots(&small_secrets, &small_survivors, &mut rng);
     let ballot_wire = small_ballots[0].to_bytes();
     assert_eq!(EXPECTED_BALLOT_WIRE_BYTES_V1, 2_858);
     assert_eq!(ballot_wire.len(), EXPECTED_BALLOT_WIRE_BYTES_V1);
@@ -592,6 +625,13 @@ fn timed_ovn_fixture() -> TimedOvnFixture {
 
 fn bench_timed_ovn(c: &mut Criterion) {
     let fixture = timed_ovn_fixture();
+    bench_timed_ovn_roster_freeze(c, &fixture);
+    bench_timed_ovn_survivor_freeze(c, &fixture);
+    bench_timed_ovn_wire(c, &fixture);
+    bench_timed_ovn_aggregate(c, &fixture);
+}
+
+fn bench_timed_ovn_roster_freeze(c: &mut Criterion, fixture: &TimedOvnFixture) {
     let mut roster = c.benchmark_group("parliament/timed_ovn/registration_roster_freeze");
     roster
         .sample_size(10)
@@ -607,7 +647,7 @@ fn bench_timed_ovn(c: &mut Criterion) {
                 || fixture.roster.registrations()[..count].to_vec(),
                 |registrations| {
                     black_box(
-                        TimedOvnRosterV1::new(*fixture.roster.session(), registrations)
+                        TimedOvnRosterV1::new(fixture.roster.session(), registrations)
                             .expect("proof-verified roster remains valid"),
                     )
                 },
@@ -616,7 +656,9 @@ fn bench_timed_ovn(c: &mut Criterion) {
         });
     }
     roster.finish();
+}
 
+fn bench_timed_ovn_survivor_freeze(c: &mut Criterion, fixture: &TimedOvnFixture) {
     let mut survivors = c.benchmark_group("parliament/timed_ovn/survivor_freeze");
     survivors
         .sample_size(10)
@@ -637,7 +679,7 @@ fn bench_timed_ovn(c: &mut Criterion) {
                         TimedOvnSurvivorRosterV1::new(
                             black_box(&fixture.roster),
                             black_box(&survivor_case.participant_ids),
-                            survivor_case.release_identity,
+                            &survivor_case.release_identity,
                         )
                         .expect("survivor roster remains valid")
                     },
@@ -647,7 +689,9 @@ fn bench_timed_ovn(c: &mut Criterion) {
         );
     }
     survivors.finish();
+}
 
+fn bench_timed_ovn_wire(c: &mut Criterion, fixture: &TimedOvnFixture) {
     let mut wire = c.benchmark_group("parliament/timed_ovn/wire");
     wire.sample_size(10)
         .warm_up_time(Duration::from_secs(1))
@@ -687,7 +731,9 @@ fn bench_timed_ovn(c: &mut Criterion) {
         });
     });
     wire.finish();
+}
 
+fn bench_timed_ovn_aggregate(c: &mut Criterion, fixture: &TimedOvnFixture) {
     let mut aggregate = c.benchmark_group("parliament/timed_ovn/aggregate");
     aggregate
         .sample_size(10)
@@ -800,7 +846,7 @@ fn timed_ovn_allocation_evidence(records: &mut Vec<AllocationEvidenceRecord>) {
             format!("parliament/timed_ovn/registration_roster_freeze/{count}"),
             || fixture.roster.registrations()[..count].to_vec(),
             |registrations| {
-                TimedOvnRosterV1::new(*fixture.roster.session(), registrations)
+                TimedOvnRosterV1::new(fixture.roster.session(), registrations)
                     .expect("proof-verified roster remains valid")
             },
         );
@@ -812,7 +858,7 @@ fn timed_ovn_allocation_evidence(records: &mut Vec<AllocationEvidenceRecord>) {
                 TimedOvnSurvivorRosterV1::new(
                     black_box(&fixture.roster),
                     black_box(&survivor_case.participant_ids),
-                    survivor_case.release_identity,
+                    &survivor_case.release_identity,
                 )
                 .expect("survivor roster remains valid")
             },

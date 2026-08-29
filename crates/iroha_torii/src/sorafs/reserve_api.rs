@@ -1847,7 +1847,6 @@ mod tests {
             now_unix.checked_mul(1_000).expect("reserve test time"),
             0,
         );
-        let block_hash = HashOf::new(&header);
         let mut block = state.state.block(header);
         let mut transaction = block.transaction();
         for policy in policies {
@@ -1856,8 +1855,9 @@ mod tests {
                 .expect("commit reserve stream policy");
         }
         transaction.apply();
-        block.block_hashes.push_for_tests(block_hash);
-        block.commit().expect("commit reserve stream test block");
+        block
+            .commit_empty_block_for_testing()
+            .expect("commit reserve stream test block");
     }
     struct FirstFrameFlushGateSink {
         output: mpsc::UnboundedSender<WsMessage>,

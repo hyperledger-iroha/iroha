@@ -27,7 +27,7 @@ fn has_exact_permission(
         })
         .any(|role| role.permissions().any(|permission| permission == required))
 }
-fn ensure_privacy_governance(
+pub(super) fn ensure_privacy_governance(
     authority: &AccountId,
     state_transaction: &StateTransaction<'_, '_>,
 ) -> Result<(), Error> {

@@ -33,19 +33,12 @@ use norito::{
     derive::{NoritoDeserialize, NoritoSerialize},
     json::{JsonDeserialize, JsonSerialize},
 };
-#[cfg(feature = "otel-exporter")]
-use opentelemetry::{
-    KeyValue,
-    metrics::{Counter, Histogram as OtelHistogram, UpDownCounter},
-};
 use prometheus::{
     CounterVec, Encoder, Gauge, Histogram, HistogramOpts, HistogramVec, IntCounter, IntCounterVec,
     IntGauge, IntGaugeVec, Opts, Registry,
     core::{AtomicU64, GenericGauge, GenericGaugeVec},
 };
 pub use prometheus::{GaugeVec, core::Collector};
-#[cfg(feature = "otel-exporter")]
-use std::collections::HashMap;
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     sync::{
@@ -160,9 +153,6 @@ pub struct SorafsHedgingBillingRuntimeMetricSnapshot {
     /// Committed hedge intents retained by the projection.
     pub hedge_intents: u32,
 }
-type MicropaymentSampleSink = Arc<
-    dyn Fn(&str, MicropaymentCreditSnapshot, MicropaymentTicketCounters) + Send + Sync + 'static,
->;
 const SORAFS_REPUTATION_SCORE_LABEL_LIMIT: usize = 100;
 const SORAFS_ORDERBOOK_EVENT_LABELS: [&str; 8] = [
     "policy_activated",
@@ -330,23 +320,9 @@ pub fn record_stack_limits(snapshot: StackSettingsSnapshot) {
         metrics.apply_stack_snapshot(&stack_settings_snapshot());
     }
 }
-/// Record a change to the gas→stack multiplier used to derive guest stack limits.
-pub fn record_stack_gas_multiplier(multiplier: u64) {
-    STACK_GAS_TO_STACK_MULTIPLIER.store(multiplier.max(1), Ordering::Relaxed);
-    if let Some(metrics) = global() {
-        metrics.apply_stack_snapshot(&stack_settings_snapshot());
-    }
-}
 /// Increment the counter tracking fallbacks to an already-initialised Rayon pool.
 pub fn record_stack_pool_fallback() {
     STACK_POOL_FALLBACK_TOTAL.fetch_add(1, Ordering::Relaxed);
-    if let Some(metrics) = global() {
-        metrics.apply_stack_snapshot(&stack_settings_snapshot());
-    }
-}
-/// Increment the counter tracking guest stack budget clamps at VM construction time.
-pub fn record_stack_budget_hit() {
-    STACK_BUDGET_HIT_TOTAL.fetch_add(1, Ordering::Relaxed);
     if let Some(metrics) = global() {
         metrics.apply_stack_snapshot(&stack_settings_snapshot());
     }
@@ -439,592 +415,6 @@ impl<'a> DecodeFromSlice<'a> for Uptime {
         Ok((Uptime(duration), used))
     }
 }
-/// OpenTelemetry instrumentation for multi-source orchestrator metrics.
-#[cfg_attr(not(feature = "otel-exporter"), derive(Copy))]
-#[derive(Clone)]
-pub struct SorafsFetchOtel {
-    #[cfg(feature = "otel-exporter")]
-    active_fetches: UpDownCounter<i64>,
-    #[cfg(feature = "otel-exporter")]
-    duration_ms: OtelHistogram<f64>,
-    #[cfg(feature = "otel-exporter")]
-    failures_total: Counter<u64>,
-    #[cfg(feature = "otel-exporter")]
-    retries_total: Counter<u64>,
-    #[cfg(feature = "otel-exporter")]
-    provider_failures_total: Counter<u64>,
-    #[cfg(feature = "otel-exporter")]
-    chunk_latency_ms: OtelHistogram<f64>,
-    #[cfg(feature = "otel-exporter")]
-    bytes_total: Counter<u64>,
-    #[cfg(feature = "otel-exporter")]
-    stalls_total: Counter<u64>,
-    #[cfg(feature = "otel-exporter")]
-    policy_events_total: Counter<u64>,
-    #[cfg(feature = "otel-exporter")]
-    pq_ratio: OtelHistogram<f64>,
-    #[cfg(feature = "otel-exporter")]
-    pq_candidate_ratio: OtelHistogram<f64>,
-    #[cfg(feature = "otel-exporter")]
-    pq_deficit_ratio: OtelHistogram<f64>,
-    #[cfg(feature = "otel-exporter")]
-    classical_ratio: OtelHistogram<f64>,
-    #[cfg(feature = "otel-exporter")]
-    classical_selected: OtelHistogram<f64>,
-    #[cfg(feature = "otel-exporter")]
-    brownouts_total: Counter<u64>,
-    #[cfg(feature = "otel-exporter")]
-    transport_events_total: Counter<u64>,
-}
-impl Default for SorafsFetchOtel {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-#[allow(clippy::unused_self, clippy::trivially_copy_pass_by_ref)] // retain &self API for OTEL-enabled builds
-impl SorafsFetchOtel {
-    /// Create a new OTEL instrumentation bundle.
-    #[must_use]
-    pub fn new() -> Self {
-        #[cfg(feature = "otel-exporter")]
-        {
-            let meter = opentelemetry::global::meter("sorafs.fetch");
-            let active_fetches = meter
-                .i64_up_down_counter("sorafs.fetch.active")
-                .with_description("Active SoraFS orchestrator fetch sessions.")
-                .with_unit("sessions")
-                .build();
-            let duration_ms = meter
-                .f64_histogram("sorafs.fetch.duration_ms")
-                .with_description("Completed fetch duration in milliseconds.")
-                .with_unit("ms")
-                .build();
-            let failures_total = meter
-                .u64_counter("sorafs.fetch.failures_total")
-                .with_description("Total number of orchestrator failures grouped by reason.")
-                .build();
-            let retries_total = meter
-                .u64_counter("sorafs.fetch.retries_total")
-                .with_description("Retry attempts triggered during orchestrator sessions.")
-                .build();
-            let provider_failures_total = meter
-                .u64_counter("sorafs.fetch.provider_failures_total")
-                .with_description("Provider-level failures observed while fetching chunks.")
-                .build();
-            let chunk_latency_ms = meter
-                .f64_histogram("sorafs.fetch.chunk_latency_ms")
-                .with_description("Latency per chunk fetch served by the orchestrator.")
-                .with_unit("ms")
-                .build();
-            let bytes_total = meter
-                .u64_counter("sorafs.fetch.bytes_total")
-                .with_description("Total bytes delivered by the orchestrator grouped by provider.")
-                .build();
-            let stalls_total = meter
-                .u64_counter("sorafs.fetch.stalls_total")
-                .with_description("Chunks exceeding the configured latency cap.")
-                .build();
-            let policy_events_total = meter
-                .u64_counter("sorafs.fetch.anonymity_events_total")
-                .with_description("Anonymity policy events grouped by stage/outcome/reason.")
-                .build();
-            let pq_ratio = meter
-                .f64_histogram("sorafs.fetch.pq_ratio")
-                .with_description("PQ-capable relay ratio observed per session.")
-                .with_unit("ratio")
-                .build();
-            let pq_candidate_ratio = meter
-                .f64_histogram("sorafs.fetch.pq_candidate_ratio")
-                .with_description("PQ-capable relay candidate ratio observed per session.")
-                .with_unit("ratio")
-                .build();
-            let pq_deficit_ratio = meter
-                .f64_histogram("sorafs.fetch.pq_deficit_ratio")
-                .with_description("PQ policy shortfall ratio observed per session.")
-                .with_unit("ratio")
-                .build();
-            let classical_ratio = meter
-                .f64_histogram("sorafs.fetch.classical_ratio")
-                .with_description("Classical relay selection ratio observed per session.")
-                .with_unit("ratio")
-                .build();
-            let classical_selected = meter
-                .f64_histogram("sorafs.fetch.classical_selected")
-                .with_description("Classical relay selections observed per session.")
-                .with_unit("relays")
-                .build();
-            let brownouts_total = meter
-                .u64_counter("sorafs.fetch.brownouts_total")
-                .with_description("Anonymity policy brownout events grouped by stage/reason.")
-                .build();
-            let transport_events_total = meter
-                .u64_counter("sorafs.fetch.transport_events_total")
-                .with_description("Transport events emitted by the orchestrator grouped by protocol/event/reason.")
-                .build();
-            Self {
-                active_fetches,
-                duration_ms,
-                failures_total,
-                retries_total,
-                provider_failures_total,
-                chunk_latency_ms,
-                bytes_total,
-                stalls_total,
-                policy_events_total,
-                pq_ratio,
-                pq_candidate_ratio,
-                pq_deficit_ratio,
-                classical_ratio,
-                classical_selected,
-                brownouts_total,
-                transport_events_total,
-            }
-        }
-        #[cfg(not(feature = "otel-exporter"))]
-        {
-            Self {}
-        }
-    }
-    /// Record fetch start for the manifest/region/job tuple.
-    pub fn fetch_started(&self, manifest_id: &str, region: &str, job_id: &str) {
-        #[cfg(feature = "otel-exporter")]
-        {
-            self.active_fetches.add(
-                1,
-                &self.manifest_attributes(manifest_id, region, Some(job_id)),
-            );
-        }
-        let _ = (self, manifest_id, region, job_id);
-    }
-    /// Record fetch completion for the manifest/region/job tuple.
-    pub fn fetch_finished(&self, manifest_id: &str, region: &str, job_id: &str) {
-        #[cfg(feature = "otel-exporter")]
-        {
-            self.active_fetches.add(
-                -1,
-                &self.manifest_attributes(manifest_id, region, Some(job_id)),
-            );
-        }
-        let _ = (self, manifest_id, region, job_id);
-    }
-    /// Record fetch duration (ms).
-    pub fn record_duration(&self, manifest_id: &str, region: &str, job_id: &str, duration_ms: f64) {
-        #[cfg(feature = "otel-exporter")]
-        {
-            self.duration_ms.record(
-                duration_ms,
-                &self.manifest_attributes(manifest_id, region, Some(job_id)),
-            );
-        }
-        let _ = (self, manifest_id, region, job_id, duration_ms);
-    }
-    /// Increment failure counter.
-    pub fn record_failure(
-        &self,
-        manifest_id: &str,
-        region: &str,
-        job_id: Option<&str>,
-        reason: &str,
-    ) {
-        #[cfg(feature = "otel-exporter")]
-        {
-            let mut attrs = self.manifest_attributes(manifest_id, region, job_id);
-            attrs.push(KeyValue::new("failure_reason", reason.to_string()));
-            self.failures_total.add(1, &attrs);
-        }
-        let _ = (self, manifest_id, region, job_id, reason);
-    }
-    /// Increment retry counter.
-    pub fn record_retries(
-        &self,
-        manifest_id: &str,
-        region: &str,
-        job_id: Option<&str>,
-        provider_id: &str,
-        reason: &str,
-        count: u64,
-    ) {
-        #[cfg(feature = "otel-exporter")]
-        {
-            if count > 0 {
-                let mut attrs = self.manifest_attributes(manifest_id, region, job_id);
-                attrs.push(KeyValue::new("provider_id", provider_id.to_string()));
-                attrs.push(KeyValue::new("retry_reason", reason.to_string()));
-                self.retries_total.add(count, &attrs);
-            }
-        }
-        let _ = (
-            self,
-            manifest_id,
-            region,
-            job_id,
-            provider_id,
-            reason,
-            count,
-        );
-    }
-    /// Record an anonymity policy event.
-    pub fn record_policy_event(
-        &self,
-        manifest_id: &str,
-        region: &str,
-        job_id: Option<&str>,
-        stage: &str,
-        outcome: &str,
-        reason: &str,
-    ) {
-        #[cfg(feature = "otel-exporter")]
-        {
-            let mut attrs = self.manifest_attributes(manifest_id, region, job_id);
-            attrs.push(KeyValue::new("stage", stage.to_string()));
-            attrs.push(KeyValue::new("outcome", outcome.to_string()));
-            attrs.push(KeyValue::new("reason", reason.to_string()));
-            self.policy_events_total.add(1, &attrs);
-        }
-        let _ = (self, manifest_id, region, job_id, stage, outcome, reason);
-    }
-    /// Record a transport event emitted by the orchestrator.
-    pub fn record_transport_event(
-        &self,
-        manifest_id: &str,
-        region: &str,
-        job_id: Option<&str>,
-        protocol: &str,
-        event: &str,
-        reason: &str,
-    ) {
-        #[cfg(feature = "otel-exporter")]
-        {
-            let mut attrs = self.manifest_attributes(manifest_id, region, job_id);
-            attrs.push(KeyValue::new("protocol", protocol.to_string()));
-            attrs.push(KeyValue::new("transport_event", event.to_string()));
-            attrs.push(KeyValue::new("transport_reason", reason.to_string()));
-            self.transport_events_total.add(1, &attrs);
-        }
-        let _ = (self, manifest_id, region, job_id, protocol, event, reason);
-    }
-    /// Record the observed PQ-capable relay ratio for a session.
-    pub fn record_pq_ratio(
-        &self,
-        manifest_id: &str,
-        region: &str,
-        job_id: Option<&str>,
-        stage: &str,
-        ratio: f64,
-    ) {
-        #[cfg(feature = "otel-exporter")]
-        {
-            let mut attrs = self.manifest_attributes(manifest_id, region, job_id);
-            attrs.push(KeyValue::new("stage", stage.to_string()));
-            self.pq_ratio.record(ratio.clamp(0.0, 1.0), &attrs);
-        }
-        let _ = (self, manifest_id, region, job_id, stage, ratio);
-    }
-    /// Record the PQ-capable candidate ratio for a session.
-    pub fn record_pq_candidate_ratio(
-        &self,
-        manifest_id: &str,
-        region: &str,
-        job_id: Option<&str>,
-        stage: &str,
-        ratio: f64,
-    ) {
-        #[cfg(feature = "otel-exporter")]
-        {
-            let mut attrs = self.manifest_attributes(manifest_id, region, job_id);
-            attrs.push(KeyValue::new("stage", stage.to_string()));
-            self.pq_candidate_ratio
-                .record(ratio.clamp(0.0, 1.0), &attrs);
-        }
-        let _ = (self, manifest_id, region, job_id, stage, ratio);
-    }
-    /// Record the PQ policy shortfall ratio for a session.
-    pub fn record_pq_deficit_ratio(
-        &self,
-        manifest_id: &str,
-        region: &str,
-        job_id: Option<&str>,
-        stage: &str,
-        ratio: f64,
-    ) {
-        #[cfg(feature = "otel-exporter")]
-        {
-            let mut attrs = self.manifest_attributes(manifest_id, region, job_id);
-            attrs.push(KeyValue::new("stage", stage.to_string()));
-            self.pq_deficit_ratio.record(ratio.clamp(0.0, 1.0), &attrs);
-        }
-        let _ = (self, manifest_id, region, job_id, stage, ratio);
-    }
-    /// Record the classical relay ratio for a session.
-    pub fn record_classical_ratio(
-        &self,
-        manifest_id: &str,
-        region: &str,
-        job_id: Option<&str>,
-        stage: &str,
-        ratio: f64,
-    ) {
-        #[cfg(feature = "otel-exporter")]
-        {
-            let mut attrs = self.manifest_attributes(manifest_id, region, job_id);
-            attrs.push(KeyValue::new("stage", stage.to_string()));
-            self.classical_ratio.record(ratio.clamp(0.0, 1.0), &attrs);
-        }
-        let _ = (self, manifest_id, region, job_id, stage, ratio);
-    }
-    /// Record the number of classical relays selected for a session.
-    pub fn record_classical_selected(
-        &self,
-        manifest_id: &str,
-        region: &str,
-        job_id: Option<&str>,
-        stage: &str,
-        selected: u64,
-    ) {
-        #[cfg(feature = "otel-exporter")]
-        {
-            let mut attrs = self.manifest_attributes(manifest_id, region, job_id);
-            attrs.push(KeyValue::new("stage", stage.to_string()));
-            self.classical_selected.record(selected as f64, &attrs);
-        }
-        let _ = (self, manifest_id, region, job_id, stage, selected);
-    }
-    /// Record an anonymity policy brownout event.
-    pub fn record_brownout_event(
-        &self,
-        manifest_id: &str,
-        region: &str,
-        job_id: Option<&str>,
-        stage: &str,
-        reason: &str,
-    ) {
-        #[cfg(feature = "otel-exporter")]
-        {
-            let mut attrs = self.manifest_attributes(manifest_id, region, job_id);
-            attrs.push(KeyValue::new("stage", stage.to_string()));
-            attrs.push(KeyValue::new("reason", reason.to_string()));
-            self.brownouts_total.add(1, &attrs);
-        }
-        let _ = (self, manifest_id, region, job_id, stage, reason);
-    }
-    /// Increment provider failure counter.
-    pub fn record_provider_failure(
-        &self,
-        manifest_id: &str,
-        region: &str,
-        job_id: Option<&str>,
-        provider_id: &str,
-        reason: &str,
-        count: u64,
-    ) {
-        #[cfg(feature = "otel-exporter")]
-        {
-            if count > 0 {
-                let mut attrs = self.manifest_attributes(manifest_id, region, job_id);
-                attrs.push(KeyValue::new("provider_id", provider_id.to_string()));
-                attrs.push(KeyValue::new("failure_reason", reason.to_string()));
-                self.provider_failures_total.add(count, &attrs);
-            }
-        }
-        let _ = (
-            self,
-            manifest_id,
-            region,
-            job_id,
-            provider_id,
-            reason,
-            count,
-        );
-    }
-    /// Record per-chunk latency (milliseconds).
-    pub fn record_chunk_latency(
-        &self,
-        manifest_id: &str,
-        region: &str,
-        job_id: Option<&str>,
-        provider_id: &str,
-        latency_ms: f64,
-    ) {
-        #[cfg(feature = "otel-exporter")]
-        {
-            let mut attrs = self.manifest_attributes(manifest_id, region, job_id);
-            attrs.push(KeyValue::new("provider_id", provider_id.to_string()));
-            self.chunk_latency_ms.record(latency_ms, &attrs);
-        }
-        let _ = (self, manifest_id, region, job_id, provider_id, latency_ms);
-    }
-    /// Record bytes delivered for a chunk.
-    pub fn record_bytes(
-        &self,
-        manifest_id: &str,
-        region: &str,
-        job_id: Option<&str>,
-        provider_id: &str,
-        bytes: u64,
-    ) {
-        #[cfg(feature = "otel-exporter")]
-        {
-            if bytes > 0 {
-                let mut attrs = self.manifest_attributes(manifest_id, region, job_id);
-                attrs.push(KeyValue::new("provider_id", provider_id.to_string()));
-                self.bytes_total.add(bytes, &attrs);
-            }
-        }
-        let _ = (self, manifest_id, region, job_id, provider_id, bytes);
-    }
-    /// Increment stall counter for latency cap breaches.
-    pub fn record_stall(
-        &self,
-        manifest_id: &str,
-        region: &str,
-        job_id: Option<&str>,
-        provider_id: &str,
-    ) {
-        #[cfg(feature = "otel-exporter")]
-        {
-            let mut attrs = self.manifest_attributes(manifest_id, region, job_id);
-            attrs.push(KeyValue::new("provider_id", provider_id.to_string()));
-            self.stalls_total.add(1, &attrs);
-        }
-        let _ = (self, manifest_id, region, job_id, provider_id);
-    }
-    #[cfg(feature = "otel-exporter")]
-    fn manifest_attributes(
-        &self,
-        manifest_id: &str,
-        region: &str,
-        job_id: Option<&str>,
-    ) -> Vec<KeyValue> {
-        let mut attrs = Vec::with_capacity(if job_id.is_some() { 3 } else { 2 });
-        attrs.push(KeyValue::new("manifest_id", manifest_id.to_string()));
-        attrs.push(KeyValue::new("region", region.to_string()));
-        if let Some(job_id) = job_id {
-            attrs.push(KeyValue::new("job_id", job_id.to_string()));
-        }
-        attrs
-    }
-}
-/// OpenTelemetry instrumentation for FASTPQ execution mode resolutions.
-#[cfg_attr(not(feature = "otel-exporter"), derive(Copy))]
-#[derive(Clone)]
-pub struct FastpqOtel {
-    #[cfg(feature = "otel-exporter")]
-    execution_mode_resolutions_total: Counter<u64>,
-    #[cfg(feature = "otel-exporter")]
-    poseidon_pipeline_resolutions_total: Counter<u64>,
-}
-impl Default for FastpqOtel {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-#[allow(clippy::unused_self)]
-impl FastpqOtel {
-    /// Create a new FASTPQ instrumentation bundle.
-    #[must_use]
-    pub fn new() -> Self {
-        #[cfg(feature = "otel-exporter")]
-        {
-            let meter = opentelemetry::global::meter("fastpq.prover");
-            let execution_mode_resolutions_total = meter
-                .u64_counter("fastpq.execution_mode_resolutions_total")
-                .with_description(
-                    "FASTPQ execution mode resolutions (labels: requested, resolved, backend, device_class, chip_family, gpu_kind).",
-                )
-                .build();
-            let poseidon_pipeline_resolutions_total = meter
-                .u64_counter("fastpq.poseidon_pipeline_resolutions_total")
-                .with_description(
-                    "FASTPQ Poseidon pipeline resolutions (labels: requested, resolved, path, device_class, chip_family, gpu_kind).",
-                )
-                .build();
-            Self {
-                execution_mode_resolutions_total,
-                poseidon_pipeline_resolutions_total,
-            }
-        }
-        #[cfg(not(feature = "otel-exporter"))]
-        {
-            Self {}
-        }
-    }
-    /// Record a FASTPQ execution mode resolution.
-    #[cfg_attr(
-        not(feature = "otel-exporter"),
-        allow(clippy::trivially_copy_pass_by_ref)
-    )]
-    pub fn record_execution_mode(
-        &self,
-        requested: &str,
-        resolved: &str,
-        backend: &str,
-        device_class: &str,
-        chip_family: &str,
-        gpu_kind: &str,
-    ) {
-        #[cfg(feature = "otel-exporter")]
-        {
-            self.execution_mode_resolutions_total.add(
-                1,
-                &[
-                    KeyValue::new("requested", requested.to_owned()),
-                    KeyValue::new("resolved", resolved.to_owned()),
-                    KeyValue::new("backend", backend.to_owned()),
-                    KeyValue::new("device_class", device_class.to_owned()),
-                    KeyValue::new("chip_family", chip_family.to_owned()),
-                    KeyValue::new("gpu_kind", gpu_kind.to_owned()),
-                ],
-            );
-        }
-        let _ = (
-            self,
-            requested,
-            resolved,
-            backend,
-            device_class,
-            chip_family,
-            gpu_kind,
-        );
-    }
-    /// Record a Poseidon pipeline resolution event.
-    #[cfg_attr(
-        not(feature = "otel-exporter"),
-        allow(clippy::trivially_copy_pass_by_ref)
-    )]
-    pub fn record_poseidon_pipeline(
-        &self,
-        requested: &str,
-        resolved: &str,
-        path: &str,
-        device_class: &str,
-        chip_family: &str,
-        gpu_kind: &str,
-    ) {
-        #[cfg(feature = "otel-exporter")]
-        {
-            self.poseidon_pipeline_resolutions_total.add(
-                1,
-                &[
-                    KeyValue::new("requested", requested.to_owned()),
-                    KeyValue::new("resolved", resolved.to_owned()),
-                    KeyValue::new("path", path.to_owned()),
-                    KeyValue::new("device_class", device_class.to_owned()),
-                    KeyValue::new("chip_family", chip_family.to_owned()),
-                    KeyValue::new("gpu_kind", gpu_kind.to_owned()),
-                ],
-            );
-        }
-        let _ = (
-            self,
-            requested,
-            resolved,
-            path,
-            device_class,
-            chip_family,
-            gpu_kind,
-        );
-    }
-}
 /// Snapshot of a Metal queue lane captured by the FASTPQ runtime.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct FastpqMetalQueueLaneSample {
@@ -1056,1069 +446,6 @@ pub struct FastpqMetalQueueSample<'a> {
     pub overlap_ms: f64,
     /// Per-lane samples collected during the window.
     pub lanes: &'a [FastpqMetalQueueLaneSample],
-}
-/// OpenTelemetry instrumentation for repair scheduler metrics.
-#[cfg_attr(not(feature = "otel-exporter"), derive(Copy))]
-#[derive(Clone)]
-pub struct SorafsRepairOtel {
-    #[cfg(feature = "otel-exporter")]
-    tasks_total: Counter<u64>,
-    #[cfg(feature = "otel-exporter")]
-    latency_minutes: OtelHistogram<f64>,
-    #[cfg(feature = "otel-exporter")]
-    backlog_oldest_age_seconds: OtelHistogram<f64>,
-    #[cfg(feature = "otel-exporter")]
-    queue_depth: OtelHistogram<f64>,
-    #[cfg(feature = "otel-exporter")]
-    lease_expired_total: Counter<u64>,
-    #[cfg(feature = "otel-exporter")]
-    slash_proposals_total: Counter<u64>,
-}
-impl Default for SorafsRepairOtel {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-#[allow(clippy::unused_self, clippy::trivially_copy_pass_by_ref)]
-impl SorafsRepairOtel {
-    /// Create a new instrumentation bundle for repair automation.
-    #[must_use]
-    pub fn new() -> Self {
-        #[cfg(feature = "otel-exporter")]
-        {
-            let meter = opentelemetry::global::meter("sorafs.repair");
-            let tasks_total = meter
-                .u64_counter("sorafs.repair.tasks_total")
-                .with_description("SoraFS repair task transitions grouped by status.")
-                .build();
-            let latency_minutes = meter
-                .f64_histogram("sorafs.repair.latency_minutes")
-                .with_description("SoraFS repair lifecycle latency in minutes.")
-                .with_unit("min")
-                .build();
-            let backlog_oldest_age_seconds = meter
-                .f64_histogram("sorafs.repair.backlog_oldest_age_seconds")
-                .with_description("Age in seconds of the oldest queued SoraFS repair task.")
-                .with_unit("s")
-                .build();
-            let queue_depth = meter
-                .f64_histogram("sorafs.repair.queue_depth")
-                .with_description("SoraFS repair queue depth per provider.")
-                .with_unit("tasks")
-                .build();
-            let lease_expired_total = meter
-                .u64_counter("sorafs.repair.lease_expired_total")
-                .with_description("SoraFS repair lease expirations grouped by outcome.")
-                .build();
-            let slash_proposals_total = meter
-                .u64_counter("sorafs.repair.slash_proposals_total")
-                .with_description("SoraFS repair slash proposals grouped by outcome.")
-                .build();
-            Self {
-                tasks_total,
-                latency_minutes,
-                backlog_oldest_age_seconds,
-                queue_depth,
-                lease_expired_total,
-                slash_proposals_total,
-            }
-        }
-        #[cfg(not(feature = "otel-exporter"))]
-        {
-            Self {}
-        }
-    }
-    /// Record a task transition for the given status label.
-    pub fn record_task_transition(&self, status: &'static str) {
-        #[cfg(feature = "otel-exporter")]
-        {
-            self.tasks_total.add(
-                1,
-                &[opentelemetry::KeyValue::new("status", status.to_owned())],
-            );
-        }
-        let _ = status;
-    }
-    /// Record repair latency in minutes for the supplied outcome label.
-    pub fn record_latency(&self, minutes: f64, outcome: &'static str) {
-        #[cfg(feature = "otel-exporter")]
-        {
-            self.latency_minutes.record(
-                minutes,
-                &[opentelemetry::KeyValue::new("outcome", outcome.to_owned())],
-            );
-        }
-        let _ = (minutes, outcome);
-    }
-    /// Record the oldest queued repair task age in seconds.
-    pub fn record_backlog_oldest_age_seconds(&self, age_secs: f64) {
-        #[cfg(feature = "otel-exporter")]
-        {
-            self.backlog_oldest_age_seconds.record(age_secs, &[]);
-        }
-        let _ = age_secs;
-    }
-    /// Record the current repair queue depth for the supplied provider.
-    pub fn record_queue_depth(&self, depth: u64, provider: &str) {
-        #[cfg(feature = "otel-exporter")]
-        {
-            self.queue_depth.record(
-                depth as f64,
-                &[opentelemetry::KeyValue::new(
-                    "provider",
-                    provider.to_owned(),
-                )],
-            );
-        }
-        let _ = (depth, provider);
-    }
-    /// Record a lease expiry event for the supplied outcome label.
-    pub fn record_lease_expired(&self, outcome: &'static str) {
-        #[cfg(feature = "otel-exporter")]
-        {
-            self.lease_expired_total.add(
-                1,
-                &[opentelemetry::KeyValue::new("outcome", outcome.to_owned())],
-            );
-        }
-        let _ = outcome;
-    }
-    /// Record a slash proposal transition for the supplied outcome label.
-    pub fn record_slash_proposal(&self, outcome: &'static str) {
-        #[cfg(feature = "otel-exporter")]
-        {
-            self.slash_proposals_total.add(
-                1,
-                &[opentelemetry::KeyValue::new("outcome", outcome.to_owned())],
-            );
-        }
-        let _ = outcome;
-    }
-}
-/// OpenTelemetry instrumentation for GC/retention sweeps.
-#[cfg_attr(not(feature = "otel-exporter"), derive(Copy))]
-#[derive(Clone)]
-pub struct SorafsGcOtel {
-    #[cfg(feature = "otel-exporter")]
-    runs_total: Counter<u64>,
-    #[cfg(feature = "otel-exporter")]
-    evictions_total: Counter<u64>,
-    #[cfg(feature = "otel-exporter")]
-    bytes_freed_total: Counter<u64>,
-    #[cfg(feature = "otel-exporter")]
-    blocked_total: Counter<u64>,
-}
-impl Default for SorafsGcOtel {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-#[allow(clippy::unused_self, clippy::trivially_copy_pass_by_ref)]
-impl SorafsGcOtel {
-    /// Create a new instrumentation bundle for GC sweeps.
-    #[must_use]
-    pub fn new() -> Self {
-        #[cfg(feature = "otel-exporter")]
-        {
-            let meter = opentelemetry::global::meter("sorafs.gc");
-            let runs_total = meter
-                .u64_counter("sorafs.gc.runs_total")
-                .with_description("SoraFS GC runs grouped by result.")
-                .build();
-            let evictions_total = meter
-                .u64_counter("sorafs.gc.evictions_total")
-                .with_description("SoraFS GC evictions grouped by reason.")
-                .build();
-            let bytes_freed_total = meter
-                .u64_counter("sorafs.gc.bytes_freed_total")
-                .with_description("SoraFS GC freed bytes grouped by reason.")
-                .build();
-            let blocked_total = meter
-                .u64_counter("sorafs.gc.blocked_total")
-                .with_description("SoraFS GC evictions blocked grouped by reason.")
-                .build();
-            Self {
-                runs_total,
-                evictions_total,
-                bytes_freed_total,
-                blocked_total,
-            }
-        }
-        #[cfg(not(feature = "otel-exporter"))]
-        {
-            Self {}
-        }
-    }
-    /// Record a GC run with the supplied result label.
-    pub fn record_run(&self, result: &'static str) {
-        #[cfg(feature = "otel-exporter")]
-        {
-            self.runs_total
-                .add(1, &[KeyValue::new("result", result.to_owned())]);
-        }
-        let _ = result;
-    }
-    /// Record a GC eviction with the supplied reason label and freed bytes.
-    pub fn record_eviction(&self, reason: &str, freed_bytes: u64) {
-        #[cfg(feature = "otel-exporter")]
-        {
-            let labels = [KeyValue::new("reason", reason.to_owned())];
-            self.evictions_total.add(1, &labels);
-            self.bytes_freed_total.add(freed_bytes, &labels);
-        }
-        let _ = (reason, freed_bytes);
-    }
-    /// Record a blocked GC eviction with the supplied reason label.
-    pub fn record_blocked(&self, reason: &str) {
-        #[cfg(feature = "otel-exporter")]
-        {
-            self.blocked_total
-                .add(1, &[KeyValue::new("reason", reason.to_owned())]);
-        }
-        let _ = reason;
-    }
-}
-/// OpenTelemetry instrumentation for reconciliation snapshots.
-#[cfg_attr(not(feature = "otel-exporter"), derive(Copy))]
-#[derive(Clone)]
-pub struct SorafsReconciliationOtel {
-    #[cfg(feature = "otel-exporter")]
-    runs_total: Counter<u64>,
-    #[cfg(feature = "otel-exporter")]
-    divergence_total: Counter<u64>,
-}
-impl Default for SorafsReconciliationOtel {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-#[allow(clippy::unused_self, clippy::trivially_copy_pass_by_ref)]
-impl SorafsReconciliationOtel {
-    /// Create a new OTEL instrumentation bundle for reconciliation snapshots.
-    #[must_use]
-    pub fn new() -> Self {
-        #[cfg(feature = "otel-exporter")]
-        {
-            let meter = opentelemetry::global::meter("sorafs.reconciliation");
-            let runs_total = meter
-                .u64_counter("sorafs.reconciliation.runs_total")
-                .with_description("SoraFS reconciliation runs grouped by result.")
-                .build();
-            let divergence_total = meter
-                .u64_counter("sorafs.reconciliation.divergence_total")
-                .with_description("SoraFS reconciliation divergence count per run.")
-                .build();
-            Self {
-                runs_total,
-                divergence_total,
-            }
-        }
-        #[cfg(not(feature = "otel-exporter"))]
-        {
-            Self {}
-        }
-    }
-    /// Record a reconciliation run with the supplied result label.
-    pub fn record_run(&self, result: &'static str) {
-        #[cfg(feature = "otel-exporter")]
-        {
-            self.runs_total
-                .add(1, &[KeyValue::new("result", result.to_owned())]);
-        }
-        let _ = result;
-    }
-    /// Record the divergence count observed in a reconciliation run.
-    pub fn record_divergence(&self, count: u64) {
-        #[cfg(feature = "otel-exporter")]
-        {
-            self.divergence_total.add(count, &[]);
-        }
-        let _ = count;
-    }
-}
-/// OpenTelemetry instrumentation for Torii SoraFS gateway metrics.
-#[cfg_attr(not(feature = "otel-exporter"), derive(Copy))]
-#[derive(Clone)]
-pub struct SorafsGatewayOtel {
-    #[cfg(feature = "otel-exporter")]
-    active_requests: UpDownCounter<i64>,
-    #[cfg(feature = "otel-exporter")]
-    responses_total: Counter<u64>,
-    #[cfg(feature = "otel-exporter")]
-    ttfb_ms: OtelHistogram<f64>,
-    #[cfg(feature = "otel-exporter")]
-    proof_verifications_total: Counter<u64>,
-    #[cfg(feature = "otel-exporter")]
-    proof_duration_ms: OtelHistogram<f64>,
-}
-impl Default for SorafsGatewayOtel {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-#[allow(clippy::unused_self, clippy::trivially_copy_pass_by_ref)]
-impl SorafsGatewayOtel {
-    /// Create a new OTEL instrumentation bundle for gateway metrics.
-    #[must_use]
-    pub fn new() -> Self {
-        #[cfg(feature = "otel-exporter")]
-        {
-            let meter = opentelemetry::global::meter("sorafs.gateway");
-            let active_requests = meter
-                .i64_up_down_counter("sorafs.gateway.active")
-                .with_description("Active SoraFS gateway HTTP requests.")
-                .with_unit("requests")
-                .build();
-            let responses_total = meter
-                .u64_counter("sorafs.gateway.responses_total")
-                .with_description(
-                    "Total SoraFS gateway responses grouped by endpoint and bounded outcome.",
-                )
-                .build();
-            let ttfb_ms = meter
-                .f64_histogram("sorafs.gateway.ttfb_ms")
-                .with_description("Gateway time-to-first-byte histogram (milliseconds).")
-                .with_unit("ms")
-                .build();
-            let proof_verifications_total = meter
-                .u64_counter("sorafs.gateway.proof_verifications_total")
-                .with_description("SoraFS proof verification outcomes grouped by profile.")
-                .build();
-            let proof_duration_ms = meter
-                .f64_histogram("sorafs.gateway.proof_duration_ms")
-                .with_description("SoraFS proof verification duration (milliseconds).")
-                .with_unit("ms")
-                .build();
-            Self {
-                active_requests,
-                responses_total,
-                ttfb_ms,
-                proof_verifications_total,
-                proof_duration_ms,
-            }
-        }
-        #[cfg(not(feature = "otel-exporter"))]
-        {
-            Self {}
-        }
-    }
-    /// Track the start of a gateway request for active request accounting.
-    pub fn request_started_detailed(&self, labels: SorafsGatewayRequestMetricLabels<'_>) {
-        #[cfg(feature = "otel-exporter")]
-        {
-            let attrs = Self::base_attrs(labels);
-            self.active_requests.add(1, &attrs);
-        }
-        #[cfg(not(feature = "otel-exporter"))]
-        {
-            let _ = labels;
-        }
-    }
-    /// Track the completion of a gateway request.
-    pub fn request_completed_detailed(&self, labels: SorafsGatewayResponseMetricLabels<'_>) {
-        #[cfg(feature = "otel-exporter")]
-        {
-            let active_attrs = Self::base_attrs(labels.request);
-            self.active_requests.add(-1, &active_attrs);
-            let mut attrs = active_attrs;
-            attrs.push(KeyValue::new("result", labels.result.to_string()));
-            attrs.push(KeyValue::new("status", labels.status.to_string()));
-            attrs.push(KeyValue::new("error_code", labels.error_code.to_string()));
-            self.responses_total.add(1, &attrs);
-        }
-        #[cfg(not(feature = "otel-exporter"))]
-        {
-            let _ = labels;
-        }
-    }
-    /// Record a gateway latency observation with detailed labels.
-    pub fn record_ttfb_detailed(
-        &self,
-        labels: SorafsGatewayResponseMetricLabels<'_>,
-        latency_ms: f64,
-    ) {
-        #[cfg(feature = "otel-exporter")]
-        {
-            let mut attrs = Self::base_attrs(labels.request);
-            attrs.push(KeyValue::new("result", labels.result.to_string()));
-            attrs.push(KeyValue::new("status", labels.status.to_string()));
-            attrs.push(KeyValue::new("error_code", labels.error_code.to_string()));
-            self.ttfb_ms.record(latency_ms, &attrs);
-        }
-        #[cfg(not(feature = "otel-exporter"))]
-        {
-            let _ = (labels, latency_ms);
-        }
-    }
-    /// Record a proof verification outcome using the gateway proof metrics.
-    pub fn record_proof_verification(
-        &self,
-        profile_version: &str,
-        outcome: &str,
-        error_code: &str,
-        latency_ms: f64,
-    ) {
-        #[cfg(feature = "otel-exporter")]
-        {
-            let attrs = [
-                KeyValue::new("profile_version", profile_version.to_string()),
-                KeyValue::new("result", outcome.to_string()),
-                KeyValue::new("error_code", error_code.to_string()),
-            ];
-            self.proof_verifications_total.add(1, &attrs);
-            self.proof_duration_ms.record(latency_ms, &attrs);
-        }
-        #[cfg(not(feature = "otel-exporter"))]
-        {
-            let _ = (profile_version, outcome, error_code, latency_ms);
-        }
-    }
-    #[cfg(feature = "otel-exporter")]
-    fn base_attrs(labels: SorafsGatewayRequestMetricLabels<'_>) -> Vec<KeyValue> {
-        vec![
-            KeyValue::new("endpoint", labels.endpoint.to_string()),
-            KeyValue::new("method", labels.method.to_string()),
-            KeyValue::new("variant", labels.variant.to_string()),
-            KeyValue::new("chunker", labels.chunker.to_string()),
-            KeyValue::new("profile", labels.profile.to_string()),
-        ]
-    }
-}
-#[cfg(feature = "otel-exporter")]
-#[derive(Default, Clone)]
-struct PorSnapshot {
-    success: u64,
-    failure: u64,
-}
-/// OpenTelemetry instrumentation for embedded SoraFS node metrics.
-pub struct SorafsNodeOtel {
-    #[cfg(feature = "otel-exporter")]
-    por_success_total: Counter<u64>,
-    #[cfg(feature = "otel-exporter")]
-    por_failure_total: Counter<u64>,
-    #[cfg(feature = "otel-exporter")]
-    capacity_ratio_pct: OtelHistogram<f64>,
-    #[cfg(feature = "otel-exporter")]
-    deal_settlements_total: Counter<u64>,
-    #[cfg(feature = "otel-exporter")]
-    deal_publish_total: Counter<u64>,
-    #[cfg(feature = "otel-exporter")]
-    deal_expected_charge_nano: OtelHistogram<f64>,
-    #[cfg(feature = "otel-exporter")]
-    deal_client_debit_nano: OtelHistogram<f64>,
-    #[cfg(feature = "otel-exporter")]
-    deal_outstanding_nano: OtelHistogram<f64>,
-    #[cfg(feature = "otel-exporter")]
-    deal_bond_slash_nano: Counter<u64>,
-    #[cfg(feature = "otel-exporter")]
-    micropayment_charge_nano: OtelHistogram<f64>,
-    #[cfg(feature = "otel-exporter")]
-    micropayment_credit_generated_nano: OtelHistogram<f64>,
-    #[cfg(feature = "otel-exporter")]
-    micropayment_credit_applied_nano: OtelHistogram<f64>,
-    #[cfg(feature = "otel-exporter")]
-    micropayment_credit_carry_nano: OtelHistogram<f64>,
-    #[cfg(feature = "otel-exporter")]
-    micropayment_outstanding_nano: OtelHistogram<f64>,
-    #[cfg(feature = "otel-exporter")]
-    micropayment_tickets_processed_total: Counter<u64>,
-    #[cfg(feature = "otel-exporter")]
-    micropayment_tickets_won_total: Counter<u64>,
-    #[cfg(feature = "otel-exporter")]
-    micropayment_tickets_duplicate_total: Counter<u64>,
-    #[cfg(feature = "otel-exporter")]
-    por_totals: Arc<Mutex<HashMap<String, PorSnapshot>>>,
-    micropayment_sink: RwLock<Option<MicropaymentSampleSink>>,
-}
-impl Clone for SorafsNodeOtel {
-    fn clone(&self) -> Self {
-        #[cfg(feature = "otel-exporter")]
-        let por_success_total = self.por_success_total.clone();
-        #[cfg(feature = "otel-exporter")]
-        let por_failure_total = self.por_failure_total.clone();
-        #[cfg(feature = "otel-exporter")]
-        let capacity_ratio_pct = self.capacity_ratio_pct.clone();
-        #[cfg(feature = "otel-exporter")]
-        let deal_settlements_total = self.deal_settlements_total.clone();
-        #[cfg(feature = "otel-exporter")]
-        let deal_publish_total = self.deal_publish_total.clone();
-        #[cfg(feature = "otel-exporter")]
-        let deal_expected_charge_nano = self.deal_expected_charge_nano.clone();
-        #[cfg(feature = "otel-exporter")]
-        let deal_client_debit_nano = self.deal_client_debit_nano.clone();
-        #[cfg(feature = "otel-exporter")]
-        let deal_outstanding_nano = self.deal_outstanding_nano.clone();
-        #[cfg(feature = "otel-exporter")]
-        let deal_bond_slash_nano = self.deal_bond_slash_nano.clone();
-        #[cfg(feature = "otel-exporter")]
-        let micropayment_charge_nano = self.micropayment_charge_nano.clone();
-        #[cfg(feature = "otel-exporter")]
-        let micropayment_credit_generated_nano = self.micropayment_credit_generated_nano.clone();
-        #[cfg(feature = "otel-exporter")]
-        let micropayment_credit_applied_nano = self.micropayment_credit_applied_nano.clone();
-        #[cfg(feature = "otel-exporter")]
-        let micropayment_credit_carry_nano = self.micropayment_credit_carry_nano.clone();
-        #[cfg(feature = "otel-exporter")]
-        let micropayment_outstanding_nano = self.micropayment_outstanding_nano.clone();
-        #[cfg(feature = "otel-exporter")]
-        let micropayment_tickets_processed_total =
-            self.micropayment_tickets_processed_total.clone();
-        #[cfg(feature = "otel-exporter")]
-        let micropayment_tickets_won_total = self.micropayment_tickets_won_total.clone();
-        #[cfg(feature = "otel-exporter")]
-        let micropayment_tickets_duplicate_total =
-            self.micropayment_tickets_duplicate_total.clone();
-        #[cfg(feature = "otel-exporter")]
-        let por_totals = self.por_totals.clone();
-        let micropayment_sink = self
-            .micropayment_sink
-            .read()
-            .map(|guard| guard.clone())
-            .unwrap_or_default();
-        Self {
-            #[cfg(feature = "otel-exporter")]
-            por_success_total,
-            #[cfg(feature = "otel-exporter")]
-            por_failure_total,
-            #[cfg(feature = "otel-exporter")]
-            capacity_ratio_pct,
-            #[cfg(feature = "otel-exporter")]
-            deal_settlements_total,
-            #[cfg(feature = "otel-exporter")]
-            deal_publish_total,
-            #[cfg(feature = "otel-exporter")]
-            deal_expected_charge_nano,
-            #[cfg(feature = "otel-exporter")]
-            deal_client_debit_nano,
-            #[cfg(feature = "otel-exporter")]
-            deal_outstanding_nano,
-            #[cfg(feature = "otel-exporter")]
-            deal_bond_slash_nano,
-            #[cfg(feature = "otel-exporter")]
-            micropayment_charge_nano,
-            #[cfg(feature = "otel-exporter")]
-            micropayment_credit_generated_nano,
-            #[cfg(feature = "otel-exporter")]
-            micropayment_credit_applied_nano,
-            #[cfg(feature = "otel-exporter")]
-            micropayment_credit_carry_nano,
-            #[cfg(feature = "otel-exporter")]
-            micropayment_outstanding_nano,
-            #[cfg(feature = "otel-exporter")]
-            micropayment_tickets_processed_total,
-            #[cfg(feature = "otel-exporter")]
-            micropayment_tickets_won_total,
-            #[cfg(feature = "otel-exporter")]
-            micropayment_tickets_duplicate_total,
-            #[cfg(feature = "otel-exporter")]
-            por_totals,
-            micropayment_sink: RwLock::new(micropayment_sink),
-        }
-    }
-}
-/// Aggregated micropayment credit measurements captured for a single sampling window.
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Default,
-    IntoSchema,
-    crate::json_macros::JsonSerialize,
-    crate::json_macros::JsonDeserialize,
-)]
-pub struct MicropaymentCreditSnapshot {
-    /// Exact deterministic charge accumulated during the sample.
-    pub deterministic_charge: Quantity,
-    /// Exact credit produced by micropayment winnings.
-    pub credit_generated: Quantity,
-    /// Exact credit immediately applied against the deterministic charge.
-    pub credit_applied: Quantity,
-    /// Exact credit carried forward for future windows.
-    pub credit_carry: Quantity,
-    /// Exact outstanding balance after applying credit.
-    pub outstanding: Quantity,
-}
-/// Lottery ticket counters observed during micropayment sampling.
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    Default,
-    IntoSchema,
-    crate::json_macros::JsonSerialize,
-    crate::json_macros::JsonDeserialize,
-)]
-pub struct MicropaymentTicketCounters {
-    /// Total tickets processed for the sample.
-    pub processed: u64,
-    /// Tickets that resulted in payouts.
-    pub won: u64,
-    /// Tickets ignored due to duplication.
-    pub duplicate: u64,
-}
-#[allow(clippy::unused_self, clippy::trivially_copy_pass_by_ref)]
-impl SorafsNodeOtel {
-    /// Create a new OTEL instrumentation bundle for SoraFS nodes.
-    #[allow(clippy::too_many_lines)]
-    #[must_use]
-    pub fn new() -> Self {
-        #[cfg(feature = "otel-exporter")]
-        {
-            let meter = opentelemetry::global::meter("sorafs.node");
-            let build_counter = |name: &'static str, description: &'static str| {
-                meter
-                    .u64_counter(name)
-                    .with_description(description)
-                    .build()
-            };
-            let build_histogram =
-                |name: &'static str, description: &'static str, unit: &'static str| {
-                    meter
-                        .f64_histogram(name)
-                        .with_description(description)
-                        .with_unit(unit)
-                        .build()
-                };
-            let por_success_total = build_counter(
-                "sorafs.node.por_success_total",
-                "Total successful PoR samples per provider.",
-            );
-            let por_failure_total = build_counter(
-                "sorafs.node.por_failure_total",
-                "Total failed PoR samples per provider.",
-            );
-            let capacity_ratio_pct = build_histogram(
-                "sorafs.node.capacity_utilisation_pct",
-                "Recorded storage utilisation ratio per provider (percent).",
-                "percent",
-            );
-            let deal_settlements_total = build_counter(
-                "sorafs.node.deal_settlements_total",
-                "Total deal settlement windows recorded per provider and status.",
-            );
-            let deal_publish_total = build_counter(
-                "sorafs.node.deal_publish_total",
-                "Settlement artefact publish attempts per provider and outcome.",
-            );
-            let deal_histograms = [
-                (
-                    "sorafs.node.deal_expected_charge_nano",
-                    "Deterministic settlement charges per window (nano XOR).",
-                ),
-                (
-                    "sorafs.node.deal_client_debit_nano",
-                    "Client credit debited during settlement windows (nano XOR).",
-                ),
-                (
-                    "sorafs.node.deal_outstanding_nano",
-                    "Outstanding balances carried after settlement (nano XOR).",
-                ),
-            ];
-            let [
-                deal_expected_charge_nano,
-                deal_client_debit_nano,
-                deal_outstanding_nano,
-            ] = deal_histograms
-                .map(|(name, description)| build_histogram(name, description, "nano"));
-            let deal_bond_slash_nano = build_counter(
-                "sorafs.node.deal_bond_slash_nano",
-                "Total bond slashes applied during settlements (nano XOR, truncated to u64).",
-            );
-            let micropayment_histograms = [
-                (
-                    "sorafs.node.micropayment_charge_nano",
-                    "Deterministic charge per usage sample (nano XOR).",
-                ),
-                (
-                    "sorafs.node.micropayment_credit_generated_nano",
-                    "Micropayment credit generated during usage samples (nano XOR).",
-                ),
-                (
-                    "sorafs.node.micropayment_credit_applied_nano",
-                    "Micropayment credit applied immediately against deterministic charges (nano XOR).",
-                ),
-                (
-                    "sorafs.node.micropayment_credit_carry_nano",
-                    "Micropayment credit carried forward after usage samples (nano XOR).",
-                ),
-                (
-                    "sorafs.node.micropayment_outstanding_nano",
-                    "Outstanding balance after applying micropayment credit (nano XOR).",
-                ),
-            ];
-            let [
-                micropayment_charge_nano,
-                micropayment_credit_generated_nano,
-                micropayment_credit_applied_nano,
-                micropayment_credit_carry_nano,
-                micropayment_outstanding_nano,
-            ] = micropayment_histograms
-                .map(|(name, description)| build_histogram(name, description, "nano"));
-            let micropayment_counters = [
-                (
-                    "sorafs.node.micropayment_tickets_processed_total",
-                    "Micropayment lottery tickets processed during usage samples.",
-                ),
-                (
-                    "sorafs.node.micropayment_tickets_won_total",
-                    "Micropayment lottery tickets that resulted in payouts.",
-                ),
-                (
-                    "sorafs.node.micropayment_tickets_duplicate_total",
-                    "Duplicate micropayment tickets ignored during usage samples.",
-                ),
-            ];
-            let [
-                micropayment_tickets_processed_total,
-                micropayment_tickets_won_total,
-                micropayment_tickets_duplicate_total,
-            ] = micropayment_counters.map(|(name, description)| build_counter(name, description));
-            Self {
-                por_success_total,
-                por_failure_total,
-                capacity_ratio_pct,
-                deal_settlements_total,
-                deal_publish_total,
-                deal_expected_charge_nano,
-                deal_client_debit_nano,
-                deal_outstanding_nano,
-                deal_bond_slash_nano,
-                micropayment_charge_nano,
-                micropayment_credit_generated_nano,
-                micropayment_credit_applied_nano,
-                micropayment_credit_carry_nano,
-                micropayment_outstanding_nano,
-                micropayment_tickets_processed_total,
-                micropayment_tickets_won_total,
-                micropayment_tickets_duplicate_total,
-                por_totals: Arc::new(Mutex::new(HashMap::new())),
-                micropayment_sink: RwLock::new(None),
-            }
-        }
-        #[cfg(not(feature = "otel-exporter"))]
-        {
-            Self {
-                micropayment_sink: RwLock::new(None),
-            }
-        }
-    }
-    /// Record a storage scheduler snapshot.
-    pub fn record_storage(
-        &self,
-        provider_id: &str,
-        bytes_used: u64,
-        bytes_capacity: u64,
-        por_samples_success: u64,
-        por_samples_failed: u64,
-    ) {
-        #[cfg(feature = "otel-exporter")]
-        {
-            let attrs = [KeyValue::new("provider_id", provider_id.to_string())];
-            if bytes_capacity > 0 {
-                let utilisation = (bytes_used as f64 / bytes_capacity as f64) * 100.0;
-                self.capacity_ratio_pct.record(utilisation, &attrs);
-            }
-            let mut totals = self
-                .por_totals
-                .lock()
-                .expect("sorafs node otel totals mutex poisoned");
-            let entry = totals
-                .entry(provider_id.to_string())
-                .or_insert_with(PorSnapshot::default);
-            if por_samples_success >= entry.success {
-                let delta = por_samples_success - entry.success;
-                if delta > 0 {
-                    self.por_success_total.add(delta, &attrs);
-                }
-            } else {
-                entry.success = 0;
-            }
-            if por_samples_failed >= entry.failure {
-                let delta = por_samples_failed - entry.failure;
-                if delta > 0 {
-                    self.por_failure_total.add(delta, &attrs);
-                }
-            } else {
-                entry.failure = 0;
-            }
-            entry.success = por_samples_success;
-            entry.failure = por_samples_failed;
-        }
-        #[cfg(not(feature = "otel-exporter"))]
-        {
-            let _ = (
-                provider_id,
-                bytes_used,
-                bytes_capacity,
-                por_samples_success,
-                por_samples_failed,
-            );
-        }
-    }
-    /// Record settlement telemetry for a completed deal window.
-    pub fn record_deal_settlement(
-        &self,
-        provider_id: &str,
-        status: &str,
-        expected_charge: &Quantity,
-        client_debit: &Quantity,
-        bond_slash: &Quantity,
-        outstanding: &Quantity,
-    ) {
-        #[cfg(feature = "otel-exporter")]
-        {
-            let provider = provider_id.to_string();
-            let provider_attrs = [KeyValue::new("provider_id", provider.clone())];
-            let settlement_attrs = [
-                KeyValue::new("provider_id", provider),
-                KeyValue::new("status", status.to_string()),
-            ];
-            self.deal_settlements_total.add(1, &settlement_attrs);
-            self.deal_expected_charge_nano
-                .record(quantity_to_nano_f64(expected_charge), &provider_attrs);
-            self.deal_client_debit_nano
-                .record(quantity_to_nano_f64(client_debit), &provider_attrs);
-            self.deal_outstanding_nano
-                .record(quantity_to_nano_f64(outstanding), &provider_attrs);
-            if !bond_slash.is_zero() {
-                let increment = quantity_to_nano_f64(bond_slash).min(u64::MAX as f64) as u64;
-                self.deal_bond_slash_nano.add(increment, &provider_attrs);
-            }
-        }
-        #[cfg(not(feature = "otel-exporter"))]
-        {
-            let _ = (
-                provider_id,
-                status,
-                expected_charge,
-                client_debit,
-                bond_slash,
-                outstanding,
-            );
-        }
-    }
-    /// Record the outcome of a settlement artefact publish attempt.
-    pub fn record_settlement_publish(&self, provider_id: &str, result: &str) {
-        #[cfg(feature = "otel-exporter")]
-        {
-            let attrs = [
-                KeyValue::new("provider_id", provider_id.to_string()),
-                KeyValue::new("result", result.to_string()),
-            ];
-            self.deal_publish_total.add(1, &attrs);
-        }
-        #[cfg(not(feature = "otel-exporter"))]
-        {
-            let _ = (provider_id, result);
-        }
-    }
-    /// Record telemetry for a micropayment sampling window.
-    pub fn record_micropayment_sample(
-        &self,
-        provider_id: &str,
-        credits: MicropaymentCreditSnapshot,
-        tickets: MicropaymentTicketCounters,
-    ) {
-        #[cfg(feature = "otel-exporter")]
-        {
-            let MicropaymentCreditSnapshot {
-                deterministic_charge,
-                credit_generated,
-                credit_applied,
-                credit_carry,
-                outstanding,
-            } = &credits;
-            let MicropaymentTicketCounters {
-                processed: tickets_processed,
-                won: tickets_won,
-                duplicate: tickets_duplicate,
-            } = &tickets;
-            let provider = provider_id.to_string();
-            let attrs = [KeyValue::new("provider_id", provider)];
-            self.micropayment_charge_nano
-                .record(quantity_to_nano_f64(deterministic_charge), &attrs);
-            self.micropayment_credit_generated_nano
-                .record(quantity_to_nano_f64(credit_generated), &attrs);
-            self.micropayment_credit_applied_nano
-                .record(quantity_to_nano_f64(credit_applied), &attrs);
-            self.micropayment_credit_carry_nano
-                .record(quantity_to_nano_f64(credit_carry), &attrs);
-            self.micropayment_outstanding_nano
-                .record(quantity_to_nano_f64(outstanding), &attrs);
-            if *tickets_processed > 0 {
-                self.micropayment_tickets_processed_total
-                    .add(*tickets_processed, &attrs);
-            }
-            if *tickets_won > 0 {
-                self.micropayment_tickets_won_total
-                    .add(*tickets_won, &attrs);
-            }
-            if *tickets_duplicate > 0 {
-                self.micropayment_tickets_duplicate_total
-                    .add(*tickets_duplicate, &attrs);
-            }
-        }
-        #[cfg(not(feature = "otel-exporter"))]
-        {
-            let _ = (provider_id, &credits, &tickets);
-        }
-        if let Ok(guard) = self.micropayment_sink.read()
-            && let Some(sink) = &*guard
-        {
-            sink(provider_id, credits, tickets);
-        }
-    }
-    /// Replace the current micropayment sample sink used for cross-component telemetry.
-    pub fn set_micropayment_sink(&self, sink: Option<MicropaymentSampleSink>) {
-        *self
-            .micropayment_sink
-            .write()
-            .expect("micropayment sink lock poisoned") = sink;
-    }
-}
-impl Default for SorafsNodeOtel {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-impl norito::core::NoritoSerialize for MicropaymentCreditSnapshot {
-    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        let payload = (
-            self.deterministic_charge.clone(),
-            self.credit_generated.clone(),
-            self.credit_applied.clone(),
-            self.credit_carry.clone(),
-            self.outstanding.clone(),
-        );
-        norito::core::NoritoSerialize::serialize(&payload, writer)
-    }
-}
-impl<'a> norito::core::NoritoDeserialize<'a> for MicropaymentCreditSnapshot {
-    fn deserialize(archived: &'a norito::core::Archived<Self>) -> Self {
-        let (deterministic_charge, credit_generated, credit_applied, credit_carry, outstanding): (
-            Quantity,
-            Quantity,
-            Quantity,
-            Quantity,
-            Quantity,
-        ) = norito::core::NoritoDeserialize::deserialize(archived.cast());
-        Self {
-            deterministic_charge,
-            credit_generated,
-            credit_applied,
-            credit_carry,
-            outstanding,
-        }
-    }
-}
-impl<'a> DecodeFromSlice<'a> for MicropaymentCreditSnapshot {
-    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-        let (
-            (deterministic_charge, credit_generated, credit_applied, credit_carry, outstanding),
-            used,
-        ) = <(Quantity, Quantity, Quantity, Quantity, Quantity)>::decode_from_slice(bytes)?;
-        Ok((
-            Self {
-                deterministic_charge,
-                credit_generated,
-                credit_applied,
-                credit_carry,
-                outstanding,
-            },
-            used,
-        ))
-    }
-}
-impl norito::core::NoritoSerialize for MicropaymentTicketCounters {
-    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        let payload = (self.processed, self.won, self.duplicate);
-        norito::core::NoritoSerialize::serialize(&payload, writer)
-    }
-}
-impl<'a> norito::core::NoritoDeserialize<'a> for MicropaymentTicketCounters {
-    fn deserialize(archived: &'a norito::core::Archived<Self>) -> Self {
-        let (processed, won, duplicate): (u64, u64, u64) =
-            norito::core::NoritoDeserialize::deserialize(archived.cast());
-        Self {
-            processed,
-            won,
-            duplicate,
-        }
-    }
-}
-impl<'a> DecodeFromSlice<'a> for MicropaymentTicketCounters {
-    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-        let ((processed, won, duplicate), used) = <(u64, u64, u64)>::decode_from_slice(bytes)?;
-        Ok((
-            Self {
-                processed,
-                won,
-                duplicate,
-            },
-            used,
-        ))
-    }
-}
-/// Cached micropayment sample surfaced via `/status`.
-#[derive(
-    Clone,
-    Debug,
-    Default,
-    IntoSchema,
-    crate::json_macros::JsonSerialize,
-    crate::json_macros::JsonDeserialize,
-)]
-pub struct MicropaymentSampleStatus {
-    /// Hex-encoded provider identifier associated with the sample.
-    pub provider_id_hex: String,
-    /// Aggregated credit snapshot for the sampling window.
-    pub credits: MicropaymentCreditSnapshot,
-    /// Ticket counters observed for the sampling window.
-    pub tickets: MicropaymentTicketCounters,
-}
-impl norito::core::NoritoSerialize for MicropaymentSampleStatus {
-    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        let payload = (
-            self.provider_id_hex.clone(),
-            self.credits.clone(),
-            self.tickets,
-        );
-        norito::core::NoritoSerialize::serialize(&payload, writer)
-    }
-}
-impl<'a> norito::core::NoritoDeserialize<'a> for MicropaymentSampleStatus {
-    fn deserialize(archived: &'a norito::core::Archived<Self>) -> Self {
-        let (provider_id_hex, credits, tickets): (
-            String,
-            MicropaymentCreditSnapshot,
-            MicropaymentTicketCounters,
-        ) = norito::core::NoritoDeserialize::deserialize(archived.cast());
-        Self {
-            provider_id_hex,
-            credits,
-            tickets,
-        }
-    }
-}
-impl<'a> DecodeFromSlice<'a> for MicropaymentSampleStatus {
-    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-        let ((provider_id_hex, credits, tickets), used) = <(
-            String,
-            MicropaymentCreditSnapshot,
-            MicropaymentTicketCounters,
-        )>::decode_from_slice(bytes)?;
-        Ok((
-            Self {
-                provider_id_hex,
-                credits,
-                tickets,
-            },
-            used,
-        ))
-    }
 }
 /// Snapshot of Taikai ingest health per (cluster, stream) surfaced via `/status`.
 #[derive(
@@ -2234,50 +561,6 @@ struct TaikaiAliasRotationSnapshotArgs<'a> {
     window_start_sequence: u64,
     window_end_sequence: u64,
     manifest_digest_hex: &'a str,
-}
-static GLOBAL_FASTPQ_OTEL: OnceLock<Arc<FastpqOtel>> = OnceLock::new();
-static GLOBAL_SORAFS_FETCH_OTEL: OnceLock<Arc<SorafsFetchOtel>> = OnceLock::new();
-static GLOBAL_SORAFS_REPAIR_OTEL: OnceLock<Arc<SorafsRepairOtel>> = OnceLock::new();
-static GLOBAL_SORAFS_RECONCILIATION_OTEL: OnceLock<Arc<SorafsReconciliationOtel>> = OnceLock::new();
-static GLOBAL_SORAFS_GC_OTEL: OnceLock<Arc<SorafsGcOtel>> = OnceLock::new();
-static GLOBAL_SORAFS_GATEWAY_OTEL: OnceLock<Arc<SorafsGatewayOtel>> = OnceLock::new();
-static GLOBAL_SORAFS_NODE_OTEL: OnceLock<Arc<SorafsNodeOtel>> = OnceLock::new();
-/// Retrieve the global FASTPQ OTEL metrics handle.
-#[must_use]
-pub fn global_fastpq_otel() -> Arc<FastpqOtel> {
-    Arc::clone(GLOBAL_FASTPQ_OTEL.get_or_init(|| Arc::new(FastpqOtel::new())))
-}
-/// Retrieve the global OTEL metrics handle used by the orchestrator.
-#[must_use]
-pub fn global_sorafs_fetch_otel() -> Arc<SorafsFetchOtel> {
-    Arc::clone(GLOBAL_SORAFS_FETCH_OTEL.get_or_init(|| Arc::new(SorafsFetchOtel::new())))
-}
-/// Retrieve the global OTEL metrics handle used by repair automation.
-#[must_use]
-pub fn global_sorafs_repair_otel() -> Arc<SorafsRepairOtel> {
-    Arc::clone(GLOBAL_SORAFS_REPAIR_OTEL.get_or_init(|| Arc::new(SorafsRepairOtel::new())))
-}
-/// Retrieve the global OTEL metrics handle used by reconciliation snapshots.
-#[must_use]
-pub fn global_sorafs_reconciliation_otel() -> Arc<SorafsReconciliationOtel> {
-    Arc::clone(
-        GLOBAL_SORAFS_RECONCILIATION_OTEL.get_or_init(|| Arc::new(SorafsReconciliationOtel::new())),
-    )
-}
-/// Retrieve the global OTEL metrics handle used by GC automation.
-#[must_use]
-pub fn global_sorafs_gc_otel() -> Arc<SorafsGcOtel> {
-    Arc::clone(GLOBAL_SORAFS_GC_OTEL.get_or_init(|| Arc::new(SorafsGcOtel::new())))
-}
-/// Retrieve the global OTEL metrics handle used by Torii gateway endpoints.
-#[must_use]
-pub fn global_sorafs_gateway_otel() -> Arc<SorafsGatewayOtel> {
-    Arc::clone(GLOBAL_SORAFS_GATEWAY_OTEL.get_or_init(|| Arc::new(SorafsGatewayOtel::new())))
-}
-/// Retrieve the global OTEL metrics handle used by embedded SoraFS nodes.
-#[must_use]
-pub fn global_sorafs_node_otel() -> Arc<SorafsNodeOtel> {
-    Arc::clone(GLOBAL_SORAFS_NODE_OTEL.get_or_init(|| Arc::new(SorafsNodeOtel::new())))
 }
 #[cfg(test)]
 mod tests {
@@ -2419,52 +702,6 @@ mod tests {
                     && cursor.highest_sequence == 3),
             "metrics must recover the poisoned cache instead of panicking"
         );
-    }
-    #[cfg(not(feature = "otel-exporter"))]
-    #[test]
-    fn sorafs_node_otel_new_and_record_sample_do_not_panic_without_exporter() {
-        let otel = SorafsNodeOtel::new();
-        otel.record_micropayment_sample(
-            "provider",
-            MicropaymentCreditSnapshot {
-                deterministic_charge: 10_u64.into(),
-                credit_generated: 5_u64.into(),
-                credit_applied: 4_u64.into(),
-                credit_carry: 1_u64.into(),
-                outstanding: 2_u64.into(),
-            },
-            MicropaymentTicketCounters {
-                processed: 3,
-                won: 1,
-                duplicate: 0,
-            },
-        );
-    }
-    #[test]
-    fn micropayment_credit_snapshot_norito_roundtrip_preserves_exact_quantities() {
-        let snapshot = MicropaymentCreditSnapshot {
-            deterministic_charge: "0.0000000001".parse().expect("canonical sub-nano quantity"),
-            credit_generated: "340282366920938463463374607431768211456"
-                .parse()
-                .expect("canonical quantity wider than u128"),
-            credit_applied: "1.25".parse().expect("canonical fractional quantity"),
-            credit_carry: 0_u64.into(),
-            outstanding: "0.000000000000000001"
-                .parse()
-                .expect("canonical exact quantity"),
-        };
-        let bytes = to_bytes(&snapshot).expect("encode exact micropayment snapshot");
-        let archived = from_bytes::<MicropaymentCreditSnapshot>(&bytes)
-            .expect("archive exact micropayment snapshot");
-        let decoded = MicropaymentCreditSnapshot::deserialize(archived);
-        assert_eq!(decoded, snapshot);
-    }
-    #[cfg(not(feature = "otel-exporter"))]
-    #[test]
-    fn sorafs_reconciliation_otel_new_and_record_do_not_panic_without_exporter() {
-        let otel = SorafsReconciliationOtel::new();
-        otel.record_run("success");
-        otel.record_divergence(2);
     }
     #[test]
     fn records_fastpq_execution_mode_metrics() {
@@ -2891,123 +1128,9 @@ mod tests {
             &dump,
             "governance_parliament_no_result_total{class=\"confirmation_jury_capacity_unavailable\"}",
         );
-        assert_eq!(parse_metric_value(line), 0.0);
+        assert!(parse_metric_value(line).abs() <= f64::EPSILON);
     }
 }
-#[cfg(feature = "otel-exporter")]
-fn install_otlp_metrics_exporter(
-    endpoint: &str,
-    service_name: &str,
-    resource: &[(&str, &str)],
-    interval: Duration,
-) -> eyre::Result<()> {
-    use opentelemetry_otlp::{MetricExporter, WithExportConfig};
-    use opentelemetry_sdk::{
-        Resource,
-        metrics::{PeriodicReader, SdkMeterProvider},
-    };
-    let exporter = MetricExporter::builder()
-        .with_tonic()
-        .with_endpoint(endpoint.to_owned())
-        .build()?;
-    let reader = PeriodicReader::builder(exporter)
-        .with_interval(interval)
-        .build();
-    let mut attributes = Vec::with_capacity(resource.len() + 1);
-    attributes.push(KeyValue::new("service.name", service_name.to_string()));
-    for (key, value) in resource {
-        attributes.push(KeyValue::new((*key).to_string(), (*value).to_string()));
-    }
-    let provider = SdkMeterProvider::builder()
-        .with_resource(
-            Resource::builder_empty()
-                .with_attributes(attributes)
-                .build(),
-        )
-        .with_reader(reader)
-        .build();
-    opentelemetry::global::set_meter_provider(provider);
-    Ok(())
-}
-/// Install an OTLP exporter that streams SoraFS orchestrator metrics via OpenTelemetry.
-///
-/// # Errors
-/// Returns an error if the OTLP exporter cannot be initialised with the provided settings.
-#[cfg(feature = "otel-exporter")]
-pub fn install_sorafs_fetch_otlp_exporter(
-    endpoint: &str,
-    service_name: &str,
-    resource: &[(&str, &str)],
-    interval: Duration,
-) -> eyre::Result<()> {
-    install_otlp_metrics_exporter(endpoint, service_name, resource, interval)
-}
-/// Stub exporter installer when the OTEL feature is disabled.
-///
-/// # Errors
-/// Always returns an error indicating that the `otel-exporter` feature is disabled.
-#[cfg(not(feature = "otel-exporter"))]
-pub fn install_sorafs_fetch_otlp_exporter(
-    _endpoint: &str,
-    _service_name: &str,
-    _resource: &[(&str, &str)],
-    _interval: Duration,
-) -> eyre::Result<()> {
-    eyre::bail!("otel-exporter feature is disabled; enable it to emit OTLP telemetry");
-}
-/// Install an OTLP exporter that streams Torii gateway metrics via OpenTelemetry.
-///
-/// # Errors
-/// Returns an error if the OTLP exporter cannot be initialised with the provided settings.
-#[cfg(feature = "otel-exporter")]
-pub fn install_sorafs_gateway_otlp_exporter(
-    endpoint: &str,
-    service_name: &str,
-    resource: &[(&str, &str)],
-    interval: Duration,
-) -> eyre::Result<()> {
-    install_otlp_metrics_exporter(endpoint, service_name, resource, interval)
-}
-/// Stub gateway exporter installer when the OTEL feature is disabled.
-///
-/// # Errors
-/// Always returns an error indicating that the `otel-exporter` feature is disabled.
-#[cfg(not(feature = "otel-exporter"))]
-pub fn install_sorafs_gateway_otlp_exporter(
-    _endpoint: &str,
-    _service_name: &str,
-    _resource: &[(&str, &str)],
-    _interval: Duration,
-) -> eyre::Result<()> {
-    eyre::bail!("otel-exporter feature is disabled; enable it to emit OTLP telemetry");
-}
-/// Install an OTLP exporter that streams embedded node metrics via OpenTelemetry.
-///
-/// # Errors
-/// Returns an error if the OTLP exporter cannot be initialised with the provided settings.
-#[cfg(feature = "otel-exporter")]
-pub fn install_sorafs_node_otlp_exporter(
-    endpoint: &str,
-    service_name: &str,
-    resource: &[(&str, &str)],
-    interval: Duration,
-) -> eyre::Result<()> {
-    install_otlp_metrics_exporter(endpoint, service_name, resource, interval)
-}
-/// Stub node exporter installer when the OTEL feature is disabled.
-///
-/// # Errors
-/// Always returns an error indicating that the `otel-exporter` feature is disabled.
-#[cfg(not(feature = "otel-exporter"))]
-pub fn install_sorafs_node_otlp_exporter(
-    _endpoint: &str,
-    _service_name: &str,
-    _resource: &[(&str, &str)],
-    _interval: Duration,
-) -> eyre::Result<()> {
-    eyre::bail!("otel-exporter feature is disabled; enable it to emit OTLP telemetry");
-}
-include!("metrics/otel_tests.rs");
 impl JsonSerialize for Uptime {
     fn json_serialize(&self, out: &mut String) {
         out.push('{');
@@ -3105,7 +1228,6 @@ mod serde_tests {
             dataspace_catalog: Vec::new(),
             nexus: None,
             tx_gossip: TxGossipSnapshot::default(),
-            sorafs_micropayments: Vec::new(),
             taikai_alias_rotations: Vec::new(),
             taikai_ingest: Vec::new(),
             da_receipt_cursors: Vec::new(),
@@ -3241,7 +1363,6 @@ pub struct NexusLaneTeuBuckets {
     /// TEU consumed after circuit-breaker adjustments (caps lowered).
     pub circuit_breaker: u64,
 }
-#[allow(dead_code)]
 impl NexusLaneTeuBuckets {
     const LABELS: [&'static str; 4] = ["floor", "headroom", "must_serve", "circuit_breaker"];
     /// Returns an iterator over bucket labels paired with their TEU amounts.
@@ -3418,7 +1539,6 @@ pub struct NexusLaneTeuDeferrals {
     /// Deferred because a circuit-breaker lowered the cap.
     pub circuit_breaker: u64,
 }
-#[allow(dead_code)]
 impl NexusLaneTeuDeferrals {
     /// Increments the deferral counter corresponding to the provided reason.
     pub fn increment(&mut self, reason: &str, amount: u64) {
@@ -3479,6 +1599,8 @@ impl<'a> DecodeFromSlice<'a> for NexusLaneTeuDeferrals {
     Debug,
     Default,
     IntoSchema,
+    NoritoSerialize,
+    NoritoDeserialize,
     crate::json_macros::JsonSerialize,
     crate::json_macros::JsonDeserialize,
 )]
@@ -3568,7 +1690,6 @@ pub struct NexusLaneTeuStatus {
     /// Validators declared in the lane's governance manifest.
     pub manifest_validators: Vec<String>,
     /// Validator-account, peer, and Torii bindings declared by the manifest.
-    #[norito(default)]
     pub manifest_validator_bindings: Vec<NexusLaneManifestValidatorBindingStatus>,
     /// Validator quorum required by the lane manifest.
     pub manifest_quorum: Option<u32>,
@@ -3576,177 +1697,6 @@ pub struct NexusLaneTeuStatus {
     pub manifest_protected_namespaces: Vec<String>,
     /// Runtime-upgrade governance hook snapshot when configured.
     pub manifest_runtime_upgrade: Option<NexusLaneRuntimeUpgradeHookStatus>,
-}
-impl norito::core::NoritoSerialize for NexusLaneTeuStatus {
-    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        norito::core::NoritoSerialize::serialize(&NexusLaneTeuStatusPayload::from(self), writer)
-    }
-}
-impl<'a> norito::core::NoritoDeserialize<'a> for NexusLaneTeuStatus {
-    fn deserialize(archived: &'a norito::core::Archived<Self>) -> Self {
-        let payload = NexusLaneTeuStatusPayload::deserialize(archived.cast());
-        payload.into()
-    }
-}
-impl<'a> DecodeFromSlice<'a> for NexusLaneTeuStatus {
-    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-        let payload = norito::codec::decode_adaptive::<NexusLaneTeuStatusPayload>(bytes)?;
-        Ok((payload.into(), bytes.len()))
-    }
-}
-#[derive(Clone, Debug, NoritoSerialize, NoritoDeserialize)]
-struct NexusLaneTeuStatusPayload {
-    lane_id: u32,
-    capacity: u64,
-    committed: u64,
-    buckets: NexusLaneTeuBuckets,
-    deferrals: NexusLaneTeuDeferrals,
-    must_serve_truncations: u64,
-    trigger_level: u64,
-    starvation_bound_slots: u64,
-    block_height: u64,
-    finality_lag_slots: u64,
-    settlement_backlog_xor_micro: u128,
-    tx_vertices: u64,
-    tx_edges: u64,
-    overlay_count: u64,
-    overlay_instr_total: u64,
-    overlay_bytes_total: u64,
-    rbc_chunks: u64,
-    rbc_bytes_total: u64,
-    peak_layer_width: u64,
-    layer_count: u64,
-    avg_layer_width: u64,
-    median_layer_width: u64,
-    scheduler_utilization_pct: u64,
-    layer_width_buckets: SchedulerLayerWidthBuckets,
-    detached_prepared: u64,
-    detached_merged: u64,
-    detached_fallback: u64,
-    quarantine_executed: u64,
-    manifest_required: bool,
-    manifest_ready: bool,
-    alias: String,
-    dataspace_id: u64,
-    dataspace_alias: Option<String>,
-    visibility: Option<String>,
-    storage_profile: String,
-    lane_type: Option<String>,
-    governance: Option<String>,
-    settlement: Option<String>,
-    scheduler_teu_capacity_override: Option<u64>,
-    scheduler_starvation_bound_override: Option<u64>,
-    manifest_path: Option<String>,
-    manifest_validators: Vec<String>,
-    manifest_quorum: Option<u32>,
-    manifest_protected_namespaces: Vec<String>,
-    manifest_runtime_upgrade: Option<NexusLaneRuntimeUpgradeHookStatus>,
-    #[norito(default)]
-    manifest_validator_bindings: Vec<NexusLaneManifestValidatorBindingStatus>,
-}
-impl From<&NexusLaneTeuStatus> for NexusLaneTeuStatusPayload {
-    fn from(value: &NexusLaneTeuStatus) -> Self {
-        Self {
-            lane_id: value.lane_id,
-            capacity: value.capacity,
-            committed: value.committed,
-            buckets: value.buckets,
-            deferrals: value.deferrals,
-            must_serve_truncations: value.must_serve_truncations,
-            trigger_level: value.trigger_level,
-            starvation_bound_slots: value.starvation_bound_slots,
-            block_height: value.block_height,
-            finality_lag_slots: value.finality_lag_slots,
-            settlement_backlog_xor_micro: value.settlement_backlog_xor_micro,
-            tx_vertices: value.tx_vertices,
-            tx_edges: value.tx_edges,
-            overlay_count: value.overlay_count,
-            overlay_instr_total: value.overlay_instr_total,
-            overlay_bytes_total: value.overlay_bytes_total,
-            rbc_chunks: value.rbc_chunks,
-            rbc_bytes_total: value.rbc_bytes_total,
-            peak_layer_width: value.peak_layer_width,
-            layer_count: value.layer_count,
-            avg_layer_width: value.avg_layer_width,
-            median_layer_width: value.median_layer_width,
-            scheduler_utilization_pct: value.scheduler_utilization_pct,
-            layer_width_buckets: value.layer_width_buckets,
-            detached_prepared: value.detached_prepared,
-            detached_merged: value.detached_merged,
-            detached_fallback: value.detached_fallback,
-            quarantine_executed: value.quarantine_executed,
-            manifest_required: value.manifest_required,
-            manifest_ready: value.manifest_ready,
-            alias: value.alias.clone(),
-            dataspace_id: value.dataspace_id,
-            dataspace_alias: value.dataspace_alias.clone(),
-            visibility: value.visibility.clone(),
-            storage_profile: value.storage_profile.clone(),
-            lane_type: value.lane_type.clone(),
-            governance: value.governance.clone(),
-            settlement: value.settlement.clone(),
-            scheduler_teu_capacity_override: value.scheduler_teu_capacity_override,
-            scheduler_starvation_bound_override: value.scheduler_starvation_bound_override,
-            manifest_path: value.manifest_path.clone(),
-            manifest_validators: value.manifest_validators.clone(),
-            manifest_quorum: value.manifest_quorum,
-            manifest_protected_namespaces: value.manifest_protected_namespaces.clone(),
-            manifest_runtime_upgrade: value.manifest_runtime_upgrade.clone(),
-            manifest_validator_bindings: value.manifest_validator_bindings.clone(),
-        }
-    }
-}
-impl From<NexusLaneTeuStatusPayload> for NexusLaneTeuStatus {
-    fn from(payload: NexusLaneTeuStatusPayload) -> Self {
-        Self {
-            lane_id: payload.lane_id,
-            capacity: payload.capacity,
-            committed: payload.committed,
-            buckets: payload.buckets,
-            deferrals: payload.deferrals,
-            must_serve_truncations: payload.must_serve_truncations,
-            trigger_level: payload.trigger_level,
-            starvation_bound_slots: payload.starvation_bound_slots,
-            block_height: payload.block_height,
-            finality_lag_slots: payload.finality_lag_slots,
-            settlement_backlog_xor_micro: payload.settlement_backlog_xor_micro,
-            tx_vertices: payload.tx_vertices,
-            tx_edges: payload.tx_edges,
-            overlay_count: payload.overlay_count,
-            overlay_instr_total: payload.overlay_instr_total,
-            overlay_bytes_total: payload.overlay_bytes_total,
-            rbc_chunks: payload.rbc_chunks,
-            rbc_bytes_total: payload.rbc_bytes_total,
-            peak_layer_width: payload.peak_layer_width,
-            layer_count: payload.layer_count,
-            avg_layer_width: payload.avg_layer_width,
-            median_layer_width: payload.median_layer_width,
-            scheduler_utilization_pct: payload.scheduler_utilization_pct,
-            layer_width_buckets: payload.layer_width_buckets,
-            detached_prepared: payload.detached_prepared,
-            detached_merged: payload.detached_merged,
-            detached_fallback: payload.detached_fallback,
-            quarantine_executed: payload.quarantine_executed,
-            manifest_required: payload.manifest_required,
-            manifest_ready: payload.manifest_ready,
-            alias: payload.alias,
-            dataspace_id: payload.dataspace_id,
-            dataspace_alias: payload.dataspace_alias,
-            visibility: payload.visibility,
-            storage_profile: payload.storage_profile,
-            lane_type: payload.lane_type,
-            governance: payload.governance,
-            settlement: payload.settlement,
-            scheduler_teu_capacity_override: payload.scheduler_teu_capacity_override,
-            scheduler_starvation_bound_override: payload.scheduler_starvation_bound_override,
-            manifest_path: payload.manifest_path,
-            manifest_validators: payload.manifest_validators,
-            manifest_quorum: payload.manifest_quorum,
-            manifest_protected_namespaces: payload.manifest_protected_namespaces,
-            manifest_runtime_upgrade: payload.manifest_runtime_upgrade,
-            manifest_validator_bindings: payload.manifest_validator_bindings,
-        }
-    }
 }
 /// Configured dataspace entry exposed through `/status` for preflight checks.
 #[derive(
@@ -4008,6 +1958,8 @@ impl<'a> DecodeFromSlice<'a> for NexusDataspaceTeuStatus {
     Debug,
     Default,
     IntoSchema,
+    NoritoSerialize,
+    NoritoDeserialize,
     crate::json_macros::JsonSerialize,
     crate::json_macros::JsonDeserialize,
 )]
@@ -4027,34 +1979,23 @@ pub struct SumeragiConsensusStatus {
     /// LockedQC view.
     pub locked_qc_view: u64,
     /// Signatures present on the most recently committed block.
-    #[norito(default)]
     pub commit_signatures_present: u64,
     /// Signatures counted toward the commit quorum.
-    #[norito(default)]
     pub commit_signatures_counted: u64,
     /// Signatures contributed by set-B validators.
-    #[norito(default)]
     pub commit_signatures_set_b: u64,
     /// Required commit quorum size for the active topology.
-    #[norito(default)]
     pub commit_signatures_required: u64,
     /// Latest commit certificate height (best-effort).
-    #[norito(default)]
     pub commit_qc_height: u64,
     /// Latest commit certificate view (best-effort).
-    #[norito(default)]
     pub commit_qc_view: u64,
     /// Latest commit certificate epoch (best-effort).
-    #[norito(default)]
     pub commit_qc_epoch: u64,
     /// Signatures attached to the latest commit certificate.
-    #[norito(default)]
     pub commit_qc_signatures_total: u64,
     /// Validator-set size for the latest commit certificate.
-    #[norito(default)]
     pub commit_qc_validator_set_len: u64,
-    /// Total gossip fallback invocations (collectors exhausted).
-    pub gossip_fallback_total: u64,
     /// Total BlockCreated drops due to locked QC gate.
     pub block_created_dropped_by_lock_total: u64,
     /// Total BlockCreated drops due to hint mismatches.
@@ -4066,505 +2007,47 @@ pub struct SumeragiConsensusStatus {
     /// Configured queue capacity on this peer.
     pub tx_queue_capacity: u64,
     /// Estimated retained queue bytes on this peer.
-    #[norito(default)]
     pub tx_queue_retained_bytes: u64,
     /// Configured retained queue byte budget on this peer.
-    #[norito(default)]
     pub tx_queue_max_retained_bytes: u64,
     /// Whether the local transaction queue is saturated.
     pub tx_queue_saturated: bool,
     /// Whether the local transaction queue is saturated by transaction count.
-    #[norito(default)]
     pub tx_queue_saturated_by_count: bool,
     /// Whether the local transaction queue is saturated by retained bytes.
-    #[norito(default)]
     pub tx_queue_saturated_by_bytes: bool,
     /// Whether the local transaction queue is saturated by oldest queued age.
-    #[norito(default)]
     pub tx_queue_saturated_by_age: bool,
     /// Oldest queued transaction age in milliseconds.
-    #[norito(default)]
     pub tx_queue_oldest_queued_age_ms: u64,
     /// Epoch length in blocks (NPoS mode; zero when not applicable).
-    #[norito(default)]
     pub epoch_length_blocks: u64,
     /// Commit window deadline offset from epoch start (blocks; zero when not applicable).
-    #[norito(default)]
     pub epoch_commit_deadline_offset: u64,
     /// Reveal window deadline offset from epoch start (blocks; zero when not applicable).
-    #[norito(default)]
     pub epoch_reveal_deadline_offset: u64,
     /// PRF epoch seed (hex) used for deterministic leader/collector selection (NPoS mode).
     #[norito(skip_serializing_if = "Option::is_none")]
     #[norito(default)]
     prf_epoch_seed: Option<String>,
     /// Height associated with the recorded PRF context.
-    #[norito(default)]
     pub prf_height: u64,
     /// View associated with the recorded PRF context.
-    #[norito(default)]
     pub prf_view: u64,
     /// Total view-change proofs accepted (advanced the proof chain).
-    #[norito(default)]
     pub view_change_proof_accepted_total: u64,
     /// Total view-change proofs ignored as stale/outdated.
-    #[norito(default)]
     pub view_change_proof_stale_total: u64,
     /// Total view-change proofs rejected as invalid.
-    #[norito(default)]
     pub view_change_proof_rejected_total: u64,
     /// Total view-change suggestions emitted locally.
-    #[norito(default)]
     pub view_change_suggest_total: u64,
     /// Total installed view changes (proof advanced locally).
-    #[norito(default)]
     pub view_change_install_total: u64,
     /// Total lanes that remain sealed awaiting governance manifests.
-    #[norito(default)]
     pub lane_governance_sealed_total: u32,
     /// Aliases of lanes that remain sealed awaiting governance manifests.
-    #[norito(default)]
     pub lane_governance_sealed_aliases: Vec<String>,
-}
-impl norito::core::NoritoSerialize for SumeragiConsensusStatus {
-    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        let payload = SumeragiConsensusStatusPayload::from(self);
-        norito::core::NoritoSerialize::serialize(&payload, writer)
-    }
-    fn encoded_len_hint(&self) -> Option<usize> {
-        SumeragiConsensusStatusPayload::from(self).encoded_len_hint()
-    }
-    fn encoded_len_exact(&self) -> Option<usize> {
-        SumeragiConsensusStatusPayload::from(self).encoded_len_exact()
-    }
-}
-impl<'a> norito::core::NoritoDeserialize<'a> for SumeragiConsensusStatus {
-    fn deserialize(archived: &'a norito::core::Archived<Self>) -> Self {
-        let payload = SumeragiConsensusStatusPayload::deserialize(archived.cast());
-        payload.into()
-    }
-}
-impl<'a> norito::core::DecodeFromSlice<'a> for SumeragiConsensusStatus {
-    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-        let payload = norito::codec::decode_adaptive::<SumeragiConsensusStatusPayload>(bytes)?;
-        Ok((payload.into(), bytes.len()))
-    }
-}
-#[derive(Clone, Debug, NoritoSerialize, NoritoDeserialize)]
-#[expect(
-    clippy::struct_excessive_bools,
-    reason = "serialized consensus telemetry payload mirrors independent first-release status flags"
-)]
-struct SumeragiConsensusStatusPayload {
-    mode_tag: String,
-    leader_index: u64,
-    highest_qc_height: u64,
-    locked_qc_height: u64,
-    locked_qc_view: u64,
-    gossip_fallback_total: u64,
-    block_created_dropped_by_lock_total: u64,
-    block_created_hint_mismatch_total: u64,
-    block_created_proposal_mismatch_total: u64,
-    tx_queue_depth: u64,
-    tx_queue_capacity: u64,
-    tx_queue_saturated: bool,
-    epoch_length_blocks: u64,
-    epoch_commit_deadline_offset: u64,
-    epoch_reveal_deadline_offset: u64,
-    prf_epoch_seed: Option<String>,
-    prf_height: u64,
-    prf_view: u64,
-    view_change_proof_accepted_total: u64,
-    view_change_proof_stale_total: u64,
-    view_change_proof_rejected_total: u64,
-    view_change_suggest_total: u64,
-    view_change_install_total: u64,
-    lane_governance_sealed_total: u32,
-    lane_governance_sealed_aliases: Vec<String>,
-    commit_signatures_present: u64,
-    commit_signatures_counted: u64,
-    commit_signatures_set_b: u64,
-    commit_signatures_required: u64,
-    commit_qc_height: u64,
-    commit_qc_view: u64,
-    commit_qc_epoch: u64,
-    commit_qc_signatures_total: u64,
-    commit_qc_validator_set_len: u64,
-    tx_queue_retained_bytes: u64,
-    tx_queue_max_retained_bytes: u64,
-    tx_queue_saturated_by_count: bool,
-    tx_queue_saturated_by_bytes: bool,
-    tx_queue_saturated_by_age: bool,
-    tx_queue_oldest_queued_age_ms: u64,
-}
-fn decode_field<'a, T: DecodeFromSlice<'a>>(
-    bytes: &'a [u8],
-    used: &mut usize,
-) -> Result<T, norito::core::Error> {
-    let (value, len) = T::decode_from_slice(&bytes[*used..])?;
-    *used += len;
-    Ok(value)
-}
-fn decode_prf_fields(
-    bytes: &[u8],
-    used: &mut usize,
-) -> Result<(Option<String>, u64, u64), norito::core::Error> {
-    if *used >= bytes.len() {
-        return Ok((None, 0, 0));
-    }
-    let seed = decode_field::<Option<String>>(bytes, used)?;
-    if *used >= bytes.len() {
-        return Ok((seed, 0, 0));
-    }
-    let height = decode_field::<u64>(bytes, used)?;
-    if *used >= bytes.len() {
-        return Ok((seed, height, 0));
-    }
-    let view = decode_field::<u64>(bytes, used)?;
-    Ok((seed, height, view))
-}
-fn decode_epoch_fields(
-    bytes: &[u8],
-    used: &mut usize,
-) -> Result<(u64, u64, u64), norito::core::Error> {
-    if *used >= bytes.len() {
-        return Ok((0, 0, 0));
-    }
-    let length = decode_field::<u64>(bytes, used)?;
-    if *used >= bytes.len() {
-        return Ok((length, 0, 0));
-    }
-    let commit = decode_field::<u64>(bytes, used)?;
-    if *used >= bytes.len() {
-        return Ok((length, commit, 0));
-    }
-    let reveal = decode_field::<u64>(bytes, used)?;
-    Ok((length, commit, reveal))
-}
-fn decode_view_change_fields(
-    bytes: &[u8],
-    used: &mut usize,
-) -> Result<(u64, u64, u64, u64, u64), norito::core::Error> {
-    if *used >= bytes.len() {
-        return Ok((0, 0, 0, 0, 0));
-    }
-    let accepted = decode_field::<u64>(bytes, used)?;
-    if *used >= bytes.len() {
-        return Ok((accepted, 0, 0, 0, 0));
-    }
-    let stale = decode_field::<u64>(bytes, used)?;
-    if *used >= bytes.len() {
-        return Ok((accepted, stale, 0, 0, 0));
-    }
-    let rejected = decode_field::<u64>(bytes, used)?;
-    if *used >= bytes.len() {
-        return Ok((accepted, stale, rejected, 0, 0));
-    }
-    let suggest = decode_field::<u64>(bytes, used)?;
-    if *used >= bytes.len() {
-        return Ok((accepted, stale, rejected, suggest, 0));
-    }
-    let install = decode_field::<u64>(bytes, used)?;
-    Ok((accepted, stale, rejected, suggest, install))
-}
-#[allow(clippy::type_complexity)]
-fn decode_commit_fields(
-    bytes: &[u8],
-    used: &mut usize,
-) -> Result<(u64, u64, u64, u64, u64, u64, u64, u64, u64), norito::core::Error> {
-    if *used >= bytes.len() {
-        return Ok((0, 0, 0, 0, 0, 0, 0, 0, 0));
-    }
-    let present = decode_field::<u64>(bytes, used)?;
-    if *used >= bytes.len() {
-        return Ok((present, 0, 0, 0, 0, 0, 0, 0, 0));
-    }
-    let counted = decode_field::<u64>(bytes, used)?;
-    if *used >= bytes.len() {
-        return Ok((present, counted, 0, 0, 0, 0, 0, 0, 0));
-    }
-    let set_b = decode_field::<u64>(bytes, used)?;
-    if *used >= bytes.len() {
-        return Ok((present, counted, set_b, 0, 0, 0, 0, 0, 0));
-    }
-    let required = decode_field::<u64>(bytes, used)?;
-    if *used >= bytes.len() {
-        return Ok((present, counted, set_b, required, 0, 0, 0, 0, 0));
-    }
-    let cert_height = decode_field::<u64>(bytes, used)?;
-    if *used >= bytes.len() {
-        return Ok((present, counted, set_b, required, cert_height, 0, 0, 0, 0));
-    }
-    let cert_view = decode_field::<u64>(bytes, used)?;
-    if *used >= bytes.len() {
-        return Ok((
-            present,
-            counted,
-            set_b,
-            required,
-            cert_height,
-            cert_view,
-            0,
-            0,
-            0,
-        ));
-    }
-    let cert_epoch = decode_field::<u64>(bytes, used)?;
-    if *used >= bytes.len() {
-        return Ok((
-            present,
-            counted,
-            set_b,
-            required,
-            cert_height,
-            cert_view,
-            cert_epoch,
-            0,
-            0,
-        ));
-    }
-    let cert_signatures = decode_field::<u64>(bytes, used)?;
-    if *used >= bytes.len() {
-        return Ok((
-            present,
-            counted,
-            set_b,
-            required,
-            cert_height,
-            cert_view,
-            cert_epoch,
-            cert_signatures,
-            0,
-        ));
-    }
-    let cert_validator_set_len = decode_field::<u64>(bytes, used)?;
-    Ok((
-        present,
-        counted,
-        set_b,
-        required,
-        cert_height,
-        cert_view,
-        cert_epoch,
-        cert_signatures,
-        cert_validator_set_len,
-    ))
-}
-impl<'a> DecodeFromSlice<'a> for SumeragiConsensusStatusPayload {
-    #[allow(clippy::too_many_lines)] // Decode enumerates every field in a fixed order for stable wire layouts.
-    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-        let mut used = 0;
-        let mode_tag = decode_field::<String>(bytes, &mut used)?;
-        let leader_index = decode_field::<u64>(bytes, &mut used)?;
-        let highest_qc_height = decode_field::<u64>(bytes, &mut used)?;
-        let locked_qc_height = decode_field::<u64>(bytes, &mut used)?;
-        let locked_qc_view = decode_field::<u64>(bytes, &mut used)?;
-        let gossip_fallback_total = decode_field::<u64>(bytes, &mut used)?;
-        let block_created_dropped_by_lock_total = decode_field::<u64>(bytes, &mut used)?;
-        let block_created_hint_mismatch_total = decode_field::<u64>(bytes, &mut used)?;
-        let block_created_proposal_mismatch_total = decode_field::<u64>(bytes, &mut used)?;
-        let tx_queue_depth = decode_field::<u64>(bytes, &mut used)?;
-        let tx_queue_capacity = decode_field::<u64>(bytes, &mut used)?;
-        let tx_queue_saturated = decode_field::<bool>(bytes, &mut used)?;
-        let (epoch_length_blocks, epoch_commit_deadline_offset, epoch_reveal_deadline_offset) =
-            decode_epoch_fields(bytes, &mut used)?;
-        let (prf_epoch_seed, prf_height, prf_view) = decode_prf_fields(bytes, &mut used)?;
-        let (
-            view_change_proof_accepted_total,
-            view_change_proof_stale_total,
-            view_change_proof_rejected_total,
-            view_change_suggest_total,
-            view_change_install_total,
-        ) = decode_view_change_fields(bytes, &mut used)?;
-        let lane_governance_sealed_total = if used < bytes.len() {
-            decode_field::<u32>(bytes, &mut used)?
-        } else {
-            0
-        };
-        let lane_governance_sealed_aliases = if used < bytes.len() {
-            decode_field::<Vec<String>>(bytes, &mut used)?
-        } else {
-            Vec::new()
-        };
-        let (
-            commit_signatures_present,
-            commit_signatures_counted,
-            commit_signatures_set_b,
-            commit_signatures_required,
-            commit_qc_height,
-            commit_qc_view,
-            commit_qc_epoch,
-            commit_qc_signatures_total,
-            commit_qc_validator_set_len,
-        ) = decode_commit_fields(bytes, &mut used)?;
-        let tx_queue_retained_bytes = if used < bytes.len() {
-            decode_field::<u64>(bytes, &mut used)?
-        } else {
-            0
-        };
-        let tx_queue_max_retained_bytes = if used < bytes.len() {
-            decode_field::<u64>(bytes, &mut used)?
-        } else {
-            0
-        };
-        let tx_queue_saturated_by_count = if used < bytes.len() {
-            decode_field::<bool>(bytes, &mut used)?
-        } else {
-            false
-        };
-        let tx_queue_saturated_by_bytes = if used < bytes.len() {
-            decode_field::<bool>(bytes, &mut used)?
-        } else {
-            false
-        };
-        let tx_queue_saturated_by_age = if used < bytes.len() {
-            decode_field::<bool>(bytes, &mut used)?
-        } else {
-            false
-        };
-        let tx_queue_oldest_queued_age_ms = if used < bytes.len() {
-            decode_field::<u64>(bytes, &mut used)?
-        } else {
-            0
-        };
-        Ok((
-            Self {
-                mode_tag,
-                leader_index,
-                highest_qc_height,
-                locked_qc_height,
-                locked_qc_view,
-                gossip_fallback_total,
-                block_created_dropped_by_lock_total,
-                block_created_hint_mismatch_total,
-                block_created_proposal_mismatch_total,
-                tx_queue_depth,
-                tx_queue_capacity,
-                tx_queue_saturated,
-                epoch_length_blocks,
-                epoch_commit_deadline_offset,
-                epoch_reveal_deadline_offset,
-                prf_epoch_seed,
-                prf_height,
-                prf_view,
-                view_change_proof_accepted_total,
-                view_change_proof_stale_total,
-                view_change_proof_rejected_total,
-                view_change_suggest_total,
-                view_change_install_total,
-                lane_governance_sealed_total,
-                lane_governance_sealed_aliases,
-                commit_signatures_present,
-                commit_signatures_counted,
-                commit_signatures_set_b,
-                commit_signatures_required,
-                commit_qc_height,
-                commit_qc_view,
-                commit_qc_epoch,
-                commit_qc_signatures_total,
-                commit_qc_validator_set_len,
-                tx_queue_retained_bytes,
-                tx_queue_max_retained_bytes,
-                tx_queue_saturated_by_count,
-                tx_queue_saturated_by_bytes,
-                tx_queue_saturated_by_age,
-                tx_queue_oldest_queued_age_ms,
-            },
-            used,
-        ))
-    }
-}
-impl From<&SumeragiConsensusStatus> for SumeragiConsensusStatusPayload {
-    fn from(status: &SumeragiConsensusStatus) -> Self {
-        Self {
-            mode_tag: status.mode_tag.clone(),
-            leader_index: status.leader_index,
-            highest_qc_height: status.highest_qc_height,
-            locked_qc_height: status.locked_qc_height,
-            locked_qc_view: status.locked_qc_view,
-            gossip_fallback_total: status.gossip_fallback_total,
-            block_created_dropped_by_lock_total: status.block_created_dropped_by_lock_total,
-            block_created_hint_mismatch_total: status.block_created_hint_mismatch_total,
-            block_created_proposal_mismatch_total: status.block_created_proposal_mismatch_total,
-            tx_queue_depth: status.tx_queue_depth,
-            tx_queue_capacity: status.tx_queue_capacity,
-            tx_queue_retained_bytes: status.tx_queue_retained_bytes,
-            tx_queue_max_retained_bytes: status.tx_queue_max_retained_bytes,
-            tx_queue_saturated: status.tx_queue_saturated,
-            tx_queue_saturated_by_count: status.tx_queue_saturated_by_count,
-            tx_queue_saturated_by_bytes: status.tx_queue_saturated_by_bytes,
-            tx_queue_saturated_by_age: status.tx_queue_saturated_by_age,
-            tx_queue_oldest_queued_age_ms: status.tx_queue_oldest_queued_age_ms,
-            epoch_length_blocks: status.epoch_length_blocks,
-            epoch_commit_deadline_offset: status.epoch_commit_deadline_offset,
-            epoch_reveal_deadline_offset: status.epoch_reveal_deadline_offset,
-            prf_epoch_seed: status.prf_epoch_seed.clone(),
-            prf_height: status.prf_height,
-            prf_view: status.prf_view,
-            view_change_proof_accepted_total: status.view_change_proof_accepted_total,
-            view_change_proof_stale_total: status.view_change_proof_stale_total,
-            view_change_proof_rejected_total: status.view_change_proof_rejected_total,
-            view_change_suggest_total: status.view_change_suggest_total,
-            view_change_install_total: status.view_change_install_total,
-            lane_governance_sealed_total: status.lane_governance_sealed_total,
-            lane_governance_sealed_aliases: status.lane_governance_sealed_aliases.clone(),
-            commit_signatures_present: status.commit_signatures_present,
-            commit_signatures_counted: status.commit_signatures_counted,
-            commit_signatures_set_b: status.commit_signatures_set_b,
-            commit_signatures_required: status.commit_signatures_required,
-            commit_qc_height: status.commit_qc_height,
-            commit_qc_view: status.commit_qc_view,
-            commit_qc_epoch: status.commit_qc_epoch,
-            commit_qc_signatures_total: status.commit_qc_signatures_total,
-            commit_qc_validator_set_len: status.commit_qc_validator_set_len,
-        }
-    }
-}
-impl From<SumeragiConsensusStatusPayload> for SumeragiConsensusStatus {
-    fn from(payload: SumeragiConsensusStatusPayload) -> Self {
-        Self {
-            mode_tag: payload.mode_tag,
-            leader_index: payload.leader_index,
-            highest_qc_height: payload.highest_qc_height,
-            locked_qc_height: payload.locked_qc_height,
-            locked_qc_view: payload.locked_qc_view,
-            gossip_fallback_total: payload.gossip_fallback_total,
-            block_created_dropped_by_lock_total: payload.block_created_dropped_by_lock_total,
-            block_created_hint_mismatch_total: payload.block_created_hint_mismatch_total,
-            block_created_proposal_mismatch_total: payload.block_created_proposal_mismatch_total,
-            tx_queue_depth: payload.tx_queue_depth,
-            tx_queue_capacity: payload.tx_queue_capacity,
-            tx_queue_retained_bytes: payload.tx_queue_retained_bytes,
-            tx_queue_max_retained_bytes: payload.tx_queue_max_retained_bytes,
-            tx_queue_saturated: payload.tx_queue_saturated,
-            tx_queue_saturated_by_count: payload.tx_queue_saturated_by_count,
-            tx_queue_saturated_by_bytes: payload.tx_queue_saturated_by_bytes,
-            tx_queue_saturated_by_age: payload.tx_queue_saturated_by_age,
-            tx_queue_oldest_queued_age_ms: payload.tx_queue_oldest_queued_age_ms,
-            epoch_length_blocks: payload.epoch_length_blocks,
-            epoch_commit_deadline_offset: payload.epoch_commit_deadline_offset,
-            epoch_reveal_deadline_offset: payload.epoch_reveal_deadline_offset,
-            prf_epoch_seed: payload.prf_epoch_seed,
-            prf_height: payload.prf_height,
-            prf_view: payload.prf_view,
-            view_change_proof_accepted_total: payload.view_change_proof_accepted_total,
-            view_change_proof_stale_total: payload.view_change_proof_stale_total,
-            view_change_proof_rejected_total: payload.view_change_proof_rejected_total,
-            view_change_suggest_total: payload.view_change_suggest_total,
-            view_change_install_total: payload.view_change_install_total,
-            lane_governance_sealed_total: payload.lane_governance_sealed_total,
-            lane_governance_sealed_aliases: payload.lane_governance_sealed_aliases,
-            commit_signatures_present: payload.commit_signatures_present,
-            commit_signatures_counted: payload.commit_signatures_counted,
-            commit_signatures_set_b: payload.commit_signatures_set_b,
-            commit_signatures_required: payload.commit_signatures_required,
-            commit_qc_height: payload.commit_qc_height,
-            commit_qc_view: payload.commit_qc_view,
-            commit_qc_epoch: payload.commit_qc_epoch,
-            commit_qc_signatures_total: payload.commit_qc_signatures_total,
-            commit_qc_validator_set_len: payload.commit_qc_validator_set_len,
-        }
-    }
 }
 /// Cryptography-related status exposed via `/status`.
 #[derive(
@@ -4952,15 +2435,15 @@ impl BuildStatus {
     Debug,
     Default,
     IntoSchema,
+    NoritoSerialize,
+    NoritoDeserialize,
     crate::json_macros::JsonSerialize,
     crate::json_macros::JsonDeserialize,
 )]
 pub struct Status {
     /// Build metadata for the currently running node binary.
-    #[norito(default)]
     pub build: BuildStatus,
     /// Millisecond UNIX timestamp when this status snapshot was observed.
-    #[norito(default)]
     pub observed_at_ms: u64,
     /// Number of currently connected peers excluding the reporting peer
     pub peers: u64,
@@ -4979,7 +2462,6 @@ pub struct Status {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub last_rejection_at_ms: Option<u64>,
     /// Number of rejected transactions observed by this node within the last five minutes.
-    #[norito(default)]
     pub txs_rejected_recent_5m: u64,
     /// Uptime since genesis block creation
     pub uptime: Uptime,
@@ -4988,28 +2470,20 @@ pub struct Status {
     /// Number of transactions tracked by the queue (queued + in-flight)
     pub queue_size: u64,
     /// Number of transactions still queued for selection.
-    #[norito(default)]
     pub queue_queued: u64,
     /// Number of transactions in-flight after selection.
-    #[norito(default)]
     pub queue_inflight: u64,
     /// Millisecond UNIX timestamp when this peer last processed a committed block.
-    #[norito(default)]
     pub last_block_committed_at_ms: u64,
     /// Millisecond UNIX timestamp when this peer last processed a committed non-empty block.
-    #[norito(default)]
     pub last_non_empty_block_committed_at_ms: u64,
     /// Milliseconds since this peer last processed a committed block.
-    #[norito(default)]
     pub time_since_last_block_ms: u64,
     /// Milliseconds since this peer last processed a committed non-empty block.
-    #[norito(default)]
     pub time_since_last_non_empty_block_ms: u64,
     /// Cryptography feature snapshot (SM enablement flags).
-    #[norito(default)]
     pub crypto: CryptoStatus,
     /// Stack sizing/configuration snapshot.
-    #[norito(default)]
     pub stack: StackStatus,
     /// Universal offline-wallet protocol capability advertised by this build.
     ///
@@ -5035,12 +2509,7 @@ pub struct Status {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub nexus: Option<NexusStatus>,
     /// Transaction gossip target/cap snapshots grouped by dataspace/plane.
-    #[norito(default)]
     pub tx_gossip: TxGossipSnapshot,
-    /// Latest SoraFS micropayment samples observed by this node.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Vec::is_empty")]
-    pub sorafs_micropayments: Vec<MicropaymentSampleStatus>,
     /// Taikai alias rotation telemetry snapshots grouped by (cluster, event, stream).
     #[norito(default)]
     #[norito(skip_serializing_if = "Vec::is_empty")]
@@ -5053,152 +2522,6 @@ pub struct Status {
     #[norito(default)]
     #[norito(skip_serializing_if = "Vec::is_empty")]
     pub da_receipt_cursors: Vec<DaReceiptCursorStatus>,
-}
-#[derive(Clone, Debug, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
-struct StatusPayload {
-    #[norito(default)]
-    build: BuildStatus,
-    #[norito(default)]
-    observed_at_ms: u64,
-    peers: u64,
-    blocks: u64,
-    blocks_non_empty: u64,
-    commit_time_ms: u64,
-    txs_approved: u64,
-    txs_rejected: u64,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    last_rejection_at_ms: Option<u64>,
-    #[norito(default)]
-    txs_rejected_recent_5m: u64,
-    uptime: Uptime,
-    view_changes: u32,
-    queue_size: u64,
-    #[norito(default)]
-    queue_queued: u64,
-    #[norito(default)]
-    queue_inflight: u64,
-    #[norito(default)]
-    last_block_committed_at_ms: u64,
-    #[norito(default)]
-    last_non_empty_block_committed_at_ms: u64,
-    #[norito(default)]
-    time_since_last_block_ms: u64,
-    #[norito(default)]
-    time_since_last_non_empty_block_ms: u64,
-    #[norito(default)]
-    crypto: CryptoStatus,
-    #[norito(default)]
-    stack: StackStatus,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    offline: Option<OfflineStatus>,
-    #[norito(skip_serializing_if = "Option::is_none")]
-    sumeragi: Option<SumeragiConsensusStatus>,
-    governance: GovernanceStatus,
-    teu_lane_commit: Vec<NexusLaneTeuStatus>,
-    teu_dataspace_backlog: Vec<NexusDataspaceTeuStatus>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Vec::is_empty")]
-    dataspace_catalog: Vec<NexusDataspaceCatalogStatus>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    nexus: Option<NexusStatus>,
-    #[norito(default)]
-    tx_gossip: TxGossipSnapshot,
-    #[norito(default)]
-    sorafs_micropayments: Vec<MicropaymentSampleStatus>,
-    #[norito(default)]
-    taikai_alias_rotations: Vec<TaikaiAliasRotationStatus>,
-    #[norito(default)]
-    taikai_ingest: Vec<TaikaiIngestStatus>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Vec::is_empty")]
-    da_receipt_cursors: Vec<DaReceiptCursorStatus>,
-}
-impl From<&Status> for StatusPayload {
-    fn from(status: &Status) -> Self {
-        Self {
-            build: status.build.clone(),
-            observed_at_ms: status.observed_at_ms,
-            peers: status.peers,
-            blocks: status.blocks,
-            blocks_non_empty: status.blocks_non_empty,
-            commit_time_ms: status.commit_time_ms,
-            txs_approved: status.txs_approved,
-            txs_rejected: status.txs_rejected,
-            last_rejection_at_ms: status.last_rejection_at_ms,
-            txs_rejected_recent_5m: status.txs_rejected_recent_5m,
-            uptime: status.uptime,
-            view_changes: status.view_changes,
-            queue_size: status.queue_size,
-            queue_queued: status.queue_queued,
-            queue_inflight: status.queue_inflight,
-            last_block_committed_at_ms: status.last_block_committed_at_ms,
-            last_non_empty_block_committed_at_ms: status.last_non_empty_block_committed_at_ms,
-            time_since_last_block_ms: status.time_since_last_block_ms,
-            time_since_last_non_empty_block_ms: status.time_since_last_non_empty_block_ms,
-            crypto: status.crypto.clone(),
-            stack: status.stack,
-            offline: status.offline.clone(),
-            sumeragi: status.sumeragi.clone(),
-            governance: status.governance.clone(),
-            teu_lane_commit: status.teu_lane_commit.clone(),
-            teu_dataspace_backlog: status.teu_dataspace_backlog.clone(),
-            dataspace_catalog: status.dataspace_catalog.clone(),
-            nexus: status.nexus.clone(),
-            tx_gossip: status.tx_gossip.clone(),
-            sorafs_micropayments: status.sorafs_micropayments.clone(),
-            taikai_alias_rotations: status.taikai_alias_rotations.clone(),
-            taikai_ingest: status.taikai_ingest.clone(),
-            da_receipt_cursors: status.da_receipt_cursors.clone(),
-        }
-    }
-}
-impl From<StatusPayload> for Status {
-    fn from(payload: StatusPayload) -> Self {
-        Self {
-            build: payload.build,
-            observed_at_ms: payload.observed_at_ms,
-            peers: payload.peers,
-            blocks: payload.blocks,
-            blocks_non_empty: payload.blocks_non_empty,
-            commit_time_ms: payload.commit_time_ms,
-            txs_approved: payload.txs_approved,
-            txs_rejected: payload.txs_rejected,
-            last_rejection_at_ms: payload.last_rejection_at_ms,
-            txs_rejected_recent_5m: payload.txs_rejected_recent_5m,
-            uptime: payload.uptime,
-            view_changes: payload.view_changes,
-            queue_size: payload.queue_size,
-            queue_queued: payload.queue_queued,
-            queue_inflight: payload.queue_inflight,
-            last_block_committed_at_ms: payload.last_block_committed_at_ms,
-            last_non_empty_block_committed_at_ms: payload.last_non_empty_block_committed_at_ms,
-            time_since_last_block_ms: payload.time_since_last_block_ms,
-            time_since_last_non_empty_block_ms: payload.time_since_last_non_empty_block_ms,
-            crypto: payload.crypto,
-            stack: payload.stack,
-            offline: payload.offline,
-            sumeragi: payload.sumeragi,
-            governance: payload.governance,
-            teu_lane_commit: payload.teu_lane_commit,
-            teu_dataspace_backlog: payload.teu_dataspace_backlog,
-            dataspace_catalog: payload.dataspace_catalog,
-            nexus: payload.nexus,
-            tx_gossip: payload.tx_gossip,
-            sorafs_micropayments: payload.sorafs_micropayments,
-            taikai_alias_rotations: payload.taikai_alias_rotations,
-            taikai_ingest: payload.taikai_ingest,
-            da_receipt_cursors: payload.da_receipt_cursors,
-        }
-    }
-}
-impl<'a> DecodeFromSlice<'a> for Status {
-    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-        let payload = norito::codec::decode_adaptive::<StatusPayload>(bytes)?;
-        Ok((payload.into(), bytes.len()))
-    }
 }
 /// Number of manifest activation records retained in telemetry snapshots.
 pub const GOVERNANCE_MANIFEST_RECENT_CAP: usize = 8;
@@ -5337,18 +2660,6 @@ pub struct GovernanceManifestActivation {
     pub height: u64,
     /// Wall-clock timestamp in milliseconds when the activation was recorded.
     pub activated_at_ms: u64,
-}
-impl norito::core::NoritoSerialize for Status {
-    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        let payload = StatusPayload::from(self);
-        norito::core::NoritoSerialize::serialize(&payload, writer)
-    }
-}
-impl<'a> norito::core::NoritoDeserialize<'a> for Status {
-    fn deserialize(archived: &'a norito::core::Archived<Status>) -> Self {
-        let payload = StatusPayload::deserialize(archived.cast());
-        payload.into()
-    }
 }
 impl norito::core::NoritoSerialize for GovernanceStatus {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
@@ -5647,7 +2958,6 @@ fn build_sumeragi_status(metrics: &Metrics) -> SumeragiConsensusStatus {
         commit_qc_epoch: metrics.sumeragi_commit_qc_epoch.get(),
         commit_qc_signatures_total: metrics.sumeragi_commit_qc_signatures_total.get(),
         commit_qc_validator_set_len: metrics.sumeragi_commit_qc_validator_set_len.get(),
-        gossip_fallback_total: metrics.sumeragi_gossip_fallback_total.get(),
         block_created_dropped_by_lock_total: metrics
             .sumeragi_block_created_dropped_by_lock_total
             .get(),
@@ -5928,7 +3238,6 @@ impl From<&Metrics> for Status {
                     .expect("tx gossip status cache poisoned")
                     .clone(),
             },
-            sorafs_micropayments: Vec::new(),
             taikai_alias_rotations: value.taikai_alias_rotation_status(),
             taikai_ingest: value.taikai_ingest_status(),
             da_receipt_cursors: collect_da_receipt_cursors(value),
@@ -6498,12 +3807,6 @@ fields {
     pub streaming_fec_parity_current: gauge_vec(&["bucket"]);
     /// Streaming feedback timeout events.
     pub streaming_feedback_timeout_total: int_counter();
-    /// Telemetry redaction events grouped by reason.
-    pub telemetry_redaction_total: int_counter_vec(&["reason"]);
-    /// Telemetry redaction skips grouped by reason.
-    pub telemetry_redaction_skipped_total: int_counter_vec(&["reason"]);
-    /// Telemetry field truncations.
-    pub telemetry_truncation_total: int_counter();
     /// Streaming privacy telemetry redaction failures.
     pub streaming_privacy_redaction_fail_total: int_counter();
     /// Streaming encode latency (milliseconds).
@@ -6606,7 +3909,7 @@ fields {
     /// Kaigi: relay manifest updates grouped by domain and action.
     pub kaigi_relay_manifest_updates_total: int_counter_vec(&["domain", "action"]);
     /// Kaigi: relay manifest updates grouped only by domain for bounded diagnostics.
-    pub kaigi_relay_manifest_updates_by_domain_total: raw(IntCounterVec);
+    pub kaigi_relay_manifest_updates_by_domain_total: int_counter_vec(&["domain"]);
     /// Kaigi: relay manifest hop-count distribution per domain.
     pub kaigi_relay_manifest_hop_count: histogram_vec_with_buckets(
         prometheus::linear_buckets(0.0, 1.0, 9).expect("inputs are valid"),
@@ -6615,7 +3918,7 @@ fields {
     /// Kaigi: relay failovers grouped by domain and call.
     pub kaigi_relay_failover_total: int_counter_vec(&["domain", "call"]);
     /// Kaigi: relay failovers grouped only by domain for bounded diagnostics.
-    pub kaigi_relay_failovers_by_domain_total: raw(IntCounterVec);
+    pub kaigi_relay_failovers_by_domain_total: int_counter_vec(&["domain"]);
     /// Kaigi: relay failover hop-count distribution per domain.
     pub kaigi_relay_failover_hop_count: histogram_vec_with_buckets(
         prometheus::linear_buckets(0.0, 1.0, 9).expect("inputs are valid"),
@@ -6624,7 +3927,7 @@ fields {
     /// Kaigi: relay health reports grouped by domain and status.
     pub kaigi_relay_health_reports_total: int_counter_vec(&["domain", "status"]);
     /// Kaigi: relay health reports grouped only by domain for bounded diagnostics.
-    pub kaigi_relay_health_reports_by_domain_total: raw(IntCounterVec);
+    pub kaigi_relay_health_reports_by_domain_total: int_counter_vec(&["domain"]);
     /// Kaigi: current relay health state labelled by domain and relay.
     pub kaigi_relay_health_state: int_gauge_vec(&["domain", "relay"]);
     /// Number of sumeragi dropped messages
@@ -6706,8 +4009,6 @@ fields {
     pub sumeragi_commit_qc_signatures_total: gauge();
     /// Sumeragi: validator-set size for the latest commit certificate.
     pub sumeragi_commit_qc_validator_set_len: gauge();
-    /// Sumeragi: gossip fallback invocations (collectors exhausted).
-    pub sumeragi_gossip_fallback_total: int_counter();
     /// Sumeragi: BlockCreated drops due to locked QC gate (sanity check failures).
     pub sumeragi_block_created_dropped_by_lock_total: int_counter();
     /// Sumeragi: BlockCreated rejects due to hint mismatch (height/view/parent).
@@ -6831,38 +4132,6 @@ fields {
     pub sumeragi_kura_store_last_retry_attempt: gauge();
     /// Sumeragi: last recorded kura persistence retry backoff in milliseconds (gauge)
     pub sumeragi_kura_store_last_retry_backoff_ms: gauge();
-    /// Sumeragi pacemaker: proposals deferred due to transaction-queue back-pressure (cumulative)
-    pub sumeragi_pacemaker_backpressure_deferrals_total: int_counter();
-    /// Sumeragi pacemaker: backpressure deferrals grouped by reason (cumulative)
-    pub sumeragi_pacemaker_backpressure_deferrals_by_reason_total: int_counter_vec(&["reason"],);
-    /// Sumeragi pacemaker: backpressure deferral durations (ms) grouped by reason
-    pub sumeragi_pacemaker_backpressure_deferral_duration_ms: histogram_vec_with_buckets(
-        vec![
-                            5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2000.0, 5000.0, 10000.0,
-                            20000.0,
-                        ],
-                        &["reason"],
-    );
-    /// Sumeragi pacemaker: backpressure deferral active state (0/1) grouped by reason
-    pub sumeragi_pacemaker_backpressure_deferral_active: gauge_vec(&["reason"],);
-    /// Sumeragi pacemaker: backpressure deferral age (ms) grouped by reason
-    pub sumeragi_pacemaker_backpressure_deferral_age_ms: gauge_vec(&["reason"],);
-    /// Sumeragi pacemaker: evaluation duration in the tick loop (ms)
-    pub sumeragi_pacemaker_eval_ms: histogram_with_buckets(
-        vec![1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0],
-    );
-    /// Sumeragi pacemaker: proposal attempt duration in the tick loop (ms)
-    pub sumeragi_pacemaker_propose_ms: histogram_with_buckets(
-        vec![1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0],
-    );
-    /// Sumeragi commit pipeline stage durations (ms) labeled by stage.
-    pub sumeragi_commit_stage_ms: histogram_vec_with_buckets(
-        vec![
-                        1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2000.0, 5000.0,
-                        10000.0, 20000.0,
-                    ],
-                    &["stage"],
-    );
     /// State commit: state_write_lock wait duration (ms) during block commit.
     pub state_commit_write_lock_wait_ms: histogram_with_buckets(
         vec![
@@ -6877,10 +4146,6 @@ fields {
                         10000.0,
                     ],
     );
-    /// Sumeragi pacemaker: commit pipeline executions triggered by timer tick (cumulative, labeled by mode/outcome)
-    pub sumeragi_commit_pipeline_tick_total: int_counter_vec(&["mode", "outcome"]);
-    /// Sumeragi pacemaker: prevote-quorum timeouts (cumulative, labeled by mode)
-    pub sumeragi_prevote_timeout_total: int_counter_vec(&["mode"]);
     /// Sumeragi: membership mismatches detected (labeled by peer, height, view)
     pub sumeragi_membership_mismatch_total: int_counter_vec(&["peer", "height", "view"],);
     /// Sumeragi: peers currently flagged for membership mismatch (0/1 gauge)
@@ -6902,37 +4167,6 @@ fields {
         prometheus::exponential_buckets(1.0, 2.0, 12).expect("inputs are valid"),
                     &["kind"],
     );
-    /// Sumeragi: pacemaker current backoff window (ms)
-    pub sumeragi_pacemaker_backoff_ms: gauge();
-    /// Sumeragi: pacemaker RTT floor (ms)
-    pub sumeragi_pacemaker_rtt_floor_ms: gauge();
-    /// Sumeragi: pacemaker backoff multiplier (gauge)
-    pub sumeragi_pacemaker_backoff_multiplier: gauge();
-    /// Sumeragi: pacemaker RTT floor multiplier (gauge)
-    pub sumeragi_pacemaker_rtt_floor_multiplier: gauge();
-    /// Sumeragi: pacemaker maximum backoff cap (ms)
-    pub sumeragi_pacemaker_max_backoff_ms: gauge();
-    /// Sumeragi: pacemaker jitter band applied to window (ms, signed magnitude)
-    pub sumeragi_pacemaker_jitter_ms: gauge();
-    /// Sumeragi: pacemaker jitter config as permille of window (0..=1000)
-    pub sumeragi_pacemaker_jitter_frac_permille: gauge();
-    /// Sumeragi: elapsed time in the current round (ms)
-    pub sumeragi_pacemaker_round_elapsed_ms: gauge();
-    /// Sumeragi: current view timeout target window (ms)
-    pub sumeragi_pacemaker_view_timeout_target_ms: gauge();
-    /// Sumeragi: remaining time until current view timeout (ms)
-    pub sumeragi_pacemaker_view_timeout_remaining_ms: gauge();
-    /// Sumeragi: per-phase latency histogram (ms), labeled by `phase` (propose|collect|commit)
-    pub sumeragi_phase_latency_ms: histogram_vec_with_buckets(
-        vec![
-                        5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2000.0, 5000.0,
-                    ],
-                    &["phase"],
-    );
-    /// Sumeragi: per-phase latency EMA (ms), labeled by `phase`
-    pub sumeragi_phase_latency_ema_ms: gauge_vec(&["phase"]);
-    /// Sumeragi: aggregate pipeline EMA latency (ms) across pacemaker-controlled phases.
-    pub sumeragi_phase_total_ema_ms: gauge();
     /// Number of p2p dropped post messages (bounded mode)
     pub p2p_dropped_posts: gauge();
     /// Number of p2p dropped broadcast messages (bounded mode)
@@ -7413,26 +4647,6 @@ fields {
     pub torii_sorafs_gateway_compliance_serving_catalog_valid_until_seconds: gauge();
     /// Whether the gateway has a fresh, verified catalog available to the serving path.
     pub torii_sorafs_gateway_compliance_ready: gauge();
-    /// Torii SoraFS hedging XOR/USD reference price in micro-USD by cluster.
-    pub torii_sorafs_hedging_xor_usd_reference_price_micro_usd: gauge_vec(&["cluster"],);
-    /// Torii SoraFS hedging feed lag in seconds by cluster and source.
-    pub torii_sorafs_hedging_feed_lag_seconds: gauge_vec(&["cluster", "source"],);
-    /// Torii SoraFS hedging feed divergence in basis points by cluster and source.
-    pub torii_sorafs_hedging_feed_divergence_bps: gauge_vec(&["cluster", "source"],);
-    /// Torii SoraFS hedging exposure drift in basis points by cluster and asset.
-    pub torii_sorafs_hedging_exposure_drift_bps: gauge_vec(&["cluster", "asset"],);
-    /// Torii SoraFS billing statement generation counters by cluster and account type.
-    pub torii_sorafs_billing_statement_generation_total: int_counter_vec(
-        &["cluster", "account_type"],
-    );
-    /// Torii SoraFS billing statement failure counters by cluster and account type.
-    pub torii_sorafs_billing_statement_failure_total: int_counter_vec(
-        &["cluster", "account_type"],
-    );
-    /// Torii SoraFS billing statement acknowledgement backlog by cluster.
-    pub torii_sorafs_billing_statement_ack_backlog: gauge_vec(&["cluster"]);
-    /// Torii SoraFS billing escrow runway in seconds by cluster and account type.
-    pub torii_sorafs_billing_escrow_runway_seconds: gauge_vec(&["cluster", "account_type"],);
     /// Torii SoraFS reserve providers grouped by lifecycle stage.
     pub torii_sorafs_reserve_lifecycle_stage_providers: gauge_vec(&["stage"]);
     /// Torii SoraFS outstanding reserve credit principal in micro-XOR by lifecycle stage.
@@ -7557,21 +4771,6 @@ fields {
     pub torii_sorafs_por_ingest_backlog: gauge_vec(&["manifest", "provider"]);
     /// Torii SoraFS PoR ingestion failures per manifest/provider pair.
     pub torii_sorafs_por_ingest_failures_total: gauge_vec(&["manifest", "provider"],);
-    /// Torii SoraFS repair task transitions by status.
-    pub torii_sorafs_repair_tasks_total: int_counter_vec(&["status"]);
-    /// Torii SoraFS repair latency histogram (minutes) grouped by outcome.
-    pub torii_sorafs_repair_latency_minutes: histogram_vec_with_buckets(
-        vec![1.0, 2.0, 5.0, 10.0, 15.0, 30.0, 60.0, 120.0, 240.0, 480.0],
-                    &["outcome"],
-    );
-    /// Torii SoraFS repair queue depth per provider.
-    pub torii_sorafs_repair_queue_depth: gauge_vec(&["provider"]);
-    /// Torii SoraFS oldest queued repair age (seconds).
-    pub torii_sorafs_repair_backlog_oldest_age_seconds: gauge();
-    /// Torii SoraFS repair lease expirations grouped by outcome.
-    pub torii_sorafs_repair_lease_expired_total: int_counter_vec(&["outcome"]);
-    /// Torii SoraFS slash proposals submitted grouped by outcome.
-    pub torii_sorafs_slash_proposals_total: int_counter_vec(&["outcome"]);
     /// Torii SoraFS reconciliation runs grouped by result.
     pub torii_sorafs_reconciliation_runs_total: int_counter_vec(&["result"]);
     /// Torii SoraFS reconciliation divergence count from the latest snapshot.
@@ -7695,10 +4894,6 @@ fields {
     pub torii_sorafs_gateway_fixture_info: int_gauge_vec(
         &["version", "profile", "fixtures_digest"],
     );
-    /// SoraFS pin registry manifest counts grouped by status.
-    pub torii_sorafs_registry_manifests_total: gauge_vec(&["status"]);
-    /// SoraFS manifest alias total (active entries tracked on-chain).
-    pub torii_sorafs_registry_aliases_total: gauge();
     /// Consensus-maintained count of retained SoraFS pin lifecycle records.
     pub torii_sorafs_pin_retained_manifests: gauge();
     /// Consensus-maintained aggregate bytes represented by live SoraFS pins.
@@ -7719,16 +4914,6 @@ fields {
     pub torii_sorafs_tls_ech_enabled: int_gauge();
     /// Gauge exposing the canonical SoraFS gateway fixture version (label = version).
     pub torii_sorafs_gateway_fixture_version: int_gauge_vec(&["version"]);
-    /// SoraFS replication order counts grouped by status.
-    pub torii_sorafs_registry_orders_total: gauge_vec(&["status"]);
-    /// SoraFS replication SLA outcomes (met, missed, pending).
-    pub torii_sorafs_replication_sla_total: gauge_vec(&["outcome"]);
-    /// Outstanding SoraFS replication backlog (pending order count).
-    pub torii_sorafs_replication_backlog_total: gauge();
-    /// Completion latency aggregates for SoraFS replication orders (epochs).
-    pub torii_sorafs_replication_completion_latency_epochs: float_gauge_vec(&["stat"],);
-    /// Deadline slack aggregates for pending SoraFS replication orders (epochs).
-    pub torii_sorafs_replication_deadline_slack_epochs: float_gauge_vec(&["stat"]);
     /// Rejections at the SoraNet privacy ingest endpoints grouped by endpoint/reason.
     pub soranet_privacy_ingest_reject_total: int_counter_vec(&["endpoint", "reason"],);
     /// Aggregated SoraNet circuit outcomes keyed by relay mode and fixed event kind.
@@ -8443,19 +5628,7 @@ construct {
                 .set(0);
         }
     }
-    [telemetry_redaction_total]
-    {
-        for reason in ["keyword", "explicit"] {
-            let _ = telemetry_redaction_total.with_label_values(&[reason]);
-        }
-    }
-    [telemetry_redaction_skipped_total]
-    {
-        for reason in ["allowlist", "disabled", "unsupported"] {
-            let _ = telemetry_redaction_skipped_total.with_label_values(&[reason]);
-        }
-    }
-    [telemetry_truncation_total streaming_privacy_redaction_fail_total
+    [streaming_privacy_redaction_fail_total
         streaming_encode_latency_ms streaming_encode_audio_jitter_ms
         streaming_encode_audio_max_jitter_ms]
     {
@@ -8490,8 +5663,10 @@ construct {
         nexus_audit_outcome_last_timestamp nexus_space_directory_revision_total
         nexus_space_directory_active_manifests nexus_space_directory_revocations_total
         kaigi_relay_registered_total kaigi_relay_registration_bandwidth
-        kaigi_relay_manifest_updates_total kaigi_relay_manifest_hop_count
-        kaigi_relay_failover_total kaigi_relay_failover_hop_count kaigi_relay_health_reports_total
+        kaigi_relay_manifest_updates_total kaigi_relay_manifest_updates_by_domain_total
+        kaigi_relay_manifest_hop_count kaigi_relay_failover_total
+        kaigi_relay_failovers_by_domain_total kaigi_relay_failover_hop_count
+        kaigi_relay_health_reports_total kaigi_relay_health_reports_by_domain_total
         kaigi_relay_health_state dropped_messages sumeragi_dropped_block_messages_total
         sumeragi_dropped_control_messages_total p2p_dropped_posts p2p_dropped_broadcasts
         p2p_subscriber_queue_full_total p2p_subscriber_queue_full_by_topic_total
@@ -8545,24 +5720,11 @@ construct {
     [sumeragi_da_votes_ingested_total sumeragi_qc_assembly_latency_ms
         sumeragi_qc_last_latency_ms sumeragi_kura_store_failures_total
         sumeragi_kura_store_last_retry_attempt sumeragi_kura_store_last_retry_backoff_ms
-        sumeragi_pacemaker_backpressure_deferrals_total
-        sumeragi_pacemaker_backpressure_deferrals_by_reason_total
-        sumeragi_pacemaker_backpressure_deferral_duration_ms
-        sumeragi_pacemaker_backpressure_deferral_active
-        sumeragi_pacemaker_backpressure_deferral_age_ms sumeragi_pacemaker_eval_ms
-        sumeragi_pacemaker_propose_ms sumeragi_commit_stage_ms state_commit_write_lock_wait_ms
-        state_commit_write_lock_hold_ms sumeragi_commit_pipeline_tick_total
-        sumeragi_prevote_timeout_total sumeragi_membership_mismatch_total
+        state_commit_write_lock_wait_ms state_commit_write_lock_hold_ms
+        sumeragi_membership_mismatch_total
         sumeragi_membership_mismatch_active sumeragi_highest_qc_height sumeragi_locked_qc_height
         sumeragi_locked_qc_view]
-        // Sumeragi pacemaker gauges
-    [sumeragi_pacemaker_backoff_ms sumeragi_pacemaker_rtt_floor_ms
-        sumeragi_pacemaker_backoff_multiplier sumeragi_pacemaker_rtt_floor_multiplier
-        sumeragi_pacemaker_max_backoff_ms sumeragi_pacemaker_jitter_ms
-        sumeragi_pacemaker_jitter_frac_permille sumeragi_pacemaker_round_elapsed_ms
-        sumeragi_pacemaker_view_timeout_target_ms sumeragi_pacemaker_view_timeout_remaining_ms
-        sumeragi_phase_latency_ms sumeragi_phase_latency_ema_ms sumeragi_phase_total_ema_ms
-        p2p_queue_depth p2p_queue_dropped_total p2p_handshake_ms_bucket p2p_handshake_ms_sum
+    [p2p_queue_depth p2p_queue_dropped_total p2p_handshake_ms_bucket p2p_handshake_ms_sum
         p2p_handshake_ms_count p2p_handshake_error_total p2p_frame_cap_violations_total]
         // Runtime upgrade metrics
     [runtime_upgrade_events_total runtime_upgrade_provenance_rejections_total
@@ -8643,7 +5805,7 @@ construct {
         sumeragi_commit_signatures_counted sumeragi_commit_signatures_set_b
         sumeragi_commit_signatures_required sumeragi_commit_qc_height sumeragi_commit_qc_view
         sumeragi_commit_qc_epoch sumeragi_commit_qc_signatures_total
-        sumeragi_commit_qc_validator_set_len sumeragi_gossip_fallback_total
+        sumeragi_commit_qc_validator_set_len
         sumeragi_block_created_dropped_by_lock_total sumeragi_block_created_hint_mismatch_total
         sumeragi_block_created_proposal_mismatch_total lane_relay_invalid_total
         lane_relay_emergency_override_total]
@@ -8783,11 +5945,7 @@ construct {
             }
         }
     }
-    [torii_sorafs_hedging_xor_usd_reference_price_micro_usd
-        torii_sorafs_hedging_feed_lag_seconds torii_sorafs_hedging_feed_divergence_bps
-        torii_sorafs_hedging_exposure_drift_bps torii_sorafs_billing_statement_generation_total
-        torii_sorafs_billing_statement_failure_total torii_sorafs_billing_statement_ack_backlog
-        torii_sorafs_billing_escrow_runway_seconds torii_sorafs_reserve_lifecycle_stage_providers
+    [torii_sorafs_reserve_lifecycle_stage_providers
         torii_sorafs_reserve_credit_draw_micro_xor torii_sorafs_reserve_credit_shortfall_micro_xor
         torii_sorafs_reserve_accrued_interest_micro_xor torii_sorafs_reserve_defaulted_providers
         torii_sorafs_reserve_appeal_backlog torii_sorafs_reserve_custody_movements
@@ -8819,10 +5977,7 @@ construct {
         torii_sorafs_outstanding_orders torii_sorafs_uptime_bps torii_sorafs_por_bps
         torii_sorafs_por_challenges_total torii_sorafs_por_forced_challenges_total
         torii_sorafs_por_sampling_duplicates_total torii_sorafs_por_ingest_backlog
-        torii_sorafs_por_ingest_failures_total torii_sorafs_repair_tasks_total
-        torii_sorafs_repair_latency_minutes torii_sorafs_repair_queue_depth
-        torii_sorafs_repair_backlog_oldest_age_seconds torii_sorafs_repair_lease_expired_total
-        torii_sorafs_slash_proposals_total torii_sorafs_reconciliation_runs_total
+        torii_sorafs_por_ingest_failures_total torii_sorafs_reconciliation_runs_total
         torii_sorafs_reconciliation_divergence_count torii_sorafs_gc_runs_total
         torii_sorafs_gc_evictions_total torii_sorafs_gc_bytes_freed_total
         torii_sorafs_gc_blocked_total torii_sorafs_gc_expired_manifests
@@ -8842,14 +5997,11 @@ construct {
         torii_sorafs_proof_health_penalty_nano torii_sorafs_proof_health_window_end_epoch
         torii_sorafs_proof_health_cooldown torii_sorafs_gar_violations_total
         torii_sorafs_gateway_refusals_total torii_sorafs_gateway_fixture_info
-        torii_sorafs_registry_manifests_total torii_sorafs_registry_aliases_total
         torii_sorafs_pin_retained_manifests torii_sorafs_pin_live_content_bytes
         torii_sorafs_alias_cache_refresh_total torii_sorafs_alias_cache_age_seconds
         torii_sorafs_tls_cert_expiry_seconds torii_sorafs_tls_renewal_total
         torii_sorafs_tls_ech_enabled torii_sorafs_gateway_fixture_version
-        torii_sorafs_registry_orders_total torii_sorafs_replication_sla_total
-        torii_sorafs_replication_backlog_total torii_sorafs_replication_completion_latency_epochs
-        torii_sorafs_replication_deadline_slack_epochs soranet_privacy_circuit_events_total
+        soranet_privacy_circuit_events_total
         soranet_privacy_ingest_reject_total soranet_privacy_pow_rejects_total
         soranet_pow_revocation_store_total soranet_privacy_throttles_total
         soranet_privacy_verified_bytes_total soranet_privacy_active_circuits_avg
@@ -8913,40 +6065,6 @@ construct {
 }
 suffix {
     metrics.finish();
-
-    // These postdate the sealed v2 catalog. Register them directly so the
-    // catalog's construction-order and hash invariants remain unchanged.
-    let kaigi_relay_manifest_updates_by_domain_total = IntCounterVec::new(
-        Opts::new(
-            "kaigi_relay_manifest_updates_by_domain_total",
-            "Kaigi relay manifest updates grouped only by domain for bounded diagnostics",
-        ),
-        &["domain"],
-    )
-    .expect("Infallible");
-    let kaigi_relay_failovers_by_domain_total = IntCounterVec::new(
-        Opts::new(
-            "kaigi_relay_failovers_by_domain_total",
-            "Kaigi relay failovers grouped only by domain for bounded diagnostics",
-        ),
-        &["domain"],
-    )
-    .expect("Infallible");
-    let kaigi_relay_health_reports_by_domain_total = IntCounterVec::new(
-        Opts::new(
-            "kaigi_relay_health_reports_by_domain_total",
-            "Kaigi relay health reports grouped only by domain for bounded diagnostics",
-        ),
-        &["domain"],
-    )
-    .expect("Infallible");
-    for metric in [
-        &kaigi_relay_manifest_updates_by_domain_total,
-        &kaigi_relay_failovers_by_domain_total,
-        &kaigi_relay_health_reports_by_domain_total,
-    ] {
-        register_guarded(&registry, metric);
-    }
 }
 initialize (metrics) {
     [txs block_height block_height_non_empty last_commit_time_ms last_block_committed_at_ms
@@ -9015,8 +6133,7 @@ initialize (metrics) {
         fraud_psp_score_bps fraud_psp_outcome_mismatch_total streaming_hpke_rekeys_total
         streaming_gck_rotations_total streaming_quic_datagrams_sent_total
         streaming_quic_datagrams_dropped_total streaming_fec_parity_current
-        streaming_feedback_timeout_total telemetry_redaction_total
-        telemetry_redaction_skipped_total telemetry_truncation_total
+        streaming_feedback_timeout_total
         streaming_privacy_redaction_fail_total streaming_encode_latency_ms
         streaming_encode_audio_jitter_ms streaming_encode_audio_max_jitter_ms
         streaming_encode_dropped_layers_total streaming_decode_buffer_ms
@@ -9072,7 +6189,7 @@ initialize (metrics) {
         sumeragi_commit_signatures_set_b sumeragi_commit_signatures_required
         sumeragi_commit_qc_height sumeragi_commit_qc_view sumeragi_commit_qc_epoch
         sumeragi_commit_qc_signatures_total sumeragi_commit_qc_validator_set_len
-        sumeragi_gossip_fallback_total sumeragi_block_created_dropped_by_lock_total
+        sumeragi_block_created_dropped_by_lock_total
         sumeragi_block_created_hint_mismatch_total sumeragi_block_created_proposal_mismatch_total
         lane_relay_invalid_total lane_relay_emergency_override_total sumeragi_prf_epoch_seed_hex
         halo2_status sumeragi_prf_height sumeragi_prf_view sumeragi_membership_view_hash
@@ -9098,23 +6215,11 @@ initialize (metrics) {
         sumeragi_qc_assembly_latency_ms sumeragi_qc_last_latency_ms
         sumeragi_kura_store_failures_total
         sumeragi_kura_store_last_retry_attempt sumeragi_kura_store_last_retry_backoff_ms
-        sumeragi_pacemaker_backpressure_deferrals_total
-        sumeragi_pacemaker_backpressure_deferrals_by_reason_total
-        sumeragi_pacemaker_backpressure_deferral_duration_ms
-        sumeragi_pacemaker_backpressure_deferral_active
-        sumeragi_pacemaker_backpressure_deferral_age_ms sumeragi_pacemaker_eval_ms
-        sumeragi_pacemaker_propose_ms sumeragi_commit_stage_ms state_commit_write_lock_wait_ms
-        state_commit_write_lock_hold_ms sumeragi_commit_pipeline_tick_total
-        sumeragi_prevote_timeout_total sumeragi_membership_mismatch_total
+        state_commit_write_lock_wait_ms state_commit_write_lock_hold_ms
+        sumeragi_membership_mismatch_total
         sumeragi_membership_mismatch_active sumeragi_post_to_peer_total
         sumeragi_bg_post_enqueued_total sumeragi_bg_post_overflow_total sumeragi_bg_post_drop_total
         sumeragi_bg_post_queue_depth sumeragi_bg_post_queue_depth_by_peer sumeragi_bg_post_age_ms
-        sumeragi_pacemaker_backoff_ms sumeragi_pacemaker_rtt_floor_ms
-        sumeragi_pacemaker_backoff_multiplier sumeragi_pacemaker_rtt_floor_multiplier
-        sumeragi_pacemaker_max_backoff_ms sumeragi_pacemaker_jitter_ms
-        sumeragi_pacemaker_jitter_frac_permille sumeragi_pacemaker_round_elapsed_ms
-        sumeragi_pacemaker_view_timeout_target_ms sumeragi_pacemaker_view_timeout_remaining_ms
-        sumeragi_phase_latency_ms sumeragi_phase_latency_ema_ms sumeragi_phase_total_ema_ms
         ivm_cache_hits ivm_cache_misses ivm_cache_evictions ivm_cache_decoded_streams
         ivm_cache_decoded_ops_total ivm_cache_decode_failures ivm_cache_decode_time_ns_total
         ivm_register_max_index ivm_register_unique_count merkle_root_gpu_total
@@ -9184,12 +6289,7 @@ initialize (metrics) {
         torii_sorafs_gateway_compliance_failures_total
         torii_sorafs_gateway_compliance_serving_catalog_sequence
         torii_sorafs_gateway_compliance_serving_catalog_valid_until_seconds
-        torii_sorafs_gateway_compliance_ready
-        torii_sorafs_hedging_xor_usd_reference_price_micro_usd
-        torii_sorafs_hedging_feed_lag_seconds torii_sorafs_hedging_feed_divergence_bps
-        torii_sorafs_hedging_exposure_drift_bps torii_sorafs_billing_statement_generation_total
-        torii_sorafs_billing_statement_failure_total torii_sorafs_billing_statement_ack_backlog
-        torii_sorafs_billing_escrow_runway_seconds torii_sorafs_reserve_lifecycle_stage_providers
+        torii_sorafs_gateway_compliance_ready torii_sorafs_reserve_lifecycle_stage_providers
         torii_sorafs_reserve_credit_draw_micro_xor torii_sorafs_reserve_credit_shortfall_micro_xor
         torii_sorafs_reserve_accrued_interest_micro_xor torii_sorafs_reserve_defaulted_providers
         torii_sorafs_reserve_appeal_backlog torii_sorafs_reserve_custody_movements
@@ -9224,9 +6324,6 @@ initialize (metrics) {
         torii_sorafs_por_bps torii_sorafs_por_challenges_total
         torii_sorafs_por_forced_challenges_total torii_sorafs_por_sampling_duplicates_total
         torii_sorafs_por_ingest_backlog torii_sorafs_por_ingest_failures_total
-        torii_sorafs_repair_tasks_total torii_sorafs_repair_latency_minutes
-        torii_sorafs_repair_queue_depth torii_sorafs_repair_backlog_oldest_age_seconds
-        torii_sorafs_repair_lease_expired_total torii_sorafs_slash_proposals_total
         torii_sorafs_reconciliation_runs_total torii_sorafs_reconciliation_divergence_count
         torii_sorafs_gc_runs_total torii_sorafs_gc_evictions_total
         torii_sorafs_gc_bytes_freed_total torii_sorafs_gc_blocked_total
@@ -9247,14 +6344,11 @@ initialize (metrics) {
         torii_sorafs_proof_health_penalty_nano torii_sorafs_proof_health_window_end_epoch
         torii_sorafs_proof_health_cooldown torii_sorafs_gar_violations_total
         torii_sorafs_gateway_refusals_total torii_sorafs_gateway_fixture_info
-        torii_sorafs_registry_manifests_total torii_sorafs_registry_aliases_total
         torii_sorafs_pin_retained_manifests torii_sorafs_pin_live_content_bytes
         torii_sorafs_alias_cache_refresh_total torii_sorafs_alias_cache_age_seconds
         torii_sorafs_tls_cert_expiry_seconds torii_sorafs_tls_renewal_total
         torii_sorafs_tls_ech_enabled torii_sorafs_gateway_fixture_version
-        torii_sorafs_registry_orders_total torii_sorafs_replication_sla_total
-        torii_sorafs_replication_backlog_total torii_sorafs_replication_completion_latency_epochs
-        torii_sorafs_replication_deadline_slack_epochs soranet_privacy_ingest_reject_total
+        soranet_privacy_ingest_reject_total
         soranet_privacy_circuit_events_total soranet_privacy_pow_rejects_total
         soranet_pow_revocation_store_total soranet_privacy_throttles_total
         soranet_privacy_verified_bytes_total soranet_privacy_active_circuits_avg
@@ -9315,12 +6409,12 @@ epilogue {
 }
 const METRIC_CATALOG_V2: &str = include_str!("metrics/catalog_v2.tsv");
 const METRIC_CATALOG_V2_HEADER: &str = "# iroha-telemetry-metric-catalog-v2";
-const METRIC_CATALOG_V2_ROWS: usize = 801;
-const METRIC_CATALOG_V2_REGISTERED: usize = 756;
-const METRIC_CATALOG_V2_BYTES: usize = 109_426;
+const METRIC_CATALOG_V2_ROWS: usize = 756;
+const METRIC_CATALOG_V2_REGISTERED: usize = 713;
+const METRIC_CATALOG_V2_BYTES: usize = 102_830;
 #[cfg(test)]
 const METRIC_CATALOG_V2_BLAKE3: &str =
-    "62cba32dfc1d08ef52d5721497a312e0c879fcf9a2e5a2e5d69e8ebb2a5a0812";
+    "d1b8e6f8ce308c0648a1c20322b7649aaa9ecf04b1e33213dbf151389cd43512";
 
 #[derive(Clone, Copy)]
 struct MetricSpec {
@@ -10173,18 +7267,6 @@ impl Metrics {
                 gpu_kind,
             ])
             .inc();
-        #[cfg(feature = "otel-exporter")]
-        {
-            let otel = global_fastpq_otel();
-            otel.record_execution_mode(
-                requested,
-                resolved,
-                backend,
-                device_class,
-                chip_family,
-                gpu_kind,
-            );
-        }
     }
     /// Record Poseidon pipeline resolution metrics for FASTPQ.
     pub fn record_fastpq_poseidon_mode(
@@ -10206,18 +7288,6 @@ impl Metrics {
                 gpu_kind,
             ])
             .inc();
-        #[cfg(feature = "otel-exporter")]
-        {
-            let otel = global_fastpq_otel();
-            otel.record_poseidon_pipeline(
-                requested,
-                resolved,
-                path,
-                device_class,
-                chip_family,
-                gpu_kind,
-            );
-        }
     }
     /// Increment a FASTPQ GPU accelerator disable event counter.
     pub fn inc_fastpq_gpu_disable(
@@ -10947,82 +8017,6 @@ impl Metrics {
         let _exposition_guard = self.lock_sorafs_gateway_compliance_exposition();
         self.torii_sorafs_gateway_compliance_ready.set(0);
     }
-    /// Set the latest SoraFS hedging XOR/USD reference price in micro-USD.
-    pub fn set_sorafs_hedging_reference_price_micro_usd(
-        &self,
-        cluster: &str,
-        price_micro_usd: u64,
-    ) {
-        self.torii_sorafs_hedging_xor_usd_reference_price_micro_usd
-            .with_label_values(&[cluster])
-            .set(price_micro_usd);
-    }
-    /// Set SoraFS hedging feed lag in seconds for one source.
-    pub fn set_sorafs_hedging_feed_lag_seconds(
-        &self,
-        cluster: &str,
-        source: &str,
-        lag_seconds: u64,
-    ) {
-        self.torii_sorafs_hedging_feed_lag_seconds
-            .with_label_values(&[cluster, source])
-            .set(lag_seconds);
-    }
-    /// Set SoraFS hedging feed divergence in basis points for one source.
-    pub fn set_sorafs_hedging_feed_divergence_bps(
-        &self,
-        cluster: &str,
-        source: &str,
-        divergence_bps: u64,
-    ) {
-        self.torii_sorafs_hedging_feed_divergence_bps
-            .with_label_values(&[cluster, source])
-            .set(divergence_bps);
-    }
-    /// Set SoraFS hedging exposure drift in basis points for one asset.
-    pub fn set_sorafs_hedging_exposure_drift_bps(
-        &self,
-        cluster: &str,
-        asset: &str,
-        drift_bps: u64,
-    ) {
-        self.torii_sorafs_hedging_exposure_drift_bps
-            .with_label_values(&[cluster, asset])
-            .set(drift_bps);
-    }
-    /// Record a SoraFS billing statement generation attempt.
-    pub fn record_sorafs_billing_statement_generation(
-        &self,
-        cluster: &str,
-        account_type: &str,
-        succeeded: bool,
-    ) {
-        self.torii_sorafs_billing_statement_generation_total
-            .with_label_values(&[cluster, account_type])
-            .inc();
-        if !succeeded {
-            self.torii_sorafs_billing_statement_failure_total
-                .with_label_values(&[cluster, account_type])
-                .inc();
-        }
-    }
-    /// Set SoraFS billing statement acknowledgement backlog for a cluster.
-    pub fn set_sorafs_billing_statement_ack_backlog(&self, cluster: &str, backlog: u64) {
-        self.torii_sorafs_billing_statement_ack_backlog
-            .with_label_values(&[cluster])
-            .set(backlog);
-    }
-    /// Set SoraFS billing escrow runway in seconds for one account type.
-    pub fn set_sorafs_billing_escrow_runway_seconds(
-        &self,
-        cluster: &str,
-        account_type: &str,
-        seconds: u64,
-    ) {
-        self.torii_sorafs_billing_escrow_runway_seconds
-            .with_label_values(&[cluster, account_type])
-            .set(seconds);
-    }
     /// Publish one complete, reconciled SoraFS reserve projection from a single finalized view.
     pub fn record_sorafs_reserve_finalized_projection(
         &self,
@@ -11294,44 +8288,6 @@ impl Metrics {
             .with_label_values(&[result])
             .inc();
     }
-    /// Increment the repair task counter for a status label.
-    pub fn inc_sorafs_repair_tasks(&self, status: &str) {
-        self.torii_sorafs_repair_tasks_total
-            .with_label_values(&[status])
-            .inc();
-    }
-    /// Observe repair latency in minutes for the supplied outcome label.
-    pub fn observe_sorafs_repair_latency(&self, outcome: &str, minutes: f64) {
-        self.torii_sorafs_repair_latency_minutes
-            .with_label_values(&[outcome])
-            .observe(minutes.max(0.0));
-    }
-    /// Record repair queue depth per provider.
-    pub fn record_sorafs_repair_queue_depths(&self, depths: &[(String, u64)]) {
-        self.torii_sorafs_repair_queue_depth.reset();
-        for (provider, depth) in depths {
-            self.torii_sorafs_repair_queue_depth
-                .with_label_values(&[provider])
-                .set(*depth);
-        }
-    }
-    /// Record the age (seconds) of the oldest queued repair task.
-    pub fn set_sorafs_repair_backlog_oldest_age_seconds(&self, age_secs: u64) {
-        self.torii_sorafs_repair_backlog_oldest_age_seconds
-            .set(age_secs);
-    }
-    /// Increment the repair lease-expired counter for a given outcome label.
-    pub fn inc_sorafs_repair_lease_expired(&self, outcome: &str) {
-        self.torii_sorafs_repair_lease_expired_total
-            .with_label_values(&[outcome])
-            .inc();
-    }
-    /// Increment the slash proposal counter for a given outcome label.
-    pub fn inc_sorafs_slash_proposals(&self, outcome: &str) {
-        self.torii_sorafs_slash_proposals_total
-            .with_label_values(&[outcome])
-            .inc();
-    }
     /// Increment the reconciliation run counter for the provided result label.
     pub fn inc_sorafs_reconciliation_runs(&self, result: &str) {
         self.torii_sorafs_reconciliation_runs_total
@@ -11410,17 +8366,6 @@ impl Metrics {
         self.torii_sorafs_storage_por_samples_failed_total
             .with_label_values(&[provider])
             .set(por_samples_failed);
-        #[cfg(feature = "otel-exporter")]
-        {
-            let otel = global_sorafs_node_otel();
-            otel.record_storage(
-                provider,
-                bytes_used,
-                bytes_capacity,
-                por_samples_success,
-                por_samples_failed,
-            );
-        }
     }
     /// Record the PoR ingestion backlog for a manifest/provider pair.
     pub fn record_sorafs_por_ingestion_backlog(
@@ -11464,61 +8409,6 @@ impl Metrics {
         self.torii_sorafs_por_challenges_total
             .with_label_values(&["failed"])
             .inc();
-    }
-    /// Record the current pin registry snapshot and replication SLA aggregates.
-    #[allow(clippy::too_many_arguments)]
-    pub fn record_sorafs_registry(
-        &self,
-        manifests_pending: u64,
-        manifests_approved: u64,
-        manifests_retired: u64,
-        alias_total: u64,
-        orders_pending: u64,
-        orders_completed: u64,
-        orders_expired: u64,
-        sla_met: u64,
-        sla_missed: u64,
-        completion_latencies: &[f64],
-        deadline_slack_epochs: &[f64],
-    ) {
-        self.torii_sorafs_registry_manifests_total
-            .with_label_values(&["pending"])
-            .set(manifests_pending);
-        self.torii_sorafs_registry_manifests_total
-            .with_label_values(&["approved"])
-            .set(manifests_approved);
-        self.torii_sorafs_registry_manifests_total
-            .with_label_values(&["retired"])
-            .set(manifests_retired);
-        self.torii_sorafs_registry_aliases_total.set(alias_total);
-        self.torii_sorafs_registry_orders_total
-            .with_label_values(&["pending"])
-            .set(orders_pending);
-        self.torii_sorafs_registry_orders_total
-            .with_label_values(&["completed"])
-            .set(orders_completed);
-        self.torii_sorafs_registry_orders_total
-            .with_label_values(&["expired"])
-            .set(orders_expired);
-        self.torii_sorafs_replication_backlog_total
-            .set(orders_pending);
-        self.torii_sorafs_replication_sla_total
-            .with_label_values(&["met"])
-            .set(sla_met);
-        self.torii_sorafs_replication_sla_total
-            .with_label_values(&["missed"])
-            .set(sla_missed);
-        self.torii_sorafs_replication_sla_total
-            .with_label_values(&["pending"])
-            .set(orders_pending);
-        record_gauge_stats(
-            &self.torii_sorafs_replication_completion_latency_epochs,
-            completion_latencies,
-        );
-        record_gauge_stats(
-            &self.torii_sorafs_replication_deadline_slack_epochs,
-            deadline_slack_epochs,
-        );
     }
     /// Record the O(1), consensus-maintained global SoraFS pin resource summary.
     pub fn record_sorafs_pin_resource_usage(
@@ -12143,8 +9033,6 @@ impl Metrics {
                 labels.profile,
             ])
             .inc();
-        #[cfg(feature = "otel-exporter")]
-        global_sorafs_gateway_otel().request_started_detailed(labels);
     }
     /// Complete canonical active-request accounting and record response/TTFB metrics.
     pub fn finish_sorafs_gateway_request(
@@ -12180,12 +9068,6 @@ impl Metrics {
         self.sorafs_gateway_ttfb_ms
             .with_label_values(&response_labels)
             .observe(ttfb_ms);
-        #[cfg(feature = "otel-exporter")]
-        {
-            let otel = global_sorafs_gateway_otel();
-            otel.request_completed_detailed(labels);
-            otel.record_ttfb_detailed(labels, ttfb_ms);
-        }
     }
     /// Record one canonical SoraFS proof-verification outcome and duration.
     pub fn record_sorafs_gateway_proof_verification(
@@ -12202,13 +9084,6 @@ impl Metrics {
         self.sorafs_gateway_proof_duration_ms
             .with_label_values(&labels)
             .observe(duration_ms);
-        #[cfg(feature = "otel-exporter")]
-        global_sorafs_gateway_otel().record_proof_verification(
-            profile_version,
-            result,
-            error_code,
-            duration_ms,
-        );
     }
     /// Increment the in-flight proof stream gauge for a given proof kind.
     pub fn inc_sorafs_proof_stream_inflight(&self, kind: &str) {

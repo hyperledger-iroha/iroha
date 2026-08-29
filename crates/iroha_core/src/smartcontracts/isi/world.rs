@@ -25554,7 +25554,7 @@ pub mod isi {
                 assert_err!(format!("{err:?}"), "already been recorded", "unexpected error: {err:?}");
                 drop(stx);
                 block
-                    .commit()
+                    .commit_world_overlay_for_testing()
                     .expect("block without applied rejected transaction overlay should commit");
             }
             assert!(
@@ -25582,7 +25582,7 @@ pub mod isi {
                     .expect_execute(&ALICE_ID, &mut stx, "first SCCP outbox record should execute");
                 stx.apply();
                 block
-                    .commit()
+                    .commit_world_overlay_for_testing()
                     .expect("first SCCP outbox record should commit");
             }
             assert!(
@@ -25630,7 +25630,7 @@ pub mod isi {
                     .expect_execute(&ALICE_ID, &mut stx, "binary SCCP outbox record should execute");
                 stx.apply();
                 block
-                    .commit()
+                    .commit_world_overlay_for_testing()
                     .expect("binary SCCP outbox record should commit");
             }
             let replay_header = iroha_data_model::block::BlockHeader::new(

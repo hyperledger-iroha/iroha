@@ -7,7 +7,6 @@ use ivm::{
     syscalls,
 };
 use norito::to_bytes;
-use std::collections::HashMap;
 mod common;
 use common::assemble_syscalls;
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
@@ -67,7 +66,7 @@ fn delete_role_with_assignees_fails() {
     wsv.grant_permission(&alice, PermissionToken::RegisterAccount);
     wsv.grant_permission(&alice, PermissionToken::RegisterAssetDefinition);
     wsv.grant_permission(&alice, PermissionToken::ManageRoles);
-    let host = WsvHost::new_with_subject(wsv, alice.clone(), HashMap::new());
+    let host = WsvHost::new_with_subject(wsv, alice.clone());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
     // Register domain, account, and asset definition
@@ -145,7 +144,7 @@ fn grant_nonexistent_role_fails() {
     wsv.grant_permission(&alice, PermissionToken::RegisterDomain);
     wsv.grant_permission(&alice, PermissionToken::RegisterAccount);
     wsv.grant_permission(&alice, PermissionToken::ManageRoles);
-    let host = WsvHost::new_with_subject(wsv, alice.clone(), HashMap::new());
+    let host = WsvHost::new_with_subject(wsv, alice.clone());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
     // Register domain and bob

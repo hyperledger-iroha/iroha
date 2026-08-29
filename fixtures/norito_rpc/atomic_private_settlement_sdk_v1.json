@@ -1,0 +1,93 @@
+{
+  "fixture_kind": "norito_json_transport_contract_v1",
+  "version": 1,
+  "identifiers": {
+    "bundle_hex": "1111111111111111111111111111111111111111111111111111111111111111",
+    "bundle_json": "hash:1111111111111111111111111111111111111111111111111111111111111111#4667",
+    "payload_hex": "2222222222222222222222222222222222222222222222222222222222222223",
+    "payload_json": "hash:2222222222222222222222222222222222222222222222222222222222222223#F3BF"
+  },
+  "request_routes": [
+    {
+      "operation": "AVAILABILITY_SHARE",
+      "path": "/v1/nexus/private-settlements/legs/availability-shares",
+      "auth": "SPONSOR",
+      "top_level_fields": ["material"]
+    },
+    {
+      "operation": "PREPARE_VOTE",
+      "path": "/v1/nexus/private-settlements/phases/prepare-votes",
+      "auth": "SPONSOR",
+      "top_level_fields": ["manifest", "payload_digest"]
+    },
+    {
+      "operation": "COMMIT_VOTE",
+      "path": "/v1/nexus/private-settlements/phases/commit-votes",
+      "auth": "SPONSOR",
+      "top_level_fields": ["payload_digest", "barrier"]
+    },
+    {
+      "operation": "PHASE_CERTIFICATE",
+      "path": "/v1/nexus/private-settlements/phases/certificates",
+      "auth": "SPONSOR",
+      "top_level_fields": ["manifest", "payload_digest", "certificate"]
+    },
+    {
+      "operation": "LEG_UPLOAD",
+      "path": "/v1/nexus/private-settlements/legs",
+      "auth": "SPONSOR",
+      "top_level_fields": ["manifest", "audit_policy", "committee_authority", "payload"]
+    },
+    {
+      "operation": "AUDIT_APPROVAL",
+      "path": "/v1/nexus/private-settlements/legs/{payload_digest}/audit-approvals",
+      "auth": "ROLE_IDENTITY",
+      "top_level_fields": ["approval"]
+    },
+    {
+      "operation": "BUNDLE_SUBMIT",
+      "path": "/v1/nexus/private-settlements/bundles",
+      "auth": "SPONSOR",
+      "top_level_fields": ["transaction"]
+    }
+  ],
+  "responses": {
+    "leg_status": {
+      "bundle_id": "hash:1111111111111111111111111111111111111111111111111111111111111111#4667",
+      "payload_digest": "hash:2222222222222222222222222222222222222222222222222222222222222223#F3BF",
+      "leg_ordinal": 0,
+      "route": {
+        "dataspace_id": 7,
+        "lane_id": 3,
+        "lane_incarnation": "hash:3333333333333333333333333333333333333333333333333333333333333333#70D6"
+      },
+      "stored_at_height": 100,
+      "lifecycle_height": 105,
+      "expiry_height": 200,
+      "lifecycle": {"status": "audited", "value": null},
+      "audit_approvals": 1,
+      "required_audit_approvals": 1
+    },
+    "bundle_status_aborted": {
+      "manifest": null,
+      "lifecycle": {"status": "aborted", "value": null},
+      "finalized_height": null
+    },
+    "receipt_pending": {
+      "status": "pending",
+      "value": {
+        "bundle_id": "hash:1111111111111111111111111111111111111111111111111111111111111111#4667",
+        "lifecycle": {"status": "prepared", "value": null}
+      }
+    },
+    "audit_approval": {
+      "bundle_id": "hash:1111111111111111111111111111111111111111111111111111111111111111#4667",
+      "payload_digest": "hash:2222222222222222222222222222222222222222222222222222222222222223#F3BF",
+      "leg_ordinal": 0,
+      "collected": 1,
+      "required": 1,
+      "newly_recorded": true,
+      "lifecycle": {"status": "audited", "value": null}
+    }
+  }
+}

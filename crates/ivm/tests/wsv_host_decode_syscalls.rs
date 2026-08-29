@@ -38,7 +38,7 @@ fn wsv_host() -> WsvHost {
         "wonderland",
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
     );
-    WsvHost::new_with_subject(wsv, caller.clone(), Default::default())
+    WsvHost::new_with_subject(wsv, caller.clone())
 }
 #[test]
 fn wsv_host_name_decode_roundtrip() {
