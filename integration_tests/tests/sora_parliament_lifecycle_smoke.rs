@@ -74,7 +74,10 @@ use iroha::{
             Account, AssetId, FeePaymentIntent, FindAssetById, FindAssets, FindBlocks, Grant,
             Identifiable as _, Level, QueryBuilderExt as _, Register, SetParameter,
         },
-        query::error::{FindError, QueryExecutionFail},
+        query::{
+            dsl::IntoPredicate as _,
+            error::{FindError, QueryExecutionFail},
+        },
         smart_contract::ContractAddress,
     },
     query::QueryError,
@@ -523,7 +526,7 @@ fn assert_asset_not_found(client: &Client, asset_id: &AssetId, label: &str) -> R
         Err(QueryError::Validation(ValidationFail::QueryFailed(QueryExecutionFail::NotFound))) => {
             let exact_match = client
                 .query(FindAssets::new())
-                .filter_with(|asset| asset.equals("id", asset_id.clone()))
+                .filter_with(|asset| asset.equals("id", asset_id.clone()).into_predicate())
                 .execute_single_opt()
                 .map_err(|error| {
                     eyre!(
@@ -844,7 +847,7 @@ fn exact_block(client: &Client, height: u64) -> Result<SignedBlock> {
         NonZeroU64::new(height).ok_or_else(|| eyre!("finalized block height must be nonzero"))?;
     let block = client
         .query(FindBlocks)
-        .filter_with(|block| block.equals("height", height))
+        .filter_with(|block| block.equals("height", height).into_predicate())
         .execute_single()
         .map_err(|error| eyre!("query exact finalized block {height}: {error}"))?;
     if block.header().height() != requested_height {

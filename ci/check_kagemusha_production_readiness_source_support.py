@@ -1895,9 +1895,10 @@ def release_closure_source_errors(
   e,
   (r"#\[test\]\s*"
    r"fn autonomous_merge_admission_intent_producer_rejects_ordinary_external_before_effects\(\).*?"
-   r"TransactionAdmissionIntent::Ordinary.*?preexecute_merge_execution_sources_into.*?"
-   r"expect_err\(.*?assert_merge_queue_plan_synced_intent_error.*?"
-   r"merge_carrier_entrypoints\.is_empty\(\).*?external_event_buf\.is_empty\(\)"),
+   r"TransactionAdmissionIntent::Ordinary.*?"
+   r"autonomous_merge_source_for_queue_plan_admission_test.*?"
+   r"payload construction must reject Ordinary External autonomous content.*?"
+   r"LaneAutonomousArtifactError::InvalidAdmissionIntent"),
   "Ordinary autonomous merge producer no-effects regression",
  )
  rp(
