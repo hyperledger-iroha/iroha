@@ -114,6 +114,119 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
             + "\n"
         ).encode()
 
+        def evidence_record(
+            participants: int, seed: int, kind: str, name: str
+        ) -> str:
+            return f"n{participants}:s{seed}:r{seed}:{kind}:{name}"
+
+        fault_transcript_entries: list[dict[str, Any]] = []
+        fault_capture_entries: list[dict[str, Any]] = []
+
+        def append_fault_evidence(
+            participants: int,
+            seed: int,
+            collection: str,
+            trial_index: int,
+            record: str,
+            transcript_fields: dict[str, Any],
+        ) -> None:
+            common = {
+                "record": record,
+                "participants": participants,
+                "seed": seed,
+                "run": seed,
+                "collection": collection,
+                "trial_index": trial_index,
+            }
+            fault_transcript_entries.append({**common, **transcript_fields})
+            fault_capture_entries.append(
+                {
+                    **common,
+                    "continuous_checks": 100,
+                    "partial_visibility_observed": False,
+                    "partial_spendable_observations": 0,
+                    "converged": True,
+                }
+            )
+
+        for participants in MODULE.REQUIRED_PARTICIPANTS:
+            for seed in range(MODULE.REQUIRED_SEEDS_PER_PARTICIPANT):
+                for trial_index, (phase, percentage) in enumerate(
+                    (phase, percentage)
+                    for phase in MODULE.REQUIRED_LOSS_PHASES
+                    for percentage in MODULE.REQUIRED_LOSS_PERCENTAGES
+                ):
+                    append_fault_evidence(
+                        participants,
+                        seed,
+                        "loss_trials",
+                        trial_index,
+                        evidence_record(
+                            participants, seed, "loss", f"{phase}:{percentage}"
+                        ),
+                        {
+                            "phase": phase,
+                            "loss_percent": percentage,
+                            "control_acknowledged": True,
+                            "healed": True,
+                            "converged": True,
+                        },
+                    )
+                for trial_index, cut in enumerate(MODULE.REQUIRED_PHASE_CUTS):
+                    append_fault_evidence(
+                        participants,
+                        seed,
+                        "phase_cut_partitions",
+                        trial_index,
+                        evidence_record(participants, seed, "cut", cut),
+                        {
+                            "cut": cut,
+                            "control_acknowledged": True,
+                            "delayed_delivery": True,
+                            "healed": True,
+                            "converged": True,
+                        },
+                    )
+                for trial_index, boundary in enumerate(
+                    MODULE.REQUIRED_CRASH_BOUNDARIES
+                ):
+                    append_fault_evidence(
+                        participants,
+                        seed,
+                        "crash_recoveries",
+                        trial_index,
+                        evidence_record(participants, seed, "crash", boundary),
+                        {
+                            "boundary": boundary,
+                            "process_restarted": True,
+                            "durable_state_reconciled": True,
+                            "converged": True,
+                        },
+                    )
+
+        fault_transcript_path = Path("evidence") / "logs" / "fault-control.jsonl"
+        fault_transcript_payload = (
+            "\n".join(
+                json.dumps(
+                    entry, sort_keys=True
+                )
+                for entry in fault_transcript_entries
+            )
+            + "\n"
+        ).encode()
+        fault_transcript_digest = hashlib.sha256(fault_transcript_payload).hexdigest()
+        fault_capture_path = Path("evidence") / "captures" / "fault-atomicity.jsonl"
+        fault_capture_payload = (
+            "\n".join(
+                json.dumps(
+                    entry, sort_keys=True
+                )
+                for entry in fault_capture_entries
+            )
+            + "\n"
+        ).encode()
+        fault_capture_digest = hashlib.sha256(fault_capture_payload).hexdigest()
+
         def fault_record(participants: int, seed: int) -> dict[str, Any]:
             return {
                 "version": 1,
@@ -141,6 +254,14 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
                         "healed": True,
                         "converged": True,
                         "partial_visibility_observed": False,
+                        "control_transcript_sha256": fault_transcript_digest,
+                        "control_transcript_record": evidence_record(
+                            participants, seed, "loss", f"{phase}:{percentage}"
+                        ),
+                        "observation_capture_sha256": fault_capture_digest,
+                        "observation_capture_record": evidence_record(
+                            participants, seed, "loss", f"{phase}:{percentage}"
+                        ),
                     }
                     for phase in MODULE.REQUIRED_LOSS_PHASES
                     for percentage in MODULE.REQUIRED_LOSS_PERCENTAGES
@@ -153,6 +274,14 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
                         "healed": True,
                         "converged": True,
                         "partial_visibility_observed": False,
+                        "control_transcript_sha256": fault_transcript_digest,
+                        "control_transcript_record": evidence_record(
+                            participants, seed, "cut", cut
+                        ),
+                        "observation_capture_sha256": fault_capture_digest,
+                        "observation_capture_record": evidence_record(
+                            participants, seed, "cut", cut
+                        ),
                     }
                     for cut in MODULE.REQUIRED_PHASE_CUTS
                 ],
@@ -163,6 +292,14 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
                         "durable_state_reconciled": True,
                         "converged": True,
                         "partial_visibility_observed": False,
+                        "control_transcript_sha256": fault_transcript_digest,
+                        "control_transcript_record": evidence_record(
+                            participants, seed, "crash", boundary
+                        ),
+                        "observation_capture_sha256": fault_capture_digest,
+                        "observation_capture_record": evidence_record(
+                            participants, seed, "crash", boundary
+                        ),
                     }
                     for boundary in MODULE.REQUIRED_CRASH_BOUNDARIES
                 ],
@@ -190,6 +327,21 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
         ).encode()
         fault_raw_digest = hashlib.sha256(fault_raw_payload).hexdigest()
         artifacts: list[dict[str, Any]] = []
+        for path, payload, kind in (
+            (fault_transcript_path, fault_transcript_payload, "operator_log"),
+            (fault_capture_path, fault_capture_payload, "sanitized_capture"),
+        ):
+            destination = root / path
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(payload)
+            artifacts.append(
+                {
+                    "kind": kind,
+                    "path": path.as_posix(),
+                    "sha256": hashlib.sha256(payload).hexdigest(),
+                    "bytes": len(payload),
+                }
+            )
         for kind in MODULE.REQUIRED_ARTIFACT_KINDS:
             path = Path("evidence") / f"{kind}.txt"
             if kind == "audit_attestation":
@@ -944,7 +1096,8 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
                 + len(MODULE.PASS_REPORT_GATES)
                 + 7
                 + 4
-                + 2 * len(MODULE.REQUIRED_DIFFERENTIAL_ARTIFACT_KINDS),
+                + 2 * len(MODULE.REQUIRED_DIFFERENTIAL_ARTIFACT_KINDS)
+                + 2,
             )
             self.assertRegex(report["bundle_binding_sha256"], r"^[0-9a-f]{64}$")
 
@@ -972,6 +1125,154 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
                 MODULE.EvidenceError, "invalid network profile"
             ):
                 MODULE.verify_bundle(manifest_path)
+
+    def test_fault_trials_must_bind_archived_transcripts_and_captures(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest_path = self.make_bundle(root)
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            raw_artifact = next(
+                item
+                for item in manifest["artifacts"]
+                if item["kind"] == "real_network_fault_raw"
+            )
+            raw_path = root / raw_artifact["path"]
+            rows = [json.loads(line) for line in raw_path.read_text().splitlines()]
+            rows[0]["loss_trials"][0]["observation_capture_sha256"] = "f" * 64
+            raw_payload = (
+                "\n".join(json.dumps(row, sort_keys=True) for row in rows) + "\n"
+            ).encode()
+            raw_path.write_bytes(raw_payload)
+            raw_artifact["bytes"] = len(raw_payload)
+            raw_artifact["sha256"] = hashlib.sha256(raw_payload).hexdigest()
+
+            report_artifact = next(
+                item
+                for item in manifest["artifacts"]
+                if item["kind"] == "real_network_fault_report"
+            )
+            report = MODULE._regenerate_fault_report([raw_path])
+            report_payload = (json.dumps(report, sort_keys=True) + "\n").encode()
+            (root / report_artifact["path"]).write_bytes(report_payload)
+            report_artifact["bytes"] = len(report_payload)
+            report_artifact["sha256"] = hashlib.sha256(report_payload).hexdigest()
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+            with self.assertRaisesRegex(
+                MODULE.EvidenceError, "does not resolve to one archived capture"
+            ):
+                MODULE.verify_bundle(manifest_path)
+
+    def test_fault_trial_record_must_exist_in_its_bound_capture(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest_path = self.make_bundle(root)
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            raw_artifact = next(
+                item
+                for item in manifest["artifacts"]
+                if item["kind"] == "real_network_fault_raw"
+            )
+            raw_path = root / raw_artifact["path"]
+            rows = [json.loads(line) for line in raw_path.read_text().splitlines()]
+            rows[0]["loss_trials"][0]["observation_capture_record"] = (
+                "n2:s0:r0:loss:missing"
+            )
+            raw_payload = (
+                "\n".join(json.dumps(row, sort_keys=True) for row in rows) + "\n"
+            ).encode()
+            raw_path.write_bytes(raw_payload)
+            raw_artifact["bytes"] = len(raw_payload)
+            raw_artifact["sha256"] = hashlib.sha256(raw_payload).hexdigest()
+
+            report_artifact = next(
+                item
+                for item in manifest["artifacts"]
+                if item["kind"] == "real_network_fault_report"
+            )
+            report_payload = (
+                json.dumps(MODULE._regenerate_fault_report([raw_path]), sort_keys=True)
+                + "\n"
+            ).encode()
+            (root / report_artifact["path"]).write_bytes(report_payload)
+            report_artifact["bytes"] = len(report_payload)
+            report_artifact["sha256"] = hashlib.sha256(report_payload).hexdigest()
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+            with self.assertRaisesRegex(
+                MODULE.EvidenceError, "is absent from its archived capture"
+            ):
+                MODULE.verify_bundle(manifest_path)
+
+    def test_fault_transcript_semantics_must_match_the_raw_trial(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest_path = self.make_bundle(root)
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            raw_artifact = next(
+                item
+                for item in manifest["artifacts"]
+                if item["kind"] == "real_network_fault_raw"
+            )
+            raw_row = json.loads(
+                (root / raw_artifact["path"])
+                .read_text(encoding="utf-8")
+                .splitlines()[0]
+            )
+            transcript_artifact = next(
+                item
+                for item in manifest["artifacts"]
+                if item["kind"] == "operator_log"
+                and item["path"].endswith("fault-control.jsonl")
+            )
+            transcript_path = root / transcript_artifact["path"]
+            transcript_rows = [
+                json.loads(line)
+                for line in transcript_path.read_text(encoding="utf-8").splitlines()
+            ]
+            transcript_rows[0]["control_acknowledged"] = False
+            transcript_payload = (
+                "\n".join(json.dumps(row, sort_keys=True) for row in transcript_rows)
+                + "\n"
+            ).encode()
+            transcript_path.write_bytes(transcript_payload)
+            transcript_digest = hashlib.sha256(transcript_payload).hexdigest()
+            for collection in (
+                "loss_trials",
+                "phase_cut_partitions",
+                "crash_recoveries",
+            ):
+                for trial in raw_row[collection]:
+                    trial["control_transcript_sha256"] = transcript_digest
+            raw_path = root / "single-fault-row.jsonl"
+            raw_path.write_text(json.dumps(raw_row) + "\n", encoding="utf-8")
+            capture_artifact = next(
+                item
+                for item in manifest["artifacts"]
+                if item["kind"] == "sanitized_capture"
+                and item["path"].endswith("fault-atomicity.jsonl")
+            )
+            artifacts = [
+                MODULE.Artifact(
+                    kind="operator_log",
+                    path=MODULE.PurePosixPath(transcript_artifact["path"]),
+                    sha256=transcript_digest,
+                    bytes=len(transcript_payload),
+                ),
+                MODULE.Artifact(
+                    kind="sanitized_capture",
+                    path=MODULE.PurePosixPath(capture_artifact["path"]),
+                    sha256=capture_artifact["sha256"],
+                    bytes=capture_artifact["bytes"],
+                ),
+            ]
+
+            with self.assertRaisesRegex(
+                MODULE.EvidenceError, "does not exactly bind the raw fault trial"
+            ):
+                MODULE._validate_fault_trial_evidence_bindings(
+                    [raw_path], artifacts, root
+                )
 
     def test_raw_benchmarks_must_bind_archived_hardware_description(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

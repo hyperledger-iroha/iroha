@@ -49,14 +49,20 @@ pub(crate) fn private_settlement_carrier_instruction_digest_v1(
 pub(crate) struct PrivateSettlementCarrierBindingV1 {
     commit_bundle_digest: Hash,
     instruction_digest: Hash,
+    signed_transaction_bytes: u64,
     consumed: bool,
 }
 
 impl PrivateSettlementCarrierBindingV1 {
-    fn new(commit_bundle_digest: Hash, instruction_digest: Hash) -> Self {
+    fn new(
+        commit_bundle_digest: Hash,
+        instruction_digest: Hash,
+        signed_transaction_bytes: u64,
+    ) -> Self {
         Self {
             commit_bundle_digest,
             instruction_digest,
+            signed_transaction_bytes,
             consumed: false,
         }
     }
@@ -66,12 +72,18 @@ impl PrivateSettlementCarrierBindingV1 {
         &mut self,
         commit_bundle_digest: Hash,
         instruction_digest: Hash,
+        max_signed_transaction_bytes: u64,
     ) -> Result<(), PrivateSettlementCarrierBindingErrorV1> {
         if self.commit_bundle_digest != commit_bundle_digest {
             return Err(PrivateSettlementCarrierBindingErrorV1::BundleMismatch);
         }
         if self.instruction_digest != instruction_digest {
             return Err(PrivateSettlementCarrierBindingErrorV1::InstructionMismatch);
+        }
+        if max_signed_transaction_bytes == 0
+            || self.signed_transaction_bytes > max_signed_transaction_bytes
+        {
+            return Err(PrivateSettlementCarrierBindingErrorV1::CarrierTooLarge);
         }
         if self.consumed {
             return Err(PrivateSettlementCarrierBindingErrorV1::AlreadyConsumed);
@@ -139,9 +151,23 @@ pub(crate) fn signed_private_settlement_carrier_binding_v1(
                 "failed to encode private-settlement carrier: {error}"
             ))
         })?;
+    let signed_transaction_bytes = norito::encode_canonical(transaction)
+        .and_then(|encoded| {
+            u64::try_from(encoded.len()).map_err(|_| {
+                norito::Error::Io(std::io::Error::other(
+                    "private-settlement carrier transaction is too large",
+                ))
+            })
+        })
+        .map_err(|error| {
+            ValidationFail::InternalError(format!(
+                "failed to encode private-settlement carrier transaction: {error}"
+            ))
+        })?;
     Ok(Some(PrivateSettlementCarrierBindingV1::new(
         commit_bundle_digest,
         instruction_digest,
+        signed_transaction_bytes,
     )))
 }
 
@@ -164,6 +190,9 @@ pub(crate) enum PrivateSettlementCarrierBindingErrorV1 {
     /// The complete instruction differs from the exact signed carrier.
     #[error("private-settlement instruction differs from the signed carrier")]
     InstructionMismatch,
+    /// The complete sponsor-signed transaction exceeds the governed carrier limit.
+    #[error("private-settlement signed carrier exceeds the governed byte limit")]
+    CarrierTooLarge,
     /// A nested or repeated execution attempted to replay the carrier.
     #[error("private-settlement carrier was already consumed")]
     AlreadyConsumed,
@@ -181,19 +210,27 @@ mod tests {
     fn one_shot_binding_rejects_substitution_and_replay() {
         let bundle_digest = Hash::new(b"bundle-a");
         let instruction_digest = Hash::new(b"instruction-a");
-        let mut binding = PrivateSettlementCarrierBindingV1::new(bundle_digest, instruction_digest);
+        let mut binding =
+            PrivateSettlementCarrierBindingV1::new(bundle_digest, instruction_digest, 1024);
 
         assert_eq!(
-            binding.consume(Hash::new(b"bundle-b"), instruction_digest),
+            binding.consume(Hash::new(b"bundle-b"), instruction_digest, 1024),
             Err(PrivateSettlementCarrierBindingErrorV1::BundleMismatch)
         );
         assert_eq!(
-            binding.consume(bundle_digest, Hash::new(b"instruction-b")),
+            binding.consume(bundle_digest, Hash::new(b"instruction-b"), 1024),
             Err(PrivateSettlementCarrierBindingErrorV1::InstructionMismatch)
         );
-        assert_eq!(binding.consume(bundle_digest, instruction_digest), Ok(()));
         assert_eq!(
-            binding.consume(bundle_digest, instruction_digest),
+            binding.consume(bundle_digest, instruction_digest, 1023),
+            Err(PrivateSettlementCarrierBindingErrorV1::CarrierTooLarge)
+        );
+        assert_eq!(
+            binding.consume(bundle_digest, instruction_digest, 1024),
+            Ok(())
+        );
+        assert_eq!(
+            binding.consume(bundle_digest, instruction_digest, 1024),
             Err(PrivateSettlementCarrierBindingErrorV1::AlreadyConsumed)
         );
     }

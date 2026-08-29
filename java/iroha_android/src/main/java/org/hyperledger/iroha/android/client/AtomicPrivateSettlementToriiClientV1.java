@@ -588,9 +588,7 @@ public final class AtomicPrivateSettlementToriiClientV1 {
           "stored_at_height",
           "lifecycle_height",
           "expiry_height",
-          "lifecycle",
-          "audit_approvals",
-          "required_audit_approvals");
+          "lifecycle");
     }
     if (route.endsWith("/committee-proof")) {
       return Set.of(

@@ -726,8 +726,7 @@ public final class AtomicPrivateSettlementToriiClientV1: @unchecked Sendable {
         if route.hasSuffix("/status") {
             return [
                 "bundle_id", "payload_digest", "leg_ordinal", "route", "stored_at_height",
-                "lifecycle_height", "expiry_height", "lifecycle", "audit_approvals",
-                "required_audit_approvals",
+                "lifecycle_height", "expiry_height", "lifecycle",
             ]
         }
         if route.hasSuffix("/committee-proof") {

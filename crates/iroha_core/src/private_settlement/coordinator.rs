@@ -356,7 +356,9 @@ impl PrivateSettlementBundleCoordinatorV1 {
     ///
     /// `authoritative_height` proves that coordination is still live, but is
     /// deliberately not encoded: the eventual inclusion height is assigned by
-    /// consensus when the carrier executes.
+    /// consensus when the carrier executes. The byte bound is an early check of
+    /// the complete boxed instruction; signed-transaction admission performs
+    /// the authoritative check including authority, metadata, and signature.
     pub(crate) fn carrier_bundle(
         &mut self,
         authoritative_height: u64,
@@ -393,9 +395,10 @@ impl PrivateSettlementBundleCoordinatorV1 {
         let validation_receipt = bundle.clone().into_receipt(authoritative_height);
         verify_private_settlement_receipt_v1(&validation_receipt)
             .map_err(PrivateSettlementCoordinatorErrorV1::from_protocol)?;
-        let encoded = norito::encode_canonical(&bundle)
+        let carrier_bytes = bundle
+            .canonical_carrier_bytes_len()
             .map_err(|_| PrivateSettlementCoordinatorErrorV1::Encoding)?;
-        if max_carrier_bytes == 0 || encoded.len() > max_carrier_bytes {
+        if max_carrier_bytes == 0 || carrier_bytes > max_carrier_bytes {
             return Err(PrivateSettlementCoordinatorErrorV1::CarrierTooLarge);
         }
         Ok(bundle)

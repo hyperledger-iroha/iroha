@@ -36,6 +36,7 @@ REQUIRED_CRASH_BOUNDARIES = (
 )
 _GIT_COMMIT = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
 _HEX_64 = re.compile(r"[0-9a-f]{64}")
+_EVIDENCE_RECORD = re.compile(r"[a-z0-9][a-z0-9._:-]{0,127}")
 
 
 class FaultEvidenceError(ValueError):
@@ -65,7 +66,45 @@ def _require_true(value: Any, label: str) -> None:
         raise FaultEvidenceError(f"{label} must be true")
 
 
-def _parse_loss_trials(value: Any, label: str) -> None:
+def _evidence_binding(value: Any, label: str) -> str:
+    if not isinstance(value, str) or _HEX_64.fullmatch(value) is None:
+        raise FaultEvidenceError(f"{label} must be a SHA-256 digest")
+    if value == "0" * 64:
+        raise FaultEvidenceError(f"{label} must not be the zero digest")
+    return value
+
+
+def _evidence_record(value: Any, label: str) -> str:
+    if not isinstance(value, str) or _EVIDENCE_RECORD.fullmatch(value) is None:
+        raise FaultEvidenceError(f"{label} must be a canonical record identifier")
+    return value
+
+
+def _fault_evidence_references(
+    record: dict[str, Any],
+) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+    transcripts: list[tuple[str, str]] = []
+    captures: list[tuple[str, str]] = []
+    for collection in ("loss_trials", "phase_cut_partitions", "crash_recoveries"):
+        for trial in record[collection]:
+            transcripts.append(
+                (
+                    trial["control_transcript_sha256"],
+                    trial["control_transcript_record"],
+                )
+            )
+            captures.append(
+                (
+                    trial["observation_capture_sha256"],
+                    trial["observation_capture_record"],
+                )
+            )
+    return transcripts, captures
+
+
+def _parse_loss_trials(
+    value: Any, label: str, evidence_pairs: set[tuple[str, str, str, str]]
+) -> None:
     if not isinstance(value, list):
         raise FaultEvidenceError(f"{label} must be a list")
     expected_pairs = [
@@ -84,6 +123,10 @@ def _parse_loss_trials(value: Any, label: str) -> None:
                 "healed",
                 "converged",
                 "partial_visibility_observed",
+                "control_transcript_sha256",
+                "control_transcript_record",
+                "observation_capture_sha256",
+                "observation_capture_record",
             },
             f"{label}[{index}]",
         )
@@ -96,6 +139,29 @@ def _parse_loss_trials(value: Any, label: str) -> None:
                 f"{label}[{index}].loss_percent must be an integer"
             )
         actual_pairs.append((phase, percentage))
+        evidence = (
+            _evidence_binding(
+                trial["control_transcript_sha256"],
+                f"{label}[{index}].control_transcript_sha256",
+            ),
+            _evidence_record(
+                trial["control_transcript_record"],
+                f"{label}[{index}].control_transcript_record",
+            ),
+            _evidence_binding(
+                trial["observation_capture_sha256"],
+                f"{label}[{index}].observation_capture_sha256",
+            ),
+            _evidence_record(
+                trial["observation_capture_record"],
+                f"{label}[{index}].observation_capture_record",
+            ),
+        )
+        if evidence in evidence_pairs:
+            raise FaultEvidenceError(
+                f"{label}[{index}] reuses another fault trial's evidence"
+            )
+        evidence_pairs.add(evidence)
         _require_true(
             trial["control_acknowledged"], f"{label}[{index}].control_acknowledged"
         )
@@ -109,7 +175,9 @@ def _parse_loss_trials(value: Any, label: str) -> None:
         raise FaultEvidenceError(f"{label} must cover the exact ordered loss matrix")
 
 
-def _parse_phase_cuts(value: Any, label: str) -> None:
+def _parse_phase_cuts(
+    value: Any, label: str, evidence_pairs: set[tuple[str, str, str, str]]
+) -> None:
     if not isinstance(value, list):
         raise FaultEvidenceError(f"{label} must be a list")
     names: list[str] = []
@@ -123,6 +191,10 @@ def _parse_phase_cuts(value: Any, label: str) -> None:
                 "healed",
                 "converged",
                 "partial_visibility_observed",
+                "control_transcript_sha256",
+                "control_transcript_record",
+                "observation_capture_sha256",
+                "observation_capture_record",
             },
             f"{label}[{index}]",
         )
@@ -130,6 +202,29 @@ def _parse_phase_cuts(value: Any, label: str) -> None:
         if not isinstance(name, str):
             raise FaultEvidenceError(f"{label}[{index}].cut must be a string")
         names.append(name)
+        evidence = (
+            _evidence_binding(
+                cut["control_transcript_sha256"],
+                f"{label}[{index}].control_transcript_sha256",
+            ),
+            _evidence_record(
+                cut["control_transcript_record"],
+                f"{label}[{index}].control_transcript_record",
+            ),
+            _evidence_binding(
+                cut["observation_capture_sha256"],
+                f"{label}[{index}].observation_capture_sha256",
+            ),
+            _evidence_record(
+                cut["observation_capture_record"],
+                f"{label}[{index}].observation_capture_record",
+            ),
+        )
+        if evidence in evidence_pairs:
+            raise FaultEvidenceError(
+                f"{label}[{index}] reuses another fault trial's evidence"
+            )
+        evidence_pairs.add(evidence)
         for field in (
             "control_acknowledged",
             "delayed_delivery",
@@ -145,7 +240,9 @@ def _parse_phase_cuts(value: Any, label: str) -> None:
         raise FaultEvidenceError(f"{label} must cover the exact ordered phase cuts")
 
 
-def _parse_crash_recoveries(value: Any, label: str) -> None:
+def _parse_crash_recoveries(
+    value: Any, label: str, evidence_pairs: set[tuple[str, str, str, str]]
+) -> None:
     if not isinstance(value, list):
         raise FaultEvidenceError(f"{label} must be a list")
     names: list[str] = []
@@ -158,6 +255,10 @@ def _parse_crash_recoveries(value: Any, label: str) -> None:
                 "durable_state_reconciled",
                 "converged",
                 "partial_visibility_observed",
+                "control_transcript_sha256",
+                "control_transcript_record",
+                "observation_capture_sha256",
+                "observation_capture_record",
             },
             f"{label}[{index}]",
         )
@@ -165,6 +266,29 @@ def _parse_crash_recoveries(value: Any, label: str) -> None:
         if not isinstance(boundary, str):
             raise FaultEvidenceError(f"{label}[{index}].boundary must be a string")
         names.append(boundary)
+        evidence = (
+            _evidence_binding(
+                recovery["control_transcript_sha256"],
+                f"{label}[{index}].control_transcript_sha256",
+            ),
+            _evidence_record(
+                recovery["control_transcript_record"],
+                f"{label}[{index}].control_transcript_record",
+            ),
+            _evidence_binding(
+                recovery["observation_capture_sha256"],
+                f"{label}[{index}].observation_capture_sha256",
+            ),
+            _evidence_record(
+                recovery["observation_capture_record"],
+                f"{label}[{index}].observation_capture_record",
+            ),
+        )
+        if evidence in evidence_pairs:
+            raise FaultEvidenceError(
+                f"{label}[{index}] reuses another fault trial's evidence"
+            )
+        evidence_pairs.add(evidence)
         for field in ("process_restarted", "durable_state_reconciled", "converged"):
             _require_true(recovery[field], f"{label}[{index}].{field}")
         if recovery["partial_visibility_observed"] is not False:
@@ -295,9 +419,21 @@ def parse_run(value: Any, source: str) -> tuple[int, int, int, str, str, str]:
     )
     _require_true(record["coordinator_restarted"], f"{source}.coordinator_restarted")
     _require_true(record["global_node_restarted"], f"{source}.global_node_restarted")
-    _parse_loss_trials(record["loss_trials"], f"{source}.loss_trials")
-    _parse_phase_cuts(record["phase_cut_partitions"], f"{source}.phase_cut_partitions")
-    _parse_crash_recoveries(record["crash_recoveries"], f"{source}.crash_recoveries")
+    evidence_pairs: set[tuple[str, str, str, str]] = set()
+    _parse_loss_trials(record["loss_trials"], f"{source}.loss_trials", evidence_pairs)
+    _parse_phase_cuts(
+        record["phase_cut_partitions"],
+        f"{source}.phase_cut_partitions",
+        evidence_pairs,
+    )
+    _parse_crash_recoveries(
+        record["crash_recoveries"], f"{source}.crash_recoveries", evidence_pairs
+    )
+    transcript_references, capture_references = _fault_evidence_references(record)
+    if len(set(transcript_references)) != len(transcript_references):
+        raise FaultEvidenceError(f"{source}: reuses a control transcript record")
+    if len(set(capture_references)) != len(capture_references):
+        raise FaultEvidenceError(f"{source}: reuses an observation capture record")
     _parse_atomicity(record["atomicity"], participants, f"{source}.atomicity")
     _require_true(record["all_nodes_converged"], f"{source}.all_nodes_converged")
     return participants, seed, run, commit, hardware_sha256, configuration_sha256
@@ -308,6 +444,8 @@ def load_runs(paths: Sequence[Path]) -> list[tuple[int, int, int, str, str, str]
 
     runs: list[tuple[int, int, int, str, str, str]] = []
     seen: set[tuple[int, int, int]] = set()
+    seen_transcript_references: set[tuple[str, str]] = set()
+    seen_capture_references: set[tuple[str, str]] = set()
     for path in paths:
         try:
             lines = path.read_text(encoding="utf-8").splitlines()
@@ -325,7 +463,18 @@ def load_runs(paths: Sequence[Path]) -> list[tuple[int, int, int, str, str, str]
             identity = parsed[:3]
             if identity in seen:
                 raise FaultEvidenceError(f"{source}: duplicate run identity {identity}")
+            transcript_references, capture_references = _fault_evidence_references(value)
+            if seen_transcript_references.intersection(transcript_references):
+                raise FaultEvidenceError(
+                    f"{source}: reuses a control transcript record from another run"
+                )
+            if seen_capture_references.intersection(capture_references):
+                raise FaultEvidenceError(
+                    f"{source}: reuses an observation capture record from another run"
+                )
             seen.add(identity)
+            seen_transcript_references.update(transcript_references)
+            seen_capture_references.update(capture_references)
             runs.append(parsed)
     if not runs:
         raise FaultEvidenceError("fault evidence is empty")

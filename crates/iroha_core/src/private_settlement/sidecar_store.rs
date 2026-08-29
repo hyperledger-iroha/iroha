@@ -457,10 +457,6 @@ pub struct PrivateSettlementPublicSidecarStatusV1 {
     pub expiry_height: u64,
     /// Current durable lifecycle.
     pub lifecycle: PrivateSettlementSidecarLifecycleV1,
-    /// Number of distinct governed approvals now durable.
-    pub audit_approvals: u8,
-    /// Governed approval threshold.
-    pub required_audit_approvals: u8,
 }
 
 /// Allowlisted aggregate lifecycle projection for one public bundle.
@@ -1011,7 +1007,7 @@ impl PrivateSettlementFileSidecarStoreV1 {
     ///
     /// Returns a redacted validation, conflict, capacity, corruption, or
     /// persistence error.
-    pub fn store_provisional(
+    pub(super) fn store_provisional(
         &self,
         material: PrivateSettlementProvisionalLegMaterialV1,
         stored_at_height: u64,
@@ -1293,8 +1289,6 @@ impl PrivateSettlementFileSidecarStoreV1 {
             return Err(PrivateSettlementSidecarStoreErrorV1::Unavailable);
         }
         let durable = self.read_record_v1(digest)?;
-        let audit_approvals = u8::try_from(durable.audit_approvals.len())
-            .map_err(|_| PrivateSettlementSidecarStoreErrorV1::Corrupt)?;
         Ok(PrivateSettlementPublicSidecarStatusV1 {
             bundle_id: durable.sidecar.manifest.bundle_id,
             payload_digest: digest,
@@ -1304,8 +1298,6 @@ impl PrivateSettlementFileSidecarStoreV1 {
             lifecycle_height: durable.lifecycle_height,
             expiry_height: durable.sidecar.manifest.expiry_height,
             lifecycle: durable.lifecycle,
-            audit_approvals,
-            required_audit_approvals: durable.sidecar.policy.body.min_approvals,
         })
     }
 
@@ -4688,8 +4680,6 @@ pub(crate) mod tests {
             initial.lifecycle,
             PrivateSettlementSidecarLifecycleV1::Collecting
         );
-        assert_eq!(initial.audit_approvals, 0);
-        assert_eq!(initial.required_audit_approvals, 2);
 
         let first = audit_approval(&store, &fixture, digest, 12);
         let first_outcome = store
@@ -4721,8 +4711,6 @@ pub(crate) mod tests {
         let partial = reopened
             .public_status(digest, 13)
             .expect("recovered status");
-        assert_eq!(partial.audit_approvals, 1);
-        assert_eq!(partial.required_audit_approvals, 2);
         assert_eq!(
             partial.lifecycle,
             PrivateSettlementSidecarLifecycleV1::Collecting
@@ -5521,7 +5509,6 @@ pub(crate) mod tests {
         let unaudited_status = unaudited_restarted
             .public_status(unaudited_digest, unaudited_expiry)
             .expect("unaudited expiry status");
-        assert_eq!(unaudited_status.audit_approvals, 0);
         assert_eq!(
             unaudited_status.lifecycle,
             PrivateSettlementSidecarLifecycleV1::Expired
@@ -5562,8 +5549,6 @@ pub(crate) mod tests {
         let partial_status = partial_restarted
             .public_status(partial_digest, partial_expiry)
             .expect("partial expiry status");
-        assert_eq!(partial_status.audit_approvals, 1);
-        assert_eq!(partial_status.required_audit_approvals, 2);
         assert_eq!(
             partial_status.lifecycle,
             PrivateSettlementSidecarLifecycleV1::Expired

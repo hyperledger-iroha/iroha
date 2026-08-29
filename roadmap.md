@@ -22,8 +22,13 @@ Completed history lives in [`status.md`](./status.md).
   Continuously assert that no strict subset of legs becomes visible or
   spendable. Bind each raw run to the settled commit, the archived structured
   hardware description, and the exact N-specific configuration through the
-  canonical N=2,3,4,8,16 configuration manifest. Keep N=17..255 claims limited
-  to codec, wire-size, deterministic state-machine, and formal-model evidence.
+  canonical N=2,3,4,8,16 configuration manifest. For every loss, phase-cut, and
+  crash row, retain a globally non-reusable exact JSONL record reference in its
+  digest-bound authenticated-controller transcript and atomicity capture; each
+  row must bind the run identity, trial parameters, acknowledgement/recovery,
+  and zero-partial-state observation fields. Keep N=17..255
+  claims limited to codec, wire-size, deterministic state-machine, and
+  formal-model evidence.
 - Execute the structured-canary and differential leakage matrix over Torii,
   restricted/public P2P, block wire, Kura/merge artifacts, snapshots, queries,
   events, logs, and telemetry. Bind every exact left/right input in the
@@ -48,6 +53,13 @@ Completed history lives in [`status.md`](./status.md).
   rejection, and fail-closed old-policy in-flight bundles--alongside auditor
   HSM/KMS rotation, retired-key retention or capsule rewrapping, and
   finality/restart reconciliation on every shipping host filesystem.
+- Complete the corrected full two-leg and three-leg paper-primary committee-
+  indexed TLC configurations on the settled candidate. After replacing the
+  erroneous bundle-global fault budgets with per-committee maps, the N=2
+  validator-focused path, four-leg clean path, and three-leg expiry/replay path
+  pass. The earlier combined N=2 result is superseded; focused results do not
+  waive either full fault configuration required by the release-evidence
+  runner.
 - Obtain independent review of the AIR, dummy selectors, asset/capsule and
   reimbursement bindings, hybrid cryptography, auditor/QC domains, and the
   cross-dataspace state machine. Archive the exact commit, manifests, raw

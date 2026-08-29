@@ -50,6 +50,14 @@ const PRIVATE_SETTLEMENT_RECONCILIATION_PAGE_RECORDS_V1: usize = 16;
 const PRIVATE_SETTLEMENT_RECONCILIATION_MAX_PAGES_PER_TICK_V1: usize = 16;
 const PRIVATE_SETTLEMENT_RECONCILIATION_INTERVAL_V1: Duration = Duration::from_secs(1);
 
+const fn private_settlement_carrier_height_is_live_v1(
+    current_height: u64,
+    authority_context_height: u64,
+    expiry_height: u64,
+) -> bool {
+    current_height >= authority_context_height && current_height < expiry_height
+}
+
 fn governed_sidecar_store_config_v1(
     config: &iroha_config::parameters::actual::NexusAtomicPrivateSettlement,
 ) -> Result<PrivateSettlementSidecarStoreConfigV1, PrivateSettlementSidecarStoreErrorV1> {
@@ -237,12 +245,55 @@ mod governed_sidecar_store_config_tests {
         assert!(audit_threshold_meets_governed_floor(3, 2));
         assert!(!audit_threshold_meets_governed_floor(1, 2));
     }
+
+    #[test]
+    fn carrier_ingress_requires_room_for_the_next_block() {
+        assert!(!private_settlement_carrier_height_is_live_v1(9, 10, 20));
+        assert!(private_settlement_carrier_height_is_live_v1(10, 10, 20));
+        assert!(private_settlement_carrier_height_is_live_v1(19, 10, 20));
+        assert!(!private_settlement_carrier_height_is_live_v1(20, 10, 20));
+        assert!(!private_settlement_carrier_height_is_live_v1(21, 10, 20));
+    }
+
+    #[test]
+    fn reconciliation_page_runs_retention_pruning_even_without_candidates() {
+        let directory = tempfile::tempdir().expect("temporary sidecar directory");
+        let config = PrivateSettlementSidecarStoreConfigV1::new(4, 1024 * 1024)
+            .expect("bounded sidecar configuration");
+        let store = PrivateSettlementFileSidecarStoreV1::open(directory.path(), config)
+            .expect("open empty sidecar store");
+
+        let removed = reconcile_and_prune_private_settlement_page_v1(&store, Vec::new(), 10)
+            .expect("empty reconciliation page still prunes");
+
+        assert_eq!(removed, 0);
+    }
 }
 
 struct PrivateSettlementReconciliationWorkV1 {
     payload_digest: Hash,
     receipt: Option<iroha_data_model::nexus::PrivateSettlementReceiptV1>,
     abort: Option<iroha_data_model::nexus::PrivateSettlementAbortReceiptV1>,
+}
+
+fn reconcile_and_prune_private_settlement_page_v1(
+    store: &PrivateSettlementFileSidecarStoreV1,
+    work: Vec<PrivateSettlementReconciliationWorkV1>,
+    authoritative_height: u64,
+) -> Result<usize, PrivateSettlementReconciliationFailureV1> {
+    for item in work {
+        store
+            .reconcile_terminal_state(
+                item.payload_digest,
+                item.receipt.as_ref(),
+                item.abort.as_ref(),
+                authoritative_height,
+            )
+            .map_err(|_| PrivateSettlementReconciliationFailureV1::StoreRejected)?;
+    }
+    store
+        .prune(authoritative_height)
+        .map_err(|_| PrivateSettlementReconciliationFailureV1::StoreRejected)
 }
 
 fn snapshot_private_settlement_reconciliation_work_v1(
@@ -310,24 +361,17 @@ async fn reconcile_private_settlement_finality_tick_v1(
         }
         let (authoritative_height, work) =
             snapshot_private_settlement_reconciliation_work_v1(&state, page.candidates)?;
-        if !work.is_empty() {
-            let blocking_store = Arc::clone(&store);
-            tokio::task::spawn_blocking(move || {
-                for item in work {
-                    blocking_store
-                        .reconcile_terminal_state(
-                            item.payload_digest,
-                            item.receipt.as_ref(),
-                            item.abort.as_ref(),
-                            authoritative_height,
-                        )
-                        .map_err(|_| PrivateSettlementReconciliationFailureV1::StoreRejected)?;
-                }
-                Ok::<(), PrivateSettlementReconciliationFailureV1>(())
-            })
-            .await
-            .map_err(|_| PrivateSettlementReconciliationFailureV1::BlockingWorkerFailed)??;
-        }
+        let blocking_store = Arc::clone(&store);
+        tokio::task::spawn_blocking(move || {
+            reconcile_and_prune_private_settlement_page_v1(
+                &blocking_store,
+                work,
+                authoritative_height,
+            )
+            .map(|_| ())
+        })
+        .await
+        .map_err(|_| PrivateSettlementReconciliationFailureV1::BlockingWorkerFailed)??;
         cursor = page.next_cursor;
         if cursor.is_none() {
             break;
@@ -1026,8 +1070,6 @@ pub(crate) async fn handler_leg_status(
         lifecycle_height: status.lifecycle_height,
         expiry_height: status.expiry_height,
         lifecycle: lifecycle_dto(status.lifecycle),
-        audit_approvals: status.audit_approvals,
-        required_audit_approvals: status.required_audit_approvals,
     })
     .into_response()
 }
@@ -1234,19 +1276,34 @@ pub(crate) async fn handler_bundle_submit(
         .commit_bundle
         .clone()
         .into_receipt(manifest.authority_context_height);
-    let encoded_carrier = norito::encode_canonical(&carrier.commit_bundle).map_err(|_| {
-        crate::Error::AppQueryValidation {
+    let carrier_bytes = norito::encode_canonical(&transaction)
+        .and_then(|encoded| {
+            u64::try_from(encoded.len()).map_err(|_| {
+                norito::Error::Io(std::io::Error::other(
+                    "private-settlement carrier transaction is too large",
+                ))
+            })
+        })
+        .map_err(|_| crate::Error::AppQueryValidation {
             code: "private_settlement_invalid_carrier",
             message: "private-settlement carrier is not canonically encodable".to_owned(),
-        }
-    })?;
+        })?;
     if authenticated.account != manifest.sponsor
         || transaction.authority() != &manifest.sponsor
         || transaction.fee_payment_intent() != &manifest.public_fee_intent
         || manifest.network_id != app.state.network_id
+        || !private_settlement_carrier_height_is_live_v1(
+            height,
+            manifest.authority_context_height,
+            manifest.expiry_height,
+        )
         || candidate_receipt.validate_shape().is_err()
         || carrier.commit_bundle.legs.len() > usize::from(config.max_participants.get())
-        || u64::try_from(encoded_carrier.len()).unwrap_or(u64::MAX) > config.max_carrier_bytes.get()
+        || manifest
+            .expiry_height
+            .checked_sub(manifest.authority_context_height)
+            .is_none_or(|span| span > config.max_expiry_blocks.get())
+        || carrier_bytes > config.max_carrier_bytes.get()
     {
         return Err(crate::Error::AppQueryValidation {
             code: "private_settlement_invalid_carrier",

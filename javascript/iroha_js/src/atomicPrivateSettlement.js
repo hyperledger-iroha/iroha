@@ -272,8 +272,6 @@ const RESPONSE_FIELDS = Object.freeze([
       "lifecycle_height",
       "expiry_height",
       "lifecycle",
-      "audit_approvals",
-      "required_audit_approvals",
     ],
   ],
   [

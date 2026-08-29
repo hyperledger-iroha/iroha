@@ -3154,7 +3154,7 @@ pub mod nexus {
         pub const MAX_CAPSULE_BYTES: u64 = 1024 * 1024;
         /// Hard encrypted-capsule ceiling for the V1 path.
         pub const MAX_CAPSULE_BYTES_LIMIT: u64 = 16 * 1024 * 1024;
-        /// Maximum encoded global carrier size.
+        /// Maximum canonical sponsor-signed direct carrier transaction size.
         /// Protocol carrier limit. The worst-case 255-leg V1 fixture is below 1 MiB.
         pub const MAX_CARRIER_BYTES: u64 = 4 * 1024 * 1024;
         /// Hard global-carrier ceiling for the V1 path.

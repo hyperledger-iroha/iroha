@@ -824,8 +824,6 @@ class AtomicPrivateSettlementToriiClientV1 private constructor(builder: Builder)
                     "lifecycle_height",
                     "expiry_height",
                     "lifecycle",
-                    "audit_approvals",
-                    "required_audit_approvals",
                 )
             route.endsWith("/committee-proof") ->
                 setOf(

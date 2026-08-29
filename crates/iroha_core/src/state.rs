@@ -55608,11 +55608,12 @@ impl StateTransaction<'_, '_> {
             .expiry_height
             .checked_sub(receipt.manifest.authority_context_height)
             .ok_or(PrivateSettlementGlobalStateErrorV1::Bounds)?;
-        let carrier_bytes = norito::encode_canonical(&receipt)
+        let carrier_bytes = receipt
+            .canonical_carrier_bytes_len()
             .map_err(|_| PrivateSettlementGlobalStateErrorV1::Encoding)?;
         if participant_count > self.nexus.atomic_private_settlement.max_participants.get()
             || expiry_span > self.nexus.atomic_private_settlement.max_expiry_blocks.get()
-            || u64::try_from(carrier_bytes.len()).unwrap_or(u64::MAX)
+            || u64::try_from(carrier_bytes).unwrap_or(u64::MAX)
                 > self.nexus.atomic_private_settlement.max_carrier_bytes.get()
         {
             return Err(PrivateSettlementGlobalStateErrorV1::Bounds);
@@ -55896,10 +55897,16 @@ impl StateTransaction<'_, '_> {
         commit_bundle_digest: Hash,
         instruction_digest: Hash,
     ) -> core::result::Result<(), PrivateSettlementCarrierBindingErrorV1> {
+        let max_signed_transaction_bytes =
+            self.nexus.atomic_private_settlement.max_carrier_bytes.get();
         self.private_settlement_carrier_binding
             .as_mut()
             .ok_or(PrivateSettlementCarrierBindingErrorV1::MissingBinding)?
-            .consume(commit_bundle_digest, instruction_digest)
+            .consume(
+                commit_bundle_digest,
+                instruction_digest,
+                max_signed_transaction_bytes,
+            )
     }
     /// Consume the exact signed direct privacy submission once.
     ///

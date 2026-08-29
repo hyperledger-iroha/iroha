@@ -366,8 +366,6 @@ _RESPONSE_FIELDS: tuple[tuple[str, frozenset[str]], ...] = (
                 "lifecycle_height",
                 "expiry_height",
                 "lifecycle",
-                "audit_approvals",
-                "required_audit_approvals",
             }
         ),
     ),

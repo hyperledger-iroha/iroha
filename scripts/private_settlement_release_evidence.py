@@ -15,7 +15,7 @@ import json
 import math
 import re
 import sys
-from collections import Counter
+from collections import Counter, defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -24,6 +24,7 @@ from typing import Any
 MANIFEST_VERSION = 1
 PROTOCOL = "AtomicPrivateSettlementV1"
 REQUIRED_PARTICIPANTS = (2, 3, 4, 8, 16)
+REQUIRED_SEEDS_PER_PARTICIPANT = 10
 REQUIRED_LOSS_PERCENTAGES = (5, 10, 20)
 REQUIRED_LOSS_PHASES = ("restricted_da", "prepare", "commit")
 REQUIRED_PHASE_CUTS = (
@@ -41,6 +42,8 @@ REQUIRED_CRASH_BOUNDARIES = (
     "wsv_application",
     "receipt_publication",
 )
+FAULT_TRANSCRIPT_ARTIFACT_KINDS = frozenset({"operator_log"})
+FAULT_CAPTURE_ARTIFACT_KINDS = frozenset({"sanitized_capture"})
 REQUIRED_AUDIT_SCOPES = (
     "air",
     "dummy_slot_selectors",
@@ -163,6 +166,11 @@ REQUIRED_FORMAL_CONFIGURATIONS = (
     ("AtomicPrivateSettlementV1_3.cfg", "pass"),
     ("AtomicPrivateSettlementV1_255.cfg", "pass"),
     ("AtomicPrivateSettlementV1_expiry.cfg", "pass"),
+    ("AtomicPrivateSettlementV1CommitteeFaults_2_validator_focused.cfg", "pass"),
+    ("AtomicPrivateSettlementV1CommitteeFaults_2.cfg", "pass"),
+    ("AtomicPrivateSettlementV1CommitteeFaults_3.cfg", "pass"),
+    ("AtomicPrivateSettlementV1CommitteeFaults_4_clean.cfg", "pass"),
+    ("AtomicPrivateSettlementV1CommitteeFaults_expiry.cfg", "pass"),
     ("AtomicPrivateSettlementV1_partial_apply_bug.cfg", "safety_violation"),
     ("AtomicPrivateSettlementV1_commit_before_prepare_bug.cfg", "safety_violation"),
     ("AtomicPrivateSettlementV1_drop_stage_on_crash_bug.cfg", "safety_violation"),
@@ -339,7 +347,11 @@ def parse_manifest(document: Any) -> tuple[dict[str, Any], list[Artifact]]:
         "manifest.qualification.crash_boundaries",
     )
     seeds = qualification["randomized_seeds"]
-    if isinstance(seeds, bool) or not isinstance(seeds, int) or seeds < 10:
+    if (
+        isinstance(seeds, bool)
+        or not isinstance(seeds, int)
+        or seeds < REQUIRED_SEEDS_PER_PARTICIPANT
+    ):
         raise EvidenceError(
             "manifest.qualification.randomized_seeds must be at least 10"
         )
@@ -1389,10 +1401,188 @@ def _regenerate_fault_report(raw_paths: Sequence[Path]) -> dict[str, Any]:
         ) from error
 
 
+def _validate_fault_trial_evidence_bindings(
+    raw_paths: Sequence[Path], artifacts: Sequence[Artifact], root: Path
+) -> None:
+    """Require every fault-trial transcript/capture digest to resolve in the archive."""
+
+    transcript_artifacts: dict[str, list[Artifact]] = defaultdict(list)
+    capture_artifacts: dict[str, list[Artifact]] = defaultdict(list)
+    for artifact in artifacts:
+        if artifact.kind in FAULT_TRANSCRIPT_ARTIFACT_KINDS:
+            transcript_artifacts[artifact.sha256].append(artifact)
+        if artifact.kind in FAULT_CAPTURE_ARTIFACT_KINDS:
+            capture_artifacts[artifact.sha256].append(artifact)
+
+    record_cache: dict[PurePosixPath, dict[str, dict[str, Any]]] = {}
+
+    def archived_records(
+        digest: str, candidates: dict[str, list[Artifact]], label: str
+    ) -> dict[str, dict[str, Any]]:
+        matches = candidates.get(digest, [])
+        if len(matches) != 1:
+            raise EvidenceError(f"{label} does not resolve to one archived artifact")
+        artifact = matches[0]
+        cached = record_cache.get(artifact.path)
+        if cached is not None:
+            return cached
+        path = root.joinpath(*artifact.path.parts)
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except (OSError, UnicodeError) as error:
+            raise EvidenceError(f"cannot read {label}: {error}") from error
+        records: dict[str, dict[str, Any]] = {}
+        for line_number, line in enumerate(lines, 1):
+            if not line.strip():
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError as error:
+                raise EvidenceError(
+                    f"{artifact.path}:{line_number} is not JSONL evidence: {error}"
+                ) from error
+            if not isinstance(entry, dict) or not isinstance(entry.get("record"), str):
+                raise EvidenceError(
+                    f"{artifact.path}:{line_number} lacks an evidence record identifier"
+                )
+            record = entry["record"]
+            if record in records:
+                raise EvidenceError(
+                    f"{artifact.path}:{line_number} duplicates evidence record {record!r}"
+                )
+            records[record] = entry
+        if not records:
+            raise EvidenceError(f"{artifact.path} contains no evidence records")
+        record_cache[artifact.path] = records
+        return records
+
+    transcript_digests = Counter(
+        artifact.sha256
+        for artifact in artifacts
+        if artifact.kind in FAULT_TRANSCRIPT_ARTIFACT_KINDS
+    )
+    capture_digests = Counter(
+        artifact.sha256
+        for artifact in artifacts
+        if artifact.kind in FAULT_CAPTURE_ARTIFACT_KINDS
+    )
+    for path in raw_paths:
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except (OSError, UnicodeError) as error:
+            raise EvidenceError(f"cannot read fault trial evidence: {error}") from error
+        for line_number, line in enumerate(lines, 1):
+            if not line.strip():
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError as error:
+                raise EvidenceError(
+                    f"invalid fault trial evidence at {path}:{line_number}: {error}"
+                ) from error
+            for collection in ("loss_trials", "phase_cut_partitions", "crash_recoveries"):
+                for index, trial in enumerate(record[collection]):
+                    transcript = trial["control_transcript_sha256"]
+                    transcript_record = trial["control_transcript_record"]
+                    capture = trial["observation_capture_sha256"]
+                    capture_record = trial["observation_capture_record"]
+                    if transcript_digests[transcript] != 1:
+                        raise EvidenceError(
+                            f"{path}:{line_number}.{collection}[{index}] control transcript "
+                            "does not resolve to one archived operator log"
+                        )
+                    if capture_digests[capture] != 1:
+                        raise EvidenceError(
+                            f"{path}:{line_number}.{collection}[{index}] observation capture "
+                            "does not resolve to one archived capture"
+                        )
+                    transcript_records = archived_records(
+                        transcript, transcript_artifacts, "control transcript"
+                    )
+                    capture_records = archived_records(
+                        capture, capture_artifacts, "observation capture"
+                    )
+                    transcript_entry = transcript_records.get(transcript_record)
+                    if transcript_entry is None:
+                        raise EvidenceError(
+                            f"{path}:{line_number}.{collection}[{index}] control record "
+                            "is absent from its archived transcript"
+                        )
+                    capture_entry = capture_records.get(capture_record)
+                    if capture_entry is None:
+                        raise EvidenceError(
+                            f"{path}:{line_number}.{collection}[{index}] observation record "
+                            "is absent from its archived capture"
+                        )
+                    common = {
+                        "record": transcript_record,
+                        "participants": record["participants"],
+                        "seed": record["seed"],
+                        "run": record["run"],
+                        "collection": collection,
+                        "trial_index": index,
+                    }
+                    if collection == "loss_trials":
+                        expected_transcript = {
+                            **common,
+                            "phase": trial["phase"],
+                            "loss_percent": trial["loss_percent"],
+                            "control_acknowledged": trial["control_acknowledged"],
+                            "healed": trial["healed"],
+                            "converged": trial["converged"],
+                        }
+                    elif collection == "phase_cut_partitions":
+                        expected_transcript = {
+                            **common,
+                            "cut": trial["cut"],
+                            "control_acknowledged": trial["control_acknowledged"],
+                            "delayed_delivery": trial["delayed_delivery"],
+                            "healed": trial["healed"],
+                            "converged": trial["converged"],
+                        }
+                    else:
+                        expected_transcript = {
+                            **common,
+                            "boundary": trial["boundary"],
+                            "process_restarted": trial["process_restarted"],
+                            "durable_state_reconciled": trial[
+                                "durable_state_reconciled"
+                            ],
+                            "converged": trial["converged"],
+                        }
+                    if transcript_entry != expected_transcript:
+                        raise EvidenceError(
+                            f"{path}:{line_number}.{collection}[{index}] control record "
+                            "does not exactly bind the raw fault trial"
+                        )
+                    expected_capture = {
+                        "record": capture_record,
+                        "participants": record["participants"],
+                        "seed": record["seed"],
+                        "run": record["run"],
+                        "collection": collection,
+                        "trial_index": index,
+                        "continuous_checks": record["atomicity"]["continuous_checks"],
+                        "partial_visibility_observed": trial[
+                            "partial_visibility_observed"
+                        ],
+                        "partial_spendable_observations": record["atomicity"][
+                            "partial_spendable_observations"
+                        ],
+                        "converged": trial["converged"],
+                    }
+                    if capture_entry != expected_capture:
+                        raise EvidenceError(
+                            f"{path}:{line_number}.{collection}[{index}] observation record "
+                            "does not exactly bind the raw atomicity trial"
+                        )
+
+
 def _validate_fault_report(
     path: Path,
     *,
     raw_artifacts: Sequence[Artifact],
+    artifacts: Sequence[Artifact],
     root: Path,
     commit: str,
     hardware_sha256: str,
@@ -1478,7 +1668,7 @@ def _validate_fault_report(
     )
     _exact_integer(
         requirements["minimum_seeds_per_participant"],
-        10,
+        REQUIRED_SEEDS_PER_PARTICIPANT,
         "real_network_fault_report.requirements.minimum_seeds_per_participant",
     )
     _exact_integer(
@@ -1528,9 +1718,9 @@ def _validate_fault_report(
         if (
             isinstance(runs, bool)
             or not isinstance(runs, int)
-            or runs < 10
+            or runs < REQUIRED_SEEDS_PER_PARTICIPANT
             or not isinstance(seeds, list)
-            or len(seeds) < 10
+            or len(seeds) < REQUIRED_SEEDS_PER_PARTICIPANT
             or any(
                 isinstance(seed, bool) or not isinstance(seed, int) for seed in seeds
             )
@@ -1544,6 +1734,7 @@ def _validate_fault_report(
         raise EvidenceError(
             "real-network fault report does not match archived raw runs"
         )
+    _validate_fault_trial_evidence_bindings(raw_paths, artifacts, root)
 
 
 def _parse_file_binding(value: Any, label: str) -> tuple[str, int]:
@@ -2378,6 +2569,7 @@ def verify_bundle(manifest_path: Path) -> dict[str, Any]:
     _validate_fault_report(
         root.joinpath(*fault_reports[0].path.parts),
         raw_artifacts=fault_raw,
+        artifacts=artifacts,
         root=root,
         commit=manifest["commit"],
         hardware_sha256=hardware_artifacts[0].sha256,

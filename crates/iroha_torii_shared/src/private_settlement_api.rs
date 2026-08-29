@@ -251,10 +251,6 @@ pub struct PrivateSettlementLegStatusResponseV1 {
     pub expiry_height: u64,
     /// Current durable lifecycle.
     pub lifecycle: PrivateSettlementLifecycleDtoV1,
-    /// Number of distinct governed approvals durable so far.
-    pub audit_approvals: u8,
-    /// Governed approval threshold.
-    pub required_audit_approvals: u8,
 }
 
 /// Restricted proof view returned only to an exact participant validator.

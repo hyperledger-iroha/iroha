@@ -2660,7 +2660,7 @@ pub struct NexusAtomicPrivateSettlement {
     pub max_proof_bytes: NonZeroU64,
     /// Maximum encrypted audit capsule size per leg.
     pub max_capsule_bytes: NonZeroU64,
-    /// Maximum encoded global carrier size.
+    /// Maximum canonical sponsor-signed direct carrier transaction size.
     pub max_carrier_bytes: NonZeroU64,
     /// Minimum durable sidecar retention after admission, in blocks.
     pub sidecar_retention_blocks: NonZeroU64,

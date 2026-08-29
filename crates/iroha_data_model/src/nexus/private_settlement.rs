@@ -3592,6 +3592,23 @@ pub struct PrivateSettlementCommitBundleV1 {
 }
 
 impl PrivateSettlementCommitBundleV1 {
+    /// Return the canonical direct-instruction byte length used for carrier preflight.
+    ///
+    /// This includes the registered [`crate::isi::InstructionBox`] framing for
+    /// [`crate::isi::private_settlement::FinalizeAtomicPrivateSettlementV1`].
+    /// Runtime admission additionally limits the complete sponsor-signed
+    /// transaction, including its authority, metadata, fee intent, and signature.
+    ///
+    /// # Errors
+    ///
+    /// Returns a Norito encoding error if the complete boxed instruction cannot be encoded.
+    pub fn canonical_carrier_bytes_len(&self) -> Result<usize, norito::Error> {
+        let instruction =
+            crate::isi::private_settlement::FinalizeAtomicPrivateSettlementV1::new(self.clone());
+        let boxed = crate::isi::InstructionBox::from(instruction);
+        norito::encode_canonical(&boxed).map(|encoded| encoded.len())
+    }
+
     /// Construct the terminal receipt at the deterministic inclusion height.
     #[must_use]
     pub fn into_receipt(self, finalized_height: u64) -> PrivateSettlementReceiptV1 {
@@ -3626,6 +3643,26 @@ pub struct PrivateSettlementReceiptV1 {
 }
 
 impl PrivateSettlementReceiptV1 {
+    /// Return the canonical pre-finality direct-instruction length represented by this receipt.
+    ///
+    /// The consensus-assigned `finalized_height` is not part of the carrier.
+    /// This reconstructs the registered finalization instruction for deterministic
+    /// WSV preflight; signed-transaction admission separately measures the exact
+    /// complete sponsor-signed transaction.
+    ///
+    /// # Errors
+    ///
+    /// Returns a Norito encoding error if the represented commit bundle cannot be encoded.
+    pub fn canonical_carrier_bytes_len(&self) -> Result<usize, norito::Error> {
+        PrivateSettlementCommitBundleV1 {
+            version: self.version,
+            manifest: self.manifest.clone(),
+            authority_catalog: self.authority_catalog.clone(),
+            legs: self.legs.clone(),
+        }
+        .canonical_carrier_bytes_len()
+    }
+
     /// Validate the compact receipt's complete non-cryptographic shape and bindings.
     ///
     /// # Errors
@@ -4821,9 +4858,26 @@ mod tests {
                 authority_catalog: receipt.authority_catalog.clone(),
                 legs: receipt.legs.clone(),
             };
-            let carrier_bytes = norito::encode_canonical(&carrier)
-                .expect("measured carrier encodes")
-                .len();
+            let carrier_bytes = carrier
+                .canonical_carrier_bytes_len()
+                .expect("measured carrier encodes");
+            assert_eq!(
+                receipt
+                    .canonical_carrier_bytes_len()
+                    .expect("receipt projects the measured carrier"),
+                carrier_bytes
+            );
+            let instruction =
+                crate::isi::private_settlement::FinalizeAtomicPrivateSettlementV1::new(
+                    carrier.clone(),
+                );
+            let boxed = crate::isi::InstructionBox::from(instruction);
+            assert_eq!(
+                norito::encode_canonical(&boxed)
+                    .expect("boxed carrier instruction encodes")
+                    .len(),
+                carrier_bytes
+            );
             eprintln!(
                 "atomic-private-settlement wire size: legs={count} receipt_bytes={receipt_bytes} carrier_bytes={carrier_bytes}"
             );

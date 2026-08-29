@@ -11444,7 +11444,7 @@ pub struct NexusAtomicPrivateSettlement {
     /// Maximum encrypted audit capsule size per leg.
     #[config(default = "defaults::nexus::atomic_private_settlement::MAX_CAPSULE_BYTES")]
     pub max_capsule_bytes: u64,
-    /// Maximum encoded global carrier size.
+    /// Maximum canonical sponsor-signed direct carrier transaction size.
     #[config(default = "defaults::nexus::atomic_private_settlement::MAX_CARRIER_BYTES")]
     pub max_carrier_bytes: u64,
     /// Minimum durable sidecar retention after admission, in blocks.

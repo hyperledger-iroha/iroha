@@ -471,8 +471,6 @@ fn validate_leg_status_response_v1(
         || response.stored_at_height == 0
         || response.lifecycle_height < response.stored_at_height
         || response.expiry_height <= response.stored_at_height
-        || response.required_audit_approvals == 0
-        || response.audit_approvals > response.required_audit_approvals
     {
         return Err(eyre!(
             "private-settlement leg status response is invalid or substituted"

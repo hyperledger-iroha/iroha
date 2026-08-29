@@ -189,7 +189,11 @@ Access views are least privilege:
 Nonterminal `Collecting`, `Audited`, `Prepared`, and `CommitCertified` records
 are never pruned. Terminal records may be pruned only after their signed
 retention height. A finalized global receipt or authoritative abort/expiry is
-required before staged reservations are released.
+required before staged reservations are released. Torii's supervised finality
+worker runs retention pruning against its synchronously snapshotted
+authoritative height on every reconciliation page, including an empty page;
+any reconciliation or pruning error stops the worker and fails the service
+closed.
 
 ## Protocol state machine
 
@@ -219,8 +223,16 @@ Collecting -> Audited -> Prepared -> CommitCertified -> Finalized
    successful responder. Commit certification does not mutate WSV.
 6. The sponsor signs and submits one carrier containing exactly one
    `FinalizeAtomicPrivateSettlementV1` instruction. The carrier binds the
-   sponsor and exact public fee intent and carries the complete receipt. Before
-   finalization, the same sponsor may instead submit one
+   sponsor and exact public fee intent and carries the complete certified
+   bundle. Coordinator and WSV preflight measure the complete boxed
+   finalization instruction, including its registered instruction framing.
+   Torii admission and the core transaction-scoped carrier binding additionally
+   measure the exact canonical sponsor-signed transaction--including authority,
+   metadata, fee intent, and signature--for `max_carrier_bytes` before any WSV
+   mutation. Consensus-assigned `finalized_height` is not signed carrier
+   material. Torii rejects already stale ingress and requires room for at least
+   the next block within the manifest expiry window. Before finalization, the
+   same sponsor may instead submit one
    `AbortAtomicPrivateSettlementV1` carrier that binds the complete public
    manifest and a stable public reason class; it never carries a delta or
    confidential sidecar material.
@@ -259,8 +271,11 @@ The canonical route catalog is
 | `GET .../bundles/{bundle_id}/receipt` | public | final receipt or abort marker |
 
 All restricted and authenticated settlement responses advertise private
-`no-store` behavior. Handlers return bounded stable error classes rather than
-echoing identifiers, plaintext, parser detail, or policy internals.
+`no-store` behavior. The ordinary leg-status response exposes lifecycle and
+public route/timing fields only; audit approval counts and the governed
+threshold remain restricted committee/auditor material. Handlers return
+bounded stable error classes rather than echoing identifiers, plaintext,
+parser detail, or policy internals.
 
 ## Configuration
 
@@ -286,6 +301,13 @@ padding class can fit the conservative complete-capsule envelope for at least
 `default_min_auditor_approvals` auditors. Admission then rejects any policy
 whose `min_approvals` is below that governed floor and any actual capsule whose
 whole canonical encoding exceeds `max_capsule_bytes`.
+
+`max_carrier_bytes` limits the complete canonical sponsor-signed direct
+transaction, including registered instruction framing, authority, metadata,
+fee intent, and signature. Coordinator/WSV receipt preflight reconstructs and
+measures the boxed finalization instruction, while Torii and the transaction-
+scoped core binding enforce the exact signed-transaction size. Ordinary network
+transaction bounds remain independent.
 
 Invalid zero values, unsupported V1 versions, duplicate/unsorted padding or
 policy lists, enabled-without-activation configurations, and values above hard
@@ -324,9 +346,17 @@ protocol limits are configuration errors.
 - State tests assert byte-identical roots, nullifiers, commitments, outputs,
   receipts, and balances after any invalid leg; success advances every leg
   exactly once.
-- The TLC model covers atomicity, idempotency, expiry, crash recovery, and
-  bounded liveness for 3 and 255 legs, with negative controls that must violate
-  safety when the atomic guard is removed.
+- The count-symmetry TLC model covers atomicity, idempotency, expiry, crash
+  recovery, and bounded liveness for 3 and 255 legs, with negative controls
+  that must violate safety when the atomic guard is removed. The complementary
+  committee-indexed refinement covers independent exact four-validator
+  committees, static `f=1` Byzantine/unavailable identities, local auditors,
+  authenticated channel faults, global quorum, and every named durability
+  boundary. Fault budgets are independent per committee rather than shared
+  across the bundle. The release runner requires the N=2 validator-focused and
+  full bounded-fault configurations, paper-primary N=3 fault configuration,
+  N=4 clean path, and N=3 expiry/replay configuration. The corrected full N=2
+  and paper-primary N=3 runs remain unclaimed in repository evidence.
 - Independent review must cover the revised AIR, dummy selectors, asset/capsule
   bindings, reimbursement relation, hybrid encryption, approval/QC domains,
   and state machine.
@@ -355,10 +385,18 @@ SHA-256, plus the archived N-specific configuration SHA-256. A canonical
 configuration manifest covers N=2,3,4,8,16 in order and binds every exact
 configuration file while asserting four validators, 3-of-4 quorum, and
 mandatory signed RS16 DA/RBC. The summary binds every raw JSONL file by length
-and SHA-256, and the final DOI verifier regenerates the summary from those
-archived records rather than trusting a detached matrix claim. Synthetic or
-simulated records are test fixtures only and must never be published as
-real-process evidence.
+and SHA-256. Every individual loss, phase-cut, and crash row also identifies
+one globally non-reusable record reference inside a SHA-256-bound archived
+authenticated-controller transcript and one inside an archived atomicity
+observation capture. The final DOI verifier resolves both digests to unique
+manifest artifacts and requires each referenced JSONL row to match its raw
+participant count, seed/run, collection, trial index and fault parameters. It
+also checks the exact controller acknowledgement/recovery fields and the
+capture's positive continuous-check count plus zero partial visibility and
+spendability observations before regenerating the summary from the archived raw
+runs rather than trusting a detached matrix claim.
+Synthetic or simulated records are test fixtures only and must never be
+published as real-process evidence.
 
 N=17 through 255 are deterministic state-machine, codec, carrier-size, and TLC
 tests. They must not be labeled real-network latency measurements.

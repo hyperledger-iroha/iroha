@@ -64,9 +64,7 @@
       "stored_at_height": 100,
       "lifecycle_height": 105,
       "expiry_height": 200,
-      "lifecycle": {"status": "audited", "value": null},
-      "audit_approvals": 1,
-      "required_audit_approvals": 1
+      "lifecycle": {"status": "audited", "value": null}
     },
     "bundle_status_aborted": {
       "manifest": null,

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -18,6 +20,16 @@ SPEC.loader.exec_module(MODULE)
 
 def run_record(participants: int, seed: int, run: int) -> dict[str, object]:
     """Build one complete synthetic record for structural validation tests."""
+
+    transcript_sha256 = MODULE.hashlib.sha256(
+        b"aggregate authenticated fault-control transcript\n"
+    ).hexdigest()
+    capture_sha256 = MODULE.hashlib.sha256(
+        b"aggregate atomicity observation capture\n"
+    ).hexdigest()
+
+    def evidence_record(kind: str, name: str) -> str:
+        return f"n{participants}:s{seed}:r{run}:{kind}:{name}"
 
     return {
         "version": 1,
@@ -45,6 +57,14 @@ def run_record(participants: int, seed: int, run: int) -> dict[str, object]:
                 "healed": True,
                 "converged": True,
                 "partial_visibility_observed": False,
+                "control_transcript_sha256": transcript_sha256,
+                "control_transcript_record": evidence_record(
+                    "loss", f"{phase}:{percentage}"
+                ),
+                "observation_capture_sha256": capture_sha256,
+                "observation_capture_record": evidence_record(
+                    "loss", f"{phase}:{percentage}"
+                ),
             }
             for phase in MODULE.REQUIRED_LOSS_PHASES
             for percentage in MODULE.REQUIRED_LOSS_PERCENTAGES
@@ -57,6 +77,10 @@ def run_record(participants: int, seed: int, run: int) -> dict[str, object]:
                 "healed": True,
                 "converged": True,
                 "partial_visibility_observed": False,
+                "control_transcript_sha256": transcript_sha256,
+                "control_transcript_record": evidence_record("cut", cut),
+                "observation_capture_sha256": capture_sha256,
+                "observation_capture_record": evidence_record("cut", cut),
             }
             for cut in MODULE.REQUIRED_PHASE_CUTS
         ],
@@ -67,6 +91,10 @@ def run_record(participants: int, seed: int, run: int) -> dict[str, object]:
                 "durable_state_reconciled": True,
                 "converged": True,
                 "partial_visibility_observed": False,
+                "control_transcript_sha256": transcript_sha256,
+                "control_transcript_record": evidence_record("crash", boundary),
+                "observation_capture_sha256": capture_sha256,
+                "observation_capture_record": evidence_record("crash", boundary),
             }
             for boundary in MODULE.REQUIRED_CRASH_BOUNDARIES
         ],
@@ -117,6 +145,69 @@ class PrivateSettlementFaultReportTests(unittest.TestCase):
         missing_crash["crash_recoveries"] = missing_crash["crash_recoveries"][:-1]  # type: ignore[index]
         with self.assertRaises(MODULE.FaultEvidenceError):
             MODULE.parse_run(missing_crash, "fixture")
+
+    def test_missing_or_reused_trial_evidence_is_rejected(self) -> None:
+        missing = run_record(3, 0, 0)
+        del missing["loss_trials"][0]["control_transcript_sha256"]  # type: ignore[index]
+        with self.assertRaises(MODULE.FaultEvidenceError):
+            MODULE.parse_run(missing, "fixture")
+
+        reused = run_record(3, 0, 0)
+        reused["phase_cut_partitions"][1]["control_transcript_sha256"] = reused[  # type: ignore[index]
+            "phase_cut_partitions"
+        ][0]["control_transcript_sha256"]
+        reused["phase_cut_partitions"][1]["observation_capture_sha256"] = reused[  # type: ignore[index]
+            "phase_cut_partitions"
+        ][0]["observation_capture_sha256"]
+        reused["phase_cut_partitions"][1]["control_transcript_record"] = reused[  # type: ignore[index]
+            "phase_cut_partitions"
+        ][0]["control_transcript_record"]
+        reused["phase_cut_partitions"][1]["observation_capture_record"] = reused[  # type: ignore[index]
+            "phase_cut_partitions"
+        ][0]["observation_capture_record"]
+        with self.assertRaises(MODULE.FaultEvidenceError):
+            MODULE.parse_run(reused, "fixture")
+
+        reused_across_categories = run_record(3, 0, 0)
+        for field in (
+            "control_transcript_sha256",
+            "control_transcript_record",
+            "observation_capture_sha256",
+            "observation_capture_record",
+        ):
+            reused_across_categories["phase_cut_partitions"][0][field] = (  # type: ignore[index]
+                reused_across_categories["loss_trials"][0][field]  # type: ignore[index]
+            )
+        with self.assertRaises(MODULE.FaultEvidenceError):
+            MODULE.parse_run(reused_across_categories, "fixture")
+
+    def test_evidence_records_cannot_be_reused_across_runs(self) -> None:
+        first = run_record(3, 0, 0)
+        second = run_record(3, 1, 1)
+        for collection in (
+            "loss_trials",
+            "phase_cut_partitions",
+            "crash_recoveries",
+        ):
+            for first_trial, second_trial in zip(
+                first[collection], second[collection], strict=True  # type: ignore[arg-type]
+            ):
+                for field in (
+                    "control_transcript_sha256",
+                    "control_transcript_record",
+                    "observation_capture_sha256",
+                    "observation_capture_record",
+                ):
+                    second_trial[field] = first_trial[field]
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "faults.jsonl"
+            path.write_text(
+                f"{json.dumps(first)}\n{json.dumps(second)}\n", encoding="utf-8"
+            )
+            with self.assertRaisesRegex(
+                MODULE.FaultEvidenceError, "from another run"
+            ):
+                MODULE.load_runs([path])
 
     def test_any_partial_visibility_or_replay_gap_is_rejected(self) -> None:
         partial = run_record(3, 0, 0)
