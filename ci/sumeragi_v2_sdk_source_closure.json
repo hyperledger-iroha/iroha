@@ -697,6 +697,7 @@
       "java/iroha_android/src/main/java/org/hyperledger/iroha/android/validationfee/ValidationFeeHijiriQuoteV1.java"
     ],
     "javascript-build-export": [
+      "javascript/iroha_js/atomic-private-settlement.d.ts",
       "javascript/iroha_js/bootle-lantern-issuance.d.ts",
       "javascript/iroha_js/browser.d.ts",
       "javascript/iroha_js/canonical-request.d.ts",
@@ -718,6 +719,7 @@
       "javascript/iroha_js/src/address.js",
       "javascript/iroha_js/src/applicationPostAuth.js",
       "javascript/iroha_js/src/assetDefinitionRegistration.js",
+      "javascript/iroha_js/src/atomicPrivateSettlement.js",
       "javascript/iroha_js/src/authenticatedBlockProofs.browser.js",
       "javascript/iroha_js/src/authenticatedBlockProofs.js",
       "javascript/iroha_js/src/axt.js",
@@ -1415,6 +1417,7 @@
       "python/iroha_torii_client/offline_models.py",
       "python/iroha_torii_client/orderbook_submission.py",
       "python/iroha_torii_client/parliament_api.py",
+      "python/iroha_torii_client/private_settlement_client.py",
       "python/iroha_torii_client/runtime_governance_auth.py",
       "python/iroha_torii_client/sccp.py",
       "python/iroha_torii_client/space_directory_client.py",

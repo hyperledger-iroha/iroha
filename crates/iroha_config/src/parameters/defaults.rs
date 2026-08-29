@@ -3162,7 +3162,16 @@ pub mod nexus {
         pub const MAX_CARRIER_BYTES_LIMIT: u64 = 4 * 1024 * 1024;
         /// Minimum durable sidecar retention after admission, in blocks.
         pub const SIDECAR_RETENTION_BLOCKS: u64 = 1_000_000;
-        /// Default online auditor threshold for newly governed policies.
+        /// Maximum encrypted settlement records retained by one local sidecar store.
+        pub const SIDECAR_MAX_RECORDS: u32 = 256;
+        /// Hard record-count ceiling implemented by the V1 sidecar store.
+        pub const SIDECAR_MAX_RECORDS_LIMIT: u32 = 4_096;
+        /// Maximum canonical bytes retained by one local sidecar store.
+        pub const SIDECAR_MAX_TOTAL_BYTES: u64 = 12 * 1024 * 1024 * SIDECAR_MAX_RECORDS as u64;
+        /// Hard byte ceiling implemented by the V1 sidecar store.
+        pub const SIDECAR_MAX_TOTAL_BYTES_LIMIT: u64 =
+            12 * 1024 * 1024 * SIDECAR_MAX_RECORDS_LIMIT as u64;
+        /// Governed minimum online auditor threshold accepted for new policies.
         pub const DEFAULT_MIN_AUDITOR_APPROVALS: u16 = 1;
         /// Audit-policy schema versions accepted by default.
         pub const PERMITTED_POLICY_VERSIONS: [u16; 1] = [1];

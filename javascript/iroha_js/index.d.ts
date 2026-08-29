@@ -28,6 +28,7 @@ export * from "./kotodama-compiler.js";
 export * from "./transaction-codec.js";
 export * from "./smart-contract-deployment.js";
 export * from "./bootle-lantern-issuance.js";
+export * from "./atomic-private-settlement.js";
 export * from "./src/blockProofTypes.js";
 export * from "./src/toriiBrowserExplorerTypes.js";
 export type * from "./src/subscriptionTypes.js";
@@ -12644,6 +12645,10 @@ export function noritoDecodeInstructionBoxArchive(
 export function noritoEncodeContractManifestSignaturePayload(
   manifest: Record<string, unknown>,
 ): Buffer;
+/** Encode one exact compact-length `FeePaymentIntent` archive. */
+export function noritoEncodeFeePaymentIntentArchive(
+  intent: NoritoFeePaymentIntent,
+): Uint8Array;
 export function noritoEncodeTransactionPayloadBatch(
   payloads: ReadonlyArray<ArrayBufferView | ArrayBuffer | Buffer>,
 ): Buffer;

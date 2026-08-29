@@ -139,6 +139,16 @@ export {
 } from "./kagemushaOffline.js";
 
 export {
+  AtomicPrivateSettlementAuthV1,
+  AtomicPrivateSettlementIdentifierV1,
+  AtomicPrivateSettlementJsonResponseV1,
+  AtomicPrivateSettlementOperationV1,
+  AtomicPrivateSettlementPreparedRequestV1,
+  AtomicPrivateSettlementToriiErrorV1,
+  AtomicPrivateSettlementToriiClientV1,
+} from "./atomicPrivateSettlement.js";
+
+export {
   assetReferencesMatch,
   composeAssetHoldingId,
   extractAssetDefinitionId,

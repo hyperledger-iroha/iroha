@@ -2653,7 +2653,8 @@ pub struct NexusAtomicPrivateSettlement {
     pub commit_timeout_blocks: NonZeroU64,
     /// Strictly increasing canonical padded-plaintext classes, in bytes.
     ///
-    /// The authenticated ciphertext is exactly 16 bytes larger.
+    /// The authenticated ciphertext is exactly 16 bytes larger; configuration
+    /// also reserves canonical AAD, nonce, vector, and wrapped-DEK framing.
     pub capsule_padding_classes_bytes: Vec<NonZeroU32>,
     /// Maximum proof sidecar size per leg.
     pub max_proof_bytes: NonZeroU64,
@@ -2663,7 +2664,11 @@ pub struct NexusAtomicPrivateSettlement {
     pub max_carrier_bytes: NonZeroU64,
     /// Minimum durable sidecar retention after admission, in blocks.
     pub sidecar_retention_blocks: NonZeroU64,
-    /// Default online auditor threshold for new policies.
+    /// Maximum encrypted settlement records retained by one local sidecar store.
+    pub sidecar_max_records: NonZeroU32,
+    /// Maximum canonical bytes retained by one local sidecar store.
+    pub sidecar_max_total_bytes: NonZeroU64,
+    /// Governed minimum online auditor threshold accepted for new policies.
     pub default_min_auditor_approvals: NonZeroU16,
     /// Audit-policy schema versions accepted by this deployment.
     pub permitted_policy_versions: BTreeSet<u16>,
@@ -2721,6 +2726,14 @@ impl_default!(NexusAtomicPrivateSettlement => {
                 defaults::nexus::atomic_private_settlement::SIDECAR_RETENTION_BLOCKS,
             )
             .expect("private-settlement sidecar retention must be non-zero"),
+            sidecar_max_records: NonZeroU32::new(
+                defaults::nexus::atomic_private_settlement::SIDECAR_MAX_RECORDS,
+            )
+            .expect("private-settlement sidecar record bound must be non-zero"),
+            sidecar_max_total_bytes: NonZeroU64::new(
+                defaults::nexus::atomic_private_settlement::SIDECAR_MAX_TOTAL_BYTES,
+            )
+            .expect("private-settlement sidecar byte bound must be non-zero"),
             default_min_auditor_approvals: NonZeroU16::new(
                 defaults::nexus::atomic_private_settlement::DEFAULT_MIN_AUDITOR_APPROVALS,
             )
@@ -3179,6 +3192,8 @@ struct NexusConsensusAtomicPrivateSettlementV1 {
     max_capsule_bytes: u64,
     max_carrier_bytes: u64,
     sidecar_retention_blocks: u64,
+    sidecar_max_records: u32,
+    sidecar_max_total_bytes: u64,
     default_min_auditor_approvals: u16,
     permitted_policy_versions: Vec<u16>,
 }
@@ -3478,6 +3493,11 @@ pub fn nexus_consensus_policy_digest_with_runtime_policies(
             sidecar_retention_blocks: nexus
                 .atomic_private_settlement
                 .sidecar_retention_blocks
+                .get(),
+            sidecar_max_records: nexus.atomic_private_settlement.sidecar_max_records.get(),
+            sidecar_max_total_bytes: nexus
+                .atomic_private_settlement
+                .sidecar_max_total_bytes
                 .get(),
             default_min_auditor_approvals: nexus
                 .atomic_private_settlement

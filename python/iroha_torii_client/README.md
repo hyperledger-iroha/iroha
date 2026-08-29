@@ -255,6 +255,51 @@ quote, or fall back to the authority. Legacy transaction metadata keys
 from the deployment genesis; a display chain label is never accepted as a
 signing domain.
 
+## Atomic private settlement transport
+
+The Python SDK exposes the complete V1 Torii route set without accepting proof
+witnesses or audit plaintext. A native wallet or coordinator first produces a
+bounded JSON object for one closed operation. Python validates its exact
+top-level shape, signs the final route, sends it once with redirects and retries
+disabled, and returns an opaque response that can be handed back to native code:
+
+```python
+from iroha_torii_client import (
+    AtomicPrivateSettlementOperationV1,
+    AtomicPrivateSettlementPreparedRequestV1,
+)
+
+prepared = AtomicPrivateSettlementPreparedRequestV1.from_native_prepared_json(
+    AtomicPrivateSettlementOperationV1.LEG_UPLOAD,
+    native_coordinator.prepared_leg_upload_json(),
+)
+try:
+    response = client.upload_private_settlement_leg_v1(
+        prepared,
+        canonical_auth=sponsor_auth,
+    )
+    try:
+        native_coordinator.accept_torii_response(response.bytes())
+    finally:
+        response.close()
+finally:
+    prepared.close()
+```
+
+Availability, Prepare, Commit, certificate persistence, leg upload, and global
+carrier submission use the sponsor's canonical account signature. Committee
+proof reads require the exact validator operator identity; capsule reads and
+approval submission require the exact governed auditor identity. Bundle status
+and receipt reads are public and expose only the protocol allowlist.
+
+Prepared requests are operation-bound and retained in erasable buffers. Their
+representations and all transport errors redact bodies. Restricted responses
+remain opaque, bounded, strict UTF-8 JSON; unexpected fields, identifier
+substitution, redirects, compressed responses, and noncanonical hash literals
+fail closed. The network must still have the governed feature activated and
+the audited proof profile available. This SDK surface is not evidence that a
+deployment has passed the independent audit or production qualification gates.
+
 ## SORA Parliament V1
 
 The account-authenticated Parliament surface is available through strict V1

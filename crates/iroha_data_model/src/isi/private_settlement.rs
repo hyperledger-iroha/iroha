@@ -68,6 +68,32 @@ pub enum PrivateSettlementPoolActivationValidationErrorV1 {
     RestrictedProjectionMismatch,
 }
 
+/// Structural failure for a public private-settlement policy rotation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum PrivateSettlementPoolRotationValidationErrorV1 {
+    /// The instruction used an unsupported wire version.
+    #[error("unsupported private-settlement pool rotation version {actual}")]
+    UnsupportedVersion {
+        /// Actual version.
+        actual: u8,
+    },
+    /// The public route is universal or has a reserved incarnation.
+    #[error("private-settlement pool rotation route is invalid")]
+    InvalidRoute,
+    /// A required pool, asset, policy, key epoch, or digest field is reserved.
+    #[error("private-settlement pool rotation binding is invalid")]
+    InvalidBinding,
+    /// The replacement governance lifecycle is invalid.
+    #[error("private-settlement pool rotation lifecycle is invalid")]
+    InvalidLifecycle,
+    /// A supplied restricted replacement record is invalid.
+    #[error("private-settlement restricted replacement governance is invalid")]
+    InvalidRestrictedGovernance,
+    /// The public replacement is not the exact projection of the restricted record.
+    #[error("private-settlement pool rotation projection does not match restricted governance")]
+    RestrictedProjectionMismatch,
+}
+
 isi! {
     /// Activate one governed confidential settlement pool using only public commitments.
     ///
@@ -246,6 +272,159 @@ impl ActivatePrivateSettlementPoolV1 {
 }
 
 isi! {
+    /// Atomically rotate one live pool to a new auditor policy and key epoch.
+    ///
+    /// Consensus preserves the pool frontier and replay sets. The exact prior
+    /// governance digest prevents stale or concurrent replacements, while the
+    /// restricted asset identifier and opening salt remain off the public wire.
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+    pub struct RotatePrivateSettlementPoolPolicyV1 {
+        /// Wire version; must be [`ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1`].
+        pub version: u8,
+        /// Exact dataspace, lane, and active lane incarnation hosting the pool.
+        pub route: PrivateSettlementRouteV1,
+        /// Stable opaque pool whose frontier must be preserved.
+        pub pool_id: PrivacyPoolIdV1,
+        /// Exact current restricted-governance digest being replaced.
+        pub expected_governance_digest: iroha_crypto::Hash,
+        /// Immutable salted commitment to the same restricted asset binding.
+        pub asset_binding_commitment: iroha_crypto::Hash,
+        /// Digest of the replacement auditor policy.
+        pub audit_policy_digest: iroha_crypto::Hash,
+        /// Strictly newer replacement signing and encryption key epoch.
+        pub audit_key_epoch: u64,
+        /// Replacement activation interval and next governance revision.
+        pub lifecycle: PrivateSettlementPoolGovernanceLifecycleV1,
+        /// Self-digest of the complete restricted replacement record.
+        pub governance_digest: iroha_crypto::Hash,
+    }
+}
+
+impl crate::seal::Instruction for RotatePrivateSettlementPoolPolicyV1 {}
+
+impl RotatePrivateSettlementPoolPolicyV1 {
+    /// Canonical first-release Norito instruction identifier.
+    pub const WIRE_ID: &'static str = "iroha.private_settlement.rotate_pool_policy.v1";
+
+    /// Construct a public rotation from the exact prior digest and restricted replacement.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error if the restricted record or public projection is invalid.
+    pub fn from_restricted(
+        expected_governance_digest: iroha_crypto::Hash,
+        replacement: &PrivateSettlementPoolGovernanceV1,
+    ) -> Result<Self, PrivateSettlementPoolRotationValidationErrorV1> {
+        replacement.validate().map_err(|_| {
+            PrivateSettlementPoolRotationValidationErrorV1::InvalidRestrictedGovernance
+        })?;
+        let rotation = Self {
+            version: replacement.body.version,
+            route: replacement.body.route,
+            pool_id: replacement.body.pool_id,
+            expected_governance_digest,
+            asset_binding_commitment: replacement.body.asset_binding_commitment,
+            audit_policy_digest: replacement.body.audit_policy_digest,
+            audit_key_epoch: replacement.body.audit_key_epoch,
+            lifecycle: replacement.body.lifecycle,
+            governance_digest: replacement.governance_digest,
+        };
+        rotation.validate_against_restricted(replacement)?;
+        Ok(rotation)
+    }
+
+    /// Validate the public fixed-profile rotation shape.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error for reserved fields or invalid lifecycle bounds.
+    pub fn validate(&self) -> Result<(), PrivateSettlementPoolRotationValidationErrorV1> {
+        if self.version != ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1 {
+            return Err(
+                PrivateSettlementPoolRotationValidationErrorV1::UnsupportedVersion {
+                    actual: self.version,
+                },
+            );
+        }
+        if self.route.dataspace_id == DataSpaceId::UNIVERSAL
+            || self
+                .route
+                .lane_incarnation
+                .as_ref()
+                .iter()
+                .all(|byte| *byte == 0)
+        {
+            return Err(PrivateSettlementPoolRotationValidationErrorV1::InvalidRoute);
+        }
+        if self.pool_id.is_zero()
+            || self
+                .expected_governance_digest
+                .as_ref()
+                .iter()
+                .all(|byte| *byte == 0)
+            || self
+                .asset_binding_commitment
+                .as_ref()
+                .iter()
+                .all(|byte| *byte == 0)
+            || self
+                .audit_policy_digest
+                .as_ref()
+                .iter()
+                .all(|byte| *byte == 0)
+            || self.audit_key_epoch == 0
+            || self
+                .governance_digest
+                .as_ref()
+                .iter()
+                .all(|byte| *byte == 0)
+            || self.expected_governance_digest == self.governance_digest
+        {
+            return Err(PrivateSettlementPoolRotationValidationErrorV1::InvalidBinding);
+        }
+        if self.lifecycle.governance_revision == 0
+            || self.lifecycle.activation_height == 0
+            || self
+                .lifecycle
+                .retirement_height
+                .is_some_and(|retirement| retirement <= self.lifecycle.activation_height)
+        {
+            return Err(PrivateSettlementPoolRotationValidationErrorV1::InvalidLifecycle);
+        }
+        Ok(())
+    }
+
+    /// Verify this public projection against one exact restricted replacement record.
+    ///
+    /// # Errors
+    ///
+    /// Returns a uniform mismatch without identifying any restricted field.
+    pub fn validate_against_restricted(
+        &self,
+        replacement: &PrivateSettlementPoolGovernanceV1,
+    ) -> Result<(), PrivateSettlementPoolRotationValidationErrorV1> {
+        self.validate()?;
+        replacement.validate().map_err(|_| {
+            PrivateSettlementPoolRotationValidationErrorV1::InvalidRestrictedGovernance
+        })?;
+        if self.version != replacement.body.version
+            || self.route != replacement.body.route
+            || self.pool_id != replacement.body.pool_id
+            || self.asset_binding_commitment != replacement.body.asset_binding_commitment
+            || self.audit_policy_digest != replacement.body.audit_policy_digest
+            || self.audit_key_epoch != replacement.body.audit_key_epoch
+            || self.lifecycle != replacement.body.lifecycle
+            || self.governance_digest != replacement.governance_digest
+        {
+            return Err(
+                PrivateSettlementPoolRotationValidationErrorV1::RestrictedProjectionMismatch,
+            );
+        }
+        Ok(())
+    }
+}
+
+isi! {
     /// Publish one sponsor-authorized opaque abort or expiry marker.
     ///
     /// The complete public manifest binds the sponsor, network, expiry, and
@@ -319,6 +498,25 @@ mod tests {
         }
     }
 
+    fn pool_rotation() -> RotatePrivateSettlementPoolPolicyV1 {
+        let activation = pool_activation();
+        RotatePrivateSettlementPoolPolicyV1 {
+            version: activation.version,
+            route: activation.route,
+            pool_id: activation.pool_id,
+            expected_governance_digest: activation.governance_digest,
+            asset_binding_commitment: activation.asset_binding_commitment,
+            audit_policy_digest: iroha_crypto::Hash::new(b"replacement audit policy"),
+            audit_key_epoch: activation.audit_key_epoch + 1,
+            lifecycle: PrivateSettlementPoolGovernanceLifecycleV1 {
+                governance_revision: activation.lifecycle.governance_revision + 1,
+                activation_height: 20,
+                retirement_height: Some(2_000),
+            },
+            governance_digest: iroha_crypto::Hash::new(b"replacement governance"),
+        }
+    }
+
     #[test]
     fn pool_activation_has_a_stable_registered_wire_id() {
         let registry = crate::isi::registry::default();
@@ -365,6 +563,28 @@ mod tests {
                 .as_any()
                 .downcast_ref::<ActivatePrivateSettlementPoolV1>(),
             Some(&activation)
+        );
+    }
+
+    #[test]
+    fn pool_rotation_has_a_stable_registered_wire_id_and_roundtrips() {
+        let registry = crate::isi::registry::default();
+        assert!(registry.contains(RotatePrivateSettlementPoolPolicyV1::WIRE_ID));
+        assert_eq!(
+            registry.wire_id(core::any::type_name::<RotatePrivateSettlementPoolPolicyV1>()),
+            Some(RotatePrivateSettlementPoolPolicyV1::WIRE_ID)
+        );
+        let rotation = pool_rotation();
+        rotation.validate().expect("canonical rotation");
+        let boxed = InstructionBox::from(rotation.clone());
+        let bytes = norito::encode_canonical(&boxed).expect("encode rotation instruction");
+        let decoded: InstructionBox =
+            norito::decode_canonical(&bytes).expect("decode rotation instruction");
+        assert_eq!(
+            decoded
+                .as_any()
+                .downcast_ref::<RotatePrivateSettlementPoolPolicyV1>(),
+            Some(&rotation)
         );
     }
 

@@ -414,6 +414,8 @@ fn nexus_atomic_private_settlement_fields_load_from_fixture() {
     assert_eq!(private.activation_height, Some(100_000));
     assert_eq!(private.max_participants.get(), 16);
     assert_eq!(private.proof_profile_version.get(), 1);
+    assert_eq!(private.sidecar_max_records.get(), 512);
+    assert_eq!(private.sidecar_max_total_bytes.get(), 6_442_450_944);
     assert_eq!(
         private
             .capsule_padding_classes_bytes
@@ -436,6 +438,31 @@ fn nexus_atomic_private_settlement_rejects_invalid_participant_bound() {
     let result = load_config_from_fixtures("bad.nexus_atomic_private_settlement_participants.toml");
     assert!(result.is_err(), "one-leg private bundles must be rejected");
 }
+
+#[test]
+fn nexus_atomic_private_settlement_rejects_sidecar_capacity_above_v1_caps() {
+    use iroha_config::parameters::{
+        defaults,
+        user::{Nexus, NexusAtomicPrivateSettlement},
+    };
+    use iroha_config_base::util::Emitter;
+
+    let mut emitter = Emitter::<ParseError>::new();
+    let private = NexusAtomicPrivateSettlement {
+        sidecar_max_records: defaults::nexus::atomic_private_settlement::SIDECAR_MAX_RECORDS_LIMIT
+            + 1,
+        sidecar_max_total_bytes:
+            defaults::nexus::atomic_private_settlement::SIDECAR_MAX_TOTAL_BYTES_LIMIT + 1,
+        ..NexusAtomicPrivateSettlement::default()
+    };
+    let nexus = Nexus {
+        atomic_private_settlement: private,
+        ..Nexus::default()
+    };
+    assert!(nexus.parse(&mut emitter).is_none());
+    assert!(emitter.into_result().is_err());
+}
+
 #[test]
 fn nexus_atomic_private_settlement_requires_activation_height_and_canonical_bounds() {
     use iroha_config::parameters::user::{Nexus, NexusAtomicPrivateSettlement};
@@ -451,6 +478,60 @@ fn nexus_atomic_private_settlement_requires_activation_height_and_canonical_boun
     };
     let nexus = Nexus {
         atomic_private_settlement: private,
+        ..Nexus::default()
+    };
+    assert!(nexus.parse(&mut emitter).is_none());
+    assert!(emitter.into_result().is_err());
+}
+
+#[test]
+fn nexus_atomic_private_settlement_capsule_bound_covers_complete_default_auditor_roster() {
+    use iroha_config::parameters::user::{Nexus, NexusAtomicPrivateSettlement};
+    use iroha_config_base::util::Emitter;
+    use iroha_data_model::nexus::private_settlement_capsule_canonical_upper_bound_v1;
+
+    for auditors in [1_u16, 32] {
+        let exact_bound =
+            private_settlement_capsule_canonical_upper_bound_v1(4_096, u64::from(auditors));
+        let mut valid_emitter = Emitter::<ParseError>::new();
+        let valid = Nexus {
+            atomic_private_settlement: NexusAtomicPrivateSettlement {
+                capsule_padding_classes_bytes: vec![4_096],
+                max_capsule_bytes: exact_bound,
+                default_min_auditor_approvals: auditors,
+                ..NexusAtomicPrivateSettlement::default()
+            },
+            ..Nexus::default()
+        };
+        assert!(valid.parse(&mut valid_emitter).is_some());
+        assert!(valid_emitter.into_result().is_ok());
+
+        let mut short_emitter = Emitter::<ParseError>::new();
+        let one_byte_short = Nexus {
+            atomic_private_settlement: NexusAtomicPrivateSettlement {
+                capsule_padding_classes_bytes: vec![4_096],
+                max_capsule_bytes: exact_bound - 1,
+                default_min_auditor_approvals: auditors,
+                ..NexusAtomicPrivateSettlement::default()
+            },
+            ..Nexus::default()
+        };
+        assert!(one_byte_short.parse(&mut short_emitter).is_none());
+        assert!(short_emitter.into_result().is_err());
+    }
+}
+
+#[test]
+fn nexus_atomic_private_settlement_rejects_default_auditor_threshold_above_v1_roster() {
+    use iroha_config::parameters::user::{Nexus, NexusAtomicPrivateSettlement};
+    use iroha_config_base::util::Emitter;
+
+    let mut emitter = Emitter::<ParseError>::new();
+    let nexus = Nexus {
+        atomic_private_settlement: NexusAtomicPrivateSettlement {
+            default_min_auditor_approvals: 33,
+            ..NexusAtomicPrivateSettlement::default()
+        },
         ..Nexus::default()
     };
     assert!(nexus.parse(&mut emitter).is_none());

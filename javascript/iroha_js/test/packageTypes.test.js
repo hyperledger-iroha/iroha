@@ -250,6 +250,7 @@ test("package smoke rejects every non-portable or missing required artifact", ()
   ];
   const requiredPaths = [
     "package.json",
+    "atomic-private-settlement.d.ts",
     "index.d.ts",
     "browser.d.ts",
     "ivm-artifact.d.ts",
@@ -259,6 +260,7 @@ test("package smoke rejects every non-portable or missing required artifact", ()
     "sumeragi-typed.d.ts",
     "src/index.js",
     "dist/index.js",
+    "dist/atomicPrivateSettlement.js",
     "dist/ivmArtifact.js",
     "dist/kotodamaCompiler/browser.js",
     "dist/kotodamaCompiler/index.js",
@@ -279,6 +281,8 @@ test("package smoke rejects every non-portable or missing required artifact", ()
 
   for (const requiredPath of [
     "index.d.ts",
+    "atomic-private-settlement.d.ts",
+    "dist/atomicPrivateSettlement.js",
     "dist/tairaTestnetProfile.js",
     ...PORTABLE_RECIPES,
     ...requiredLazyPaths,

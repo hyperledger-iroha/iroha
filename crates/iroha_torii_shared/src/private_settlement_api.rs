@@ -6,6 +6,8 @@
 //! capsules appear only in authenticated restricted requests or auditor
 //! responses.  Auditor plaintext is never an HTTP DTO.
 
+use core::fmt;
+
 use iroha_crypto::Hash;
 use iroha_data_model::nexus::{
     AtomicPrivateSettlementV1, PrivateSettlementAbortReceiptV1, PrivateSettlementAuditApprovalV1,
@@ -262,7 +264,7 @@ pub struct PrivateSettlementLegStatusResponseV1 {
 /// governed approval material, and durable-availability evidence needed for
 /// Prepare.
 #[derive(
-    JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
+    JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Clone, PartialEq, Eq,
 )]
 #[norito(deny_unknown_fields)]
 pub struct PrivateSettlementCommitteeProofResponseV1 {
@@ -286,6 +288,19 @@ pub struct PrivateSettlementCommitteeProofResponseV1 {
     pub availability: PrivateSettlementSidecarAvailabilityV1,
     /// Current durable lifecycle.
     pub lifecycle: PrivateSettlementLifecycleDtoV1,
+}
+
+impl fmt::Debug for PrivateSettlementCommitteeProofResponseV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PrivateSettlementCommitteeProofResponseV1")
+            .field("bundle_id", &self.manifest.bundle_id)
+            .field("leg_ordinal", &self.statement.leg_ordinal)
+            .field("route", &self.statement.route)
+            .field("audit_approvals", &self.audit_approvals.len())
+            .field("lifecycle", &self.lifecycle)
+            .finish_non_exhaustive()
+    }
 }
 
 /// Restricted capsule response returned only to a governed local auditor.

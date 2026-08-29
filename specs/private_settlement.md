@@ -23,6 +23,14 @@ authority has exactly four validators and every availability, Prepare, and
 Commit certificate contains exactly three distinct valid signatures from that
 authority. Observers cannot pad a quorum.
 
+The authority is not a caller-selected set of four keys. At the manifest's
+`authority_context_height`, every validator resolves the exact canonical
+ordered roster and active lane incarnation from consensus state, requires the
+resolved authority height to equal that context height, requires the V1
+`f = 1` four-validator geometry, and verifies every BLS proof of possession.
+Restricted upload, Prepare voting, and global receipt admission all use this
+same state-anchored authority boundary.
+
 Ordinary validators receive the proof and opaque fixed-shape delta, not audit
 plaintext. Authorized local auditors decrypt and approve the exact plaintext;
 the governed default is one approval from N authorized auditors. The global
@@ -108,7 +116,12 @@ XChaCha20-Poly1305. The same DEK is independently wrapped to every auditor in
 the exact policy order using the existing X25519/ML-KEM-768 hybrid KEM and an
 independent authenticated nonce. Capsule and wrap AAD bind the network,
 dataspace route and incarnation, bundle, leg, policy, key epoch, and canonical
-plaintext commitment.
+plaintext commitment. They also bind the digest of the exact state-anchored
+four-validator authority and its `authority_context_height`. The capsule AEAD
+authenticates the canonical complete AAD; each DEK-wrap AEAD authenticates that
+same AAD plus its exact auditor identity, recipient hybrid key, and KEM
+ciphertext. A capsule or wrapped DEK therefore cannot be transplanted to a
+different historical roster or authority height.
 
 The capsule includes the exact parties, asset, amount, memo, policy references,
 view data, note openings, and output-encryption openings required for audit. It
@@ -121,6 +134,32 @@ Retired decryption keys must be retained, or retained capsules must be rewrapped
 for the applicable regulatory retention period. That is an operator/governance
 obligation and a release recovery test, not an implicit property of AEAD.
 
+## Governed pool activation and policy rotation
+
+`ActivatePrivateSettlementPoolV1` creates the public projection of one
+restricted route/pool/asset binding and its canonical initial commitments.
+`RotatePrivateSettlementPoolPolicyV1` is the privacy-governance-authorized
+replacement boundary for its auditor policy and key epoch. A rotation must name
+the exact current `governance_digest`, preserve the route, pool, asset-binding
+commitment, frontier, roots, nullifiers, outputs, and receipts, advance the
+governance revision by exactly one, use a strictly newer key epoch and different
+policy/governance digests, and activate at the block that contains the rotation.
+The predecessor must still be active at the preceding height. A rotation is
+rejected if a receipt touching the same exact route/pool is finalized at that
+activation height; policy activation and pool finalization cannot share that
+height.
+
+The globally replicated projection retains a gap-free public lineage of every
+superseded policy digest, key epoch, lifecycle, and governance digest. Snapshot
+and restart validation resolve the revision effective at both a finalized
+receipt's `authority_context_height` and finalization height, so a receipt
+finalized before rotation remains valid and its exact replay remains
+idempotent. This history does not grandfather pending work: a bundle prepared
+under the old policy that crosses the activation boundary fails closed before
+any global mutation. Operational recovery still requires retaining old
+decryption keys for retained capsules or governing and testing capsule
+rewrapping before those keys are destroyed.
+
 ## Restricted confidential availability
 
 `PrivateSettlementFileSidecarStoreV1` persists provisional and certified
@@ -130,6 +169,12 @@ same-effective-user ownership, a single-writer process lease, create-new temp
 files, canonical decode/re-encode, fsync before rename, and directory fsync.
 Startup scanning rejects unknown, noncanonical, substituted, or capacity-
 violating records and reconstructs staged pool/nullifier/output reservations.
+Those locks use exact-route keys: pool heads are reserved by
+`(route, pool_id, old_epoch, old_root)`, nullifiers by
+`(route, pool_id, nullifier)`, and outputs by
+`(route, pool_id, commitment)`. Equal opaque values on different routes do not
+alias, while a conflict on the same full route cannot be bypassed by reusing a
+pool identifier.
 
 Access views are least privilege:
 
@@ -174,7 +219,11 @@ Collecting -> Audited -> Prepared -> CommitCertified -> Finalized
    successful responder. Commit certification does not mutate WSV.
 6. The sponsor signs and submits one carrier containing exactly one
    `FinalizeAtomicPrivateSettlementV1` instruction. The carrier binds the
-   sponsor and exact public fee intent and carries the complete receipt.
+   sponsor and exact public fee intent and carries the complete receipt. Before
+   finalization, the same sponsor may instead submit one
+   `AbortAtomicPrivateSettlementV1` carrier that binds the complete public
+   manifest and a stable public reason class; it never carries a delta or
+   confidential sidecar material.
 7. Global receipt planning verifies every authority/QC/delta and every current
    WSV invariant. Only after all fallible checks succeed are all pool heads,
    root provenance entries, nullifiers, encrypted outputs, replay receipt, and
@@ -223,8 +272,20 @@ environment variable enables the feature. The actual configuration includes:
 - `max_participants` (hard V1 maximum 255) and `max_expiry_blocks`;
 - audit, Prepare, and Commit height timeouts;
 - strictly increasing capsule padding classes;
-- proof, capsule, carrier, sidecar-record, and retention bounds;
-- `default_min_auditor_approvals` and permitted audit-policy versions.
+- proof, whole-canonical-capsule, carrier, per-record, and retention bounds;
+- `sidecar_max_records` and `sidecar_max_total_bytes`, which are consensus-
+  committed governed capacities passed to every Torii sidecar store at open;
+- `default_min_auditor_approvals`, which is the governed minimum threshold
+  accepted for every newly admitted policy, and permitted audit-policy versions.
+
+`max_capsule_bytes` limits the canonical Norito encoding of the complete
+`PrivateSettlementAuditCapsuleV1`, including AAD, nonce, ciphertext, vector
+framing, auditor identifiers, and every wrapped-DEK row; it is not a
+ciphertext-only allowance. Configuration parsing proves that each enabled
+padding class can fit the conservative complete-capsule envelope for at least
+`default_min_auditor_approvals` auditors. Admission then rejects any policy
+whose `min_approvals` is below that governed floor and any actual capsule whose
+whole canonical encoding exceeds `max_capsule_bytes`.
 
 Invalid zero values, unsupported V1 versions, duplicate/unsorted padding or
 policy lists, enabled-without-activation configurations, and values above hard
@@ -244,6 +305,9 @@ protocol limits are configuration errors.
 - Every global leg is validated before the first overlay write.
 - Replay markers and terminal receipts survive snapshots, Kura replay, and
   restart; ambiguous local state fails closed and reconciles from immutable WSV.
+- Governed pool projections retain exact policy-revision lineage so historical
+  finalized receipts remain restart-valid and exact-replay idempotent after a
+  rotation, while old-policy in-flight bundles remain inadmissible.
 - Mandatory signed RS16 DA/RBC remains enabled in every deployment and fault
   test; there is no private-settlement bypass.
 
@@ -279,6 +343,23 @@ publication. Continuously assert that no strict subset becomes visible or
 spendable and that every node converges after healing. Keep signed RS16 DA/RBC
 enabled.
 
+Each real-process run emits one strict JSONL record for
+`scripts/private_settlement_fault_report.py`. The reporter requires the exact
+N=2,3,4,8,16 matrix across at least ten seeds per N, one validator restart in
+every committee, coordinator/global restarts, acknowledged 5/10/20-percent
+loss for restricted DA, Prepare, and Commit, all phase cuts and persistence
+boundaries, convergence, byte-identical invalid-leg state, exactly-once success,
+replay rejection, and zero partial visibility or spendability observations.
+Every run binds the same full source commit and archived hardware-description
+SHA-256, plus the archived N-specific configuration SHA-256. A canonical
+configuration manifest covers N=2,3,4,8,16 in order and binds every exact
+configuration file while asserting four validators, 3-of-4 quorum, and
+mandatory signed RS16 DA/RBC. The summary binds every raw JSONL file by length
+and SHA-256, and the final DOI verifier regenerates the summary from those
+archived records rather than trusting a detached matrix claim. Synthetic or
+simulated records are test fixtures only and must never be published as
+real-process evidence.
+
 N=17 through 255 are deterministic state-machine, codec, carrier-size, and TLC
 tests. They must not be labeled real-network latency measurements.
 
@@ -289,6 +370,23 @@ snapshots, queries, events, logs, and telemetry. Plant account, asset, amount,
 memo, and capsule canaries in multiple encodings. Differential runs in which
 only secrets change must preserve public shapes and message counts; only
 cryptographic values may differ. Publish the residual metadata listed above.
+`scripts/private_settlement_leakage_audit.py` enforces this with byte-level
+canary scans, exact public file/size/JSON-shape comparison, and mandatory paired
+V1 message-count manifests covering Torii, public/restricted P2P, block, query,
+event, log, and telemetry records. Its report binds the canary manifest, every
+scanned artifact, and both message-count manifests by byte length and SHA-256.
+The DOI-bundle verifier independently requires those bindings to cover every
+archived public and restricted capture, Kura/merge and snapshot artifact,
+query/event/log/telemetry record, and both count manifests; a clean report from
+another capture set cannot satisfy the gate. It also reloads the canary manifest
+and independently rescans every archived privacy surface, so a digest-rebound
+report with suppressed findings still fails. A separate canonical
+differential-pair manifest binds the left and right artifact paths, kinds,
+lengths, and SHA-256 digests for every required privacy surface. The verifier
+requires the declared left/right roots to contain exactly that paired archive
+inventory, loads every pair itself, requires equal byte lengths, and recomputes
+JSON public shapes. Changing a same-size public field name or omitting an
+unpaired differential file cannot be hidden by rewriting the leakage report.
 
 For each real N, run at least five warmups and thirty measured bundles across
 multiple seeds on pinned hardware. Report p50/p95/p99 with confidence intervals
@@ -299,6 +397,18 @@ control. The first release publishes its measured envelope; later releases fail
 when p95 regresses by more than `max(10%, 3 MAD)` or p99 by more than 20% against
 the signed baseline.
 
+`scripts/private_settlement_benchmark_report.py` validates the raw JSONL matrix
+and emits deterministic bootstrap intervals. The final release verifier parses
+the retained raw samples again, regenerates every p50/p95/p99, MAD, and
+deterministic confidence interval, and requires the published measured-run and
+seed identities, stage/resource shapes, counts, and passing regression result
+to match exactly. Every raw sample and the generated report bind the same full
+release commit, archived hardware-description digest, and exact N-specific
+configuration digest, so results from another build, host profile, network
+configuration, or altered summary cannot be relabeled. Later-release regression
+comparisons reject a baseline captured with different hardware, configurations,
+or benchmark requirements before applying the p95/p99 thresholds.
+
 ### Release artifact
 
 Focused suites, workspace tests, strict clippy, format verification, ten strict
@@ -308,3 +418,22 @@ Archive raw CSV/JSON, exact configurations, sanitized captures, plots, logs,
 manifest hashes, commit id, hardware description, threat model, protocol
 argument, limitations, and independent audit reports in a DOI-backed artifact
 for the BCK26 paper.
+
+Validate the final, already-published artifact with
+`scripts/private_settlement_release_evidence.py <bundle>/release-manifest-v1.json`.
+The V1 manifest binds every file by byte length and SHA-256, rejects unlisted
+files and symlinks, and requires the exact real-network participant/loss/crash
+matrix, four-validator 3-of-4 committees, ten randomized seeds, a two-hour
+soak, benchmark sample minima, reproducible-build/SBOM evidence, a complete
+independent-audit scope, an auditor key-custody/rotation report, and a canonical
+DOI. Focused/workspace tests, strict Clippy, format verification, SDK,
+inventory, ten-seed randomization, two-hour atomic soak, and serial
+privacy-release gates are structured V1 reports bound to the exact source
+commit and to distinct separately archived operator transcripts; a one-line
+placeholder cannot satisfy them. Reproducible-build evidence must contain at
+least two distinct builder/environment records that produce byte-identical
+archived release binaries, and the CycloneDX 1.5/1.6 SBOM must bind the same
+commit and SHA-256 hashes. The hardware description is a commit-bound structured
+record, and the configuration manifest must bind every archived N=2,3,4,8,16
+configuration used by both the fault and benchmark matrices. This verifier
+deliberately does not manufacture or waive any of those external results.

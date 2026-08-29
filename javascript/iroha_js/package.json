@@ -29,6 +29,11 @@
       "import": "./dist/bootleLanternIssuance.js",
       "types": "./bootle-lantern-issuance.d.ts"
     },
+    "./atomic-private-settlement": {
+      "browser": "./dist/atomicPrivateSettlement.js",
+      "import": "./dist/atomicPrivateSettlement.js",
+      "types": "./atomic-private-settlement.d.ts"
+    },
     "./transaction-codec": {
       "browser": "./dist/transactionCodec.js",
       "import": "./dist/transactionCodec.js",
@@ -128,6 +133,9 @@
       ],
       "bootle-lantern-issuance": [
         "./bootle-lantern-issuance.d.ts"
+      ],
+      "atomic-private-settlement": [
+        "./atomic-private-settlement.d.ts"
       ],
       "transaction-codec": [
         "./transaction-codec.d.ts"
@@ -236,6 +244,7 @@
     "repo-agreement.d.ts",
     "privacy-capabilities.d.ts",
     "bootle-lantern-issuance.d.ts",
+    "atomic-private-settlement.d.ts",
     "canonical-request.d.ts",
     "ivm-artifact.d.ts",
     "transaction-codec.d.ts",

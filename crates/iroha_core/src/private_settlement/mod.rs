@@ -45,6 +45,9 @@ pub use phase::{
     aggregate_private_settlement_phase_votes, build_private_settlement_prepare_barrier,
     verify_private_settlement_phase_certificate,
 };
+pub use protocol::{
+    PrivateSettlementCommitteeAuthorityErrorV1, validate_private_settlement_committee_authority_v1,
+};
 pub use sidecar_store::{
     PRIVATE_SETTLEMENT_RECONCILIATION_MAX_PAGE_RECORDS_V1,
     PRIVATE_SETTLEMENT_SIDECAR_DEFAULT_MAX_RECORDS_V1,

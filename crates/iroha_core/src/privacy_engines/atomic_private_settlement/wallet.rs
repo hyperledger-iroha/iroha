@@ -9,20 +9,36 @@
 
 use super::{
     facade::{AtomicPrivateSettlementProofErrorV1, prove_atomic_private_settlement_v1},
-    relation::{AtomicPrivateSettlementInputWitnessV1, AtomicPrivateSettlementProverWitnessV1},
+    relation::{
+        AtomicPrivateSettlementInputWitnessV1, AtomicPrivateSettlementProverWitnessV1,
+        atomic_private_settlement_dummy_input_memo_digest_v1,
+        atomic_private_settlement_output_memo_digests_v1, atomic_private_settlement_program_id_v1,
+        internal_statement_v1,
+    },
 };
+use crate::privacy_engines::proof_managed_accumulator::plan_two_leaf_proof_managed_transition_v1;
 use crate::private_settlement::audit::private_settlement_audit_plaintext_commitment_v1;
 use iroha_crypto::Hash;
 use iroha_data_model::nexus::{
-    AtomicPrivateSettlementV1, PRIVATE_SETTLEMENT_INPUT_SLOTS_V1, PrivateSettlementAuditCapsuleV1,
+    AtomicPrivateSettlementV1, PRIVATE_SETTLEMENT_INPUT_SLOTS_V1,
+    PRIVATE_SETTLEMENT_OUTPUT_SLOTS_V1, PrivateSettlementAuditCapsuleV1,
+    PrivateSettlementAuditNoteOpeningV1, PrivateSettlementAuditOutputV1,
     PrivateSettlementAuditPlaintextV1, PrivateSettlementAuditPolicyV1,
     PrivateSettlementProofStatementV1,
 };
+use iroha_data_model::privacy::{
+    PrivacyCommitmentV1, PrivacyEncryptedOutputV1, PrivacyNamespaceScopeV1, PrivacyNamespaceV1,
+    PrivacyNullifierV1, PrivacyPoolProgramNamespaceV1, PrivacyProtocolIdV1, PrivacyRootV1,
+};
+use rand_core_06::{CryptoRng, RngCore};
 use thiserror::Error;
 use zeroize::{Zeroize as _, Zeroizing};
 
 use crate::privacy_engines::ivm_private_note::{
-    PRIVATE_NOTE_TREE_DEPTH_V1, derive_note_authority_v1,
+    PRIVATE_NOTE_TREE_DEPTH_V1, PrivateNotePlaintextV1, PrivateNoteRelationProfileV1,
+    derive_note_authority_v1, derive_note_nullifier_v1, derive_profiled_input_commitment_v1,
+    derive_profiled_output_commitment_v1,
+    encrypt_ivm_private_wallet_note_for_commitment_with_opening_v1,
 };
 
 const OWNER_BUNDLE_MAGIC_V1: &[u8; 4] = b"APWB";
@@ -95,7 +111,7 @@ pub struct AtomicPrivateSettlementWalletInspectionV1 {
 }
 
 /// Public artifacts emitted by one terminal native proving operation.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct AtomicPrivateSettlementPreparedProofV1 {
     /// Exact fixed-shape public statement proved by `proof`.
     pub statement: PrivateSettlementProofStatementV1,
@@ -103,6 +119,37 @@ pub struct AtomicPrivateSettlementPreparedProofV1 {
     pub proof: Vec<u8>,
     /// Padded ciphertext decryptable only by governed local auditors.
     pub audit_capsule: PrivateSettlementAuditCapsuleV1,
+}
+
+impl core::fmt::Debug for AtomicPrivateSettlementPreparedProofV1 {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("AtomicPrivateSettlementPreparedProofV1(<restricted>)")
+    }
+}
+
+/// Canonical origin and successor state for one newly governed settlement pool.
+///
+/// The membership witnesses remain encapsulated and can only be consumed into
+/// the native owner-bundle encoder.  Public governance receives the sorted
+/// origin commitments and roots, never the spending secrets or paths.
+pub struct AtomicPrivateSettlementBootstrapPlanV1 {
+    /// Strictly ordered commitments supplied to pool activation.
+    pub initial_commitments: [PrivacyCommitmentV1; PRIVATE_SETTLEMENT_INPUT_SLOTS_V1],
+    /// Root produced by the exact governed origin commitment set.
+    pub old_root: PrivacyRootV1,
+    /// Root after appending all three fixed output commitments in statement order.
+    pub new_root: PrivacyRootV1,
+    inputs: [AtomicPrivateSettlementInputSecretV1; PRIVATE_SETTLEMENT_INPUT_SLOTS_V1],
+}
+
+impl AtomicPrivateSettlementBootstrapPlanV1 {
+    /// Consume the plan into the owner-only input witnesses used by the bundle encoder.
+    #[must_use]
+    pub fn into_input_secrets(
+        self,
+    ) -> [AtomicPrivateSettlementInputSecretV1; PRIVATE_SETTLEMENT_INPUT_SLOTS_V1] {
+        self.inputs
+    }
 }
 
 /// Stable, redacted native-wallet failure.
@@ -123,6 +170,242 @@ pub enum AtomicPrivateSettlementWalletErrorV1 {
     /// Native proving or its independent self-verification failed.
     #[error("atomic private-settlement native proof failed")]
     Proof(#[from] AtomicPrivateSettlementProofErrorV1),
+}
+
+fn validate_preparation_context_v1(
+    manifest: &AtomicPrivateSettlementV1,
+    statement: &PrivateSettlementProofStatementV1,
+) -> Result<(), AtomicPrivateSettlementWalletErrorV1> {
+    manifest
+        .validate()
+        .map_err(|_| AtomicPrivateSettlementWalletErrorV1::PublicBinding)?;
+    statement
+        .validate()
+        .map_err(|_| AtomicPrivateSettlementWalletErrorV1::PublicBinding)?;
+    let leg = manifest
+        .legs
+        .get(usize::from(statement.leg_ordinal))
+        .ok_or(AtomicPrivateSettlementWalletErrorV1::PublicBinding)?;
+    if statement.network_id != manifest.network_id
+        || statement.bundle_id != manifest.bundle_id
+        || statement.authority_context_height != manifest.authority_context_height
+        || statement.route != leg.route
+        || statement.pool_id != leg.pool_id
+        || statement.asset_binding_commitment != leg.asset_binding_commitment
+        || statement.audit_policy_digest != leg.audit_policy_digest
+        || statement.fee_intent_digest != manifest.fee_intent_digest
+        || statement.reimbursement_terms_commitment != manifest.reimbursement_terms_commitment
+        || statement.reimbursement_leg_ordinal != manifest.reimbursement_leg_ordinal
+        || statement.expiry_height != manifest.expiry_height
+    {
+        return Err(AtomicPrivateSettlementWalletErrorV1::PublicBinding);
+    }
+    Ok(())
+}
+
+/// Derive both fixed input commitments under the settlement-only note profile.
+///
+/// Inactive slots receive their unique bundle-bound dummy memo here.  Active
+/// memo digests are owner-selected and retained.  The caller must have already
+/// populated each spending-authority digest from its spending secret.
+///
+/// # Errors
+///
+/// Rejects an invalid public context, fixed-slot shape, dummy domain, or note opening.
+pub fn prepare_atomic_private_settlement_input_openings_v1(
+    manifest: &AtomicPrivateSettlementV1,
+    statement: &PrivateSettlementProofStatementV1,
+    openings: &mut [PrivateSettlementAuditNoteOpeningV1],
+) -> Result<(), AtomicPrivateSettlementWalletErrorV1> {
+    validate_preparation_context_v1(manifest, statement)?;
+    if openings.len() != PRIVATE_SETTLEMENT_INPUT_SLOTS_V1 {
+        return Err(AtomicPrivateSettlementWalletErrorV1::SecretMaterial);
+    }
+    // Fixed output memos are immaterial to input-note validation.  Using one
+    // closed non-zero placeholder avoids a circular dependency on the audit
+    // plaintext commitment while retaining the settlement selectors.
+    let profile = PrivateNoteRelationProfileV1::exact_three_output_balanced([[1_u8; 32]; 3]);
+    for (index, opening) in openings.iter_mut().enumerate() {
+        if !opening.active {
+            let dummy_domain = opening
+                .dummy_domain
+                .ok_or(AtomicPrivateSettlementWalletErrorV1::SecretMaterial)?;
+            opening.memo_digest = atomic_private_settlement_dummy_input_memo_digest_v1(
+                manifest,
+                statement,
+                index,
+                dummy_domain,
+            )
+            .map_err(|_| AtomicPrivateSettlementWalletErrorV1::SecretMaterial)?;
+        }
+        let note = PrivateNotePlaintextV1::new_profiled_input_v1(
+            opening.value,
+            opening.spending_authority,
+            opening.rho,
+            opening.blinding,
+            opening.memo_digest,
+            profile,
+        )
+        .map_err(|_| AtomicPrivateSettlementWalletErrorV1::SecretMaterial)?;
+        opening.commitment = derive_profiled_input_commitment_v1(&note, profile)
+            .map_err(|_| AtomicPrivateSettlementWalletErrorV1::SecretMaterial)?;
+    }
+    if openings[0].commitment == openings[1].commitment {
+        return Err(AtomicPrivateSettlementWalletErrorV1::SecretMaterial);
+    }
+    Ok(())
+}
+
+/// Derive the two stable pool/program nullifiers for prepared input openings.
+///
+/// # Errors
+///
+/// Rejects a substituted public context, wrong spending secret, malformed
+/// opening, or duplicate nullifier.
+pub fn derive_atomic_private_settlement_input_nullifiers_v1(
+    manifest: &AtomicPrivateSettlementV1,
+    statement: &PrivateSettlementProofStatementV1,
+    openings: &[PrivateSettlementAuditNoteOpeningV1],
+    spending_secrets: &[[u8; 32]; PRIVATE_SETTLEMENT_INPUT_SLOTS_V1],
+) -> Result<
+    [PrivacyNullifierV1; PRIVATE_SETTLEMENT_INPUT_SLOTS_V1],
+    AtomicPrivateSettlementWalletErrorV1,
+> {
+    validate_preparation_context_v1(manifest, statement)?;
+    let openings: &[PrivateSettlementAuditNoteOpeningV1; PRIVATE_SETTLEMENT_INPUT_SLOTS_V1] =
+        openings
+            .try_into()
+            .map_err(|_| AtomicPrivateSettlementWalletErrorV1::SecretMaterial)?;
+    let internal = internal_statement_v1(manifest, statement)
+        .map_err(|_| AtomicPrivateSettlementWalletErrorV1::PublicBinding)?;
+    let mut nullifiers = [PrivacyNullifierV1::new([0_u8; 32]); PRIVATE_SETTLEMENT_INPUT_SLOTS_V1];
+    for (index, (opening, secret)) in openings.iter().zip(spending_secrets).enumerate() {
+        if derive_note_authority_v1(secret)
+            .map_err(|_| AtomicPrivateSettlementWalletErrorV1::SecretMaterial)?
+            != opening.spending_authority
+        {
+            return Err(AtomicPrivateSettlementWalletErrorV1::SecretMaterial);
+        }
+        nullifiers[index] =
+            derive_note_nullifier_v1(&internal, secret, &opening.rho, opening.commitment)
+                .map_err(|_| AtomicPrivateSettlementWalletErrorV1::SecretMaterial)?;
+    }
+    if nullifiers[0] == nullifiers[1] {
+        return Err(AtomicPrivateSettlementWalletErrorV1::SecretMaterial);
+    }
+    Ok(nullifiers)
+}
+
+/// Finalize and encrypt the fixed recipient, change, and reimbursement outputs.
+///
+/// This operation derives the three role memos from the exact committed audit
+/// plaintext, recomputes each commitment, and encrypts with fresh authenticated
+/// nonces while retaining only the caller-supplied capsule opening.
+///
+/// # Errors
+///
+/// Rejects a substituted context, wrong fixed shape, malformed note/view key,
+/// or unavailable/unsafe encryption randomness.
+pub fn prepare_atomic_private_settlement_outputs_v1(
+    rng: &mut (impl RngCore + CryptoRng),
+    manifest: &AtomicPrivateSettlementV1,
+    statement: &PrivateSettlementProofStatementV1,
+    outputs: &mut [PrivateSettlementAuditOutputV1],
+) -> Result<Vec<PrivacyEncryptedOutputV1>, AtomicPrivateSettlementWalletErrorV1> {
+    validate_preparation_context_v1(manifest, statement)?;
+    if outputs.len() != PRIVATE_SETTLEMENT_OUTPUT_SLOTS_V1 {
+        return Err(AtomicPrivateSettlementWalletErrorV1::SecretMaterial);
+    }
+    let fixed_memos = atomic_private_settlement_output_memo_digests_v1(manifest, statement)
+        .map_err(|_| AtomicPrivateSettlementWalletErrorV1::PublicBinding)?;
+    let profile = PrivateNoteRelationProfileV1::exact_three_output_balanced(fixed_memos);
+    let program_id = atomic_private_settlement_program_id_v1()
+        .map_err(|_| AtomicPrivateSettlementWalletErrorV1::PublicBinding)?;
+    let mut encrypted = Vec::with_capacity(PRIVATE_SETTLEMENT_OUTPUT_SLOTS_V1);
+    for (index, (output, memo)) in outputs.iter_mut().zip(fixed_memos).enumerate() {
+        output.note.memo_digest = memo;
+        let note = PrivateNotePlaintextV1::new_profiled_output_v1(
+            output.note.value,
+            output.note.spending_authority,
+            output.note.rho,
+            output.note.blinding,
+            output.note.memo_digest,
+            index,
+            profile,
+        )
+        .map_err(|_| AtomicPrivateSettlementWalletErrorV1::SecretMaterial)?;
+        output.note.commitment = derive_profiled_output_commitment_v1(&note, index, profile)
+            .map_err(|_| AtomicPrivateSettlementWalletErrorV1::SecretMaterial)?;
+        encrypted.push(
+            encrypt_ivm_private_wallet_note_for_commitment_with_opening_v1(
+                rng,
+                statement.pool_id,
+                program_id,
+                &note,
+                output.note.commitment,
+                output.recipient_view_key,
+                &output.encryption_opening.ephemeral_secret,
+            )
+            .map_err(|_| AtomicPrivateSettlementWalletErrorV1::SecretMaterial)?,
+        );
+    }
+    Ok(encrypted)
+}
+
+/// Build exact membership witnesses and the validator-derived successor root
+/// for a newly activated two-note settlement pool.
+///
+/// # Errors
+///
+/// Rejects an invalid statement, zero/duplicate commitments, reserved-zero
+/// spending secrets, or an accumulator construction failure. Binding each
+/// secret to its audit-opened commitment is performed by the owner-bundle
+/// encoder once the corresponding openings are supplied.
+pub fn plan_atomic_private_settlement_bootstrap_v1(
+    statement: &PrivateSettlementProofStatementV1,
+    input_commitments: [PrivacyCommitmentV1; PRIVATE_SETTLEMENT_INPUT_SLOTS_V1],
+    input_spending_secrets: [[u8; 32]; PRIVATE_SETTLEMENT_INPUT_SLOTS_V1],
+) -> Result<AtomicPrivateSettlementBootstrapPlanV1, AtomicPrivateSettlementWalletErrorV1> {
+    statement
+        .validate()
+        .map_err(|_| AtomicPrivateSettlementWalletErrorV1::PublicBinding)?;
+    let output_commitments: [PrivacyCommitmentV1; PRIVATE_SETTLEMENT_OUTPUT_SLOTS_V1] = statement
+        .output_commitments
+        .as_slice()
+        .try_into()
+        .map_err(|_| AtomicPrivateSettlementWalletErrorV1::PublicBinding)?;
+    let namespace = PrivacyNamespaceV1::new(
+        PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+        PrivacyNamespaceScopeV1::PoolProgram(PrivacyPoolProgramNamespaceV1 {
+            pool_id: statement.pool_id,
+            program_id: atomic_private_settlement_program_id_v1()
+                .map_err(|_| AtomicPrivateSettlementWalletErrorV1::PublicBinding)?,
+        }),
+    );
+    let planned = plan_two_leaf_proof_managed_transition_v1(
+        namespace,
+        input_commitments,
+        &output_commitments,
+    )
+    .map_err(|_| AtomicPrivateSettlementWalletErrorV1::SecretMaterial)?;
+    let inputs = [
+        AtomicPrivateSettlementInputSecretV1::new(
+            input_spending_secrets[0],
+            planned.input_positions[0],
+            planned.authentication_paths[0],
+        )?,
+        AtomicPrivateSettlementInputSecretV1::new(
+            input_spending_secrets[1],
+            planned.input_positions[1],
+            planned.authentication_paths[1],
+        )?,
+    ];
+    Ok(AtomicPrivateSettlementBootstrapPlanV1 {
+        initial_commitments: planned.initial_commitments,
+        old_root: planned.old_root,
+        new_root: planned.new_root,
+        inputs,
+    })
 }
 
 struct DecodedOwnerBundleV1 {
@@ -701,6 +984,12 @@ mod tests {
             bundle_id: manifest.bundle_id,
             leg_ordinal: statement.leg_ordinal,
             route: statement.route,
+            authority_digest: fixture
+                .sidecar
+                .authority
+                .digest()
+                .expect("authority digest"),
+            authority_context_height: manifest.authority_context_height,
             audit_policy_digest: policy.policy_digest,
             audit_key_epoch: policy.body.key_epoch,
             plaintext_commitment,
@@ -749,6 +1038,12 @@ mod tests {
         assert!(!prepared.proof.is_empty());
         assert_eq!(prepared.statement, statement);
         assert_eq!(prepared.audit_capsule, capsule);
+        let debug = format!("{prepared:?}");
+        assert_eq!(
+            debug,
+            "AtomicPrivateSettlementPreparedProofV1(<restricted>)"
+        );
+        assert!(!debug.contains(&hex::encode(&prepared.proof)));
         assert!(material.iter().all(|byte| *byte == 0));
     }
 

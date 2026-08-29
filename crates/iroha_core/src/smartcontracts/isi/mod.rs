@@ -554,6 +554,9 @@ define_instruction_handlers! {
         iroha_data_model::isi::private_settlement::ActivatePrivateSettlementPoolV1
     >,
     dispatch_instruction::<
+        iroha_data_model::isi::private_settlement::RotatePrivateSettlementPoolPolicyV1
+    >,
+    dispatch_instruction::<
         iroha_data_model::isi::private_settlement::AbortAtomicPrivateSettlementV1
     >,
     dispatch_instruction::<

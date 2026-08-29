@@ -9,7 +9,8 @@ use super::{
     committee::prepare_private_settlement_leg_v1,
     protocol::{
         aggregate_private_settlement_phase_votes_v1, private_settlement_prepare_barrier_v1,
-        sign_private_settlement_phase_vote_v1, validate_private_settlement_prepare_barrier_v1,
+        sign_private_settlement_phase_vote_v1, validate_private_settlement_committee_authority_v1,
+        validate_private_settlement_prepare_barrier_v1,
         verify_private_settlement_phase_certificate_v1,
     },
     sidecar_store::PrivateSettlementFileSidecarStoreV1,
@@ -94,7 +95,7 @@ impl PrivateSettlementPhaseSignerV1 {
         {
             return Err(PrivateSettlementPhaseErrorV1);
         }
-        store
+        let (_, authority) = store
             .validate_phase_manifest(
                 payload_digest,
                 &self.peer_id,
@@ -102,6 +103,12 @@ impl PrivateSettlementPhaseSignerV1 {
                 authoritative_height,
             )
             .map_err(|_| PrivateSettlementPhaseErrorV1)?;
+        validate_private_settlement_committee_authority_v1(
+            state,
+            manifest.authority_context_height,
+            &authority,
+        )
+        .map_err(|_| PrivateSettlementPhaseErrorV1)?;
         let body = prepare_private_settlement_leg_v1(
             state,
             store,

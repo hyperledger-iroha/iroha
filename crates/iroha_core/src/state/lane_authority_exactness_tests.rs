@@ -96,6 +96,153 @@ fn resolve_universal_committee(
     )
 }
 
+fn private_settlement_authority_for_keys(
+    state: &State,
+    authority_height: u64,
+    keypairs: &[KeyPair],
+) -> iroha_data_model::nexus::PrivateSettlementCommitteeAuthorityV1 {
+    let mut validator_rows = keypairs
+        .iter()
+        .map(|keypair| {
+            (
+                AccountId::new(keypair.public_key().clone()),
+                PeerId::new(keypair.public_key().clone()),
+                iroha_crypto::bls_normal_pop_prove(keypair.private_key())
+                    .expect("private-settlement authority PoP"),
+            )
+        })
+        .collect::<Vec<_>>();
+    validator_rows.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+    let validators = validator_rows
+        .iter()
+        .map(|(_, validator, _)| validator.clone())
+        .collect::<Vec<_>>();
+    let validator_pops = validator_rows
+        .into_iter()
+        .map(|(_, _, pop)| pop)
+        .collect::<Vec<_>>();
+    iroha_data_model::nexus::PrivateSettlementCommitteeAuthorityV1 {
+        route: iroha_data_model::nexus::PrivateSettlementRouteV1 {
+            dataspace_id: DataSpaceId::UNIVERSAL,
+            lane_id: LaneId::SINGLE,
+            lane_incarnation: state
+                .lane_incarnation_at_height(LaneId::SINGLE, authority_height)
+                .expect("fixture lane incarnation is active"),
+        },
+        validator_set_hash: HashOf::new(&validators),
+        validators,
+        validator_pops,
+    }
+}
+
+#[test]
+fn private_settlement_authority_accepts_exact_state_anchored_f1_roster() {
+    let (state, keypairs) = exact_manifest_authority_fixture(1, 4);
+    let authority = private_settlement_authority_for_keys(&state, 1, &keypairs);
+
+    crate::private_settlement::validate_private_settlement_committee_authority_v1(
+        &state.view(),
+        1,
+        &authority,
+    )
+    .expect("exact four-validator f=1 authority must be accepted");
+}
+
+#[test]
+fn private_settlement_authority_rejects_forged_and_reordered_rosters() {
+    let (state, keypairs) = exact_manifest_authority_fixture(1, 4);
+    let valid = private_settlement_authority_for_keys(&state, 1, &keypairs);
+
+    let forged_keys = (0x41_u8..=0x44)
+        .map(|seed| {
+            KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                .expect("forged test BLS key")
+        })
+        .collect::<Vec<_>>();
+    let forged = private_settlement_authority_for_keys(&state, 1, &forged_keys);
+    assert!(
+        crate::private_settlement::validate_private_settlement_committee_authority_v1(
+            &state.view(),
+            1,
+            &forged,
+        )
+        .is_err(),
+        "four attacker-owned BLS keys must not become lane authority"
+    );
+
+    let mut reordered = valid;
+    reordered.validators.swap(0, 1);
+    reordered.validator_pops.swap(0, 1);
+    reordered.validator_set_hash = HashOf::new(&reordered.validators);
+    assert!(
+        crate::private_settlement::validate_private_settlement_committee_authority_v1(
+            &state.view(),
+            1,
+            &reordered,
+        )
+        .is_err(),
+        "the receipt roster must preserve canonical state order"
+    );
+}
+
+#[test]
+fn private_settlement_authority_rejects_rotated_roster_and_stale_incarnation() {
+    let (state, original_keys) = exact_manifest_authority_fixture(1, 4);
+    let original = private_settlement_authority_for_keys(&state, 1, &original_keys);
+    let replacement_keys = (0x51_u8..=0x54)
+        .map(|seed| {
+            KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                .expect("replacement test BLS key")
+        })
+        .collect::<Vec<_>>();
+    seed_consensus_keys_with_pops(&state, &replacement_keys);
+    install_lane_manifest_registry_for_keypairs(&state, &[LaneId::SINGLE], &replacement_keys);
+    assert!(
+        crate::private_settlement::validate_private_settlement_committee_authority_v1(
+            &state.view(),
+            1,
+            &original,
+        )
+        .is_err(),
+        "a roster retired from the state authority source must be rejected"
+    );
+    let replacement = private_settlement_authority_for_keys(&state, 1, &replacement_keys);
+    crate::private_settlement::validate_private_settlement_committee_authority_v1(
+        &state.view(),
+        1,
+        &replacement,
+    )
+    .expect("the replacement authoritative roster must be accepted");
+
+    let mut stale_incarnation = replacement;
+    stale_incarnation.route.lane_incarnation = Hash::new(b"retired lane incarnation");
+    assert!(
+        crate::private_settlement::validate_private_settlement_committee_authority_v1(
+            &state.view(),
+            1,
+            &stale_incarnation,
+        )
+        .is_err(),
+        "authority from another lane incarnation must be rejected"
+    );
+}
+
+#[test]
+fn private_settlement_authority_rejects_non_f1_committee_geometry() {
+    let (state, keypairs) = exact_manifest_authority_fixture(2, 7);
+    let four_key_claim = private_settlement_authority_for_keys(&state, 1, &keypairs[..4]);
+
+    assert!(
+        crate::private_settlement::validate_private_settlement_committee_authority_v1(
+            &state.view(),
+            1,
+            &four_key_claim,
+        )
+        .is_err(),
+        "V1 must not accept a four-key subset of an f=2/seven-validator committee"
+    );
+}
+
 #[test]
 fn exact_lane_committee_rejects_f1_pools_of_one_and_three() {
     for available in [1_u8, 3] {

@@ -373,6 +373,7 @@ test("package publishes the exact general-purpose subpath inventory", () => {
   assert.deepEqual(Object.keys(packageJson.exports).sort(), [
     ".",
     "./address",
+    "./atomic-private-settlement",
     "./blake2b",
     "./bootle-lantern-issuance",
     "./browser",
@@ -402,6 +403,14 @@ test("package publishes the typed Sumeragi parser through its lazy subpath", () 
     browser: "./dist/sumeragiTyped.js",
     import: "./dist/sumeragiTyped.js",
     types: "./sumeragi-typed.d.ts",
+  });
+});
+
+test("package publishes the atomic private settlement client through one browser-safe subpath", () => {
+  assert.deepEqual(packageJson.exports["./atomic-private-settlement"], {
+    browser: "./dist/atomicPrivateSettlement.js",
+    import: "./dist/atomicPrivateSettlement.js",
+    types: "./atomic-private-settlement.d.ts",
   });
 });
 
@@ -457,7 +466,7 @@ test("package SCCP exports expose the exact four-mainnet inventory", () => {
       SCCP_DOMAIN_ETH: 1,
       SCCP_DOMAIN_SORA: 0,
       SCCP_DOMAIN_TON: 4,
-      SCCP_DOMAIN_TRON: 5,
+      SCCP_DOMAIN_TRON: 3,
     },
   );
   assert.deepEqual(
@@ -467,13 +476,13 @@ test("package SCCP exports expose the exact four-mainnet inventory", () => {
         .sort(([left], [right]) => left.localeCompare(right)),
     ),
     {
-      SCCP_CODEC_CANONICAL_TEXT: 1,
-      SCCP_CODEC_EVM_ADDRESS20: 2,
-      SCCP_CODEC_TON_ACCOUNT36: 7,
-      SCCP_CODEC_TRON_ADDRESS21: 5,
+      SCCP_CODEC_CANONICAL_TEXT: 0,
+      SCCP_CODEC_EVM_ADDRESS20: 1,
+      SCCP_CODEC_TON_ACCOUNT36: 3,
+      SCCP_CODEC_TRON_ADDRESS21: 2,
     },
   );
-  assert.deepEqual(Object.keys(packageSccpExports.SCCP_CODEC_KEYS), ["1", "2", "5", "7"]);
+  assert.deepEqual(Object.keys(packageSccpExports.SCCP_CODEC_KEYS), ["0", "1", "2", "3"]);
   assert.deepEqual(Object.keys(packageSccpExports.SCCP_NETWORK_PROFILES), [
     "sora-taira",
     "ethereum-mainnet",
@@ -572,6 +581,7 @@ test("package Nexus browser export has an enforced browser-only dependency graph
       "dist/contractAddress.js",
       "dist/crc64Xz.js",
       "dist/curveRegistry.js",
+      "dist/domainId.js",
       "dist/ed25519Strict.js",
       "dist/entrypointSchema.js",
       "dist/governanceSelector.js",

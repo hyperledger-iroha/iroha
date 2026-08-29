@@ -196,6 +196,7 @@ from .orderbook_submission import (
     require_orderbook_chain_discriminant,
 )
 from .parliament_api import ParliamentApiV1Mixin
+from .private_settlement_client import create_atomic_private_settlement_client_mixin
 from .runtime_governance_auth import RuntimeGovernanceAuthMixin
 from .sccp import (
     SccpBridgeSubmitResponse,
@@ -9588,10 +9589,17 @@ _ToriiClientSpaceDirectoryMixin: type[Any] = create_space_directory_client_mixin
     normalize_network_id=_offline_hash_literal, transaction_draft_type=AppApiTransactionDraft,
 )
 _ToriiClientKaigiRelayMixin: type[Any] = create_kaigi_relay_client_mixin()
+_ToriiClientAtomicPrivateSettlementMixin: type[Any] = (
+    create_atomic_private_settlement_client_mixin(
+        canonical_auth_type=ToriiCanonicalRequestAuth,
+        operator_context_type=ToriiOperatorSigningContext,
+    )
+)
 
 
 class ToriiClient(
     SorafsOrderbookSubmissionMixin,
+    _ToriiClientAtomicPrivateSettlementMixin,
     _ToriiClientKaigiRelayMixin,
     _ToriiClientSpaceDirectoryMixin,
     _ToriiClientGovernanceBallotMixin,

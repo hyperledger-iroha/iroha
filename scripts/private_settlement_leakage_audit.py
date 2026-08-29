@@ -4,26 +4,38 @@
 The scanner is deliberately format-agnostic so it can cover Torii/P2P packet
 captures, Kura artifacts, snapshots, logs, metrics, and query responses with
 one manifest. It also compares paired public captures and rejects changes in
-file inventory, byte length, or JSON structure when only secrets were varied.
+file inventory, byte length, JSON structure, or message/record counts when only
+secrets were varied.
 """
 
 from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
 import json
-import os
 import sys
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Iterator, Sequence
+from typing import Any
 from urllib.parse import quote
-
 
 REPORT_VERSION = 1
 DEFAULT_CHUNK_BYTES = 1024 * 1024
 DEFAULT_MAX_FILE_BYTES = 2 * 1024 * 1024 * 1024
 DEFAULT_MAX_TOTAL_BYTES = 32 * 1024 * 1024 * 1024
+REQUIRED_COUNT_CHANNELS = (
+    "torii_requests",
+    "torii_responses",
+    "public_p2p_messages",
+    "restricted_p2p_messages",
+    "block_messages",
+    "query_responses",
+    "event_records",
+    "log_records",
+    "telemetry_records",
+)
 
 
 class AuditInputError(ValueError):
@@ -85,7 +97,9 @@ def _integer_variants(name: str, value: int) -> list[EncodedCanary]:
         if value < 1 << (width * 8):
             variants[f"u{width * 8}_le"] = value.to_bytes(width, "little")
             variants[f"u{width * 8}_be"] = value.to_bytes(width, "big")
-    return [EncodedCanary(name, encoding, encoded) for encoding, encoded in variants.items()]
+    return [
+        EncodedCanary(name, encoding, encoded) for encoding, encoded in variants.items()
+    ]
 
 
 def _binary_variants(name: str, value: bytes) -> list[EncodedCanary]:
@@ -121,11 +135,15 @@ def load_canaries(path: Path) -> list[EncodedCanary]:
         kind = entry.get("kind")
         value = entry.get("value")
         if not isinstance(name, str) or not name or name in names:
-            raise AuditInputError(f"canaries[{index}].name must be unique and non-empty")
+            raise AuditInputError(
+                f"canaries[{index}].name must be unique and non-empty"
+            )
         names.add(name)
         if kind == "text" and isinstance(value, str) and value:
             expanded.extend(_text_variants(name, value))
-        elif kind == "integer" and isinstance(value, int) and not isinstance(value, bool):
+        elif (
+            kind == "integer" and isinstance(value, int) and not isinstance(value, bool)
+        ):
             expanded.extend(_integer_variants(name, value))
         elif kind == "binary_base64" and isinstance(value, str):
             try:
@@ -166,6 +184,17 @@ def iter_artifact_files(paths: Sequence[Path]) -> Iterator[Path]:
                 yield resolved
 
 
+def _artifact_binding(path: Path) -> dict[str, Any]:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        while chunk := stream.read(DEFAULT_CHUNK_BYTES):
+            digest.update(chunk)
+    return {
+        "bytes": path.stat().st_size,
+        "sha256": digest.hexdigest(),
+    }
+
+
 def scan_file(
     path: Path,
     canaries: Sequence[EncodedCanary],
@@ -196,7 +225,9 @@ def scan_file(
             tail = window[-overlap:] if overlap else b""
     return [
         {"canary": name, "encoding": encoding, "offset": offset}
-        for name, encoding, offset in sorted(hits, key=lambda item: (item[2], item[0], item[1]))
+        for name, encoding, offset in sorted(
+            hits, key=lambda item: (item[2], item[0], item[1])
+        )
     ]
 
 
@@ -228,7 +259,9 @@ def _relative_inventory(root: Path) -> dict[str, Path]:
     return inventory
 
 
-def compare_capture_roots(left: Path, right: Path, max_file_bytes: int) -> dict[str, Any]:
+def compare_capture_roots(
+    left: Path, right: Path, max_file_bytes: int
+) -> dict[str, Any]:
     """Compare public artifact inventory, byte sizes, and JSON structure."""
 
     left_files = _relative_inventory(left)
@@ -269,12 +302,60 @@ def compare_capture_roots(left: Path, right: Path, max_file_bytes: int) -> dict[
     }
 
 
+def load_message_counts(path: Path) -> dict[str, int]:
+    """Load one strict capture-derived message/record count manifest."""
+
+    if path.is_symlink() or not path.is_file():
+        raise AuditInputError(f"message-count manifest must be a regular file: {path}")
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise AuditInputError(
+            f"cannot read message-count manifest {path}: {error}"
+        ) from error
+    if not isinstance(document, dict) or set(document) != {"version", "channels"}:
+        raise AuditInputError(
+            "message-count manifest must contain only version and channels"
+        )
+    if document["version"] != REPORT_VERSION:
+        raise AuditInputError("message-count manifest version must be 1")
+    channels = document["channels"]
+    if not isinstance(channels, dict) or set(channels) != set(REQUIRED_COUNT_CHANNELS):
+        raise AuditInputError(
+            f"message-count channels must be exactly {list(REQUIRED_COUNT_CHANNELS)}"
+        )
+    for name, count in channels.items():
+        if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+            raise AuditInputError(
+                f"message-count channel {name!r} must be a non-negative integer"
+            )
+    return {name: channels[name] for name in REQUIRED_COUNT_CHANNELS}
+
+
+def compare_message_counts(left: Path, right: Path) -> list[dict[str, Any]]:
+    """Reject traffic-count differences in paired secret-only experiments."""
+
+    left_counts = load_message_counts(left)
+    right_counts = load_message_counts(right)
+    return [
+        {
+            "channel": channel,
+            "left": left_counts[channel],
+            "right": right_counts[channel],
+        }
+        for channel in REQUIRED_COUNT_CHANNELS
+        if left_counts[channel] != right_counts[channel]
+    ]
+
+
 def run_audit(
     manifest: Path,
     artifacts: Sequence[Path],
     *,
     differential_left: Path | None = None,
     differential_right: Path | None = None,
+    message_counts_left: Path | None = None,
+    message_counts_right: Path | None = None,
     max_file_bytes: int = DEFAULT_MAX_FILE_BYTES,
     max_total_bytes: int = DEFAULT_MAX_TOTAL_BYTES,
 ) -> dict[str, Any]:
@@ -282,12 +363,45 @@ def run_audit(
 
     if max_file_bytes <= 0 or max_total_bytes <= 0:
         raise AuditInputError("byte limits must be positive")
+    if manifest.is_symlink() or not manifest.is_file():
+        raise AuditInputError("canary manifest must be a regular non-symlink file")
     if (differential_left is None) != (differential_right is None):
         raise AuditInputError("both differential roots must be supplied together")
+    if (message_counts_left is None) != (message_counts_right is None):
+        raise AuditInputError("both message-count manifests must be supplied together")
+    if differential_left is not None and message_counts_left is None:
+        raise AuditInputError(
+            "differential experiments require both message-count manifests"
+        )
+    if differential_left is None and message_counts_left is not None:
+        raise AuditInputError(
+            "message-count manifests require paired differential roots"
+        )
     canaries = load_canaries(manifest)
     files = list(iter_artifact_files(artifacts))
+    scanned_paths = set(files)
+    if differential_left is not None and differential_right is not None:
+        differential_paths = {
+            path.resolve(strict=True)
+            for root in (differential_left, differential_right)
+            for path in _relative_inventory(root).values()
+        }
+        if not differential_paths.issubset(scanned_paths):
+            raise AuditInputError(
+                "every differential capture file must also be supplied as an artifact"
+            )
+    if message_counts_left is not None and message_counts_right is not None:
+        count_paths = {
+            message_counts_left.resolve(strict=True),
+            message_counts_right.resolve(strict=True),
+        }
+        if not count_paths.issubset(scanned_paths):
+            raise AuditInputError(
+                "both message-count manifests must also be supplied as artifacts"
+            )
     total_bytes = 0
     findings: list[dict[str, Any]] = []
+    scanned_artifacts: list[dict[str, Any]] = []
     for path in files:
         size = path.stat().st_size
         if size > max_file_bytes:
@@ -295,6 +409,7 @@ def run_audit(
         total_bytes += size
         if total_bytes > max_total_bytes:
             raise AuditInputError("artifact set exceeds max-total-bytes")
+        scanned_artifacts.append(_artifact_binding(path))
         hits = scan_file(path, canaries)
         if hits:
             findings.append({"path": str(path), "bytes": size, "hits": hits})
@@ -303,15 +418,36 @@ def run_audit(
         differential = compare_capture_roots(
             differential_left, differential_right, max_file_bytes
         )
-    differential_failed = differential is not None and any(differential.values())
+    message_count_mismatches = None
+    if message_counts_left is not None and message_counts_right is not None:
+        message_count_mismatches = compare_message_counts(
+            message_counts_left, message_counts_right
+        )
+    differential_failed = (
+        differential is not None and any(differential.values())
+    ) or bool(message_count_mismatches)
+    scanned_artifacts.sort(key=lambda item: (item["sha256"], item["bytes"]))
+    message_count_manifests = None
+    if message_counts_left is not None and message_counts_right is not None:
+        message_count_manifests = sorted(
+            (
+                _artifact_binding(message_counts_left.resolve(strict=True)),
+                _artifact_binding(message_counts_right.resolve(strict=True)),
+            ),
+            key=lambda item: (item["sha256"], item["bytes"]),
+        )
     return {
         "version": REPORT_VERSION,
         "passed": not findings and not differential_failed,
+        "canary_manifest": _artifact_binding(manifest.resolve(strict=True)),
+        "scanned_artifacts": scanned_artifacts,
         "scanned_files": len(files),
         "scanned_bytes": total_bytes,
         "canary_names": sorted({canary.name for canary in canaries}),
         "findings": findings,
         "differential": differential,
+        "message_count_manifests": message_count_manifests,
+        "message_count_mismatches": message_count_mismatches,
     }
 
 
@@ -321,6 +457,8 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--artifact", action="append", required=True, type=Path)
     parser.add_argument("--differential-left", type=Path)
     parser.add_argument("--differential-right", type=Path)
+    parser.add_argument("--message-counts-left", type=Path)
+    parser.add_argument("--message-counts-right", type=Path)
     parser.add_argument("--max-file-bytes", type=int, default=DEFAULT_MAX_FILE_BYTES)
     parser.add_argument("--max-total-bytes", type=int, default=DEFAULT_MAX_TOTAL_BYTES)
     parser.add_argument("--output", type=Path)
@@ -335,6 +473,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.artifact,
             differential_left=args.differential_left,
             differential_right=args.differential_right,
+            message_counts_left=args.message_counts_left,
+            message_counts_right=args.message_counts_right,
             max_file_bytes=args.max_file_bytes,
             max_total_bytes=args.max_total_bytes,
         )

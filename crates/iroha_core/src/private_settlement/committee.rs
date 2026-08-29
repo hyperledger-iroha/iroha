@@ -121,7 +121,7 @@ where
     let pool_governance = world
         .private_settlement_governance
         .get(&pool_key)
-        .copied()
+        .cloned()
         .ok_or(PrivateSettlementCommitteeErrorV1)?;
     let existing_nullifiers = world
         .private_settlement_nullifiers
@@ -291,7 +291,7 @@ mod tests {
             .expect("fixture pool key");
         world
             .private_settlement_governance
-            .insert(key, fixture.governance);
+            .insert(key, fixture.governance.clone());
         world.private_settlement_pools.insert(key, pool);
         world
     }

@@ -19,6 +19,8 @@ use iroha_data_model::{
 use std::collections::BTreeMap;
 use thiserror::Error;
 
+use crate::state::{LaneAuthorityRoute, StateReadOnly};
+
 /// Reserved digest carried by Prepare bodies before the all-leg barrier exists.
 pub(crate) fn private_settlement_reserved_prepared_bundle_digest_v1() -> Hash {
     Hash::prehashed([0; Hash::LENGTH])
@@ -145,6 +147,57 @@ pub(super) fn validate_authority_cryptography_v1(
         {
             return Err(PrivateSettlementProtocolErrorV1::Authority);
         }
+    }
+    Ok(())
+}
+
+/// Uniform failure returned when a private-settlement roster is not the exact
+/// state-anchored participant authority at its declared context height.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+#[error("private-settlement committee authority is not authoritative")]
+pub struct PrivateSettlementCommitteeAuthorityErrorV1;
+
+/// Validate one private-settlement authority against the consensus state.
+///
+/// This is the authorization boundary behind restricted upload, Prepare, and
+/// global receipt application. In addition to validating the supplied BLS
+/// keys and proofs of possession, it requires the exact canonical ordered
+/// validator roster resolved for the lane/dataspace route at
+/// `authority_context_height`, the exact active lane incarnation, and the V1
+/// four-validator/`f = 1` geometry. A self-signed caller-selected committee can
+/// therefore never authorize a private state transition.
+///
+/// # Errors
+///
+/// Returns one redacted error when the route, incarnation, geometry, ordered
+/// roster, or roster cryptography is not authoritative.
+pub fn validate_private_settlement_committee_authority_v1(
+    state: &impl StateReadOnly,
+    authority_context_height: u64,
+    authority: &PrivateSettlementCommitteeAuthorityV1,
+) -> Result<(), PrivateSettlementCommitteeAuthorityErrorV1> {
+    if authority_context_height == 0 {
+        return Err(PrivateSettlementCommitteeAuthorityErrorV1);
+    }
+    validate_authority_cryptography_v1(authority)
+        .map_err(|_| PrivateSettlementCommitteeAuthorityErrorV1)?;
+
+    let route = LaneAuthorityRoute::new(authority.route.lane_id, authority.route.dataspace_id);
+    if state.lane_incarnation_at_height(authority.route.lane_id, authority_context_height)
+        != Some(authority.route.lane_incarnation)
+    {
+        return Err(PrivateSettlementCommitteeAuthorityErrorV1);
+    }
+    let resolved = state
+        .resolve_lane_committee_at_height(route, authority_context_height)
+        .map_err(|_| PrivateSettlementCommitteeAuthorityErrorV1)?;
+    if resolved.route() != route
+        || resolved.authority_height() != authority_context_height
+        || resolved.fault_tolerance() != 1
+        || resolved.validators().len() != PRIVATE_SETTLEMENT_COMMITTEE_VALIDATORS_V1
+        || resolved.validators() != authority.validators.as_slice()
+    {
+        return Err(PrivateSettlementCommitteeAuthorityErrorV1);
     }
     Ok(())
 }

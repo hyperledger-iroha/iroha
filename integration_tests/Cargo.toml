@@ -76,6 +76,10 @@ zk-stark = [
 # Non-shipping native exact-12 fixture builders used only by explicit
 # four-peer privacy release gates.
 privacy-release-evidence = ["iroha_core/privacy-release-evidence"]
+# Explicit, ignored release harness for real-process atomic private settlement.
+# The feature owns no fixture/proof bypass; it only keeps the multi-hour native
+# proof and sixteen-node topology out of ordinary integration-test binaries.
+atomic-private-settlement-release = []
 # Non-shipping exact-seat threshold-share providers for the dedicated modern
 # Parliament four-validator corridor. The test target is absent unless this
 # feature is explicitly requested, and Core rejects optimized compilation.
